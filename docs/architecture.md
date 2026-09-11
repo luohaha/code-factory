@@ -92,11 +92,11 @@ Agent Manager 只额外注入一段 Code Factory 协议指令，告诉 RD 当前
 
 每条消息有单调递增的 `sequence` 和 `deliverToRd`。RD Run 启动时捕获尚未消费的外部消息范围 `inputFromSequence..inputToSequence`：
 
-1. 同一 Session 已运行时，新消息只追加到需求对话，不中断当前进程；
+1. 同一 Session 已运行时，新消息只追加到需求对话，不会打断当前进程；人类可随后显式点击“打断”；
 2. Run 成功后，消费游标只推进到该 Run 启动时捕获的 `inputToSequence`；
 3. 若仍有未消费外部消息，Agent Manager 自动 resume 同一 RD Session；
 4. 多条新消息在下一轮合并投递并保持顺序；
-5. Run 失败不推进游标，重试不会丢消息；
+5. Run 失败或被打断时不推进游标，重试或纠偏续跑不会丢消息；只有本次 Run 启动后到达的新消息才会触发打断后的自动续跑；
 6. RD 自己的输出永不作为正常的下一轮输入。
 
 只有原生会话丢失且需要恢复时，才会从需求对话生成上下文摘要，而不是在正常流程中重放 RD 输出。

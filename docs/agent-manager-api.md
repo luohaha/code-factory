@@ -41,6 +41,7 @@ curl http://127.0.0.1:4310/api/health
 | `POST` | `/api/requirements` | 创建需求及其 RD Session |
 | `POST` | `/api/requirements/:id/start` | 启动或重试需求 |
 | `POST` | `/api/requirements/:id/reply` | 向需求对话发送人工消息 |
+| `POST` | `/api/requirements/:id/interrupt` | 打断当前 RD Run |
 | `POST` | `/api/requirements/:id/confirm` | 确认已完成的需求 |
 | `GET` | `/api/requirements/:id/messages` | 查询需求的完整对话 |
 | `POST` | `/api/requirements/:id/attachments` | 上传一个待发送的对话附件 |
@@ -354,7 +355,7 @@ Requirement 不存在时返回 `404`；已经 `done` 或 `cancelled` 时返回 `
 
 ### `POST /api/requirements/:id/reply`
 
-向 Requirement 对话追加一条人工消息。Session 空闲时会自动启动 RD Run；正在运行时只排队，不中断当前 Run。
+向 Requirement 对话追加一条人工消息。Session 空闲时会自动启动 RD Run；正在运行时始终只排队，不会打断当前 Run。需要停止当前 Run 时，必须另行调用 `interrupt` 端点。
 
 请求体：
 
@@ -387,7 +388,22 @@ Requirement 不存在时返回 `404`；已经 `done` 或 `cancelled` 时返回 `
 }
 ~~~
 
-`message` 可在包含 `attachmentIds` 时为空。`queued` 表示收到消息时 RD Session 是否正在运行。文字和附件都为空时返回 `400`；Requirement 不存在时返回 `404`；已经 `done` 或 `cancelled` 时返回 `409`。
+`message` 可在包含 `attachmentIds` 时为空。`queued` 表示收到消息时 RD Session 是否正在运行。无论 `queued` 为何值，回复接口本身都不会打断 Run。文字和附件都为空时返回 `400`；Requirement 不存在时返回 `404`；已经 `done` 或 `cancelled` 时返回 `409`。
+
+### `POST /api/requirements/:id/interrupt`
+
+打断当前 Requirement 的 RD Run，不追加消息。请求体可省略或使用空对象。Agent Manager 会终止 CLI 及其启动的整棵工具进程树；POSIX 平台先发送 `SIGTERM`，2 秒后仍有后代存活则向进程组发送 `SIGKILL`，Windows 使用 `taskkill /T /F`。进程树停止后 Run 才记录为 `cancelled`，Session 回到 `waiting_human`。
+
+~~~json
+{
+  "accepted": true,
+  "requirementId": "req_...",
+  "action": "interrupt",
+  "runId": "run_..."
+}
+~~~
+
+成功响应为 `202 Accepted`；Run 尚在退出过程中时重复调用也是幂等的。没有正在运行的 RD Run 时返回 `409 Conflict`。若打断前已有在本次 Run 启动后到达的待处理消息，Run 退出后会自动恢复同一 Session；否则保持等待，直到收到下一条人工或外部消息。
 
 ### `POST /api/requirements/:id/confirm`
 
@@ -591,6 +607,18 @@ curl -N "$API/events?after=0"
 curl -sS -X POST "$API/requirements/$requirement_id/reply" \
   -H 'Content-Type: application/json' \
   -d '{"message":"同时检查超时后的子进程是否退出。"}'
+~~~
+
+若这条消息用于立即纠偏，先正常追加消息，再由用户显式打断当前 Run：
+
+~~~bash
+curl -sS -X POST "$API/requirements/$requirement_id/reply" \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"先停下，不要改接口；只补回归测试。"}'
+
+curl -sS -X POST "$API/requirements/$requirement_id/interrupt" \
+  -H 'Content-Type: application/json' \
+  -d '{}'
 ~~~
 
 当 `/api/requirements` 显示 Requirement 已进入 `waiting_confirmation`，检查结果后完成确认：

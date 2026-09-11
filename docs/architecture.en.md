@@ -101,11 +101,11 @@ The system does not maintain a separate RD message-queue table. `requirement_mes
 
 Each message has a monotonically increasing `sequence` and a `deliverToRd` flag. When an RD Run starts, it captures the pending external-message range as `inputFromSequence..inputToSequence`:
 
-1. If the Session is already running, new messages are appended to the Requirement conversation without interrupting the process.
+1. If the Session is already running, new messages are only appended and never interrupt it; a human may then explicitly click **Interrupt**.
 2. After a successful Run, the consumption cursor advances only to the `inputToSequence` captured when that Run started.
 3. If external messages remain, Agent Manager automatically resumes the same RD Session.
 4. Multiple messages are delivered together in order during the next Run.
-5. A failed Run does not advance the cursor, so retrying cannot lose messages.
+5. A failed or interrupted Run does not advance the cursor, so retrying or corrective resumption cannot lose messages. Only messages arriving after the interrupted Run started trigger its automatic replacement.
 6. RD output is never delivered back to the RD Agent as normal next-turn input.
 
 Only when the native session is lost and must be recovered may Agent Manager rebuild context from a compact conversation summary. Normal execution never replays all previous RD output.

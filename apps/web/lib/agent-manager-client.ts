@@ -187,6 +187,10 @@ export class AgentManagerClient {
     return this.action(id, 'reply', { message, attachmentIds });
   }
 
+  interruptRequirement(id: string): Promise<{ accepted: true; runId: string }> {
+    return this.action(id, 'interrupt', {});
+  }
+
   async uploadMessageAttachment(requirementId: string, file: File): Promise<MessageAttachmentDto> {
     let response: Response;
     try {

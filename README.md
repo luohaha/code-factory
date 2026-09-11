@@ -18,7 +18,7 @@ The main runtime rules are:
 - A Requirement receives its RD AgentSession immediately when it is created. There is no agent pool or scheduling queue.
 - One AgentSession may produce multiple AgentRuns while preserving context through the native Codex thread ID or Claude Code session ID.
 - Different RD sessions may run concurrently, while a single session may have only one active RD Run.
-- The Requirement conversation is the RD message stream. Human and Reviewer messages arriving during a Run are processed automatically after that Run finishes.
+- The Requirement conversation is the RD message stream. Human and Reviewer messages arriving during a Run are queued without interrupting it. A human can explicitly interrupt the current Run, after which the same Session resumes with queued messages.
 - RD Agent output is visible in the conversation but is never sent back to the same agent as new input.
 - A human can request a review for an Open PR and explicitly choose Codex or Claude Code as the Reviewer.
 - Reviewer is a short-lived Run with no persistent AgentSession. Its result is added to the Requirement conversation and wakes the corresponding RD session.
@@ -37,7 +37,7 @@ The bundled dashboard provides three views:
 - Pull Request board: `DRAFT / OPEN / CLOSED / MERGED`
 - RD Session board: `Idle / Running / Waiting for human / Failed / Completed`
 
-Opening a Requirement displays its description, linked PRs, Run information, and unified conversation. Human messages can include pasted, dropped, or selected images and general file attachments. Images render inline; other files remain downloadable and are passed to the RD Agent by local path. The input remains available while RD is running, and new messages wait in the conversation for the next Run.
+Opening a Requirement displays its description, linked PRs, Run information, and unified conversation. Human messages can include pasted, dropped, or selected images and general file attachments. Images render inline; other files remain downloadable and are passed to the RD Agent by local path. The input remains available while RD is running: sending only queues the message, while the separate **Interrupt** button cancels the current Run and lets the same Session process queued corrections.
 
 ## Quick Start
 

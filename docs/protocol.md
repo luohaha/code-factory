@@ -41,11 +41,12 @@ Content-Type: application/json
 ~~~text
 POST /api/requirements/:id/start
 POST /api/requirements/:id/reply
+POST /api/requirements/:id/interrupt
 POST /api/requirements/:id/confirm
 POST /api/requirements/:id/attachments
 ~~~
 
-文件先以原始二进制 body 上传到 `attachments` 端点，再把返回的 ID 作为 `attachmentIds` 随 `start` 或 `reply` 发送。每条消息最多 6 个附件、单个最大 20 MB；PNG、JPEG、GIF、WebP 会作为图片预览，其他文件作为普通附件下载。`reply` 的 JSON body 为 `{"message":"...","attachmentIds":["att_..."]}`；包含附件时文字可为空。如果 RD 正在运行，接口仍返回 `202`，`queued=true` 表示消息已进入需求对话并会在当前 Run 结束后处理；它不会因 Session 正在运行而返回 409。
+文件先以原始二进制 body 上传到 `attachments` 端点，再把返回的 ID 作为 `attachmentIds` 随 `start` 或 `reply` 发送。每条消息最多 6 个附件、单个最大 20 MB；PNG、JPEG、GIF、WebP 会作为图片预览，其他文件作为普通附件下载。`reply` 的 JSON body 为 `{"message":"...","attachmentIds":["att_..."]}`；包含附件时文字可为空。RD 正在运行时，回复始终只追加到对话并排队，不会打断当前 Run。只有显式调用 `interrupt` 端点（Web 看板中的“打断”按钮）才会停止当前 RD Run。
 
 人工发起 PR Review：
 

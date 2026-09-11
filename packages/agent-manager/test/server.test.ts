@@ -21,6 +21,92 @@ class WaitingRunner implements AgentProcessRunner {
   }
 }
 
+class InterruptibleWaitingRunner implements AgentProcessRunner {
+  requests: ProcessRunRequest[] = [];
+
+  run(request: ProcessRunRequest): Promise<RunOutcome> {
+    this.requests.push(request);
+    return new Promise((resolve) => {
+      request.signal?.addEventListener('abort', () => resolve({
+        status: 'cancelled',
+        exitCode: null,
+        nativeSessionId: null,
+        finalMessage: null,
+        error: 'Agent Run interrupted by human',
+      }), { once: true });
+    });
+  }
+}
+
+test('HTTP reply queues by default and the interrupt action resumes the RD Agent with that message', async () => {
+  const runner = new InterruptibleWaitingRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    logger: createLogger({ level: 'silent' }),
+  });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const created = await fetch(`${baseUrl}/api/requirements`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Correct course', description: 'Initial task', provider: 'codex' }),
+    }).then((response) => response.json()) as { id: string };
+    await fetch(`${baseUrl}/api/requirements/${created.id}/start`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+
+    const response = await fetch(`${baseUrl}/api/requirements/${created.id}/reply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'Use this corrected direction.' }),
+    });
+    assert.equal(response.status, 202);
+    const body = await response.json() as { queued: boolean };
+    assert.equal(body.queued, true);
+    assert.equal(runner.requests[0]?.signal?.aborted, false);
+
+    const interruptResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/interrupt`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(interruptResponse.status, 202);
+    assert.equal(runner.requests[0]?.signal?.aborted, true);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(runner.requests.length, 2);
+    assert.match(runner.requests[1]?.invocation.input ?? '', /Use this corrected direction\./);
+
+    const secondInterrupt = await fetch(`${baseUrl}/api/requirements/${created.id}/interrupt`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(secondInterrupt.status, 202);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const repeatedInterrupt = await fetch(`${baseUrl}/api/requirements/${created.id}/interrupt`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(repeatedInterrupt.status, 409);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    manager.close();
+  }
+});
+
 test('HTTP API exposes the persisted human and RD Agent conversation', async () => {
   const runner = new WaitingRunner();
   const logLines: string[] = [];

@@ -27,6 +27,7 @@ import {
   Search,
   Send,
   Settings2,
+  Square,
   Terminal,
   TriangleAlert,
   UserRound,
@@ -579,6 +580,7 @@ function RequirementDetail({
   onOpenChange,
   onStart,
   onReply,
+  onInterrupt,
   onConfirm,
   onReview,
   apiUrl,
@@ -594,6 +596,7 @@ function RequirementDetail({
   onOpenChange: (open: boolean) => void;
   onStart: (message?: string, attachments?: File[]) => Promise<void>;
   onReply: (message: string, attachments?: File[]) => Promise<void>;
+  onInterrupt: () => Promise<void>;
   onConfirm: () => Promise<void>;
   onReview: (pullRequestId: string, provider: AgentProvider) => Promise<void>;
   apiUrl: string;
@@ -793,13 +796,16 @@ function RequirementDetail({
 
             {requirement.session.state === 'running' ? (
               <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
-                <span className="grid size-8 place-items-center rounded-xl bg-emerald-500/12 text-emerald-600"><Bot className="size-3.5" /></span>
-                <span className="flex items-center gap-2"><LoaderCircle className="size-3.5 animate-spin" />RD Agent 正在工作，输出会自动更新…</span>
+                <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-emerald-500/12 text-emerald-600"><Bot className="size-3.5" /></span>
+                <span className="flex min-w-0 flex-1 items-center gap-2"><LoaderCircle className="size-3.5 shrink-0 animate-spin" />RD Agent 正在工作；新消息默认排队。</span>
+                <Button type="button" variant="ghost" size="xs" className="shrink-0 text-amber-700 dark:text-amber-300" disabled={busy} onClick={() => void onInterrupt().catch(() => undefined)}>
+                  <Square data-icon="inline-start" />打断
+                </Button>
               </div>
             ) : null}
             {requirement.session.pendingMessageCount > 0 ? (
               <div className="mt-3 rounded-lg bg-amber-500/8 px-3 py-2 text-[10px] text-amber-700 dark:text-amber-300">
-                {requirement.session.pendingMessageCount} 条外部消息将在当前 Run 结束后由 RD Agent 处理。
+                {requirement.session.pendingMessageCount} 条外部消息将在{requirement.session.state === 'running' ? '当前 Run 结束后' : '下一次 Run 中'}由 RD Agent 处理。
               </div>
             ) : null}
               <div ref={conversationEndRef} aria-hidden="true" />
@@ -872,7 +878,7 @@ function RequirementDetail({
               }}
               disabled={!canWrite || busy}
               className="max-h-36 min-h-14 resize-none border-0 bg-transparent px-2 py-1.5 text-xs shadow-none focus-visible:border-transparent focus-visible:ring-0 disabled:bg-transparent"
-              placeholder={requirement.status === 'todo' ? '补充要求并开始执行，可粘贴或拖入附件…' : requirement.session.state === 'running' ? '发送消息或附件；当前 Run 结束后自动处理…' : canWrite ? '回复 RD Agent，可粘贴或拖入附件…' : '当前状态暂不可回复'}
+              placeholder={requirement.status === 'todo' ? '补充要求并开始执行，可粘贴或拖入附件…' : requirement.session.state === 'running' ? '发送消息或附件；默认等待下一次 Run 处理…' : canWrite ? '回复 RD Agent，可粘贴或拖入附件…' : '当前状态暂不可回复'}
             />
             <div className="mt-1 flex items-center justify-between gap-3 px-1">
               <div className="flex min-w-0 items-center gap-2">
@@ -1290,6 +1296,7 @@ export default function Home() {
           const attachmentIds = await uploadMessageAttachments(selectedRequirement.id, attachments);
           return await client.replyToRequirement(selectedRequirement.id, message, attachmentIds);
         }) : Promise.resolve()}
+        onInterrupt={() => selectedRequirement ? runAction(selectedRequirement.id, () => client.interruptRequirement(selectedRequirement.id)) : Promise.resolve()}
         onConfirm={() => selectedRequirement ? runAction(selectedRequirement.id, () => client.confirmRequirement(selectedRequirement.id)) : Promise.resolve()}
         onReview={requestReview}
       />
