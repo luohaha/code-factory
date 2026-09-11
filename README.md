@@ -65,16 +65,17 @@ cd ~/starrocks
 npx @code-factory/agent-manager start
 ~~~
 
-Agent Manager prints structured JSONL logs containing the local dashboard URL:
+Agent Manager writes structured JSONL logs to the workspace data directory by default:
 
-~~~text
-{"timestamp":"2026-09-11T03:00:00.000Z","level":"info","message":"Code Factory Agent Manager started","component":"agent-manager","workspaceRoot":"/path/to/repo","databasePath":"/home/user/.code-factory/workspaces/1234/factory.sqlite","dashboardUrl":"http://127.0.0.1:4310/","apiUrl":"http://127.0.0.1:4310/api","pullRequestReconcileIntervalSeconds":30}
+~~~bash
+tail -f ~/.code-factory/workspaces/<workspace-hash>/agent-manager.log
 ~~~
 
-The default log level is `info`. Set `CODE_FACTORY_LOG_LEVEL` or pass
-`--log-level debug|info|warn|error|silent` to change it. Lifecycle logs include
-Requirement, Session, Run, PR, and HTTP identifiers, but omit prompts, conversation
-bodies, and raw Agent output.
+No operational logs are written to stdout or stderr. The default log level is `info`;
+set `CODE_FACTORY_LOG_LEVEL` or pass `--log-level debug|info|warn|error|silent`
+to change it. Override the destination with `CODE_FACTORY_LOG_FILE` or
+`--log-file PATH`. Lifecycle logs include Requirement, Session, Run, PR, and HTTP
+identifiers, but omit prompts, conversation bodies, and raw Agent output.
 
 Open the Dashboard URL to use Code Factory. Pass `--open` to open it automatically:
 
@@ -96,6 +97,7 @@ Workspace data is stored outside the managed repository:
 ~~~text
 ~/.code-factory/workspaces/<workspace-hash>/factory.sqlite
 ~/.code-factory/workspaces/<workspace-hash>/attachments/
+~/.code-factory/workspaces/<workspace-hash>/agent-manager.log
 ~~~
 
 ## Verification

@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { AgentManager } from '../src/agent-manager.ts';
 import type { GitHubClient, GitHubPullRequestSnapshot } from '../src/github-client.ts';
+import { silentLogger } from '../src/logger.ts';
 import type { AgentProcessRunner, ProcessRunRequest } from '../src/process-runner.ts';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
 import type { RunOutcome } from '../src/types.ts';
@@ -36,7 +37,7 @@ class SequenceGitHubClient implements GitHubClient {
 test('Agent Manager queues conversation messages during a Run and resumes without replaying RD output', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new DeferredRunner();
-  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner });
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
   try {
     const first = manager.createRequirement({ title: 'First', description: 'First task', provider: 'codex' });
     const second = manager.createRequirement({ title: 'Second', description: 'Second task', provider: 'claude-code' });
@@ -94,6 +95,7 @@ test('RD Agent registration cannot advance an existing PR lifecycle state', () =
   const manager = new AgentManager({
     workspaceRoot: process.cwd(),
     store: new SqliteAgentManagerStore(':memory:'),
+    logger: silentLogger,
   });
   try {
     const requirement = manager.createRequirement({ title: 'PR ownership', description: 'Open a PR', provider: 'codex' });
@@ -128,7 +130,7 @@ test('RD Agent registration cannot advance an existing PR lifecycle state', () =
 test('a human-requested PR review writes to the requirement conversation and wakes the RD session', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new DeferredRunner();
-  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner });
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
   try {
     const requirement = manager.createRequirement({ title: 'Review me', description: 'Open a PR', provider: 'codex' });
     const pullRequest = manager.trackPullRequest({
@@ -230,6 +232,7 @@ test('PR reconciliation delivers new review activity, CI failures, and status ch
     store: new SqliteAgentManagerStore(':memory:'),
     runner,
     githubClient: new SequenceGitHubClient([openSnapshot, activitySnapshot, activitySnapshot, mergedSnapshot]),
+    logger: silentLogger,
   });
   try {
     const requirement = manager.createRequirement({ title: 'Feature', description: 'Open a PR', provider: 'codex' });

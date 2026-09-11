@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import { AgentManager } from '../src/agent-manager.ts';
-import { createLogger, isLogLevel, type LogWriter } from '../src/logger.ts';
+import { createFileLogger, createLogger, isLogLevel, type LogWriter } from '../src/logger.ts';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
 
 class MemoryWriter implements LogWriter {
@@ -56,6 +59,58 @@ test('child logger adds context and safely serializes errors and circular values
   assert.equal((entry.error as { message: string }).message, 'boom');
   assert.deepEqual(entry.circular, { self: '[Circular]' });
   assert.equal(entry.count, '1');
+});
+
+test('file logger appends every log level to a private JSONL file', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-logger-'));
+  const filePath = join(directory, 'nested', 'agent-manager.log');
+  try {
+    const logger = createFileLogger({
+      filePath,
+      level: 'debug',
+      now: () => new Date('2026-09-11T03:00:00.000Z'),
+    });
+    logger.info('started');
+    logger.error('failed', { error: 'boom' });
+
+    const entries = readFileSync(filePath, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.deepEqual(entries.map((entry) => entry.level), ['info', 'error']);
+    assert.deepEqual(entries.map((entry) => entry.message), ['started', 'failed']);
+    assert.equal(statSync(filePath).mode & 0o777, 0o600);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Agent Manager writes to its configured log file by default', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-manager-log-'));
+  const logFilePath = join(directory, 'manager.log');
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    logFilePath,
+  });
+  try {
+    manager.createRequirement({
+      title: 'Persist logs',
+      description: 'Write manager logs to a file',
+      provider: 'codex',
+    });
+  } finally {
+    manager.close();
+  }
+
+  try {
+    assert.equal(manager.logFilePath, logFilePath);
+    const entries = readFileSync(logFilePath, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.deepEqual(entries.map((entry) => entry.message), [
+      'Agent Manager initialized',
+      'Requirement created',
+      'Agent Manager closed',
+    ]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('Agent Manager publishes lifecycle logs through an injected logger', () => {

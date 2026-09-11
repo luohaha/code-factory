@@ -1,3 +1,6 @@
+import { appendFileSync, closeSync, mkdirSync, openSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'silent';
 
 export type LogContext = Readonly<Record<string, unknown>>;
@@ -21,6 +24,10 @@ export interface LoggerOptions {
   stdout?: LogWriter;
   stderr?: LogWriter;
   now?: () => Date;
+}
+
+export interface FileLoggerOptions extends Omit<LoggerOptions, 'stdout' | 'stderr'> {
+  filePath: string;
 }
 
 const priorities: Record<LogLevel, number> = {
@@ -76,6 +83,22 @@ export function createLogger(options: LoggerOptions = {}): Logger {
       now,
     }),
   };
+}
+
+export function createFileLogger(options: FileLoggerOptions): Logger {
+  const filePath = resolve(options.filePath);
+  mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
+  closeSync(openSync(filePath, 'a', 0o600));
+  const writer: LogWriter = {
+    write: (value) => appendFileSync(filePath, value, { encoding: 'utf8', mode: 0o600 }),
+  };
+  return createLogger({
+    ...(options.level ? { level: options.level } : {}),
+    ...(options.context ? { context: options.context } : {}),
+    ...(options.now ? { now: options.now } : {}),
+    stdout: writer,
+    stderr: writer,
+  });
 }
 
 export const silentLogger: Logger = createLogger({

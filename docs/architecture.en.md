@@ -196,7 +196,7 @@ The Web application contains three boards:
 
 Requirement details form a Jira-like work surface containing the description, linked PRs, Run information, and a unified Human/RD/Reviewer/System conversation. The input remains available while RD is running, and pending external-message counts appear on Requirement and Session cards.
 
-Running `npx @code-factory/agent-manager start` serves the API, SSE stream, and bundled Web dashboard from the same port and prints the local URL. No separate Web deployment is required.
+Running `npx @code-factory/agent-manager start` serves the API, SSE stream, and bundled Web dashboard from the same port and writes the local URL to the log file in the workspace data directory. No separate Web deployment is required.
 
 ## 10. Current Boundary
 

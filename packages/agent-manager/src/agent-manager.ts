@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 import { ClaudeCodeAdapter } from './adapters/claude-code.js';
 import { CodexAdapter } from './adapters/codex.js';
@@ -13,7 +13,7 @@ import {
   type GitHubClient,
   type GitHubReviewActivity,
 } from './github-client.js';
-import { silentLogger, type Logger } from './logger.js';
+import { createFileLogger, type Logger, type LogLevel } from './logger.js';
 import { HeadlessProcessRunner, type AgentProcessRunner, type ProcessRunRequest } from './process-runner.js';
 import { SqliteAgentManagerStore } from './sqlite-store.js';
 import type { AgentManagerStore } from './store.js';
@@ -39,6 +39,8 @@ export interface AgentManagerOptions {
   runner?: AgentProcessRunner;
   githubClient?: GitHubClient;
   logger?: Logger;
+  logLevel?: LogLevel;
+  logFilePath?: string;
   timeoutMs?: number;
   maxOutputBytes?: number;
 }
@@ -46,6 +48,10 @@ export interface AgentManagerOptions {
 export function defaultDatabasePath(workspaceRoot: string): string {
   const key = createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 16);
   return join(homedir(), '.code-factory', 'workspaces', key, 'factory.sqlite');
+}
+
+export function defaultLogFilePath(databasePath: string): string {
+  return resolve(databasePath === ':memory:' ? 'agent-manager.log' : join(dirname(databasePath), 'agent-manager.log'));
 }
 
 export const MAX_MESSAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
@@ -56,6 +62,7 @@ export class AgentManager extends EventEmitter {
   readonly databasePath: string;
   readonly attachmentDirectory: string;
   readonly logger: Logger;
+  readonly logFilePath: string | null;
   readonly #store: AgentManagerStore;
   readonly #runner: AgentProcessRunner;
   readonly #githubClient: GitHubClient;
@@ -72,7 +79,14 @@ export class AgentManager extends EventEmitter {
     this.workspaceRoot = realpathSync(options.workspaceRoot ?? process.cwd());
     this.databasePath = options.databasePath ?? defaultDatabasePath(this.workspaceRoot);
     this.attachmentDirectory = options.attachmentDirectory ?? join(dirname(this.databasePath), 'attachments');
-    this.logger = options.logger ?? silentLogger;
+    this.logFilePath = options.logger
+      ? null
+      : resolve(options.logFilePath ?? defaultLogFilePath(this.databasePath));
+    this.logger = options.logger ?? createFileLogger({
+      filePath: this.logFilePath!,
+      level: options.logLevel ?? 'info',
+      context: { component: 'agent-manager' },
+    });
     this.#store = options.store ?? new SqliteAgentManagerStore(this.databasePath);
     this.#runner = options.runner ?? new HeadlessProcessRunner();
     this.#githubClient = options.githubClient ?? new GhCliGitHubClient(this.workspaceRoot);
@@ -90,6 +104,7 @@ export class AgentManager extends EventEmitter {
     this.logger.info('Agent Manager initialized', {
       workspaceRoot: this.workspaceRoot,
       databasePath: this.databasePath,
+      logFilePath: this.logFilePath,
     });
   }
 

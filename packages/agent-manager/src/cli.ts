@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process';
 
 import { AgentManager } from './agent-manager.js';
-import { createLogger, isLogLevel } from './logger.js';
+import { isLogLevel } from './logger.js';
 import { createAgentManagerServer, listen } from './server.js';
 
 function option(name: string): string | undefined {
@@ -11,9 +11,7 @@ function option(name: string): string | undefined {
 }
 
 function usage(): never {
-  createLogger({ context: { component: 'agent-manager' } }).error('Invalid command line arguments', {
-    usage: 'code-factory-agent-manager start [--host 127.0.0.1] [--port 4310] [--db PATH] [--allow-origin ORIGIN] [--pr-reconcile-interval SECONDS] [--log-level debug|info|warn|error|silent] [--open]',
-  });
+  process.stderr.write('Usage: code-factory-agent-manager start [--host 127.0.0.1] [--port 4310] [--db PATH] [--allow-origin ORIGIN] [--pr-reconcile-interval SECONDS] [--log-level debug|info|warn|error|silent] [--log-file PATH] [--open]\n');
   process.exit(1);
 }
 
@@ -32,8 +30,15 @@ const logLevelOption = option('--log-level');
 if (process.argv.includes('--log-level') && logLevelOption === undefined) usage();
 const logLevel = logLevelOption ?? process.env.CODE_FACTORY_LOG_LEVEL ?? 'info';
 if (!isLogLevel(logLevel)) usage();
-const logger = createLogger({ level: logLevel, context: { component: 'agent-manager' } });
-const manager = new AgentManager({ ...(databasePath ? { databasePath } : {}), logger });
+const logFilePathOption = option('--log-file');
+if (process.argv.includes('--log-file') && logFilePathOption === undefined) usage();
+const logFilePath = logFilePathOption ?? process.env.CODE_FACTORY_LOG_FILE;
+const manager = new AgentManager({
+  ...(databasePath ? { databasePath } : {}),
+  logLevel,
+  ...(logFilePath ? { logFilePath } : {}),
+});
+const logger = manager.logger;
 const server = createAgentManagerServer(manager, {
   host: option('--host') ?? '127.0.0.1',
   port,
@@ -50,6 +55,7 @@ logger.info('Code Factory Agent Manager started', {
   databasePath: manager.databasePath,
   dashboardUrl,
   apiUrl: `${dashboardUrl}api`,
+  logFilePath: manager.logFilePath,
   pullRequestReconcileIntervalSeconds: reconcileIntervalSeconds,
 });
 logger.warn('Headless agents run with the current user\'s full filesystem and network permissions');

@@ -122,7 +122,11 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         return;
       }
       if (request.method === 'GET' && url.pathname === '/api/workspace') {
-        sendJson(response, 200, { root: manager.workspaceRoot, databasePath: manager.databasePath });
+        sendJson(response, 200, {
+          root: manager.workspaceRoot,
+          databasePath: manager.databasePath,
+          logFilePath: manager.logFilePath,
+        });
         return;
       }
       if (request.method === 'GET' && url.pathname === '/api/requirements') {
