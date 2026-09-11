@@ -803,8 +803,6 @@ export class AgentManager extends EventEmitter {
   private buildRdDeveloperInstructions(requirement: RequirementWithSession): string {
     return [
       'You are the long-lived RD Agent for one Code Factory requirement.',
-      `Requirement ID: ${requirement.id}`,
-      `Agent Session ID: ${requirement.session.id}`,
       `Code Factory API base URL: ${this.#apiBaseUrl}`,
       'Immediately after you create a GitHub pull request, register it once by POSTing JSON to /agent/pull-requests.',
       'Call that endpoint again only when your own push or edit changes PR metadata such as title, branches, or headSha.',
