@@ -6,7 +6,7 @@ Agent Manager 只支持 `codex` 和 `claude` 两个本机 CLI。每次调用都�
 
 - `cwd` 固定为 Agent Manager 启动目录；
 - `shell: false`，不拼接 shell 命令；
-- RD 与 Claude Reviewer 的 prompt 通过 stdin 传入，避免出现在进程参数和进程列表；Codex Reviewer 受 CLI 参数约束，Review 指令通过 `developer_instructions` 注入；
+- RD 与 Reviewer 的任务 prompt 都通过 stdin 传入，避免出现在进程参数和进程列表；
 - 继承当前进程环境，由 CLI 自己读取登录状态、配置、项目指令和 Skills；
 - 不传 `--cd` 或 `--add-dir`；Codex 和 Claude Code 均以无交互审批、无 CLI 沙箱限制的模式运行；
 - stdout 按 JSONL 解析，stderr 保留为错误摘要；
@@ -34,14 +34,13 @@ codex exec --json --color never --dangerously-bypass-approvals-and-sandbox \
 短程 Reviewer：
 
 ```bash
-codex exec review --json --ephemeral \
+codex exec --json --color never --ephemeral \
   --dangerously-bypass-approvals-and-sandbox \
-  -c 'developer_instructions="...PR URL, head SHA, review contract..."' \
-  --base <base-branch>
+  -c 'developer_instructions="...GitHub review contract..."' -
 ```
 
 `thread.started` 事件中的 `thread_id` 写入 AgentSession，后续 RD Run 复用它。Reviewer 使用 `--ephemeral`，不会形成可恢复的业务 Session。
-Codex 的 Code Factory 运行协议通过官方支持的 `developer_instructions` 配置覆盖项追加，不替换仓库中的 `AGENTS.md`。`codex exec review` 不允许同时使用 `--base` 和位置参数 `[PROMPT]`，因此 Reviewer 不传 stdin 占位符 `-`，而是把指定 PR、不可变 head SHA 和 Review 约束一并注入 `developer_instructions`。
+Codex 的 Code Factory 运行协议通过官方支持的 `developer_instructions` 配置覆盖项追加，不替换仓库中的 `AGENTS.md`。Reviewer 不使用面向本地工作树的 `codex exec review --base`；它以普通 headless Agent 运行，并从 stdin 接收 `Review GitHub PR <url>`。
 
 ## 3. Claude Code
 
@@ -67,7 +66,9 @@ claude --print --output-format stream-json --verbose \
   --no-session-persistence --dangerously-skip-permissions
 ```
 
-Reviewer 的 stdin 以 `/review` 开头，让 Claude Code 直接使用当前目录可用的原生 review skill。`--no-session-persistence` 只负责保证它不会变成长生命周期会话。Reviewer 在权限层面不受限制，但 prompt 仍要求它只使用 GitHub CLI/API 读取指定 PR/head SHA、发布评论且不修改共享工作区。
+Claude Reviewer 同样不调用 `/review`，而是以普通 headless Agent 运行，并从 stdin 接收 `Review GitHub PR <url>`。`--no-session-persistence` 只负责保证它不会变成长生命周期会话。
+
+Codex 和 Claude Code 共用同一套 Reviewer system/developer 指令：使用 GitHub CLI/API 读取目标 PR、在开始时记录并在发布前复核 head SHA、发布 GitHub Review 评论、不修改共享工作区。`ReviewRequest.targetHeadSha` 仍由 Agent Manager 在触发时内部捕获，用于追踪审查版本，不需要出现在任务 prompt 中。
 
 ## 4. 事件归一化
 

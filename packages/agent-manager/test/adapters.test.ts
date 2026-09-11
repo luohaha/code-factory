@@ -29,26 +29,24 @@ test('Codex starts and resumes through stdin without overriding the workspace', 
   ]);
 });
 
-test('Codex reviewer is ephemeral and scoped to a base branch', () => {
+test('Codex reviewer is ephemeral and receives a prompt through stdin', () => {
   const invocation = new CodexAdapter().buildReviewInvocation({
-    prompt: 'review carefully',
-    baseBranch: 'main',
+    prompt: 'Review GitHub PR https://github.com/acme/repo/pull/7',
     developerInstructions: 'Publish review comments.',
   });
-  assert.deepEqual(invocation.args.slice(0, 5), [
+  assert.deepEqual(invocation.args.slice(0, 6), [
     'exec',
-    'review',
     '--json',
+    '--color',
+    'never',
     '--ephemeral',
     '--dangerously-bypass-approvals-and-sandbox',
   ]);
-  assert.deepEqual(invocation.args.slice(-2), [
-    '--base',
-    'main',
-  ]);
-  assert.ok(!invocation.args.includes('-'));
-  assert.ok(invocation.args.some((value) => value.includes('Publish review comments.') && value.includes('review carefully')));
-  assert.equal(invocation.input, '');
+  assert.equal(invocation.args.at(-1), '-');
+  assert.ok(!invocation.args.includes('review'));
+  assert.ok(!invocation.args.includes('--base'));
+  assert.ok(invocation.args.some((value) => value.includes('Publish review comments.')));
+  assert.equal(invocation.input, 'Review GitHub PR https://github.com/acme/repo/pull/7');
 });
 
 test('Claude Code persists RD sessions but not reviewer sessions', () => {
@@ -62,11 +60,12 @@ test('Claude Code persists RD sessions but not reviewer sessions', () => {
   const resumed = adapter.buildRdInvocation({ prompt: 'continue', nativeSessionId: 'session-1' });
   assert.deepEqual(resumed.args.slice(-2), ['--resume', 'session-1']);
 
-  const review = adapter.buildReviewInvocation({ prompt: 'focus on tests', baseBranch: 'main' });
+  const review = adapter.buildReviewInvocation({ prompt: 'Review GitHub PR https://github.com/acme/repo/pull/7' });
   assert.ok(review.args.includes('--no-session-persistence'));
   assert.ok(review.args.includes('--dangerously-skip-permissions'));
   assert.ok(!review.args.includes('--permission-mode'));
-  assert.match(review.input, /^\/review/);
+  assert.equal(review.input, 'Review GitHub PR https://github.com/acme/repo/pull/7');
+  assert.doesNotMatch(review.input, /^\/review/);
 });
 
 test('adapters normalize native session identifiers', () => {

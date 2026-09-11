@@ -412,7 +412,7 @@ curl -X POST http://127.0.0.1:4310/api/requirements/req_.../confirm \
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `provider` | string | 是 | `codex` 或 `claude-code` |
-| `prompt` | string | 否 | 额外的 Review 关注点 |
+| `prompt` | string | 否 | 追加到 Reviewer system/developer 指令的 Review 关注点；Reviewer 的任务 prompt 始终只是 `Review GitHub PR <url>` |
 
 ~~~bash
 curl -X POST http://127.0.0.1:4310/api/pull-requests/pr_.../review-requests \
