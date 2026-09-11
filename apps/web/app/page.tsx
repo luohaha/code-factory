@@ -292,9 +292,9 @@ function RequirementCard({
         </span>
       </div>
 
-      <button type="button" className="mt-2.5 block w-full text-left" onClick={onOpen}>
-        <h3 className="text-[13px] leading-5 font-semibold tracking-[-0.01em] hover:underline">{requirement.title}</h3>
-        <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-muted-foreground">{requirement.description}</p>
+      <button type="button" className="mt-2.5 block w-full min-w-0 overflow-hidden text-left" onClick={onOpen}>
+        <h3 className="line-clamp-2 text-[13px] leading-5 font-semibold tracking-[-0.01em] [overflow-wrap:anywhere] hover:underline">{requirement.title}</h3>
+        <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-muted-foreground [overflow-wrap:anywhere]">{requirement.description}</p>
       </button>
 
       {requirement.session.lastError ? (
