@@ -8,7 +8,7 @@ Agent Manager 只支持 `codex` 和 `claude` 两个本机 CLI。每次调用都�
 - `shell: false`，不拼接 shell 命令；
 - prompt 通过 stdin 传入，避免出现在进程参数和进程列表；
 - 继承当前进程环境，由 CLI 自己读取登录状态、配置、项目指令和 Skills；
-- 不传 `--cd`、`--add-dir` 或危险的权限绕过参数；
+- 不传 `--cd` 或 `--add-dir`；Codex 和 Claude Code 均以无交互审批、无 CLI 沙箱限制的模式运行；
 - stdout 按 JSONL 解析，stderr 保留为错误摘要；
 - RD 默认超时 60 分钟，Reviewer 最长 30 分钟；超时先发 `SIGTERM`，2 秒后仍未退出则 `SIGKILL`；
 - 同一个 RD AgentSession 只允许一个活跃 Run；不同需求的 Session 不经调度即可并行运行。
@@ -20,20 +20,22 @@ Agent Manager 只支持 `codex` 和 `claude` 两个本机 CLI。每次调用都�
 新建 RD 原生会话：
 
 ```bash
-codex exec --json --color never --sandbox workspace-write \
+codex exec --json --color never --dangerously-bypass-approvals-and-sandbox \
   -c 'developer_instructions="...Code Factory API contract..."' -
 ```
 
 恢复原生会话：
 
 ```bash
-codex exec --json --color never --sandbox workspace-write resume <thread-id> -
+codex exec --json --color never --dangerously-bypass-approvals-and-sandbox \
+  resume <thread-id> -
 ```
 
 短程 Reviewer：
 
 ```bash
-codex exec review --json --ephemeral --base <base-branch> -
+codex exec review --json --ephemeral \
+  --dangerously-bypass-approvals-and-sandbox --base <base-branch> -
 ```
 
 `thread.started` 事件中的 `thread_id` 写入 AgentSession，后续 RD Run 复用它。Reviewer 使用 `--ephemeral`，不会形成可恢复的业务 Session。
@@ -45,7 +47,7 @@ Codex 的 Code Factory 运行协议通过官方支持的 `developer_instructions
 
 ```bash
 claude --print --output-format stream-json --verbose \
-  --permission-mode acceptEdits --session-id <uuid> \
+  --dangerously-skip-permissions --session-id <uuid> \
   --append-system-prompt "...Code Factory API contract..."
 ```
 
@@ -53,17 +55,17 @@ claude --print --output-format stream-json --verbose \
 
 ```bash
 claude --print --output-format stream-json --verbose \
-  --permission-mode acceptEdits --resume <session-id>
+  --dangerously-skip-permissions --resume <session-id>
 ```
 
 短程 Reviewer：
 
 ```bash
 claude --print --output-format stream-json --verbose \
-  --no-session-persistence
+  --no-session-persistence --dangerously-skip-permissions
 ```
 
-Reviewer 的 stdin 以 `/review` 开头，让 Claude Code 直接使用当前目录可用的原生 review skill；不覆盖 permission mode。`--no-session-persistence` 只负责保证它不会变成长生命周期会话。Reviewer 被要求使用 GitHub CLI/API 读取指定 PR/head SHA、发布评论且不修改共享工作区。
+Reviewer 的 stdin 以 `/review` 开头，让 Claude Code 直接使用当前目录可用的原生 review skill。`--no-session-persistence` 只负责保证它不会变成长生命周期会话。Reviewer 在权限层面不受限制，但 prompt 仍要求它只使用 GitHub CLI/API 读取指定 PR/head SHA、发布评论且不修改共享工作区。
 
 ## 4. 事件归一化
 
@@ -87,4 +89,6 @@ Agent Manager 自己只依赖归一化字段，原始事件可作为诊断流输
 
 ## 6. 安全边界
 
-Agent Manager 应只在用户信任的代码目录中启动，HTTP 默认只监听 `127.0.0.1`，并只允许 `http://localhost:3000` 的本地 Web 看板跨域访问；可用 `--allow-origin` 覆盖。API 不接受客户端指定 cwd。生产化前还需要增加本地访问令牌、Webhook 签名验证、敏感字段脱敏和运行日志清理策略。
+Agent Manager 应只在用户信任的代码目录中启动。所有 headless RD 和 Reviewer 都会跳过 CLI 审批与沙箱检查，继承启动用户的完整文件系统、网络和命令执行权限；Agent Manager 启动时会明确打印此警告。Reviewer 的“只读”是 prompt 约束，不是操作系统级隔离。
+
+HTTP 默认只监听 `127.0.0.1`，并只允许 `http://localhost:3000` 的本地 Web 看板跨域访问；可用 `--allow-origin` 覆盖。API 不接受客户端指定 cwd。生产化前还需要增加本地访问令牌、Webhook 签名验证、敏感字段脱敏和运行日志清理策略。

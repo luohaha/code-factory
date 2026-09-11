@@ -24,8 +24,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       '--output-format',
       'stream-json',
       '--verbose',
-      '--permission-mode',
-      'acceptEdits',
+      '--dangerously-skip-permissions',
     ];
     if (input.nativeSessionId) args.push('--resume', input.nativeSessionId);
     else args.push('--session-id', randomUUID());
@@ -45,6 +44,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
         'stream-json',
         '--verbose',
         '--no-session-persistence',
+        '--dangerously-skip-permissions',
         ...instructionArgs,
       ],
       input: `/review Review the current changes against ${input.baseBranch}. ${input.prompt}`,

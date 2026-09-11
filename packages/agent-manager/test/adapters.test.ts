@@ -9,17 +9,25 @@ test('Codex starts and resumes through stdin without overriding the workspace', 
   const first = adapter.buildRdInvocation({ prompt: 'implement it', nativeSessionId: null });
   assert.equal(first.command, 'codex');
   assert.equal(first.input, 'implement it');
-  assert.deepEqual(first.args, ['exec', '--json', '--color', 'never', '--sandbox', 'workspace-write', '-']);
+  assert.deepEqual(first.args, ['exec', '--json', '--color', 'never', '--dangerously-bypass-approvals-and-sandbox', '-']);
 
   const resumed = adapter.buildRdInvocation({ prompt: 'continue', nativeSessionId: 'thread-1' });
-  assert.deepEqual(resumed.args, ['exec', '--json', '--color', 'never', '--sandbox', 'workspace-write', 'resume', 'thread-1', '-']);
+  assert.deepEqual(resumed.args, ['exec', '--json', '--color', 'never', '--dangerously-bypass-approvals-and-sandbox', 'resume', 'thread-1', '-']);
   assert.ok(!resumed.args.includes('--cd'));
-  assert.ok(!resumed.args.some((value) => value.includes('dangerously')));
 });
 
 test('Codex reviewer is ephemeral and scoped to a base branch', () => {
   const invocation = new CodexAdapter().buildReviewInvocation({ prompt: 'review carefully', baseBranch: 'main' });
-  assert.deepEqual(invocation.args, ['exec', 'review', '--json', '--ephemeral', '--base', 'main', '-']);
+  assert.deepEqual(invocation.args, [
+    'exec',
+    'review',
+    '--json',
+    '--ephemeral',
+    '--dangerously-bypass-approvals-and-sandbox',
+    '--base',
+    'main',
+    '-',
+  ]);
   assert.equal(invocation.input, 'review carefully');
 });
 
@@ -27,7 +35,8 @@ test('Claude Code persists RD sessions but not reviewer sessions', () => {
   const adapter = new ClaudeCodeAdapter();
   const first = adapter.buildRdInvocation({ prompt: 'implement it', nativeSessionId: null });
   assert.ok(first.args.includes('--session-id'));
-  assert.ok(first.args.includes('acceptEdits'));
+  assert.ok(first.args.includes('--dangerously-skip-permissions'));
+  assert.ok(!first.args.includes('--permission-mode'));
   assert.ok(!first.args.includes('--add-dir'));
 
   const resumed = adapter.buildRdInvocation({ prompt: 'continue', nativeSessionId: 'session-1' });
@@ -35,6 +44,7 @@ test('Claude Code persists RD sessions but not reviewer sessions', () => {
 
   const review = adapter.buildReviewInvocation({ prompt: 'focus on tests', baseBranch: 'main' });
   assert.ok(review.args.includes('--no-session-persistence'));
+  assert.ok(review.args.includes('--dangerously-skip-permissions'));
   assert.ok(!review.args.includes('--permission-mode'));
   assert.match(review.input, /^\/review/);
 });

@@ -52,6 +52,8 @@ npx @code-factory/agent-manager start
 
 All agents launched by that process use `~/starrocks` as their working directory.
 
+Every headless RD and Reviewer invocation skips interactive approval and CLI sandbox checks. It therefore inherits the launching user's full filesystem, network, and command-execution permissions. Agent Manager must only be started in a trusted workspace. Reviewers remain behaviorally read-only through their task instructions; this is not an operating-system security boundary.
+
 ## 3. Entities
 
 ### Requirement
@@ -152,7 +154,7 @@ DRAFT → OPEN → MERGED
 
 - One AgentSession may have at most one active RD Run.
 - RD Sessions belonging to different Requirements may run concurrently.
-- Reviewer is an independent, read-only, short-lived task and may run concurrently with RD.
+- Reviewer is an independent, behaviorally read-only, short-lived task and may run concurrently with RD.
 - One PR may have at most one active ReviewRequest.
 - All processes share the Agent Manager working directory by default. Concurrent RD Sessions can therefore conflict on files or Git state. The MVP exposes this risk instead of hiding it behind a global lock. Optional worktree isolation can be added later.
 

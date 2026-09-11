@@ -2,6 +2,8 @@
 
 默认地址为 `http://127.0.0.1:4310`。API、SSE 和 Web 页面使用同一端口，只操作 Agent Manager 启动时绑定的 workspace。
 
+逐接口的请求字段、响应模型、状态码和 `curl` 示例见 [Agent Manager HTTP API Reference](agent-manager-api.md)。本文档重点说明消息投递与事件协议。
+
 ## 1. 查询接口
 
 ~~~text

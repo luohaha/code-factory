@@ -12,7 +12,7 @@ export class CodexAdapter implements AgentAdapter {
   readonly provider = 'codex' as const;
 
   buildRdInvocation(input: RdInvocationInput): AgentInvocation {
-    const common = ['--json', '--color', 'never', '--sandbox', 'workspace-write'];
+    const common = ['--json', '--color', 'never', '--dangerously-bypass-approvals-and-sandbox'];
     if (input.developerInstructions) {
       common.push('-c', `developer_instructions=${JSON.stringify(input.developerInstructions)}`);
     }
@@ -27,7 +27,17 @@ export class CodexAdapter implements AgentAdapter {
       : [];
     return {
       command: 'codex',
-      args: ['exec', 'review', '--json', '--ephemeral', ...instructionArgs, '--base', input.baseBranch, '-'],
+      args: [
+        'exec',
+        'review',
+        '--json',
+        '--ephemeral',
+        '--dangerously-bypass-approvals-and-sandbox',
+        ...instructionArgs,
+        '--base',
+        input.baseBranch,
+        '-',
+      ],
       input: input.prompt,
     };
   }

@@ -24,6 +24,7 @@ The main runtime rules are:
 - Reviewer is a short-lived Run with no persistent AgentSession. Its result is added to the Requirement conversation and wakes the corresponding RD session.
 - An RD Agent can call the local Agent API to register or update a PR and propose a separate TODO Requirement.
 - Child-process cwd is always the Agent Manager startup directory. Project instructions, Skills, and configuration are loaded according to the native Codex or Claude Code directory rules.
+- Every headless RD and Reviewer skips CLI approval and sandbox checks, so it runs with the launching user's full filesystem, network, and command-execution permissions. Start Agent Manager only in a trusted workspace.
 - Requirements follow `TODO → DOING → WAITING_CONFIRMATION → DONE`.
 - SQLite is the initial persistence layer, behind a business-level Store interface that can later be implemented with PostgreSQL.
 
@@ -67,6 +68,7 @@ Agent Manager prints a local dashboard URL:
 ~~~text
 Dashboard: http://127.0.0.1:4310/
 API:       http://127.0.0.1:4310/api
+Warning: headless agents run with the current user's full filesystem and network permissions.
 ~~~
 
 Open the Dashboard URL to use Code Factory. Pass `--open` to open it automatically:
@@ -102,6 +104,7 @@ npm run build
 - [Final architecture and domain model — English](docs/architecture.en.md)
 - [最终架构与领域模型 — 中文](docs/architecture.md)
 - [Headless Agent Runner](docs/agent-runners.md)
+- [Agent Manager HTTP API Reference](docs/agent-manager-api.md)
 - [HTTP and event protocol](docs/protocol.md)
 - [Development roadmap](docs/roadmap.md)
 

@@ -43,6 +43,8 @@ Agent Manager 启动时以 `realpath(process.cwd())` 固定 workspace。RD 和 R
 
 Agent Manager 只额外注入一段 Code Factory 协议指令，告诉 RD 当前 Requirement/Session ID 以及可调用的本地 Agent API；它不复制或替换项目自身的 Skills。
 
+所有 headless RD 和 Reviewer 调用都会跳过交互审批与 CLI 沙箱检查，继承启动用户的完整文件系统、网络和命令执行权限。因此 Agent Manager 只能在可信 workspace 中启动。Reviewer 的“只读”由任务 prompt 约束，不是操作系统级安全边界。
+
 ## 3. 实体
 
 ### Requirement
@@ -141,7 +143,7 @@ DRAFT → OPEN → MERGED
 
 - 同一个 AgentSession 同时最多一个 RD Run；
 - 不同 Requirement 的 RD Session 可以并行；
-- Reviewer 是独立只读短任务，可以与 RD Run 并行；
+- Reviewer 是行为上只读的独立短任务，可以与 RD Run 并行；
 - 同一个 PR 同时最多一个 ReviewRequest；
 - 所有进程默认共享 Agent Manager 的 cwd，因此不同 RD 并行写入仍可能发生文件或 Git 状态冲突。MVP 不通过全局锁隐藏这个风险，后续提供可选 worktree 隔离。
 

@@ -37,6 +37,7 @@ console.log(`Workspace: ${manager.workspaceRoot}`);
 console.log(`Database:  ${manager.databasePath}`);
 console.log(`Dashboard: ${dashboardUrl}`);
 console.log(`API:       ${dashboardUrl}api`);
+console.log('Warning: headless agents run with the current user\'s full filesystem and network permissions.');
 
 if (process.argv.includes('--open')) {
   const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
