@@ -103,6 +103,14 @@ Agent Manager 启动后默认每 30 秒通过本机 `gh` CLI 轮询 Draft/Open P
 
 ## 7. 安全边界
 
-Agent Manager 应只在用户信任的代码目录中启动。所有 headless RD 和 Reviewer 都会跳过 CLI 审批与沙箱检查，继承启动用户的完整文件系统、网络和命令执行权限；Agent Manager 启动时会明确打印此警告。Reviewer 的“只读”是 prompt 约束，不是操作系统级隔离。
+Agent Manager 应只在用户信任的代码目录中启动。所有 headless RD 和 Reviewer 都会跳过 CLI 审批与沙箱检查，继承启动用户的完整文件系统、网络和命令执行权限；Agent Manager 启动时会在日志中明确记录此警告。Reviewer 的“只读”是 prompt 约束，不是操作系统级隔离。
 
 HTTP 默认只监听 `127.0.0.1`，并只允许 `http://localhost:3000` 的本地 Web 看板跨域访问；可用 `--allow-origin` 覆盖。API 不接受客户端指定 cwd。生产化前还需要增加本地访问令牌、Webhook 签名验证、敏感字段脱敏和运行日志清理策略。
+
+## 8. 运行日志
+
+Agent Manager 默认把自身、Requirement、Run、PR reconciliation 和 HTTP 请求生命周期日志以 JSONL 追加到 `~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log`，不向 stdout 或 stderr 打印运行日志。默认级别为 `info`，可通过 `--log-level debug|info|warn|error|silent` 或 `CODE_FACTORY_LOG_LEVEL` 调整；可通过 `--log-file PATH` 或 `CODE_FACTORY_LOG_FILE` 修改文件位置，命令行参数优先于环境变量。日志文件创建权限为 `0600`。
+
+底层使用 `winston` 和 `winston-daily-rotate-file`。默认按本地日期写入 `agent-manager-YYYY-MM-DD.log`，单个文件达到 20 MB 后继续按大小切分，保留 14 天；`agent-manager.log` 是指向当前文件的稳定符号链接。`--log-max-size SIZE` / `CODE_FACTORY_LOG_MAX_SIZE` 可修改单文件上限，`--log-max-files COUNT_OR_DAYS` / `CODE_FACTORY_LOG_MAX_FILES` 可修改保留文件数或天数。
+
+日志只包含关联排障所需的 ID、状态、耗时和错误，不记录 prompt、对话正文或 Agent 原始 stdout。直接通过库构造 `AgentManager` 时也默认写文件；宿主仍可注入自定义 `Logger`，显式接管日志目标与策略。

@@ -172,4 +172,4 @@ Web 有三个看板：
 
 需求详情是 Jira 式工作面板：展示描述、关联 PR、运行信息以及 Human/RD/Reviewer/System 的统一对话。RD 运行时输入框仍可使用，未消费消息数会显示在需求卡和 Session 卡上。
 
-运行 `npx @code-factory/agent-manager start` 后，Agent Manager 同一端口提供 API、SSE 和打包后的 Web 页面，并打印可点击 URL。
+运行 `npx @code-factory/agent-manager start` 后，Agent Manager 同一端口提供 API、SSE 和打包后的 Web 页面，并将本地 URL 写入 workspace 数据目录中的日志文件。

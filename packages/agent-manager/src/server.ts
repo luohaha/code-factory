@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 import { AgentManager, MAX_MESSAGE_ATTACHMENT_BYTES } from './agent-manager.js';
 import { DashboardServer } from './dashboard-server.js';
+import type { Logger } from './logger.js';
 import { StoreConflictError, StoreNotFoundError } from './store.js';
 import type { AgentProvider, ManagerEvent, PullRequestStatus } from './types.js';
 
@@ -10,6 +11,7 @@ export interface AgentManagerServerOptions {
   host?: string;
   port?: number;
   allowedOrigin?: string;
+  logger?: Logger;
 }
 
 function sendJson(response: ServerResponse, status: number, value: unknown): void {
@@ -88,8 +90,21 @@ function fileNameHeader(request: IncomingMessage): string {
 
 export function createAgentManagerServer(manager: AgentManager, options: AgentManagerServerOptions = {}): Server {
   const allowedOrigin = options.allowedOrigin;
+  const logger = (options.logger ?? manager.logger).child({ component: 'http' });
   const dashboard = new DashboardServer();
   const server = createServer(async (request, response) => {
+    const startedAt = performance.now();
+    response.once('finish', () => {
+      const context = {
+        method: request.method ?? 'UNKNOWN',
+        path: request.url?.split('?', 1)[0] ?? '/',
+        statusCode: response.statusCode,
+        durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+      };
+      if (response.statusCode >= 500) logger.error('HTTP request completed', context);
+      else if (response.statusCode >= 400) logger.warn('HTTP request completed', context);
+      else logger.info('HTTP request completed', context);
+    });
     if (allowedOrigin) {
       response.setHeader('access-control-allow-origin', allowedOrigin);
       response.setHeader('access-control-allow-headers', 'content-type, x-file-name');
@@ -107,7 +122,11 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         return;
       }
       if (request.method === 'GET' && url.pathname === '/api/workspace') {
-        sendJson(response, 200, { root: manager.workspaceRoot, databasePath: manager.databasePath });
+        sendJson(response, 200, {
+          root: manager.workspaceRoot,
+          databasePath: manager.databasePath,
+          logFilePath: manager.logFilePath,
+        });
         return;
       }
       if (request.method === 'GET' && url.pathname === '/api/requirements') {
@@ -232,7 +251,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         const provider = providerField(body.provider);
         const prompt = stringField(body, 'prompt');
         void manager.requestReview(pullRequestId, { provider, ...(prompt ? { prompt } : {}) })
-          .catch((error: unknown) => console.error('Reviewer run failed:', error));
+          .catch((error: unknown) => logger.error('Reviewer run failed unexpectedly', { pullRequestId, error }));
         sendJson(response, 202, { accepted: true, pullRequestId, provider });
         return;
       }
@@ -257,7 +276,8 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         }
         const message = stringField(body, 'message');
         const attachmentIds = stringArrayField(body, 'attachmentIds');
-        void manager.runRequirement(requirementId, message, attachmentIds).catch((error: unknown) => console.error('RD run failed:', error));
+        void manager.runRequirement(requirementId, message, attachmentIds)
+          .catch((error: unknown) => logger.error('RD run failed unexpectedly', { requirementId, error }));
         sendJson(response, 202, { accepted: true, requirementId, action: name });
         return;
       }
@@ -274,7 +294,11 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
       } else if (error instanceof TypeError || error instanceof SyntaxError || error instanceof RangeError) {
         sendJson(response, 400, { error: error.message });
       } else {
-        console.error(error);
+        logger.error('HTTP request failed unexpectedly', {
+          method: request.method ?? 'UNKNOWN',
+          path: url.pathname,
+          error,
+        });
         sendJson(response, 500, { error: 'Internal server error' });
       }
     }
@@ -284,6 +308,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
     if (!address || typeof address === 'string') return;
     const host = address.address === '::' || address.address === '0.0.0.0' ? '127.0.0.1' : address.address;
     manager.setApiBaseUrl(`http://${host}:${address.port}/api`);
+    logger.info('HTTP server listening', { host, port: address.port });
   });
   return server;
 }

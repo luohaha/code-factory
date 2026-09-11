@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { AgentManager } from '../src/agent-manager.ts';
+import { createLogger } from '../src/logger.ts';
 import type { AgentProcessRunner, ProcessRunRequest } from '../src/process-runner.ts';
 import { createAgentManagerServer } from '../src/server.ts';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
@@ -22,6 +23,9 @@ class WaitingRunner implements AgentProcessRunner {
 
 test('HTTP API exposes the persisted human and RD Agent conversation', async () => {
   const runner = new WaitingRunner();
+  const logLines: string[] = [];
+  const logWriter = { write: (value: string) => logLines.push(value) };
+  const logger = createLogger({ stdout: logWriter, stderr: logWriter });
   const attachmentDirectory = mkdtempSync(join(tmpdir(), 'code-factory-test-'));
   const manager = new AgentManager({
     workspaceRoot: process.cwd(),
@@ -29,8 +33,9 @@ test('HTTP API exposes the persisted human and RD Agent conversation', async () 
     attachmentDirectory,
     store: new SqliteAgentManagerStore(':memory:'),
     runner,
+    logger,
   });
-  const server = createAgentManagerServer(manager, { allowedOrigin: 'http://localhost:3000' });
+  const server = createAgentManagerServer(manager, { allowedOrigin: 'http://localhost:3000', logger });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', resolve);
@@ -167,6 +172,13 @@ test('HTTP API exposes the persisted human and RD Agent conversation', async () 
     const proposed = await proposedResponse.json() as { status: string; createdBy: string };
     assert.equal(proposed.status, 'todo');
     assert.equal(proposed.createdBy, 'rd_agent');
+
+    const requestLogs = logLines.map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((entry) => entry.message === 'HTTP request completed');
+    assert.ok(requestLogs.some((entry) => entry.component === 'http'
+      && entry.path === '/api/requirements'
+      && entry.statusCode === 201
+      && typeof entry.durationMs === 'number'));
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     manager.close();

@@ -225,9 +225,12 @@ Reviewer Run 超时时，对应 `AgentRun.status` 为 `timed_out`，而 `ReviewR
 ~~~json
 {
   "root": "/path/to/workspace",
-  "databasePath": "/home/user/.code-factory/workspaces/7a60b5f8c3d94945/factory.sqlite"
+  "databasePath": "/home/user/.code-factory/workspaces/7a60b5f8c3d94945/factory.sqlite",
+  "logFilePath": "/home/user/.code-factory/workspaces/7a60b5f8c3d94945/logs/agent-manager.log"
 }
 ~~~
+
+`logFilePath` 指向当前活跃日志的稳定符号链接；实际日志文件按日期和大小滚动。
 
 ### `GET /api/requirements`
 
