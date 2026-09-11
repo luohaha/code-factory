@@ -253,6 +253,18 @@ export class AgentManager extends EventEmitter {
     return pullRequest;
   }
 
+  /** Registers Agent-authored PR metadata without allowing the Agent to drive GitHub lifecycle state. */
+  registerAgentPullRequest(input: TrackPullRequestInput): PullRequest {
+    const existing = this.#store.listPullRequests()
+      .find((item) => item.repository === input.repository && item.number === input.number);
+    if (existing && existing.requirementId !== input.requirementId) {
+      throw new StoreConflictError(
+        `Pull request ${input.repository}#${input.number} already belongs to requirement ${existing.requirementId}`,
+      );
+    }
+    return this.trackPullRequest(existing ? { ...input, status: existing.status } : input);
+  }
+
   /** Starts a requirement or explicitly retries it. Human messages are persisted before any Run starts. */
   runRequirement(
     requirementId: string,
@@ -514,6 +526,7 @@ export class AgentManager extends EventEmitter {
           `${pullRequest.status} -> ${snapshot.status}`,
           `PR: ${snapshot.url}`,
           `Head: ${snapshot.headSha}`,
+          'Agent Manager has already persisted this lifecycle state from GitHub. Do not call /api/agent/pull-requests to mirror this event.',
         ].join('\n'),
         now,
       }) || shouldWakeRd;
@@ -628,7 +641,9 @@ export class AgentManager extends EventEmitter {
       `Requirement ID: ${requirement.id}`,
       `Agent Session ID: ${requirement.session.id}`,
       `Code Factory API base URL: ${this.#apiBaseUrl}`,
-      'When you create or update a GitHub pull request, register its current state by POSTing JSON to /agent/pull-requests.',
+      'Immediately after you create a GitHub pull request, register it once by POSTing JSON to /agent/pull-requests.',
+      'Call that endpoint again only when your own push or edit changes PR metadata such as title, branches, or headSha.',
+      'Agent Manager owns draft/open/closed/merged lifecycle synchronization through its GitHub reconciler. Never call /agent/pull-requests merely to mirror a lifecycle event reported by a System message or observed on GitHub.',
       `The payload must include requirementId=${requirement.id}, repository, number, url, title, baseBranch, headBranch, headSha, and status (draft|open|closed|merged).`,
       'When you discover separate follow-up work, you may propose a new TODO requirement by POSTing JSON to /agent/requirements.',
       `Include sourceSessionId=${requirement.session.id}, parentRequirementId=${requirement.id}, title, description, and optionally provider (defaults to your provider).`,

@@ -138,6 +138,8 @@ New review activity is appended as a Reviewer message. PR status and CI failures
 
 Observation baselines and external event receipts are persisted in SQLite. This prevents duplicate delivery across polling cycles and Agent Manager restarts. When an older PR is first adopted, existing comments and CI results form the baseline instead of being replayed, while a stale stored PR status is corrected immediately. `--pr-reconcile-interval SECONDS` changes the interval; `0` disables polling.
 
+GitHub and the PR reconciler exclusively advance PR lifecycle state. The RD Agent registers a PR after creating it and may refresh metadata when its own push or edit changes the head SHA, title, or branches, but the Agent API cannot change `draft/open/closed/merged` for an existing PR. Reconciler status messages explicitly say that the state is already persisted, so the RD Agent must not mirror the event.
+
 ## 6. State Machines
 
 Requirement:

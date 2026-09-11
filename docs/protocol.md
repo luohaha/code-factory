@@ -84,7 +84,7 @@ Content-Type: application/json
 }
 ~~~
 
-`status` 必须是 `draft | open | closed | merged`。`repository + number` 幂等更新同一 PR。
+`status` 必须是 `draft | open | closed | merged`，仅用于首次登记。`repository + number` 幂等更新同一 PR 的元数据，但后续请求不能改变 lifecycle 状态；状态由 PR Reconciler 根据 GitHub 自动同步。
 
 提议新的独立需求：
 

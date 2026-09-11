@@ -127,6 +127,8 @@ Agent Manager 默认每 30 秒通过本机已认证的 `gh` CLI 轮询所有已�
 
 SQLite 持久化 observation baseline 和 external event receipt，避免轮询或 Agent Manager 重启后重复投递。首次接管旧 PR 时，已有评论和 CI 结果只作为基线，不回放历史消息；但数据库中落后的 PR 状态会立即修正。可用 `--pr-reconcile-interval SECONDS` 修改间隔，设为 `0` 可关闭轮询。
 
+PR lifecycle 状态由 GitHub 和 PR Reconciler 单向推进。RD Agent 只在创建 PR 时首次登记，以及自己的 push 或编辑改变 head SHA、标题或分支等元数据时更新记录；Agent API 不允许既有 PR 通过 RD 请求切换 `draft/open/closed/merged`。Reconciler 的状态消息会明确说明状态已经持久化，RD 不应重复同步。
+
 ## 6. 状态机
 
 Requirement：

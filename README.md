@@ -23,7 +23,7 @@ The main runtime rules are:
 - A human can request a review for an Open PR and explicitly choose Codex or Claude Code as the Reviewer.
 - Reviewer is a short-lived Run with no persistent AgentSession. Its result is added to the Requirement conversation and wakes the corresponding RD session.
 - A built-in PR reconciler polls GitHub for status changes, PR comments, review submissions, inline review comments, and newly failed CI checks. These events enter the same Requirement conversation and wake or queue for the RD session.
-- An RD Agent can call the local Agent API to register or update a PR and propose a separate TODO Requirement.
+- An RD Agent can call the local Agent API to register a newly created PR, refresh metadata changed by its own work, and propose a separate TODO Requirement. GitHub lifecycle state is subsequently owned by the Agent Manager reconciler rather than the RD Agent.
 - Child-process cwd is always the Agent Manager startup directory. Project instructions, Skills, and configuration are loaded according to the native Codex or Claude Code directory rules.
 - Every headless RD and Reviewer skips CLI approval and sandbox checks, so it runs with the launching user's full filesystem, network, and command-execution permissions. Start Agent Manager only in a trusted workspace.
 - Requirements follow `TODO → DOING → WAITING_CONFIRMATION → DONE`.
