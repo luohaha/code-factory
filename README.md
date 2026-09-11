@@ -1,33 +1,137 @@
 # Code Factory
 
-Code Factory is a local, TypeScript-based development workspace for running and supervising coding agents. Start an **Agent Manager** inside a repository, create Jira-like requirements, collaborate with long-lived RD Agent sessions, track pull requests, and request on-demand reviews from a Web dashboard.
+> From requirement to reviewed pull request, keep every coding-agent loop visible and under human control.
 
-The current implementation supports headless **Codex** and **Claude Code**.
+Code Factory is a **local control plane for agent-driven software delivery**. It turns each requirement into a persistent development loop that connects a human, an RD coding agent, GitHub pull requests, and on-demand AI reviewers in one Web dashboard.
+
+It is designed for developers and engineering teams that already use **Codex** or **Claude Code**, but need more than isolated terminal sessions: durable context, visible progress, human intervention, PR feedback, and an auditable conversation around the work.
+
+## Product Positioning
+
+Code Factory sits between an issue tracker, an agent session manager, and a pull-request control center:
+
+- **Requirement-driven:** work starts from a concrete requirement instead of an ad-hoc prompt.
+- **Persistent:** every requirement owns a long-lived RD session that can be resumed across multiple runs.
+- **Human-controlled:** people can add context, queue corrections, interrupt a run, and decide when work is done.
+- **Trigger-aware:** external signals flow into the same development loop; the built-in GitHub PR Trigger handles status, reviews, comments, and CI failures.
+- **Local-first:** agents run in your existing repository with your installed CLI tools, project instructions, and credentials.
+
+Code Factory is not a hosted IDE or a generic agent pool. It coordinates the delivery workflow around coding agents while leaving code execution, Git, and GitHub access in the developer's own environment.
+
+The current implementation supports headless **Codex** and **Claude Code** agents.
+
+## Quick Start
+
+### Prerequisites
+
+- Node.js 22.13 or newer
+- At least one installed and authenticated Agent CLI: `codex` or `claude`
+- GitHub CLI (`gh`) installed and authenticated for PR reconciliation and review workflows
+
+### Build and start from this repository
+
+Build Agent Manager once:
+
+~~~bash
+cd /path/to/code-factory/packages/agent-manager
+npm install
+npm run build
+~~~
+
+Then start it **from the repository you want the agents to work in**:
+
+~~~bash
+cd /path/to/your-project
+node /path/to/code-factory/packages/agent-manager/dist/cli.js start --open
+~~~
+
+The startup directory becomes the managed workspace and the working directory for every RD and Reviewer agent. By default, the dashboard is available at [http://127.0.0.1:4310](http://127.0.0.1:4310).
+
+### Choose a port
+
+Use `--port` followed by an integer from `1` to `65535`:
+
+~~~bash
+node /path/to/code-factory/packages/agent-manager/dist/cli.js start --port 8080
+~~~
+
+To listen on all network interfaces, specify the host as well:
+
+~~~bash
+node /path/to/code-factory/packages/agent-manager/dist/cli.js start \
+  --host 0.0.0.0 \
+  --port 8080
+~~~
+
+Listening on `0.0.0.0` makes the dashboard reachable from other machines. Only do this on a trusted network: headless agents run with the permissions of the user who started Agent Manager.
+
+### Common examples
+
+~~~bash
+# Open the dashboard after startup
+node /path/to/code-factory/packages/agent-manager/dist/cli.js start --open
+
+# Reconcile tracked pull requests every 10 seconds
+node /path/to/code-factory/packages/agent-manager/dist/cli.js start \
+  --pr-reconcile-interval 10
+
+# Disable pull-request polling
+node /path/to/code-factory/packages/agent-manager/dist/cli.js start \
+  --pr-reconcile-interval 0
+
+# Use a custom database and debug logging
+node /path/to/code-factory/packages/agent-manager/dist/cli.js start \
+  --db /path/to/factory.sqlite \
+  --log-level debug
+~~~
+
+### CLI options
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--host HOST` | `127.0.0.1` | HTTP listen address. |
+| `--port PORT` | `4310` | Dashboard, HTTP API, and SSE port (`1`–`65535`). |
+| `--open` | Off | Open the dashboard in the default browser after startup. |
+| `--db PATH` | Workspace data directory | SQLite database path. |
+| `--allow-origin ORIGIN` | `http://localhost:3000` | Allowed CORS origin. |
+| `--pr-reconcile-interval SECONDS` | `30` | GitHub polling interval; use `0` to disable it. |
+| `--log-level LEVEL` | `info` | `debug`, `info`, `warn`, `error`, or `silent`. |
+| `--log-file PATH` | Workspace log directory | Structured JSONL log destination. |
+| `--log-max-size SIZE` | `20m` | Rotate the active log after it reaches this size. |
+| `--log-max-files COUNT_OR_DAYS` | `14d` | Number of rotated logs or retention period. |
+
+When the npm package is published, the equivalent command will be:
+
+~~~bash
+cd /path/to/your-project
+npx @code-factory/agent-manager start --port 8080 --open
+~~~
 
 ## How It Works
 
-Code Factory is built around three first-class domain entities:
+~~~mermaid
+flowchart LR
+  H[Human] <--> W[Web dashboard]
+  W <-->|HTTP + SSE| M[Agent Manager]
+  M <--> DB[(SQLite)]
+  M -->|Create or resume| RD[Long-lived RD session<br/>Codex or Claude Code]
+  M -->|Request review| RV[Short-lived Reviewer<br/>Codex or Claude Code]
+  RD -->|Edit and test| WS[Local workspace]
+  RD -->|Create or update PR| GH[GitHub]
+  RD -->|Register PR or propose TODO| M
+  RV -->|Review comments| GH
+  GH -->|PR state, comments,<br/>reviews, and CI| T[PR Agent Trigger]
+  T -->|Deduplicated messages| M
+~~~
 
-- **Requirement** — a Jira-like work item containing its business state and complete Human/RD/Reviewer conversation.
-- **AgentSession** — the long-lived RD session created and permanently bound to one Requirement.
-- **PullRequest** — a GitHub PR associated with a Requirement, with `draft`, `open`, `closed`, or `merged` state.
+1. A human creates a Requirement and chooses Codex or Claude Code, optionally pinning a model and reasoning effort. Code Factory creates a dedicated, persistent RD session for it.
+2. Agent Manager starts or resumes that agent in the managed workspace. Messages sent during a run are queued; the human may explicitly interrupt when an immediate correction is needed.
+3. The RD agent edits and tests the repository, then registers any pull request it creates. The built-in PR Agent Trigger continuously brings GitHub state and feedback into the Requirement conversation.
+4. A human can request a short-lived AI review for an open PR with its own provider, model, and reasoning effort. Review results return to the same conversation and wake the original RD session to continue the loop.
 
-The main runtime rules are:
+Different Requirements can run concurrently, while each Requirement has at most one active RD run. Requirement state, conversations, runs, sessions, PR metadata, and Agent Trigger receipts are persisted in SQLite.
 
-- One Agent Manager manages the workspace directory from which it was started.
-- A Requirement receives its RD AgentSession immediately when it is created, with an optional model and reasoning-effort override. There is no agent pool or scheduling queue.
-- One AgentSession may produce multiple AgentRuns while preserving context through the native Codex thread ID or Claude Code session ID.
-- Different RD sessions may run concurrently, while a single session may have only one active RD Run.
-- The Requirement conversation is the RD message stream. Human and Reviewer messages arriving during a Run are queued without interrupting it. A human can explicitly interrupt the current Run, after which the same Session resumes with queued messages.
-- RD Agent output is visible in the conversation but is never sent back to the same agent as new input.
-- A human can request a review for an Open PR, explicitly choose Codex or Claude Code as the Reviewer, and optionally override its model and reasoning effort.
-- Reviewer is a short-lived Run with no persistent AgentSession. Its result is added to the Requirement conversation and wakes the corresponding RD session.
-- A built-in PR Agent Trigger polls GitHub for status changes, PR comments, review submissions, inline review comments, and newly failed CI checks. `AgentTrigger` is the extension point for future sources such as Slack threads; Agent Manager owns deduplication, conversation delivery, and RD wake-up behavior.
-- An RD Agent can call the local Agent API to register a newly created PR, refresh metadata changed by its own work, and propose a separate TODO Requirement. GitHub lifecycle state is subsequently owned by the Agent Manager reconciler rather than the RD Agent.
-- Child-process cwd is always the Agent Manager startup directory. Project instructions, Skills, and configuration are loaded according to the native Codex or Claude Code directory rules.
-- Every headless RD and Reviewer skips CLI approval and sandbox checks, so it runs with the launching user's full filesystem, network, and command-execution permissions. Start Agent Manager only in a trusted workspace.
-- Requirements follow `TODO → DOING → WAITING_CONFIRMATION → DONE`.
-- SQLite is the initial persistence layer, behind a business-level Store interface that can later be implemented with PostgreSQL.
+For the complete domain model, state machines, concurrency rules, and delivery semantics, see [Final architecture and domain model](docs/architecture.en.md).
 
 ## Web Dashboard
 
@@ -37,79 +141,35 @@ The bundled dashboard provides three views:
 - Pull Request board: `DRAFT / OPEN / CLOSED / MERGED`
 - RD Session board: `Idle / Running / Waiting for human / Failed / Completed`
 
-Opening a Requirement displays its description, linked PRs, Run information, and unified conversation. Human messages can include pasted, dropped, or selected images and general file attachments. Images render inline; other files remain downloadable and are passed to the RD Agent by local path. The input remains available while RD is running: sending only queues the message, while the separate **Interrupt** button cancels the current Run and lets the same Session process queued corrections.
+Opening a Requirement shows its description, linked PRs, run information, and unified Human/RD/Reviewer conversation. Messages support images and file attachments. New input can be queued while RD is running, or the current run can be interrupted so the same session handles the correction immediately.
 
-The dashboard supports English and Simplified Chinese. Use the language switcher in the header to change languages; the selected locale is saved in the browser, and first-time visitors default to their browser language.
+The dashboard supports English and Simplified Chinese, remembers the selected locale, and initially follows the browser language.
 
-## Quick Start
+The Web dashboard, HTTP API, and SSE event stream run in the same process and use the same port. No separate Web deployment is required.
 
-Requirements:
+## Data and Logs
 
-- Node.js 22.13 or newer
-- At least one installed and authenticated Agent CLI: `codex` or `claude`
-- GitHub CLI (`gh`) installed and authenticated for PR reconciliation and review workflows
-
-Build from this repository:
-
-~~~bash
-cd packages/agent-manager
-npm install
-npm run build
-
-cd ~/starrocks
-node /path/to/code-factory/packages/agent-manager/dist/cli.js start
-~~~
-
-After the npm package is published, the intended command is:
-
-~~~bash
-cd ~/starrocks
-npx @code-factory/agent-manager start
-~~~
-
-Agent Manager writes structured JSONL logs to the workspace data directory by default:
-
-~~~bash
-tail -f ~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log
-~~~
-
-The CLI always prints a short startup banner with the Workspace, Database, log path,
-Dashboard URL, API URL, and PR reconciler interval. Other operational logs are not
-written to stdout or stderr. The default log level is `info`;
-set `CODE_FACTORY_LOG_LEVEL` or pass `--log-level debug|info|warn|error|silent`
-to change it. Override the destination with `CODE_FACTORY_LOG_FILE` or
-`--log-file PATH`. Lifecycle logs include Requirement, Session, Run, PR, and HTTP
-identifiers, but omit prompts, conversation bodies, and raw Agent output.
-
-File rotation is provided by `winston` and `winston-daily-rotate-file`. Logs use
-dated names such as `agent-manager-2026-09-11.log`, rotate again after 20 MB,
-and are retained for 14 days by default. `agent-manager.log` is a stable symlink
-to the active file. Use `--log-max-size SIZE` / `CODE_FACTORY_LOG_MAX_SIZE` and
-`--log-max-files COUNT_OR_DAYS` / `CODE_FACTORY_LOG_MAX_FILES` to override the
-size and retention limits.
-
-Open the Dashboard URL to use Code Factory. Pass `--open` to open it automatically:
-
-~~~bash
-npx @code-factory/agent-manager start --open
-~~~
-
-The Web dashboard, HTTP API, and SSE event stream use the same process and port. No separate Web deployment is required.
-
-By default, Agent Manager reconciles every tracked Draft/Open PR every 30 seconds. Change the interval or disable polling with:
-
-~~~bash
-npx @code-factory/agent-manager start --pr-reconcile-interval 10
-npx @code-factory/agent-manager start --pr-reconcile-interval 0
-~~~
-
-Workspace data is stored outside the managed repository:
+Workspace data is stored outside the managed repository by default:
 
 ~~~text
 ~/.code-factory/workspaces/<workspace-hash>/factory.sqlite
 ~/.code-factory/workspaces/<workspace-hash>/attachments/
 ~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log
 ~~~
+
+The CLI prints a startup banner containing the workspace, database, log path, dashboard URL, API URL, and PR reconciliation interval. Operational logs are written as structured JSONL and omit prompts, conversation bodies, and raw Agent output.
+
+Follow the active log with:
+
+~~~bash
+tail -f ~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log
+~~~
+
+Logging can also be configured with `CODE_FACTORY_LOG_LEVEL`, `CODE_FACTORY_LOG_FILE`, `CODE_FACTORY_LOG_MAX_SIZE`, and `CODE_FACTORY_LOG_MAX_FILES`. Command-line options take precedence over their environment-variable equivalents.
+
+## Security Model
+
+Every headless RD and Reviewer invocation skips interactive CLI approval and sandbox checks. Agents therefore inherit the launching user's filesystem, network, and command-execution permissions. Start Agent Manager only inside a trusted workspace and expose its HTTP port only to trusted users and networks.
 
 ## Verification
 
@@ -135,6 +195,6 @@ npm run build
 
 ## Current Boundaries
 
-The current implementation includes the Agent Manager core, SQLite Store, HTTP/SSE API, Codex and Claude Code adapters, conversation-driven RD continuation, PR tracking, manually triggered Reviewer Runs, and the bundled Web dashboard.
+The current implementation includes the Agent Manager core, SQLite Store, HTTP/SSE API, Codex and Claude Code adapters, conversation-driven RD continuation, PR tracking, manually triggered Reviewer runs, and the bundled Web dashboard.
 
-Reviewer agents are instructed to publish inline comments through the GitHub CLI/API. The polling reconciler observes GitHub state but does not yet structurally verify that a requested Reviewer posted every expected comment. The `AgentTrigger` extension API is currently code-level; dynamic trigger discovery/configuration and a Slack implementation remain future work. Webhook-based synchronization, stale-review indicators after a head-SHA change, local access tokens, detailed tool-execution logs, and optional worktree isolation also remain future work.
+The `AgentTrigger` extension API is currently code-level; dynamic trigger discovery/configuration and a Slack implementation remain future work. Webhook-based synchronization, stale-review indicators after a head-SHA change, local access tokens, detailed tool-execution logs, and optional worktree isolation also remain future work. Concurrent RD sessions currently share one working directory and can conflict on files or Git state.
