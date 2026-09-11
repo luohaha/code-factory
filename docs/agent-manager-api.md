@@ -226,7 +226,7 @@ Reviewer Run 超时时，对应 `AgentRun.status` 为 `timed_out`，而 `ReviewR
 {
   "root": "/path/to/workspace",
   "databasePath": "/home/user/.code-factory/workspaces/7a60b5f8c3d94945/factory.sqlite",
-  "logFilePath": "/home/user/.code-factory/workspaces/7a60b5f8c3d94945/agent-manager.log"
+  "logFilePath": "/home/user/.code-factory/workspaces/7a60b5f8c3d94945/logs/agent-manager.log"
 }
 ~~~
 

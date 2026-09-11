@@ -107,6 +107,6 @@ HTTP 默认只监听 `127.0.0.1`，并只允许 `http://localhost:3000` 的本�
 
 ## 8. 运行日志
 
-Agent Manager 默认把自身、Requirement、Run、PR reconciliation 和 HTTP 请求生命周期日志以 JSONL 追加到 `~/.code-factory/workspaces/<workspace-hash>/agent-manager.log`，不向 stdout 或 stderr 打印运行日志。默认级别为 `info`，可通过 `--log-level debug|info|warn|error|silent` 或 `CODE_FACTORY_LOG_LEVEL` 调整；可通过 `--log-file PATH` 或 `CODE_FACTORY_LOG_FILE` 修改文件位置，命令行参数优先于环境变量。日志文件创建权限为 `0600`。
+Agent Manager 默认把自身、Requirement、Run、PR reconciliation 和 HTTP 请求生命周期日志以 JSONL 追加到 `~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log`，不向 stdout 或 stderr 打印运行日志。默认级别为 `info`，可通过 `--log-level debug|info|warn|error|silent` 或 `CODE_FACTORY_LOG_LEVEL` 调整；可通过 `--log-file PATH` 或 `CODE_FACTORY_LOG_FILE` 修改文件位置，命令行参数优先于环境变量。日志文件创建权限为 `0600`。
 
 日志只包含关联排障所需的 ID、状态、耗时和错误，不记录 prompt、对话正文或 Agent 原始 stdout。直接通过库构造 `AgentManager` 时也默认写文件；宿主仍可注入自定义 `Logger`，显式接管日志目标与策略。

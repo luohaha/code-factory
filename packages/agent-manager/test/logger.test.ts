@@ -82,13 +82,13 @@ test('file logger appends every log level to a private JSONL file', () => {
   }
 });
 
-test('Agent Manager writes to its configured log file by default', () => {
+test('Agent Manager writes to the workspace logs directory by default', () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-manager-log-'));
-  const logFilePath = join(directory, 'manager.log');
+  const logFilePath = join(directory, 'logs', 'agent-manager.log');
   const manager = new AgentManager({
     workspaceRoot: process.cwd(),
+    databasePath: join(directory, 'factory.sqlite'),
     store: new SqliteAgentManagerStore(':memory:'),
-    logFilePath,
   });
   try {
     manager.createRequirement({

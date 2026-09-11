@@ -68,7 +68,7 @@ npx @code-factory/agent-manager start
 Agent Manager writes structured JSONL logs to the workspace data directory by default:
 
 ~~~bash
-tail -f ~/.code-factory/workspaces/<workspace-hash>/agent-manager.log
+tail -f ~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log
 ~~~
 
 No operational logs are written to stdout or stderr. The default log level is `info`;
@@ -97,7 +97,7 @@ Workspace data is stored outside the managed repository:
 ~~~text
 ~/.code-factory/workspaces/<workspace-hash>/factory.sqlite
 ~/.code-factory/workspaces/<workspace-hash>/attachments/
-~/.code-factory/workspaces/<workspace-hash>/agent-manager.log
+~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log
 ~~~
 
 ## Verification

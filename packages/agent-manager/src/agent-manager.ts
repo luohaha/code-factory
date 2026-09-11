@@ -51,7 +51,8 @@ export function defaultDatabasePath(workspaceRoot: string): string {
 }
 
 export function defaultLogFilePath(databasePath: string): string {
-  return resolve(databasePath === ':memory:' ? 'agent-manager.log' : join(dirname(databasePath), 'agent-manager.log'));
+  const workspaceDataDirectory = databasePath === ':memory:' ? process.cwd() : dirname(databasePath);
+  return resolve(workspaceDataDirectory, 'logs', 'agent-manager.log');
 }
 
 export const MAX_MESSAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
