@@ -39,6 +39,8 @@ The bundled dashboard provides three views:
 
 Opening a Requirement displays its description, linked PRs, Run information, and unified conversation. Human messages can include pasted, dropped, or selected images and general file attachments. Images render inline; other files remain downloadable and are passed to the RD Agent by local path. The input remains available while RD is running: sending only queues the message, while the separate **Interrupt** button cancels the current Run and lets the same Session process queued corrections.
 
+The dashboard supports English and Simplified Chinese. Use the language switcher in the header to change languages; the selected locale is saved in the browser, and first-time visitors default to their browser language.
+
 ## Quick Start
 
 Requirements:

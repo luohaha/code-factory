@@ -15,6 +15,7 @@ import {
   GitBranch,
   GitPullRequest,
   LayoutDashboard,
+  Languages,
   LoaderCircle,
   MessagesSquare,
   MessageSquareReply,
@@ -79,13 +80,15 @@ import {
   type SessionState,
   type WorkspaceDto,
 } from '@/lib/agent-manager-client';
+import { I18nProvider, useI18n } from '@/lib/i18n';
+import type { TranslationKey } from '@/locales/zh-CN';
 
 type ConnectionState = 'connecting' | 'online' | 'reconnecting' | 'offline';
 
 const requirementColumns: Array<{
   status: RequirementStatus;
-  title: string;
-  description: string;
+  title: TranslationKey;
+  description: TranslationKey;
   tone: string;
 }> = [
   { status: 'todo', title: 'TODO', description: 'Session assigned, not started', tone: 'bg-sky-500' },
@@ -94,7 +97,7 @@ const requirementColumns: Array<{
   { status: 'done', title: 'DONE', description: 'Completion confirmed by a human', tone: 'bg-emerald-600' },
 ];
 
-const pullRequestColumns: Array<{ status: PullRequestStatus; title: string; description: string; tone: string }> = [
+const pullRequestColumns: Array<{ status: PullRequestStatus; title: TranslationKey; description: TranslationKey; tone: string }> = [
   { status: 'draft', title: 'DRAFT', description: 'Still in preparation; review unavailable', tone: 'bg-slate-400' },
   { status: 'open', title: 'OPEN', description: 'A human can request an Agent review', tone: 'bg-emerald-500' },
   { status: 'closed', title: 'CLOSED', description: 'Closed without being merged', tone: 'bg-rose-500' },
@@ -103,8 +106,8 @@ const pullRequestColumns: Array<{ status: PullRequestStatus; title: string; desc
 
 const sessionColumns: Array<{
   state: SessionState;
-  title: string;
-  description: string;
+  title: TranslationKey;
+  description: TranslationKey;
   tone: string;
 }> = [
   { state: 'idle', title: 'IDLE', description: 'Session assigned, no Run yet', tone: 'bg-slate-400' },
@@ -114,7 +117,7 @@ const sessionColumns: Array<{
   { state: 'completed', title: 'COMPLETED', description: 'Requirement complete; Session archived', tone: 'bg-teal-600' },
 ];
 
-const stateLabel: Record<SessionState, string> = {
+const stateLabel: Record<SessionState, TranslationKey> = {
   idle: 'Idle',
   running: 'Running',
   waiting_human: 'Waiting for human',
@@ -130,7 +133,7 @@ const stateDot: Record<SessionState, string> = {
   completed: 'bg-teal-600',
 };
 
-const statusLabel: Record<RequirementStatus, string> = {
+const statusLabel: Record<RequirementStatus, TranslationKey> = {
   todo: 'TODO',
   doing: 'DOING',
   waiting_confirmation: 'Awaiting confirmation',
@@ -138,7 +141,15 @@ const statusLabel: Record<RequirementStatus, string> = {
   cancelled: 'Cancelled',
 };
 
-const authorLabel: Record<RequirementMessageDto['author'], string> = {
+const runStatusLabel: Record<AgentRunDto['status'], TranslationKey> = {
+  running: 'Running',
+  succeeded: 'Succeeded',
+  failed: 'Failed',
+  timed_out: 'Timed out',
+  cancelled: 'Cancelled',
+};
+
+const authorLabel: Record<RequirementMessageDto['author'], TranslationKey> = {
   human: 'Human',
   rd_agent: 'RD Agent',
   reviewer: 'Reviewer',
@@ -154,19 +165,19 @@ function shortId(id: string): string {
   return value.length > 12 ? value.slice(0, 8) : value;
 }
 
-function formatAge(value: string): string {
+function formatAge(value: string, t: ReturnType<typeof useI18n>['t']): string {
   const milliseconds = Date.now() - new Date(value).getTime();
-  if (!Number.isFinite(milliseconds) || milliseconds < 0) return 'just now';
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return t('just now');
   const minutes = Math.floor(milliseconds / 60_000);
-  if (minutes < 1) return 'just now';
-  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 1) return t('just now');
+  if (minutes < 60) return t('{count}m', { count: minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
+  if (hours < 24) return t('{count}h', { count: hours });
+  return t('{count}d', { count: Math.floor(hours / 24) });
 }
 
-function formatTime(value: string): string {
-  return new Intl.DateTimeFormat('en-US', {
+function formatTime(value: string, locale: 'en' | 'zh-CN'): string {
+  return new Intl.DateTimeFormat(locale === 'zh-CN' ? 'zh-CN' : 'en-US', {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -196,6 +207,7 @@ function formatBytes(value: number): string {
 }
 
 function MessageAttachments({ attachments, apiUrl }: { attachments: MessageAttachmentDto[]; apiUrl: string }) {
+  const { t } = useI18n();
   if (attachments.length === 0) return null;
   const images = attachments.filter((attachment) => attachment.kind === 'image');
   const files = attachments.filter((attachment) => attachment.kind !== 'image');
@@ -212,7 +224,7 @@ function MessageAttachments({ attachments, apiUrl }: { attachments: MessageAttac
                 target="_blank"
                 rel="noreferrer"
                 className="group relative block min-w-0 overflow-hidden rounded-xl border border-black/8 bg-black/4 dark:border-white/10 dark:bg-white/5"
-                title={`Open ${attachment.fileName}`}
+                title={t('Open {name}', { name: attachment.fileName })}
               >
                 {/* oxlint-disable-next-line next/no-img-element -- Attachment URLs are dynamic local API resources. */}
                 <img
@@ -281,6 +293,7 @@ function RequirementCard({
   onStart: () => void;
   onConfirm: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <article className="rounded-xl border border-border/80 bg-card p-3.5 shadow-[0_1px_2px_oklch(0.18_0.02_255/0.05)] transition hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-[0_8px_24px_oklch(0.18_0.02_255/0.08)]">
       <div className="flex items-start justify-between gap-3">
@@ -288,13 +301,13 @@ function RequirementCard({
           REQ-{shortId(requirement.id)}
         </Badge>
         <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-          <Clock3 className="size-3" />{formatAge(requirement.updatedAt)}
+          <Clock3 className="size-3" />{formatAge(requirement.updatedAt, t)}
         </span>
       </div>
 
-      <button type="button" className="mt-2.5 block w-full text-left" onClick={onOpen}>
-        <h3 className="text-[13px] leading-5 font-semibold tracking-[-0.01em] hover:underline">{requirement.title}</h3>
-        <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-muted-foreground">{requirement.description}</p>
+      <button type="button" className="mt-2.5 block w-full min-w-0 overflow-hidden text-left" onClick={onOpen}>
+        <h3 className="line-clamp-2 text-[13px] leading-5 font-semibold tracking-[-0.01em] [overflow-wrap:anywhere] hover:underline">{requirement.title}</h3>
+        <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-muted-foreground [overflow-wrap:anywhere]">{requirement.description}</p>
       </button>
 
       {requirement.session.lastError ? (
@@ -307,30 +320,30 @@ function RequirementCard({
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
             <span className={`size-2 shrink-0 rounded-full ${stateDot[requirement.session.state]}`} />
-            <span className="text-[10px] font-medium">RD · {stateLabel[requirement.session.state]}</span>
+            <span className="text-[10px] font-medium">RD · {t(stateLabel[requirement.session.state])}</span>
           </div>
           <span className="shrink-0 font-mono text-[9px] text-muted-foreground">{providerLabel(requirement.provider)}</span>
         </div>
         <p className="mt-1.5 truncate font-mono text-[9px] text-muted-foreground">ses-{shortId(requirement.session.id)}</p>
-        {run ? <p className="mt-2 text-[10px] text-foreground/70">{run.taskSummary} · {run.status}</p> : null}
+        {run ? <p className="mt-2 text-[10px] text-foreground/70">{run.taskSummary} · {t(runStatusLabel[run.status])}</p> : null}
         {requirement.session.pendingMessageCount > 0 ? (
-          <p className="mt-2 text-[10px] font-medium text-amber-600">{requirement.session.pendingMessageCount} messages pending</p>
+          <p className="mt-2 text-[10px] font-medium text-amber-600">{t('{count} messages pending', { count: requirement.session.pendingMessageCount })}</p>
         ) : null}
       </div>
 
       {requirement.status === 'todo' ? (
         <Button size="xs" className="mt-3 w-full" disabled={busy} onClick={onStart}>
-          {busy ? <LoaderCircle className="animate-spin" /> : <Play data-icon="inline-start" />}Start
+          {busy ? <LoaderCircle className="animate-spin" /> : <Play data-icon="inline-start" />}{t('Start')}
         </Button>
       ) : null}
       {requirement.status === 'waiting_confirmation' ? (
         <div className="mt-3 grid grid-cols-2 gap-2">
-          <Button size="xs" variant="outline" disabled={busy} onClick={onOpen}><MessageSquareReply data-icon="inline-start" />Reply</Button>
-          <Button size="xs" disabled={busy} onClick={onConfirm}><Check data-icon="inline-start" />Confirm completion</Button>
+          <Button size="xs" variant="outline" disabled={busy} onClick={onOpen}><MessageSquareReply data-icon="inline-start" />{t('Reply')}</Button>
+          <Button size="xs" disabled={busy} onClick={onConfirm}><Check data-icon="inline-start" />{t('Confirm completion')}</Button>
         </div>
       ) : null}
       {requirement.status === 'doing' && requirement.session.state !== 'running' ? (
-        <Button size="xs" variant="outline" className="mt-3 w-full" onClick={onOpen}><MessageSquareReply data-icon="inline-start" />Open conversation</Button>
+        <Button size="xs" variant="outline" className="mt-3 w-full" onClick={onOpen}><MessageSquareReply data-icon="inline-start" />{t('Open conversation')}</Button>
       ) : null}
     </article>
   );
@@ -343,6 +356,7 @@ function SessionCard({ requirement, run, busy, onOpen, onRetry }: {
   onOpen: () => void;
   onRetry: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <article className="rounded-xl border border-border/80 bg-card p-3.5">
       <div className="flex items-center justify-between gap-2">
@@ -356,13 +370,13 @@ function SessionCard({ requirement, run, busy, onOpen, onRetry }: {
         <h3 className="truncate text-xs font-semibold hover:underline">{requirement.title}</h3>
         <p className="mt-1.5 truncate font-mono text-[9px] text-muted-foreground">ses-{shortId(requirement.session.id)}</p>
       </button>
-      {run ? <p className="mt-2.5 text-[10px] leading-4 text-foreground/75">{run.taskSummary} · {run.status}</p> : null}
+      {run ? <p className="mt-2.5 text-[10px] leading-4 text-foreground/75">{run.taskSummary} · {t(runStatusLabel[run.status])}</p> : null}
       {requirement.session.pendingMessageCount > 0 ? (
-        <p className="mt-2 text-[10px] font-medium text-amber-600">{requirement.session.pendingMessageCount} external messages pending</p>
+        <p className="mt-2 text-[10px] font-medium text-amber-600">{t('{count} external messages pending', { count: requirement.session.pendingMessageCount })}</p>
       ) : null}
       {requirement.session.lastError ? (
         <Button size="xs" variant="destructive" className="mt-3 w-full" disabled={busy} onClick={onRetry}>
-          {busy ? <LoaderCircle className="animate-spin" /> : <RotateCcw data-icon="inline-start" />}Retry original Session
+          {busy ? <LoaderCircle className="animate-spin" /> : <RotateCcw data-icon="inline-start" />}{t('Retry original Session')}
         </Button>
       ) : null}
     </article>
@@ -376,6 +390,7 @@ function PullRequestCard({ pullRequest, requirement, activeReview, busy, onRevie
   busy: boolean;
   onReview: (provider: AgentProvider) => Promise<void>;
 }) {
+  const { t } = useI18n();
   const [reviewer, setReviewer] = useState<AgentProvider>('codex');
   return (
     <article className="rounded-xl border border-border/80 bg-card p-3.5 shadow-[0_1px_2px_oklch(0.18_0.02_255/0.05)]">
@@ -398,7 +413,7 @@ function PullRequestCard({ pullRequest, requirement, activeReview, busy, onRevie
           </NativeSelect>
           <Button size="xs" disabled={busy || Boolean(activeReview)} onClick={() => void onReview(reviewer).catch(() => undefined)}>
             {busy || activeReview ? <LoaderCircle className="animate-spin" /> : <ScanSearch data-icon="inline-start" />}
-            {activeReview ? 'Reviewing' : 'Request review'}
+            {activeReview ? t('Reviewing') : t('Request review')}
           </Button>
         </div>
       ) : null}
@@ -412,6 +427,7 @@ function RequirementPullRequestCard({ pullRequest, activeReview, busy, onReview 
   busy: boolean;
   onReview: (provider: AgentProvider) => Promise<void>;
 }) {
+  const { t } = useI18n();
   const [reviewer, setReviewer] = useState<AgentProvider>('codex');
   const status = pullRequestColumns.find((column) => column.status === pullRequest.status);
 
@@ -423,7 +439,7 @@ function RequirementPullRequestCard({ pullRequest, activeReview, busy, onReview 
             <Badge variant="outline" className="h-5 font-mono text-[10px]">{pullRequest.repository}#{pullRequest.number}</Badge>
             <span className="flex items-center gap-1.5 text-[9px] font-medium text-muted-foreground">
               <span className={`size-1.5 rounded-full ${status?.tone ?? 'bg-slate-400'}`} />
-              {status?.title ?? pullRequest.status.toUpperCase()}
+              {status ? t(status.title) : pullRequest.status.toUpperCase()}
             </span>
             <span className="font-mono text-[9px] text-muted-foreground">{pullRequest.headSha.slice(0, 8)}</span>
           </div>
@@ -444,14 +460,14 @@ function RequirementPullRequestCard({ pullRequest, activeReview, busy, onReview 
               disabled={busy || Boolean(activeReview)}
               onChange={(event) => setReviewer(event.target.value as AgentProvider)}
               className="min-w-0 flex-1 sm:w-40 sm:flex-none"
-              aria-label="Select Reviewer Agent"
+              aria-label={t('Select Reviewer Agent')}
             >
               <NativeSelectOption value="codex">Codex Reviewer</NativeSelectOption>
               <NativeSelectOption value="claude-code">Claude Reviewer</NativeSelectOption>
             </NativeSelect>
             <Button size="sm" disabled={busy || Boolean(activeReview)} onClick={() => void onReview(reviewer).catch(() => undefined)}>
               {busy || activeReview ? <LoaderCircle className="animate-spin" /> : <ScanSearch data-icon="inline-start" />}
-              {activeReview ? 'Reviewing' : 'Request review'}
+              {activeReview ? t('Reviewing') : t('Request review')}
             </Button>
           </div>
         ) : null}
@@ -464,6 +480,7 @@ function NewRequirementDialog({ disabled, onCreate }: {
   disabled: boolean;
   onCreate: (input: { title: string; description: string; provider: AgentProvider }) => Promise<void>;
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -492,24 +509,24 @@ function NewRequirementDialog({ disabled, onCreate }: {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button size="sm" disabled={disabled} />}><Plus data-icon="inline-start" />New requirement</DialogTrigger>
+      <DialogTrigger render={<Button size="sm" disabled={disabled} />}><Plus data-icon="inline-start" />{t('New requirement')}</DialogTrigger>
       <DialogContent className="sm:max-w-lg">
         <form onSubmit={submit}>
           <DialogHeader>
-            <DialogTitle>Create a requirement and RD Session</DialogTitle>
-            <DialogDescription>A unique Session is assigned immediately, with no scheduling or Agent allocation.</DialogDescription>
+            <DialogTitle>{t('Create a requirement and RD Session')}</DialogTitle>
+            <DialogDescription>{t('A unique Session is assigned immediately, with no scheduling or Agent allocation.')}</DialogDescription>
           </DialogHeader>
           <FieldGroup className="my-5 gap-4">
             <Field>
-              <FieldLabel htmlFor="requirement-title">Requirement title</FieldLabel>
-              <Input id="requirement-title" name="title" required placeholder="For example: improve bulk import throughput" />
+              <FieldLabel htmlFor="requirement-title">{t('Requirement title')}</FieldLabel>
+              <Input id="requirement-title" name="title" required placeholder={t('For example: improve bulk import throughput')} />
             </Field>
             <Field>
-              <FieldLabel htmlFor="requirement-description">Task and acceptance criteria</FieldLabel>
-              <Textarea id="requirement-description" name="description" required placeholder="Feature work, validation, or performance goals" />
+              <FieldLabel htmlFor="requirement-description">{t('Task and acceptance criteria')}</FieldLabel>
+              <Textarea id="requirement-description" name="description" required placeholder={t('Feature work, validation, or performance goals')} />
             </Field>
             <Field>
-              <FieldLabel htmlFor="requirement-provider">RD Agent</FieldLabel>
+              <FieldLabel htmlFor="requirement-provider">{t('RD Agent')}</FieldLabel>
               <NativeSelect id="requirement-provider" name="provider" className="w-full" defaultValue="codex">
                 <NativeSelectOption value="codex">Codex headless</NativeSelectOption>
                 <NativeSelectOption value="claude-code">Claude Code headless</NativeSelectOption>
@@ -517,8 +534,8 @@ function NewRequirementDialog({ disabled, onCreate }: {
             </Field>
           </FieldGroup>
           <DialogFooter>
-            <DialogClose render={<Button type="button" variant="outline" />}>Cancel</DialogClose>
-            <Button type="submit" disabled={submitting}>{submitting ? <LoaderCircle className="animate-spin" /> : null}Create</Button>
+            <DialogClose render={<Button type="button" variant="outline" />}>{t('Cancel')}</DialogClose>
+            <Button type="submit" disabled={submitting}>{submitting ? <LoaderCircle className="animate-spin" /> : null}{t('Create')}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -527,6 +544,7 @@ function NewRequirementDialog({ disabled, onCreate }: {
 }
 
 function ConnectionDialog({ apiUrl, onConnect }: { apiUrl: string; onConnect: (url: string) => void }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState(apiUrl);
   const [error, setError] = useState<string | null>(null);
@@ -538,29 +556,29 @@ function ConnectionDialog({ apiUrl, onConnect }: { apiUrl: string; onConnect: (u
       setError(null);
       setOpen(false);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Invalid URL');
+      setError(caught instanceof Error ? caught.message : t('Invalid URL'));
     }
   }
 
   return (
     <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (next) setValue(apiUrl); }}>
-      <DialogTrigger render={<Button variant="outline" size="icon" aria-label="Agent Manager connection settings" />}><Settings2 /></DialogTrigger>
+      <DialogTrigger render={<Button variant="outline" size="icon" aria-label={t('Agent Manager connection settings')} />}><Settings2 /></DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <form onSubmit={submit}>
           <DialogHeader>
-            <DialogTitle>Connect to Agent Manager</DialogTitle>
-            <DialogDescription>The URL is stored in this browser and is not written to the project or uploaded.</DialogDescription>
+            <DialogTitle>{t('Connect to Agent Manager')}</DialogTitle>
+            <DialogDescription>{t('The URL is stored in this browser and is not written to the project or uploaded.')}</DialogDescription>
           </DialogHeader>
           <FieldGroup className="my-5">
             <Field>
-              <FieldLabel htmlFor="manager-url">HTTP URL</FieldLabel>
+              <FieldLabel htmlFor="manager-url">{t('HTTP URL')}</FieldLabel>
               <Input id="manager-url" value={value} onChange={(event) => setValue(event.target.value)} placeholder={DEFAULT_AGENT_MANAGER_URL} />
             </Field>
             {error ? <p className="text-xs text-destructive">{error}</p> : null}
           </FieldGroup>
           <DialogFooter>
-            <DialogClose render={<Button type="button" variant="outline" />}>Cancel</DialogClose>
-            <Button type="submit">Connect</Button>
+            <DialogClose render={<Button type="button" variant="outline" />}>{t('Cancel')}</DialogClose>
+            <Button type="submit">{t('Connect')}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -601,6 +619,7 @@ function RequirementDetail({
   onReview: (pullRequestId: string, provider: AgentProvider) => Promise<void>;
   apiUrl: string;
 }) {
+  const { locale, t } = useI18n();
   const [message, setMessage] = useState('');
   const [draftAttachments, setDraftAttachments] = useState<DraftAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
@@ -653,11 +672,11 @@ function RequirementDetail({
   function addAttachments(files: File[]) {
     const remaining = maxAttachmentsPerMessage - draftAttachments.length;
     if (files.some((file) => file.size > maxAttachmentBytes)) {
-      setAttachmentError('Each attachment must be 20 MB or smaller.');
+      setAttachmentError(t('Each attachment must be 20 MB or smaller.'));
       return;
     }
     if (files.length > remaining) {
-      setAttachmentError(`Each message supports up to ${maxAttachmentsPerMessage} attachments.`);
+      setAttachmentError(t('Each message supports up to {count} attachments.', { count: maxAttachmentsPerMessage }));
       return;
     }
     setDraftAttachments((current) => [
@@ -686,10 +705,10 @@ function RequirementDetail({
         <SheetHeader className="border-b border-border bg-card py-4 pr-12 pl-5 sm:pr-12 sm:pl-6">
           <div className="mb-2.5 flex items-center gap-2">
             <Badge variant="outline" className="font-mono text-[10px]">REQ-{shortId(requirement.id)}</Badge>
-            <Badge variant="secondary" className="text-[10px]">{statusLabel[requirement.status]}</Badge>
+            <Badge variant="secondary" className="text-[10px]">{t(statusLabel[requirement.status])}</Badge>
             <span className="ml-auto flex items-center gap-1.5 text-[10px] text-muted-foreground">
               <span className={`size-2 rounded-full ${stateDot[requirement.session.state]}`} />
-              {stateLabel[requirement.session.state]}
+              {t(stateLabel[requirement.session.state])}
             </span>
           </div>
           <SheetTitle className="text-xl leading-7 font-semibold tracking-[-0.025em]">{requirement.title}</SheetTitle>
@@ -703,12 +722,12 @@ function RequirementDetail({
         <ScrollArea className="min-h-0 flex-1 bg-muted/15">
           <div className="px-5 py-5 sm:px-6">
             <section className="rounded-xl border border-border/80 bg-card px-4 py-3.5">
-              <p className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">Requirement description</p>
+              <p className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Requirement description')}</p>
               <p className="mt-1.5 text-xs leading-5 whitespace-pre-wrap">{requirement.description}</p>
               <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 border-t border-border/70 pt-3 text-[10px] text-muted-foreground sm:grid-cols-3">
-                <div><dt className="sr-only">Created at</dt><dd>Created {formatTime(requirement.createdAt)}</dd></div>
-                <div><dt className="sr-only">Run count</dt><dd>{runs.length} Runs</dd></div>
-                <div className="col-span-2 min-w-0 sm:col-span-1"><dt className="sr-only">Native Session</dt><dd className="truncate" title={requirement.session.nativeSessionId ?? undefined}>Native: {requirement.session.nativeSessionId ? shortId(requirement.session.nativeSessionId) : 'Not created'}</dd></div>
+                <div><dt className="sr-only">{t('Created at')}</dt><dd>{t('Created {time}', { time: formatTime(requirement.createdAt, locale) })}</dd></div>
+                <div><dt className="sr-only">{t('Run count')}</dt><dd>{t('{count} Runs', { count: runs.length })}</dd></div>
+                <div className="col-span-2 min-w-0 sm:col-span-1"><dt className="sr-only">{t('Native Session')}</dt><dd className="truncate" title={requirement.session.nativeSessionId ?? undefined}>{t('Native: {id}', { id: requirement.session.nativeSessionId ? shortId(requirement.session.nativeSessionId) : t('Not created') })}</dd></div>
               </dl>
             </section>
 
@@ -716,7 +735,7 @@ function RequirementDetail({
               <section className="mt-5" aria-labelledby="linked-pull-requests">
                 <div className="mb-2.5 flex items-center gap-2">
                   <GitPullRequest className="size-3.5 text-muted-foreground" />
-                  <h3 id="linked-pull-requests" className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">Linked Pull Requests</h3>
+                  <h3 id="linked-pull-requests" className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Linked Pull Requests')}</h3>
                   <Badge variant="secondary" className="ml-1 h-5 min-w-5 justify-center px-1.5 font-mono text-[9px]">{pullRequests.length}</Badge>
                 </div>
                 <div className="space-y-2">
@@ -737,19 +756,19 @@ function RequirementDetail({
               <div className="mb-4 flex items-center gap-2 border-b border-border/80 pb-3">
                 <span className="grid size-7 place-items-center rounded-lg bg-primary/8 text-primary"><MessagesSquare className="size-3.5" /></span>
                 <div>
-                  <h3 id="requirement-conversation" className="text-xs font-semibold">Activity and conversation</h3>
-                  <p className="mt-0.5 text-[9px] text-muted-foreground">{messages.length} messages · Continue with the same RD Session</p>
+                  <h3 id="requirement-conversation" className="text-xs font-semibold">{t('Activity and conversation')}</h3>
+                  <p className="mt-0.5 text-[9px] text-muted-foreground">{t('{count} messages · Continue with the same RD Session', { count: messages.length })}</p>
                 </div>
               </div>
 
             {messageLoading ? (
-              <div className="flex items-center justify-center gap-2 py-10 text-xs text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />Loading messages</div>
+              <div className="flex items-center justify-center gap-2 py-10 text-xs text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />{t('Loading messages')}</div>
             ) : null}
             {!messageLoading && messages.length === 0 ? (
               <div className="rounded-xl border border-dashed border-border px-4 py-8 text-center">
                 <Bot className="mx-auto size-5 text-muted-foreground" />
-                <p className="mt-2 text-xs font-medium">No Agent output yet</p>
-                <p className="mt-1 text-[10px] text-muted-foreground">RD Agent messages will appear here in real time after the requirement starts.</p>
+                <p className="mt-2 text-xs font-medium">{t('No Agent output yet')}</p>
+                <p className="mt-1 text-[10px] text-muted-foreground">{t('RD Agent messages will appear here in real time after the requirement starts.')}</p>
               </div>
             ) : null}
 
@@ -765,8 +784,8 @@ function RequirementDetail({
                     <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md bg-sky-500/12 text-sky-600 dark:text-sky-300"><Activity className="size-3.5" /></span>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-3">
-                        <span className="text-[10px] font-semibold">System event</span>
-                        <span className="shrink-0 text-[9px] text-muted-foreground">{formatTime(item.createdAt)}</span>
+                        <span className="text-[10px] font-semibold">{t('System event')}</span>
+                        <span className="shrink-0 text-[9px] text-muted-foreground">{formatTime(item.createdAt, locale)}</span>
                       </div>
                       {item.body ? <div className="mt-1 text-[11px] leading-5 break-words"><MessageBody body={item.body} /></div> : null}
                       {attachments.length > 0 ? <div className="mt-2"><MessageAttachments attachments={attachments} apiUrl={apiUrl} /></div> : null}
@@ -781,8 +800,8 @@ function RequirementDetail({
                   </span>
                   <div className={`min-w-0 max-w-[86%] ${human ? 'text-right' : ''}`}>
                     <div className={`flex items-center gap-2 ${human ? 'justify-end' : ''}`}>
-                      <span className="text-[10px] font-semibold">{authorLabel[item.author]}</span>
-                      <span className="text-[9px] text-muted-foreground">{formatTime(item.createdAt)}</span>
+                      <span className="text-[10px] font-semibold">{t(authorLabel[item.author])}</span>
+                      <span className="text-[9px] text-muted-foreground">{formatTime(item.createdAt, locale)}</span>
                     </div>
                     <div className={`mt-1.5 rounded-2xl px-3.5 py-2.5 text-left text-xs leading-5 break-words shadow-[0_1px_2px_oklch(0.18_0.02_255/0.04)] ${human ? 'rounded-tr-md bg-primary text-primary-foreground' : reviewer ? 'rounded-tl-md border border-violet-500/15 bg-violet-500/7' : 'rounded-tl-md border border-border/80 bg-card'}`}>
                       {item.body ? <MessageBody body={item.body} inverted={human} /> : null}
@@ -797,15 +816,18 @@ function RequirementDetail({
             {requirement.session.state === 'running' ? (
               <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
                 <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-emerald-500/12 text-emerald-600"><Bot className="size-3.5" /></span>
-                <span className="flex min-w-0 flex-1 items-center gap-2"><LoaderCircle className="size-3.5 shrink-0 animate-spin" />RD Agent is working; new messages are queued by default.</span>
+                <span className="flex min-w-0 flex-1 items-center gap-2"><LoaderCircle className="size-3.5 shrink-0 animate-spin" />{t('RD Agent is working; new messages are queued by default.')}</span>
                 <Button type="button" variant="ghost" size="xs" className="shrink-0 text-amber-700 dark:text-amber-300" disabled={busy} onClick={() => void onInterrupt().catch(() => undefined)}>
-                  <Square data-icon="inline-start" />Interrupt
+                  <Square data-icon="inline-start" />{t('Interrupt')}
                 </Button>
               </div>
             ) : null}
             {requirement.session.pendingMessageCount > 0 ? (
               <div className="mt-3 rounded-lg bg-amber-500/8 px-3 py-2 text-[10px] text-amber-700 dark:text-amber-300">
-                {requirement.session.pendingMessageCount} external messages will be processed by the RD Agent {requirement.session.state === 'running' ? 'after the current Run' : 'during the next Run'}.
+                {t('{count} external messages will be processed by the RD Agent {when}.', {
+                  count: requirement.session.pendingMessageCount,
+                  when: t(requirement.session.state === 'running' ? 'after the current Run' : 'during the next Run'),
+                })}
               </div>
             ) : null}
               <div ref={conversationEndRef} aria-hidden="true" />
@@ -816,8 +838,8 @@ function RequirementDetail({
         <div className="border-t border-border bg-card px-4 py-3 sm:px-6">
           {requirement.status === 'waiting_confirmation' ? (
             <div className="mb-2.5 flex items-center justify-between gap-3 rounded-xl border border-violet-500/15 bg-violet-500/7 px-3 py-2 text-[10px] text-violet-700 dark:text-violet-300">
-              <span>The Agent reported completion. You can still ask follow-up questions.</span>
-              <Button size="xs" className="shrink-0" disabled={busy} onClick={() => void onConfirm().catch(() => undefined)}><Check data-icon="inline-start" />Confirm completion</Button>
+              <span>{t('The Agent reported completion. You can still ask follow-up questions.')}</span>
+              <Button size="xs" className="shrink-0" disabled={busy} onClick={() => void onConfirm().catch(() => undefined)}><Check data-icon="inline-start" />{t('Confirm completion')}</Button>
             </div>
           ) : null}
           <form
@@ -845,7 +867,7 @@ function RequirementDetail({
                     <button
                       type="button"
                       className="absolute top-1 right-1 grid size-5 place-items-center rounded-full bg-black/65 text-white opacity-80 transition hover:opacity-100"
-                      aria-label={`Remove ${attachment.file.name}`}
+                      aria-label={t('Remove {name}', { name: attachment.file.name })}
                       onClick={() => removeAttachment(attachment.id)}
                     >
                       <X className="size-3" />
@@ -855,7 +877,7 @@ function RequirementDetail({
               </div>
             ) : null}
             <Textarea
-              aria-label="Reply to RD Agent"
+              aria-label={t('Reply to RD Agent')}
               value={message}
               onChange={(event) => setMessage(event.target.value)}
               onPaste={(event) => {
@@ -878,7 +900,7 @@ function RequirementDetail({
               }}
               disabled={!canWrite || busy}
               className="max-h-36 min-h-14 resize-none border-0 bg-transparent px-2 py-1.5 text-xs shadow-none focus-visible:border-transparent focus-visible:ring-0 disabled:bg-transparent"
-              placeholder={requirement.status === 'todo' ? 'Add instructions and start; paste or drop attachments…' : requirement.session.state === 'running' ? 'Send a message or attachment; it will wait for the next Run by default…' : canWrite ? 'Reply to the RD Agent; paste or drop attachments…' : 'Replies are unavailable in the current state'}
+              placeholder={requirement.status === 'todo' ? t('Add instructions and start; paste or drop attachments…') : requirement.session.state === 'running' ? t('Send a message or attachment; it will wait for the next Run by default…') : canWrite ? t('Reply to the RD Agent; paste or drop attachments…') : t('Replies are unavailable in the current state')}
             />
             <div className="mt-1 flex items-center justify-between gap-3 px-1">
               <div className="flex min-w-0 items-center gap-2">
@@ -899,14 +921,14 @@ function RequirementDetail({
                   size="icon-sm"
                   className="rounded-xl text-muted-foreground"
                   disabled={!canWrite || busy || draftAttachments.length >= maxAttachmentsPerMessage}
-                  aria-label="Add attachment"
+                  aria-label={t('Add attachment')}
                   onClick={() => attachmentInputRef.current?.click()}
                 >
                   <Paperclip />
                 </Button>
-                <span className="truncate text-[9px] text-muted-foreground">Enter to send · Up to 6 attachments</span>
+                <span className="truncate text-[9px] text-muted-foreground">{t('Enter to send · Up to 6 attachments')}</span>
               </div>
-              <Button type="submit" size="icon-sm" className="rounded-xl" disabled={!canWrite || busy || (!message.trim() && draftAttachments.length === 0)} aria-label="Send reply">
+              <Button type="submit" size="icon-sm" className="rounded-xl" disabled={!canWrite || busy || (!message.trim() && draftAttachments.length === 0)} aria-label={t('Send reply')}>
                 {busy ? <LoaderCircle className="animate-spin" /> : <Send />}
               </Button>
             </div>
@@ -914,7 +936,7 @@ function RequirementDetail({
           {attachmentError ? <p className="mt-1.5 px-1 text-[10px] text-destructive">{attachmentError}</p> : null}
           {requirement.status === 'todo' ? (
             <Button className="mt-2 w-full" variant="ghost" size="xs" disabled={busy} onClick={() => void onStart()}>
-              <Play data-icon="inline-start" />Start without additional instructions
+              <Play data-icon="inline-start" />{t('Start without additional instructions')}
             </Button>
           ) : null}
         </div>
@@ -923,7 +945,8 @@ function RequirementDetail({
   );
 }
 
-export default function Home() {
+function Dashboard() {
+  const { locale, setLocale, t } = useI18n();
   const [view, setView] = useState<'requirements' | 'pull_requests' | 'sessions'>('requirements');
   const [apiUrl, setApiUrl] = useState(DEFAULT_AGENT_MANAGER_URL);
   const [connection, setConnection] = useState<ConnectionState>('connecting');
@@ -966,11 +989,11 @@ export default function Home() {
       setLastSynced(new Date());
     } catch (caught) {
       setConnection('offline');
-      setError(caught instanceof Error ? caught.message : 'Unable to connect to Agent Manager');
+      setError(caught instanceof Error ? caught.message : t('Unable to connect to Agent Manager'));
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, [client]);
+  }, [client, t]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1012,14 +1035,14 @@ export default function Home() {
       setMessageLoading(true);
       client.listMessages(selectedId)
         .then((items) => { if (!cancelled) setMessages(items); })
-        .catch((caught: unknown) => { if (!cancelled) setError(caught instanceof Error ? caught.message : 'Failed to load messages'); })
+        .catch((caught: unknown) => { if (!cancelled) setError(caught instanceof Error ? caught.message : t('Failed to load messages')); })
         .finally(() => { if (!cancelled) setMessageLoading(false); });
     }, 0);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [client, messageRevision, selectedId]);
+  }, [client, messageRevision, selectedId, t]);
 
   const selectedRequirement = requirements.find((item) => item.id === selectedId) ?? null;
   const selectedRuns = runs.filter((run) => run.requirementId === selectedId);
@@ -1052,8 +1075,8 @@ export default function Home() {
       await reload(false);
       setMessageRevision((value) => value + 1);
     } catch (caught) {
-      const prefix = caught instanceof AgentManagerApiError && caught.status === 409 ? 'This action conflicts with the current state. Refresh and try again.' : '';
-      setError(prefix || (caught instanceof Error ? caught.message : 'Operation failed'));
+      const prefix = caught instanceof AgentManagerApiError && caught.status === 409 ? t('This action conflicts with the current state. Refresh and try again.') : '';
+      setError(prefix || (caught instanceof Error ? caught.message : t('Operation failed')));
       throw caught;
     } finally {
       setBusyId(null);
@@ -1067,7 +1090,7 @@ export default function Home() {
       await client.requestReview(pullRequestId, reviewer);
       await reload(false);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Failed to request a review');
+      setError(caught instanceof Error ? caught.message : t('Failed to request a review'));
       throw caught;
     } finally {
       setBusyPullRequestId(null);
@@ -1087,7 +1110,7 @@ export default function Home() {
       setSelectedId(created.id);
       setView('requirements');
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Failed to create requirement');
+      setError(caught instanceof Error ? caught.message : t('Failed to create requirement'));
       throw caught;
     }
   }
@@ -1103,7 +1126,7 @@ export default function Home() {
   const activeSessions = requirements.filter((item) => item.session.state === 'running').length;
   const waitingHumans = requirements.filter((item) => item.session.state === 'waiting_human').length;
   const failures = requirements.filter((item) => item.session.state === 'failed').length;
-  const workspaceLabel = workspace?.root ?? 'Workspace not connected';
+  const workspaceLabel = workspace?.root ?? t('Workspace not connected');
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -1117,10 +1140,10 @@ export default function Home() {
             </div>
           </div>
 
-          <nav className="ml-1 flex h-full items-center gap-1 sm:ml-5" aria-label="Main navigation">
-            <Button variant="ghost" size="sm" className={view === 'requirements' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('requirements')}><LayoutDashboard data-icon="inline-start" />Requirements</Button>
+          <nav className="ml-1 flex h-full items-center gap-1 sm:ml-5" aria-label={t('Main navigation')}>
+            <Button variant="ghost" size="sm" className={view === 'requirements' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('requirements')}><LayoutDashboard data-icon="inline-start" />{t('Requirements')}</Button>
             <Button variant="ghost" size="sm" className={view === 'pull_requests' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('pull_requests')}><GitPullRequest data-icon="inline-start" />PR</Button>
-            <Button variant="ghost" size="sm" className={view === 'sessions' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('sessions')}><Activity data-icon="inline-start" />Sessions</Button>
+            <Button variant="ghost" size="sm" className={view === 'sessions' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('sessions')}><Activity data-icon="inline-start" />{t('Sessions')}</Button>
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
@@ -1128,7 +1151,8 @@ export default function Home() {
               <CircleDot className={`size-3 shrink-0 ${connection === 'online' ? 'text-emerald-500' : connection === 'reconnecting' ? 'text-amber-500' : 'text-rose-500'}`} />
               <span className="truncate font-mono">{workspaceLabel}</span>
             </div>
-            <Button variant="outline" size="icon" aria-label="Refresh" disabled={loading} onClick={() => void reload(true)}><RefreshCw className={loading ? 'animate-spin' : ''} /></Button>
+            <Button variant="outline" size="sm" aria-label={t('Switch language')} onClick={() => setLocale(locale === 'en' ? 'zh-CN' : 'en')}><Languages data-icon="inline-start" />{locale === 'en' ? t('Chinese') : t('English')}</Button>
+            <Button variant="outline" size="icon" aria-label={t('Refresh')} disabled={loading} onClick={() => void reload(true)}><RefreshCw className={loading ? 'animate-spin' : ''} /></Button>
             <ConnectionDialog apiUrl={apiUrl} onConnect={connect} />
             <NewRequirementDialog disabled={connection !== 'online'} onCreate={createRequirement} />
           </div>
@@ -1140,27 +1164,27 @@ export default function Home() {
           <div>
             <div className="flex items-center gap-2">
               <h1 id="overview-title" className="text-xl font-semibold tracking-[-0.03em]">
-                {view === 'requirements' ? 'Requirement workflow' : view === 'pull_requests' ? 'Pull Requests' : 'RD Agent Sessions'}
+                {view === 'requirements' ? t('Requirement workflow') : view === 'pull_requests' ? t('Pull Requests') : t('RD Agent Sessions')}
               </h1>
-              <Badge variant="secondary" className="font-mono text-[9px]">{connection === 'online' ? 'LIVE' : 'OFFLINE'}</Badge>
+              <Badge variant="secondary" className="font-mono text-[9px]">{connection === 'online' ? t('LIVE') : t('OFFLINE')}</Badge>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               {view === 'requirements'
-                ? 'The requirement conversation is the RD Agent message stream; messages remain available while it runs'
+                ? t('The requirement conversation is the RD Agent message stream; messages remain available while it runs')
                 : view === 'pull_requests'
-                  ? 'A human can select Codex or Claude to run a one-off review on an Open PR'
-                  : 'Sessions inherit the Agent Manager working directory and native Skills'}
+                  ? t('A human can select Codex or Claude to run a one-off review on an Open PR')
+                  : t('Sessions inherit the Agent Manager working directory and native Skills')}
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-5 text-xs">
-            <div><span className="mr-1.5 text-lg font-semibold tabular-nums">{activeSessions}</span><span className="text-muted-foreground">Running</span></div>
-            <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-violet-600">{waitingHumans}</span><span className="text-muted-foreground">Waiting for human</span></div>
-            <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-rose-600">{failures}</span><span className="text-muted-foreground">Failed</span></div>
+            <div><span className="mr-1.5 text-lg font-semibold tabular-nums">{activeSessions}</span><span className="text-muted-foreground">{t('Running')}</span></div>
+            <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-violet-600">{waitingHumans}</span><span className="text-muted-foreground">{t('Waiting for human')}</span></div>
+            <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-rose-600">{failures}</span><span className="text-muted-foreground">{t('Failed')}</span></div>
             <div className="hidden h-7 w-px bg-border sm:block" />
             <div className="relative hidden sm:block">
               <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input aria-label="Search requirements or Sessions" value={query} onChange={(event) => setQuery(event.target.value)} className="w-56 pr-3 pl-8 text-xs" placeholder="Search requirements or Sessions" />
+              <Input aria-label={t('Search requirements or Sessions')} value={query} onChange={(event) => setQuery(event.target.value)} className="w-56 pr-3 pl-8 text-xs" placeholder={t('Search requirements or Sessions')} />
             </div>
           </div>
         </div>
@@ -1170,19 +1194,19 @@ export default function Home() {
         <div className="px-4 pt-4 lg:px-6">
           <Alert variant="destructive">
             <WifiOff />
-            <AlertTitle>{connection === 'offline' ? 'Agent Manager not connected' : 'Operation incomplete'}</AlertTitle>
-            <AlertDescription>{error} {connection === 'offline' ? 'Confirm that Agent Manager is running and allows access from http://localhost:3000.' : ''}</AlertDescription>
+            <AlertTitle>{connection === 'offline' ? t('Agent Manager not connected') : t('Operation incomplete')}</AlertTitle>
+            <AlertDescription>{error} {connection === 'offline' ? t('Confirm that Agent Manager is running and allows access from http://localhost:3000.') : ''}</AlertDescription>
           </Alert>
         </div>
       ) : null}
 
       <div className="flex items-center gap-2 border-b border-border/70 px-4 py-2.5 lg:px-6">
         <Button variant="secondary" size="xs" title={workspace?.root}><FolderGit2 data-icon="inline-start" />{workspaceLabel}</Button>
-        <Button variant={provider === 'all' ? 'ghost' : 'secondary'} size="xs" className={provider === 'all' ? 'text-muted-foreground' : ''} onClick={cycleProvider}>{provider === 'all' ? 'All Agents' : providerLabel(provider)}</Button>
-        <span className="ml-auto text-[10px] text-muted-foreground">{lastSynced ? `Last synced ${lastSynced.toLocaleTimeString('en-US')}` : apiUrl}</span>
+        <Button variant={provider === 'all' ? 'ghost' : 'secondary'} size="xs" className={provider === 'all' ? 'text-muted-foreground' : ''} onClick={cycleProvider}>{provider === 'all' ? t('All Agents') : providerLabel(provider)}</Button>
+        <span className="ml-auto text-[10px] text-muted-foreground">{lastSynced ? t('Last synced {time}', { time: lastSynced.toLocaleTimeString(locale === 'zh-CN' ? 'zh-CN' : 'en-US') }) : apiUrl}</span>
       </div>
 
-      <section className="kanban-scroll overflow-x-auto" aria-label={view === 'requirements' ? 'Requirement board' : view === 'pull_requests' ? 'Pull Request board' : 'Agent Session board'}>
+      <section className="kanban-scroll overflow-x-auto" aria-label={view === 'requirements' ? t('Requirement board') : view === 'pull_requests' ? t('Pull Request board') : t('Agent Session board')}>
         {view === 'requirements' ? (
           <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-4 gap-4 p-4 lg:p-5">
             {requirementColumns.map((column) => {
@@ -1190,8 +1214,8 @@ export default function Home() {
               return (
                 <section key={column.status} className="w-[300px]" aria-labelledby={`requirement-${column.status}`}>
                   <header className="mb-3 h-11 px-1">
-                    <div className="flex items-center gap-2"><span className={`size-1.5 rounded-full ${column.tone}`} /><h2 id={`requirement-${column.status}`} className="text-xs font-semibold">{column.title}</h2><span className="font-mono text-[10px] text-muted-foreground">{items.length}</span></div>
-                    <p className="mt-1 pl-3.5 text-[10px] text-muted-foreground">{column.description}</p>
+                    <div className="flex items-center gap-2"><span className={`size-1.5 rounded-full ${column.tone}`} /><h2 id={`requirement-${column.status}`} className="text-xs font-semibold">{t(column.title)}</h2><span className="font-mono text-[10px] text-muted-foreground">{items.length}</span></div>
+                    <p className="mt-1 pl-3.5 text-[10px] text-muted-foreground">{t(column.description)}</p>
                   </header>
                   <div className="space-y-2.5">
                     {items.map((item) => (
@@ -1205,7 +1229,7 @@ export default function Home() {
                         onConfirm={() => void runAction(item.id, () => client.confirmRequirement(item.id)).catch(() => undefined)}
                       />
                     ))}
-                    {items.length === 0 ? <div className="grid min-h-24 place-items-center rounded-xl border border-dashed border-border text-[10px] text-muted-foreground">{loading ? 'Loading…' : 'No requirements'}</div> : null}
+                    {items.length === 0 ? <div className="grid min-h-24 place-items-center rounded-xl border border-dashed border-border text-[10px] text-muted-foreground">{loading ? t('Loading…') : t('No requirements')}</div> : null}
                   </div>
                 </section>
               );
@@ -1220,10 +1244,10 @@ export default function Home() {
                   <header className="mb-3 h-11 px-1">
                     <div className="flex items-center gap-2">
                       <span className={`size-1.5 rounded-full ${column.tone}`} />
-                      <h2 id={`pull-request-${column.status}`} className="text-xs font-semibold">{column.title}</h2>
+                      <h2 id={`pull-request-${column.status}`} className="text-xs font-semibold">{t(column.title)}</h2>
                       <span className="font-mono text-[10px] text-muted-foreground">{items.length}</span>
                     </div>
-                    <p className="mt-1 pl-3.5 text-[10px] text-muted-foreground">{column.description}</p>
+                    <p className="mt-1 pl-3.5 text-[10px] text-muted-foreground">{t(column.description)}</p>
                   </header>
                   <div className="space-y-2.5">
                     {items.map((pullRequest) => (
@@ -1238,7 +1262,7 @@ export default function Home() {
                     ))}
                     {items.length === 0 ? (
                       <div className="grid min-h-24 place-items-center rounded-xl border border-dashed border-border text-[10px] text-muted-foreground">
-                        {loading ? 'Loading…' : 'No Pull Requests'}
+                        {loading ? t('Loading…') : t('No Pull Requests')}
                       </div>
                     ) : null}
                   </div>
@@ -1253,8 +1277,8 @@ export default function Home() {
               return (
                 <section key={column.state} className="w-[266px]" aria-labelledby={`session-${column.state}`}>
                   <header className="mb-3 h-11 px-1">
-                    <div className="flex items-center gap-2"><span className={`size-1.5 rounded-full ${column.tone}`} /><h2 id={`session-${column.state}`} className="text-xs font-semibold">{column.title}</h2><span className="font-mono text-[10px] text-muted-foreground">{items.length}</span></div>
-                    <p className="mt-1 pl-3.5 text-[10px] text-muted-foreground">{column.description}</p>
+                    <div className="flex items-center gap-2"><span className={`size-1.5 rounded-full ${column.tone}`} /><h2 id={`session-${column.state}`} className="text-xs font-semibold">{t(column.title)}</h2><span className="font-mono text-[10px] text-muted-foreground">{items.length}</span></div>
+                    <p className="mt-1 pl-3.5 text-[10px] text-muted-foreground">{t(column.description)}</p>
                   </header>
                   <div className="space-y-2.5">
                     {items.map((item) => (
@@ -1267,7 +1291,7 @@ export default function Home() {
                         onRetry={() => void runAction(item.id, () => client.retryRequirement(item.id)).catch(() => undefined)}
                       />
                     ))}
-                    {items.length === 0 ? <div className="grid min-h-24 place-items-center rounded-xl border border-dashed border-border text-[10px] text-muted-foreground">No Sessions</div> : null}
+                    {items.length === 0 ? <div className="grid min-h-24 place-items-center rounded-xl border border-dashed border-border text-[10px] text-muted-foreground">{t('No Sessions')}</div> : null}
                   </div>
                 </section>
               );
@@ -1303,9 +1327,13 @@ export default function Home() {
 
       <div className="fixed right-4 bottom-4 hidden items-center gap-2 rounded-lg border border-border bg-card/95 px-3 py-2 text-[10px] text-muted-foreground shadow-lg backdrop-blur sm:flex">
         <Terminal className="size-3.5" />
-        <span>{connection === 'online' ? 'Agent Manager online' : connection === 'reconnecting' ? 'Reconnecting' : 'Agent Manager offline'}</span>
+        <span>{connection === 'online' ? t('Agent Manager online') : connection === 'reconnecting' ? t('Reconnecting') : t('Agent Manager offline')}</span>
         <span className={`size-1.5 rounded-full ${connection === 'online' ? 'bg-emerald-500' : connection === 'reconnecting' ? 'bg-amber-500' : 'bg-rose-500'}`} />
       </div>
     </main>
   );
+}
+
+export default function Home() {
+  return <I18nProvider><Dashboard /></I18nProvider>;
 }
