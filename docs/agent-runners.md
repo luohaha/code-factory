@@ -1,38 +1,38 @@
 # Headless Agent Runner
 
-## 1. 通用执行契约
+## 1. Common execution contract
 
-Agent Manager 只支持 `codex` 和 `claude` 两个本机 CLI。每次调用都遵循以下约束：
+Agent Manager supports the local `codex` and `claude` CLIs. Every invocation follows these rules:
 
-- `cwd` 固定为 Agent Manager 启动目录；
-- `shell: false`，不拼接 shell 命令；
-- RD 与 Reviewer 的任务 prompt 都通过 stdin 传入，避免出现在进程参数和进程列表；
-- 继承当前进程环境，由 CLI 自己读取登录状态、配置、项目指令和 Skills；
-- 不传 `--cd` 或 `--add-dir`；Codex 和 Claude Code 均以无交互审批、无 CLI 沙箱限制的模式运行；
-- stdout 按 JSONL 解析，stderr 保留为错误摘要；
-- RD 默认超时 60 分钟，Reviewer 最长 30 分钟；超时会终止 CLI 及其启动的整棵工具进程树；
-- 人类打断 RD Run 时，POSIX 平台先向独立进程组发送 `SIGTERM`，2 秒后仍有后代存活则发送 `SIGKILL`；Windows 使用 `taskkill /T /F`。进程树停止后 Run 才记录为 `cancelled`；
-- 同一个 RD AgentSession 只允许一个活跃 Run；不同需求的 Session 不经调度即可并行运行。
-- 人类或 Reviewer 在 RD 运行期间发送的消息只写入需求对话，不触发打断；只有人类显式点击“打断”才会停止当前 Run，随后用同一原生 Session 处理排队消息；
-- Agent Manager 为 RD 注入本地 Agent API 协议，项目指令和 Skills 仍由 CLI 根据 cwd 原生加载。
+- `cwd` is always the directory where Agent Manager started;
+- `shell: false`; commands are never assembled through a shell;
+- RD and Reviewer task prompts are supplied through stdin so they do not appear in process arguments;
+- the child inherits the current environment, and each CLI loads its own authentication, configuration, repository instructions, and Skills;
+- Agent Manager does not pass `--cd` or `--add-dir`; both CLIs run without interactive approval or CLI sandbox restrictions;
+- stdout is parsed as JSONL, while stderr is retained as an error summary;
+- RD Runs time out after 60 minutes by default and Reviewer Runs after at most 30 minutes; a timeout terminates the CLI and its complete tool-process tree;
+- on POSIX systems, a human interrupt sends `SIGTERM` to the isolated process group and follows with `SIGKILL` after two seconds if descendants remain; Windows uses `taskkill /T /F`. The Run becomes `cancelled` only after the process tree exits;
+- one RD AgentSession may have only one active Run, while Sessions for different Requirements may run concurrently;
+- Human or Reviewer messages received during an RD Run are appended to the Requirement conversation without interrupting it. Only an explicit human interrupt stops the current Run, after which queued messages continue in the same native Session;
+- Agent Manager injects the local Agent API contract into RD Agents; project instructions and Skills are still loaded natively from the working directory.
 
 ## 2. Codex
 
-新建 RD 原生会话：
+Start a native RD session:
 
 ```bash
 codex exec --json --color never --dangerously-bypass-approvals-and-sandbox \
   -c 'developer_instructions="...Code Factory API contract..."' -
 ```
 
-恢复原生会话：
+Resume a native RD session:
 
 ```bash
 codex exec --json --color never --dangerously-bypass-approvals-and-sandbox \
   resume <thread-id> -
 ```
 
-短程 Reviewer：
+Run a short-lived Reviewer:
 
 ```bash
 codex exec --json --color never --ephemeral \
@@ -40,12 +40,13 @@ codex exec --json --color never --ephemeral \
   -c 'developer_instructions="...GitHub review contract..."' -
 ```
 
-`thread.started` 事件中的 `thread_id` 写入 AgentSession，后续 RD Run 复用它。Reviewer 使用 `--ephemeral`，不会形成可恢复的业务 Session。
-Codex 的 Code Factory 运行协议通过官方支持的 `developer_instructions` 配置覆盖项追加，不替换仓库中的 `AGENTS.md`。Reviewer 不使用面向本地工作树的 `codex exec review --base`；它以普通 headless Agent 运行，并从 stdin 接收 `Review GitHub PR <url>`。
+The `thread_id` from a `thread.started` event is stored on the AgentSession and reused by later RD Runs. Reviewers use `--ephemeral` and do not create resumable business Sessions.
+
+Code Factory instructions are appended through Codex's supported `developer_instructions` override and do not replace repository `AGENTS.md` files. A Reviewer does not use the local-working-tree-oriented `codex exec review --base` command. It runs as an ordinary headless Agent and receives `Review GitHub PR <url>` through stdin.
 
 ## 3. Claude Code
 
-新建 RD 原生会话：
+Start a native RD session:
 
 ```bash
 claude --print --output-format stream-json --verbose \
@@ -53,67 +54,67 @@ claude --print --output-format stream-json --verbose \
   --append-system-prompt "...Code Factory API contract..."
 ```
 
-恢复原生会话：
+Resume a native RD session:
 
 ```bash
 claude --print --output-format stream-json --verbose \
   --dangerously-skip-permissions --resume <session-id>
 ```
 
-短程 Reviewer：
+Run a short-lived Reviewer:
 
 ```bash
 claude --print --output-format stream-json --verbose \
   --no-session-persistence --dangerously-skip-permissions
 ```
 
-Claude Reviewer 同样不调用 `/review`，而是以普通 headless Agent 运行，并从 stdin 接收 `Review GitHub PR <url>`。`--no-session-persistence` 只负责保证它不会变成长生命周期会话。
+Claude Reviewers also run as ordinary headless Agents instead of invoking `/review`. They receive `Review GitHub PR <url>` through stdin. `--no-session-persistence` prevents them from becoming long-lived Sessions.
 
-Codex 和 Claude Code 共用同一套 Reviewer system/developer 指令：使用 GitHub CLI/API 读取目标 PR、在开始时记录并在发布前复核 head SHA、发布 GitHub Review 评论、不修改共享工作区。`ReviewRequest.targetHeadSha` 仍由 Agent Manager 在触发时内部捕获，用于追踪审查版本，不需要出现在任务 prompt 中。
+Codex and Claude Code share the same Reviewer system/developer instructions: inspect the target PR through the GitHub CLI/API, record the head SHA at the start and verify it again before publishing, publish GitHub review comments, and do not modify the shared workspace. Agent Manager still captures `ReviewRequest.targetHeadSha` internally when the review is requested; it does not need to appear in the task prompt.
 
-## 4. 事件归一化
+## 4. Event normalization
 
-Adapter 把两种 CLI 的 JSONL 映射为：
+Adapters map each CLI's JSONL output into:
 
-- `session_started`：捕获原生 session id；
-- `message`：Agent 文本输出；
-- `completed`：模型回合结束；
-- `error`：结构化错误；
-- `other`：保留未知事件以便兼容 CLI 升级。
+- `session_started`: captures the native session ID;
+- `message`: Agent text output;
+- `completed`: the model turn completed;
+- `error`: a structured error;
+- `other`: retains an unknown event for forward compatibility.
 
-Agent Manager 自己只依赖归一化字段，原始事件可作为诊断流输出。人类回复和归一化后的 Agent/Reviewer 文本消息会持久化到需求对话，并通过 `message.created` 实时推送；原始 JSONL 和工具噪声不写入数据库，避免无限增长。
+Agent Manager depends only on normalized fields. Raw events may be exposed as a diagnostic stream. Human messages and normalized Agent or Reviewer messages are persisted in the Requirement conversation and broadcast through `message.created`. Raw JSONL and tool noise are not stored in the database.
 
 ## 5. PR Reconciler
 
-Agent Manager 启动后默认每 30 秒通过本机 `gh` CLI 轮询 Draft/Open PR。轮询读取 PR 状态、head SHA、普通 PR 评论、Review、行级 review comment 和 CI check：
+By default, Agent Manager polls Draft and Open PRs every 30 seconds through the authenticated local `gh` CLI. Each poll reads PR state, head SHA, general comments, reviews, inline review comments, and CI checks:
 
-- PR 状态变化与 CI 失败作为 System 消息；
-- PR/Review 评论作为 Reviewer 消息，并用明显边界标记为不可信外部反馈；
-- 活跃 Requirement 的消息设置 `deliverToRd=true`，复用既有对话游标触发或排队下一轮 RD Run；
-- SQLite observation 保存 CI 前态，external event receipt 对评论、状态和 CI 事件持久去重；
-- 首次接管旧 PR 时不回放已有评论和 CI，只修正落后的 PR 状态。
+- PR state changes and CI failures become System messages;
+- PR and review comments become Reviewer messages and are explicitly marked as untrusted external feedback;
+- messages for active Requirements use `deliverToRd=true`, reusing the existing conversation cursor to trigger or queue the next RD Run;
+- SQLite observation state tracks previous CI state, while external-event receipts deduplicate comments, state changes, and CI events across restarts;
+- the first observation of an existing PR establishes a baseline without replaying old comments or CI results, while still correcting stale PR state.
 
-`--pr-reconcile-interval SECONDS` 可修改轮询间隔，`0` 关闭轮询。轮询需要启动用户已经通过 `gh auth login` 完成认证。
+Use `--pr-reconcile-interval SECONDS` to change the interval or `0` to disable polling. Reconciliation requires the launching user to be authenticated with `gh auth login`.
 
-## 6. 恢复与失败
+## 6. Recovery and failure
 
-- CLI 启动后只要观测到原生 session id，就立即写入 AgentSession；
-- Run 成功后先推进本次输入消息边界；有新外部消息时立即启动下一轮，否则 Requirement 进入 `waiting_confirmation`，Session 进入 `waiting_human`；
-- Run 失败或超时后，Requirement 保持 `doing`，Session 进入 `failed`；
-- Run 被人类打断后，Requirement 保持 `doing`，Session 回到 `waiting_human`；若打断时已有新纠偏消息，则立即恢复同一 Session；
-- 人类重试或回复时仍使用同一个 AgentSession；已有原生 id 就 resume，没有则重新创建原生会话；
-- Agent Manager 重启后不会把旧 PID 当成存活进程；启动 reconciliation 会把遗留 RD Run 标记为失败，并独立清理遗留 ReviewRequest，不污染 RD Session 状态。
+- A native session ID is stored as soon as the CLI reports it.
+- After a successful Run, Agent Manager advances only the input message boundary captured by that Run. If external messages remain, it starts another Run; otherwise the Requirement enters `waiting_confirmation` and the Session enters `waiting_human`.
+- A failed or timed-out Run leaves the Requirement in `doing` and moves the Session to `failed`.
+- A human-interrupted Run leaves the Requirement in `doing` and returns the Session to `waiting_human`. If corrective messages arrived after the Run started, Agent Manager immediately resumes the same Session.
+- A human retry or reply continues the same AgentSession. Agent Manager resumes an existing native session ID or creates a new native session if none exists.
+- On restart, Agent Manager never treats an old PID as a live process. Startup reconciliation marks orphaned RD Runs as failed and separately cleans up orphaned ReviewRequests without changing RD Session state.
 
-## 7. 安全边界
+## 7. Security boundary
 
-Agent Manager 应只在用户信任的代码目录中启动。所有 headless RD 和 Reviewer 都会跳过 CLI 审批与沙箱检查，继承启动用户的完整文件系统、网络和命令执行权限；Agent Manager 启动时会在终端 Banner 和日志中明确记录此警告。Reviewer 的“只读”是 prompt 约束，不是操作系统级隔离。
+Run Agent Manager only inside trusted workspaces. Every headless RD and Reviewer skips CLI approvals and sandbox checks, inheriting the launching user's filesystem, network, and command-execution permissions. The startup banner and log record this warning. Reviewer read-only behavior is enforced by instructions, not by an operating-system boundary.
 
-HTTP 默认只监听 `127.0.0.1`，并只允许 `http://localhost:3000` 的本地 Web 看板跨域访问；可用 `--allow-origin` 覆盖。API 不接受客户端指定 cwd。生产化前还需要增加本地访问令牌、Webhook 签名验证、敏感字段脱敏和运行日志清理策略。
+HTTP listens on `127.0.0.1` by default and permits the local dashboard origin `http://localhost:3000`. Use `--allow-origin` to override it. API clients cannot choose the child process working directory. Production hardening still requires a local access token, webhook signature validation, sensitive-field redaction, and a log-retention policy.
 
-## 8. 运行日志
+## 8. Runtime logs
 
-Agent Manager 默认把自身、Requirement、Run、PR reconciliation 和 HTTP 请求生命周期日志以 JSONL 追加到 `~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log`。CLI 会始终向 stdout 输出一次包含 Workspace、Database、日志路径、Dashboard URL、API URL 和 Reconciler 周期的启动 Banner；除此之外不向 stdout 或 stderr 打印运行日志。默认级别为 `info`，可通过 `--log-level debug|info|warn|error|silent` 或 `CODE_FACTORY_LOG_LEVEL` 调整；可通过 `--log-file PATH` 或 `CODE_FACTORY_LOG_FILE` 修改文件位置，命令行参数优先于环境变量。日志文件创建权限为 `0600`。
+Agent Manager appends JSONL lifecycle logs for the manager, Requirements, Runs, PR reconciliation, and HTTP requests to `~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log`. The CLI always prints one startup banner containing the Workspace, Database, log path, Dashboard URL, API URL, and Reconciler interval; it otherwise emits no runtime logs to stdout or stderr. The default level is `info`. Configure it with `--log-level debug|info|warn|error|silent` or `CODE_FACTORY_LOG_LEVEL`, and configure the destination with `--log-file PATH` or `CODE_FACTORY_LOG_FILE`. Command-line values take precedence. Log files use mode `0600`.
 
-底层使用 `winston` 和 `winston-daily-rotate-file`。默认按本地日期写入 `agent-manager-YYYY-MM-DD.log`，单个文件达到 20 MB 后继续按大小切分，保留 14 天；`agent-manager.log` 是指向当前文件的稳定符号链接。`--log-max-size SIZE` / `CODE_FACTORY_LOG_MAX_SIZE` 可修改单文件上限，`--log-max-files COUNT_OR_DAYS` / `CODE_FACTORY_LOG_MAX_FILES` 可修改保留文件数或天数。
+Logging uses `winston` and `winston-daily-rotate-file`. Files rotate by local date and after reaching 20 MB, with 14 days retained by default. `agent-manager.log` is a stable symlink to the current file. Use `--log-max-size SIZE` or `CODE_FACTORY_LOG_MAX_SIZE` to change the per-file limit, and `--log-max-files COUNT_OR_DAYS` or `CODE_FACTORY_LOG_MAX_FILES` to change retention.
 
-日志只包含关联排障所需的 ID、状态、耗时和错误，不记录 prompt、对话正文或 Agent 原始 stdout。直接通过库构造 `AgentManager` 时也默认写文件；宿主仍可注入自定义 `Logger`，显式接管日志目标与策略。
+Logs contain only IDs, states, durations, and errors needed for diagnostics. They do not contain prompts, conversation bodies, or raw Agent stdout. Library users may inject a custom `Logger` to own the destination and policy.
