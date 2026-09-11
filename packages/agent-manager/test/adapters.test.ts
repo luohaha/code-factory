@@ -30,18 +30,25 @@ test('Codex starts and resumes through stdin without overriding the workspace', 
 });
 
 test('Codex reviewer is ephemeral and scoped to a base branch', () => {
-  const invocation = new CodexAdapter().buildReviewInvocation({ prompt: 'review carefully', baseBranch: 'main' });
-  assert.deepEqual(invocation.args, [
+  const invocation = new CodexAdapter().buildReviewInvocation({
+    prompt: 'review carefully',
+    baseBranch: 'main',
+    developerInstructions: 'Publish review comments.',
+  });
+  assert.deepEqual(invocation.args.slice(0, 5), [
     'exec',
     'review',
     '--json',
     '--ephemeral',
     '--dangerously-bypass-approvals-and-sandbox',
+  ]);
+  assert.deepEqual(invocation.args.slice(-2), [
     '--base',
     'main',
-    '-',
   ]);
-  assert.equal(invocation.input, 'review carefully');
+  assert.ok(!invocation.args.includes('-'));
+  assert.ok(invocation.args.some((value) => value.includes('Publish review comments.') && value.includes('review carefully')));
+  assert.equal(invocation.input, '');
 });
 
 test('Claude Code persists RD sessions but not reviewer sessions', () => {
