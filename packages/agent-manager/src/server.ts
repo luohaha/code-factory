@@ -256,13 +256,18 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         return;
       }
 
-      const action = url.pathname.match(/^\/api\/requirements\/([^/]+)\/(start|reply|confirm)$/);
+      const action = url.pathname.match(/^\/api\/requirements\/([^/]+)\/(start|reply|interrupt|confirm)$/);
       if (request.method === 'POST' && action) {
         const requirementId = decodeURIComponent(action[1]!);
         const name = action[2]!;
         const body = await readJson(request);
         if (name === 'confirm') {
           sendJson(response, 200, manager.confirmRequirement(requirementId));
+          return;
+        }
+        if (name === 'interrupt') {
+          const result = manager.interruptRdRun(requirementId);
+          sendJson(response, 202, { accepted: true, requirementId, action: name, runId: result.runId });
           return;
         }
         if (name === 'reply') {

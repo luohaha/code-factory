@@ -11,8 +11,9 @@ Agent Manager 只支持 `codex` 和 `claude` 两个本机 CLI。每次调用都�
 - 不传 `--cd` 或 `--add-dir`；Codex 和 Claude Code 均以无交互审批、无 CLI 沙箱限制的模式运行；
 - stdout 按 JSONL 解析，stderr 保留为错误摘要；
 - RD 默认超时 60 分钟，Reviewer 最长 30 分钟；超时先发 `SIGTERM`，2 秒后仍未退出则 `SIGKILL`；
+- 人类打断 RD Run 时同样先发 `SIGTERM`，2 秒后仍未退出则 `SIGKILL`，并把 Run 记录为 `cancelled`；
 - 同一个 RD AgentSession 只允许一个活跃 Run；不同需求的 Session 不经调度即可并行运行。
-- 人类或 Reviewer 在 RD 运行期间发送的消息写入需求对话，当前 Run 结束后自动恢复同一原生 Session；
+- 人类或 Reviewer 在 RD 运行期间发送的消息只写入需求对话，不触发打断；只有人类显式点击“打断”才会停止当前 Run，随后用同一原生 Session 处理排队消息；
 - Agent Manager 为 RD 注入本地 Agent API 协议，项目指令和 Skills 仍由 CLI 根据 cwd 原生加载。
 
 ## 2. Codex
@@ -98,6 +99,7 @@ Agent Manager 启动后默认每 30 秒通过本机 `gh` CLI 轮询 Draft/Open P
 - CLI 启动后只要观测到原生 session id，就立即写入 AgentSession；
 - Run 成功后先推进本次输入消息边界；有新外部消息时立即启动下一轮，否则 Requirement 进入 `waiting_confirmation`，Session 进入 `waiting_human`；
 - Run 失败或超时后，Requirement 保持 `doing`，Session 进入 `failed`；
+- Run 被人类打断后，Requirement 保持 `doing`，Session 回到 `waiting_human`；若打断时已有新纠偏消息，则立即恢复同一 Session；
 - 人类重试或回复时仍使用同一个 AgentSession；已有原生 id 就 resume，没有则重新创建原生会话；
 - Agent Manager 重启后不会把旧 PID 当成存活进程；启动 reconciliation 会把遗留 RD Run 标记为失败，并独立清理遗留 ReviewRequest，不污染 RD Session 状态。
 

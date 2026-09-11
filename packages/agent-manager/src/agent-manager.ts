@@ -72,6 +72,7 @@ export class AgentManager extends EventEmitter {
   readonly #adapters: Record<AgentProvider, AgentAdapter>;
   readonly #timeoutMs: number;
   readonly #maxOutputBytes: number;
+  readonly #activeRdRuns = new Map<string, { runId: string; controller: AbortController }>();
   #apiBaseUrl = 'http://127.0.0.1:4310/api';
   #pullRequestReconcileTimer: NodeJS.Timeout | null = null;
   #pullRequestReconcileInFlight: Promise<void> | null = null;
@@ -380,6 +381,24 @@ export class AgentManager extends EventEmitter {
     return { message, queued };
   }
 
+  interruptRdRun(requirementId: string): { runId: string } {
+    const requirement = this.requireRequirement(requirementId);
+    if (requirement.session.state !== 'running') {
+      throw new StoreConflictError(`Requirement ${requirementId} does not have a running RD Run`);
+    }
+    const active = this.#activeRdRuns.get(requirementId);
+    if (!active) throw new StoreConflictError(`Requirement ${requirementId} RD Run cannot be interrupted`);
+    if (!active.controller.signal.aborted) {
+      active.controller.abort();
+      this.logger.info('RD run interruption requested', {
+        requirementId,
+        sessionId: requirement.session.id,
+        runId: active.runId,
+      });
+    }
+    return { runId: active.runId };
+  }
+
   requestReview(
     pullRequestId: string,
     options: { provider: AgentProvider; prompt?: string },
@@ -504,6 +523,8 @@ export class AgentManager extends EventEmitter {
       ...(inputToSequence === undefined ? {} : { inputToSequence }),
       now: new Date().toISOString(),
     });
+    const controller = new AbortController();
+    this.#activeRdRuns.set(requirementId, { runId, controller });
     this.publish({
       type: 'run.started',
       requirementId,
@@ -539,6 +560,7 @@ export class AgentManager extends EventEmitter {
       workspaceRoot: this.workspaceRoot,
       timeoutMs: this.#timeoutMs,
       maxOutputBytes: this.#maxOutputBytes,
+      signal: controller.signal,
       onNativeSession: (nativeSessionId) => {
         this.#store.setNativeSessionId(started.session.id, nativeSessionId, new Date().toISOString());
         this.logger.debug('Native agent session captured', {
@@ -564,6 +586,8 @@ export class AgentManager extends EventEmitter {
         });
       },
     }).then((outcome) => {
+      const active = this.#activeRdRuns.get(requirementId);
+      if (active?.runId === runId) this.#activeRdRuns.delete(requirementId);
       const current = this.#store.finishRdRun(runId, outcome, new Date().toISOString());
       if (outcome.status !== 'succeeded') {
         this.appendMessage({
@@ -578,15 +602,16 @@ export class AgentManager extends EventEmitter {
       this.publishOutcome(requirementId, current.session.id, runId, 'rd', outcome);
       this.logRunOutcome(requirementId, runId, 'rd', outcome, performance.now() - startedAt);
       if (outcome.status === 'succeeded') this.schedulePendingRdMessages(requirementId);
+      if (outcome.status === 'cancelled') this.schedulePendingRdMessages(requirementId, inputToSequence ?? 0);
       return current;
     });
   }
 
-  private schedulePendingRdMessages(requirementId: string): void {
+  private schedulePendingRdMessages(requirementId: string, afterSequence = 0): void {
     queueMicrotask(() => {
       const current = this.requireRequirement(requirementId);
       if (current.status === 'done' || current.status === 'cancelled' || current.session.state === 'running') return;
-      if (this.#store.listPendingRdMessages(requirementId).length === 0) return;
+      if (!this.#store.listPendingRdMessages(requirementId).some((message) => message.sequence > afterSequence)) return;
       void this.startRdRun(requirementId).catch((error: unknown) => {
         this.logger.error('RD run failed unexpectedly', { requirementId, error });
       });

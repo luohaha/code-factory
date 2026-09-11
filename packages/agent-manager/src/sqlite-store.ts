@@ -507,6 +507,11 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
           last_consumed_message_sequence = MAX(last_consumed_message_sequence, COALESCE(?, last_consumed_message_sequence)),
           updated_at = ? WHERE id = ?`)
           .run(outcome.nativeSessionId, run.inputToSequence, now, run.sessionId);
+      } else if (outcome.status === 'cancelled') {
+        this.#db.prepare("UPDATE agent_sessions SET state = 'waiting_human', last_error = NULL, native_session_id = COALESCE(?, native_session_id), updated_at = ? WHERE id = ?")
+          .run(outcome.nativeSessionId, now, run.sessionId);
+        this.#db.prepare("UPDATE requirements SET status = 'doing', updated_at = ? WHERE id = ?")
+          .run(now, run.requirementId);
       } else {
         this.#db.prepare("UPDATE agent_sessions SET state = 'failed', last_error = ?, native_session_id = COALESCE(?, native_session_id), updated_at = ? WHERE id = ?")
           .run(outcome.error ?? `Run ${outcome.status}`, outcome.nativeSessionId, now, run.sessionId);

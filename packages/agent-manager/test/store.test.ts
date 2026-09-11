@@ -109,6 +109,36 @@ test('successful RD run waits for confirmation and human confirmation completes 
   }
 });
 
+test('an interrupted RD run returns to a non-error waiting state', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-1',
+      sessionId: 'ses-1',
+      title: 'Requirement',
+      description: 'Description',
+      provider: 'codex',
+      createdBy: 'human',
+      now,
+    });
+    store.beginRun({ runId: 'run-1', requirementId: 'req-1', role: 'rd', provider: 'codex', taskSummary: 'start', now });
+    const interrupted = store.finishRdRun('run-1', {
+      status: 'cancelled',
+      exitCode: null,
+      nativeSessionId: 'native-1',
+      finalMessage: null,
+      error: 'Agent Run interrupted by human',
+    }, '2026-09-10T12:01:00.000Z');
+
+    assert.equal(interrupted.status, 'doing');
+    assert.equal(interrupted.session.state, 'waiting_human');
+    assert.equal(interrupted.session.lastError, null);
+    assert.equal(store.listRuns('req-1')[0]?.status, 'cancelled');
+  } finally {
+    store.close();
+  }
+});
+
 test('an open PR starts one ephemeral reviewer without changing its RD session', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {

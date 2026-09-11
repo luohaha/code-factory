@@ -18,6 +18,25 @@ class DeferredRunner implements AgentProcessRunner {
   }
 }
 
+class InterruptibleRunner implements AgentProcessRunner {
+  requests: ProcessRunRequest[] = [];
+  resolvers: Array<(outcome: RunOutcome) => void> = [];
+
+  run(request: ProcessRunRequest): Promise<RunOutcome> {
+    this.requests.push(request);
+    return new Promise((resolve) => {
+      this.resolvers.push(resolve);
+      request.signal?.addEventListener('abort', () => resolve({
+        status: 'cancelled',
+        exitCode: null,
+        nativeSessionId: null,
+        finalMessage: null,
+        error: 'Agent Run interrupted by human',
+      }), { once: true });
+    });
+  }
+}
+
 class SequenceGitHubClient implements GitHubClient {
   readonly #snapshots: GitHubPullRequestSnapshot[];
   #index = 0;
@@ -86,6 +105,65 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
       error: null,
     });
     await secondExecution;
+  } finally {
+    manager.close();
+  }
+});
+
+test('a queued correction does not interrupt until a human explicitly interrupts the running RD Agent', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new InterruptibleRunner();
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
+  try {
+    const requirement = manager.createRequirement({ title: 'Correct course', description: 'Initial task', provider: 'codex' });
+    const firstExecution = manager.runRequirement(requirement.id);
+    const firstRunId = manager.listRuns(requirement.id)[0]?.id;
+    runner.requests[0]?.onNativeSession?.('native-thread-1');
+
+    const reply = manager.postHumanMessage(requirement.id, 'Stop and use the new approach.');
+    assert.equal(reply.queued, true);
+    assert.equal(runner.requests[0]?.signal?.aborted, false);
+
+    manager.interruptRdRun(requirement.id);
+    assert.equal(runner.requests[0]?.signal?.aborted, true);
+
+    const interrupted = await firstExecution;
+    assert.equal(interrupted.status, 'doing');
+    assert.equal(interrupted.session.state, 'waiting_human');
+    assert.equal(manager.listRuns(requirement.id).find((run) => run.id === firstRunId)?.status, 'cancelled');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(runner.requests.length, 2);
+    assert.ok(runner.requests[1]?.invocation.args.includes('resume'));
+    assert.match(runner.requests[1]?.invocation.input ?? '', /Stop and use the new approach\./);
+    runner.resolvers[1]?.({
+      status: 'succeeded',
+      exitCode: 0,
+      nativeSessionId: 'native-thread-1',
+      finalMessage: 'corrected',
+      error: null,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  } finally {
+    manager.close();
+  }
+});
+
+test('interrupting an RD Run without a newer message stops instead of immediately restarting it', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new InterruptibleRunner();
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
+  try {
+    const requirement = manager.createRequirement({ title: 'Pause', description: 'Initial task', provider: 'codex' });
+    const execution = manager.runRequirement(requirement.id, 'Start here.');
+    const activeRun = manager.interruptRdRun(requirement.id);
+    assert.equal(activeRun.runId, manager.listRuns(requirement.id)[0]?.id);
+
+    const interrupted = await execution;
+    assert.equal(interrupted.session.state, 'waiting_human');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(runner.requests.length, 1);
+    assert.throws(() => manager.interruptRdRun(requirement.id), /does not have a running RD Run/);
   } finally {
     manager.close();
   }

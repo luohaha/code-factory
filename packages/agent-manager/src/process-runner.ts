@@ -9,6 +9,7 @@ export interface ProcessRunRequest {
   workspaceRoot: string;
   timeoutMs: number;
   maxOutputBytes: number;
+  signal?: AbortSignal;
   onNativeSession?: (nativeSessionId: string) => void;
   onOutput?: (line: string) => void;
   onEvent?: (event: NormalizedAgentEvent) => void;
@@ -40,8 +41,23 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
       let nativeSessionId: string | null = null;
       let finalMessage: string | null = null;
       let protocolError: string | null = null;
-      let timedOut = false;
+      let termination: 'cancelled' | 'timed_out' | null = null;
+      let forceKill: NodeJS.Timeout | null = null;
       let settled = false;
+
+      const terminate = (reason: 'cancelled' | 'timed_out') => {
+        if (termination || settled) return;
+        termination = reason;
+        child.kill('SIGTERM');
+        forceKill = setTimeout(() => child.kill('SIGKILL'), 2_000);
+        forceKill.unref();
+      };
+      const onAbort = () => terminate('cancelled');
+      const cleanup = () => {
+        clearTimeout(timeout);
+        if (forceKill) clearTimeout(forceKill);
+        request.signal?.removeEventListener('abort', onAbort);
+      };
 
       const consumeLine = (line: string) => {
         if (!line.trim()) return;
@@ -72,26 +88,35 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         // The process-level error/close handlers produce the canonical outcome.
       });
 
-      const timeout = setTimeout(() => {
-        timedOut = true;
-        child.kill('SIGTERM');
-        const forceKill = setTimeout(() => child.kill('SIGKILL'), 2_000);
-        forceKill.unref();
-      }, request.timeoutMs);
+      const timeout = setTimeout(() => terminate('timed_out'), request.timeoutMs);
       timeout.unref();
+      request.signal?.addEventListener('abort', onAbort, { once: true });
+      if (request.signal?.aborted) onAbort();
 
       child.once('error', (error) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timeout);
+        cleanup();
+        if (termination === 'cancelled') {
+          resolve({ status: 'cancelled', exitCode: null, nativeSessionId, finalMessage, error: 'Agent Run interrupted by human' });
+          return;
+        }
+        if (termination === 'timed_out') {
+          resolve({ status: 'timed_out', exitCode: null, nativeSessionId, finalMessage, error: `Agent timed out after ${request.timeoutMs}ms` });
+          return;
+        }
         resolve({ status: 'failed', exitCode: null, nativeSessionId, finalMessage, error: error.message });
       });
       child.once('close', (code, signal) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timeout);
+        cleanup();
         if (stdoutBuffer) consumeLine(stdoutBuffer);
-        if (timedOut) {
+        if (termination === 'cancelled') {
+          resolve({ status: 'cancelled', exitCode: code, nativeSessionId, finalMessage, error: 'Agent Run interrupted by human' });
+          return;
+        }
+        if (termination === 'timed_out') {
           resolve({ status: 'timed_out', exitCode: code, nativeSessionId, finalMessage, error: `Agent timed out after ${request.timeoutMs}ms` });
           return;
         }
