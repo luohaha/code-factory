@@ -210,7 +210,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
 
       if (request.method === 'POST' && url.pathname === '/api/agent/pull-requests') {
         const body = await readJson(request);
-        const item = manager.trackPullRequest({
+        const item = manager.registerAgentPullRequest({
           requirementId: stringField(body, 'requirementId', true)!,
           repository: stringField(body, 'repository', true)!,
           number: positiveIntegerField(body, 'number'),

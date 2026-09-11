@@ -43,6 +43,8 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
 
     const firstExecution = manager.runRequirement(first.id);
     assert.equal(runner.requests[0]?.workspaceRoot, manager.workspaceRoot);
+    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
+      value.includes('Agent Manager owns draft/open/closed/merged lifecycle synchronization')));
     const secondExecution = manager.runRequirement(second.id);
     assert.equal(runner.requests[1]?.workspaceRoot, manager.workspaceRoot);
     const queued = manager.postHumanMessage(first.id, 'add another test');
@@ -83,6 +85,41 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
       error: null,
     });
     await secondExecution;
+  } finally {
+    manager.close();
+  }
+});
+
+test('RD Agent registration cannot advance an existing PR lifecycle state', () => {
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+  });
+  try {
+    const requirement = manager.createRequirement({ title: 'PR ownership', description: 'Open a PR', provider: 'codex' });
+    const initial = manager.registerAgentPullRequest({
+      requirementId: requirement.id,
+      repository: 'acme/repo',
+      number: 8,
+      url: 'https://github.com/acme/repo/pull/8',
+      title: 'Feature',
+      baseBranch: 'main',
+      headBranch: 'feature',
+      headSha: 'abc123',
+      status: 'open',
+    });
+    const attempted = manager.registerAgentPullRequest({
+      ...initial,
+      title: 'Feature updated by RD',
+      headSha: 'def456',
+      status: 'merged',
+    });
+    assert.equal(attempted.title, 'Feature updated by RD');
+    assert.equal(attempted.headSha, 'def456');
+    assert.equal(attempted.status, 'open');
+
+    const reconciled = manager.trackPullRequest({ ...attempted, status: 'merged' });
+    assert.equal(reconciled.status, 'merged');
   } finally {
     manager.close();
   }
@@ -231,6 +268,8 @@ test('PR reconciliation delivers new review activity, CI failures, and status ch
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(runner.requests.length, 2);
     assert.match(runner.requests[1]?.invocation.input ?? '', /open -> merged/);
+    assert.match(runner.requests[1]?.invocation.input ?? '', /already persisted this lifecycle state/);
+    assert.match(runner.requests[1]?.invocation.input ?? '', /Do not call \/api\/agent\/pull-requests/);
 
     runner.resolvers[1]?.({
       status: 'succeeded', exitCode: 0, nativeSessionId: 'rd-session', finalMessage: 'merged', error: null,

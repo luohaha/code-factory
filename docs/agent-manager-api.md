@@ -438,7 +438,7 @@ Reviewer 在后台运行，接口不会等待 Review 完成。PR 不存在时返
 
 ### `POST /api/agent/pull-requests`
 
-登记或更新 GitHub PR。相同 `repository + number` 的后续请求更新同一条记录。
+登记或更新 GitHub PR 元数据。相同 `repository + number` 的后续请求更新同一条记录，但不能推进已登记 PR 的 lifecycle 状态；`draft/open/closed/merged` 由 PR Reconciler 根据 GitHub 推进。
 
 请求体的所有字段均为必填：
 
@@ -472,7 +472,7 @@ curl -X POST http://127.0.0.1:4310/api/agent/pull-requests \
 
 成功响应：`200 OK`，body 为创建或更新后的 `PullRequest`。Requirement 不存在时返回 `404`；字段无效时返回 `400`。
 
-Agent 应在 PR 创建后登记，并在标题、分支、head SHA 或状态变化时再次调用该接口。
+Agent 应在 PR 创建后登记，并且只在自己的 push 或编辑改变标题、分支或 head SHA 等元数据时再次调用。首次登记后，请求中的 `status` 字段会被忽略并保留 Agent Manager 已记录的状态；GitHub 状态事件由 PR Reconciler 自动同步，Agent 收到相应 System 消息时不得重复调用该接口。
 
 ### `POST /api/agent/requirements`
 

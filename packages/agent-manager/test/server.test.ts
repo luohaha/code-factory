@@ -124,7 +124,28 @@ test('HTTP API exposes the persisted human and RD Agent conversation', async () 
       }),
     });
     assert.equal(prResponse.status, 200);
-    const pullRequest = await prResponse.json() as { id: string };
+    const pullRequest = await prResponse.json() as { id: string; status: string };
+    assert.equal(pullRequest.status, 'open');
+    const attemptedStatusResponse = await fetch(`${baseUrl}/api/agent/pull-requests`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        requirementId: created.id,
+        repository: 'acme/repo',
+        number: 12,
+        url: 'https://github.com/acme/repo/pull/12',
+        title: 'Interactive task with another commit',
+        baseBranch: 'main',
+        headBranch: 'feature',
+        headSha: 'def456',
+        status: 'merged',
+      }),
+    });
+    assert.equal(attemptedStatusResponse.status, 200);
+    const attemptedStatus = await attemptedStatusResponse.json() as { status: string; title: string; headSha: string };
+    assert.equal(attemptedStatus.status, 'open');
+    assert.equal(attemptedStatus.title, 'Interactive task with another commit');
+    assert.equal(attemptedStatus.headSha, 'def456');
     const reviewResponse = await fetch(`${baseUrl}/api/pull-requests/${pullRequest.id}/review-requests`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
