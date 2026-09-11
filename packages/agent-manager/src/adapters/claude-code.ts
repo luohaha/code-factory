@@ -26,6 +26,8 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       '--verbose',
       '--dangerously-skip-permissions',
     ];
+    if (input.model) args.push('--model', input.model);
+    if (input.reasoningEffort) args.push('--effort', input.reasoningEffort);
     if (input.nativeSessionId) args.push('--resume', input.nativeSessionId);
     else args.push('--session-id', randomUUID());
     if (input.developerInstructions) args.push('--append-system-prompt', input.developerInstructions);
@@ -33,6 +35,10 @@ export class ClaudeCodeAdapter implements AgentAdapter {
   }
 
   buildReviewInvocation(input: ReviewInvocationInput): AgentInvocation {
+    const configurationArgs = [
+      ...(input.model ? ['--model', input.model] : []),
+      ...(input.reasoningEffort ? ['--effort', input.reasoningEffort] : []),
+    ];
     const instructionArgs = input.developerInstructions
       ? ['--append-system-prompt', input.developerInstructions]
       : [];
@@ -45,6 +51,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
         '--verbose',
         '--no-session-persistence',
         '--dangerously-skip-permissions',
+        ...configurationArgs,
         ...instructionArgs,
       ],
       input: input.prompt,

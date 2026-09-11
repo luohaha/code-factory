@@ -5,7 +5,7 @@ import { AgentManager, MAX_MESSAGE_ATTACHMENT_BYTES } from './agent-manager.js';
 import { DashboardServer } from './dashboard-server.js';
 import type { Logger } from './logger.js';
 import { StoreConflictError, StoreNotFoundError } from './store.js';
-import type { AgentProvider, ManagerEvent, PullRequestStatus } from './types.js';
+import type { AgentProvider, AgentReasoningEffort, ManagerEvent, PullRequestStatus } from './types.js';
 
 export interface AgentManagerServerOptions {
   host?: string;
@@ -52,6 +52,14 @@ function stringField(body: Record<string, unknown>, name: string, required = fal
 
 function providerField(value: unknown): AgentProvider {
   if (value !== 'codex' && value !== 'claude-code') throw new TypeError('provider must be codex or claude-code');
+  return value;
+}
+
+function reasoningEffortField(value: unknown): AgentReasoningEffort | undefined {
+  if (value === undefined) return undefined;
+  if (value !== 'low' && value !== 'medium' && value !== 'high' && value !== 'xhigh' && value !== 'max') {
+    throw new TypeError('reasoningEffort must be low, medium, high, xhigh, or max');
+  }
   return value;
 }
 
@@ -201,10 +209,14 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
       }
       if (request.method === 'POST' && url.pathname === '/api/requirements') {
         const body = await readJson(request);
+        const model = stringField(body, 'model')?.trim();
+        const reasoningEffort = reasoningEffortField(body.reasoningEffort);
         const item = manager.createRequirement({
           title: stringField(body, 'title', true)!,
           description: stringField(body, 'description', true)!,
           provider: providerField(body.provider),
+          ...(model ? { model } : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
         });
         sendJson(response, 201, item);
         return;
@@ -215,10 +227,14 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         const sourceSessionId = stringField(body, 'sourceSessionId', true)!;
         const source = manager.listSessions().find((session) => session.id === sourceSessionId);
         if (!source) throw new StoreNotFoundError(`Session ${sourceSessionId} not found`);
+        const model = stringField(body, 'model')?.trim();
+        const reasoningEffort = reasoningEffortField(body.reasoningEffort);
         const item = manager.createRequirement({
           title: stringField(body, 'title', true)!,
           description: stringField(body, 'description', true)!,
           provider: body.provider === undefined ? source.provider : providerField(body.provider),
+          ...(model ? { model } : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
           createdBy: 'rd_agent',
           sourceSessionId,
           parentRequirementId: stringField(body, 'parentRequirementId') ?? source.requirementId,
@@ -249,10 +265,23 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         const pullRequestId = decodeURIComponent(reviewRequest[1]!);
         const body = await readJson(request);
         const provider = providerField(body.provider);
+        const model = stringField(body, 'model')?.trim();
+        const reasoningEffort = reasoningEffortField(body.reasoningEffort);
         const prompt = stringField(body, 'prompt');
-        void manager.requestReview(pullRequestId, { provider, ...(prompt ? { prompt } : {}) })
+        void manager.requestReview(pullRequestId, {
+          provider,
+          ...(model ? { model } : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(prompt ? { prompt } : {}),
+        })
           .catch((error: unknown) => logger.error('Reviewer run failed unexpectedly', { pullRequestId, error }));
-        sendJson(response, 202, { accepted: true, pullRequestId, provider });
+        sendJson(response, 202, {
+          accepted: true,
+          pullRequestId,
+          provider,
+          model: model ?? null,
+          reasoningEffort: reasoningEffort ?? null,
+        });
         return;
       }
 

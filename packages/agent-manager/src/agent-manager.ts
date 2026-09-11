@@ -20,6 +20,7 @@ import type { AgentManagerStore } from './store.js';
 import { StoreConflictError, StoreNotFoundError } from './store.js';
 import type {
   AgentProvider,
+  AgentReasoningEffort,
   CreateRequirementInput,
   ManagerEvent,
   MessageAttachment,
@@ -176,6 +177,7 @@ export class AgentManager extends EventEmitter {
   createRequirement(input: CreateRequirementInput): RequirementWithSession {
     const title = input.title.trim();
     const description = input.description.trim();
+    const model = input.model?.trim() || undefined;
     if (!title) throw new TypeError('title is required');
     if (!description) throw new TypeError('description is required');
     if (input.createdBy === 'rd_agent') {
@@ -195,6 +197,8 @@ export class AgentManager extends EventEmitter {
       title,
       description,
       provider: input.provider,
+      ...(model ? { model } : {}),
+      ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
       createdBy: input.createdBy ?? 'human',
       ...(input.parentRequirementId ? { parentRequirementId: input.parentRequirementId } : {}),
       ...(input.sourceSessionId ? { sourceSessionId: input.sourceSessionId } : {}),
@@ -204,12 +208,19 @@ export class AgentManager extends EventEmitter {
       type: 'requirement.created',
       requirementId,
       sessionId,
-      payload: { provider: input.provider, createdBy: requirement.createdBy },
+      payload: {
+        provider: input.provider,
+        model: model ?? null,
+        reasoningEffort: input.reasoningEffort ?? null,
+        createdBy: requirement.createdBy,
+      },
     });
     this.logger.info('Requirement created', {
       requirementId,
       sessionId,
       provider: input.provider,
+      model: model ?? null,
+      reasoningEffort: input.reasoningEffort ?? null,
       createdBy: requirement.createdBy,
     });
     return requirement;
@@ -411,19 +422,22 @@ export class AgentManager extends EventEmitter {
 
   requestReview(
     pullRequestId: string,
-    options: { provider: AgentProvider; prompt?: string },
+    options: { provider: AgentProvider; model?: string; reasoningEffort?: AgentReasoningEffort; prompt?: string },
   ): Promise<RunOutcome> {
     const startedAt = performance.now();
     const pullRequest = this.requirePullRequest(pullRequestId);
     const requirement = this.requireRequirement(pullRequest.requirementId);
     const runId = `run_${randomUUID()}`;
     const reviewRequestId = `rev_${randomUUID()}`;
+    const model = options.model?.trim() || undefined;
     this.#store.beginReviewRequest({
       id: reviewRequestId,
       runId,
       pullRequestId,
       requirementId: requirement.id,
       provider: options.provider,
+      ...(model ? { model } : {}),
+      ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
       targetHeadSha: pullRequest.headSha,
       taskSummary: `Review ${pullRequest.repository}#${pullRequest.number} at ${pullRequest.headSha.slice(0, 8)}`,
       now: new Date().toISOString(),
@@ -433,7 +447,14 @@ export class AgentManager extends EventEmitter {
       requirementId: requirement.id,
       sessionId: requirement.session.id,
       runId,
-      payload: { reviewRequestId, pullRequestId, provider: options.provider, targetHeadSha: pullRequest.headSha },
+      payload: {
+        reviewRequestId,
+        pullRequestId,
+        provider: options.provider,
+        model: model ?? null,
+        reasoningEffort: options.reasoningEffort ?? null,
+        targetHeadSha: pullRequest.headSha,
+      },
     });
     this.logger.info('Review run started', {
       requirementId: requirement.id,
@@ -441,6 +462,8 @@ export class AgentManager extends EventEmitter {
       reviewRequestId,
       pullRequestId,
       provider: options.provider,
+      model: model ?? null,
+      reasoningEffort: options.reasoningEffort ?? null,
       targetHeadSha: pullRequest.headSha,
     });
 
@@ -454,6 +477,8 @@ export class AgentManager extends EventEmitter {
     return this.execute({
       invocation: adapter.buildReviewInvocation({
         prompt,
+        ...(model ? { model } : {}),
+        ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
         developerInstructions,
       }),
       adapter,
@@ -523,6 +548,8 @@ export class AgentManager extends EventEmitter {
       requirementId,
       role: 'rd',
       provider: requirement.provider,
+      ...(requirement.model ? { model: requirement.model } : {}),
+      ...(requirement.reasoningEffort ? { reasoningEffort: requirement.reasoningEffort } : {}),
       taskSummary: pendingMessages.length > 0
         ? `Process ${pendingMessages.length} new conversation message${pendingMessages.length === 1 ? '' : 's'}`
         : isResume ? 'Resume RD session' : 'Start RD session',
@@ -540,6 +567,8 @@ export class AgentManager extends EventEmitter {
       payload: {
         role: 'rd',
         provider: requirement.provider,
+        model: requirement.model,
+        reasoningEffort: requirement.reasoningEffort,
         resumed: isResume,
         inputFromSequence: inputFromSequence ?? null,
         inputToSequence: inputToSequence ?? null,
@@ -550,6 +579,8 @@ export class AgentManager extends EventEmitter {
       sessionId: started.session.id,
       runId,
       provider: requirement.provider,
+      model: requirement.model,
+      reasoningEffort: requirement.reasoningEffort,
       resumed: isResume,
       pendingMessageCount: pendingMessages.length,
     });
@@ -560,6 +591,8 @@ export class AgentManager extends EventEmitter {
       invocation: adapter.buildRdInvocation({
         prompt,
         nativeSessionId: requirement.session.nativeSessionId,
+        ...(requirement.model ? { model: requirement.model } : {}),
+        ...(requirement.reasoningEffort ? { reasoningEffort: requirement.reasoningEffort } : {}),
         developerInstructions: this.buildRdDeveloperInstructions(requirement),
         imagePaths,
       }),
@@ -778,7 +811,7 @@ export class AgentManager extends EventEmitter {
       'Agent Manager owns draft/open/closed/merged lifecycle synchronization through its GitHub reconciler. Never call /agent/pull-requests merely to mirror a lifecycle event reported by a System message or observed on GitHub.',
       `The payload must include requirementId=${requirement.id}, repository, number, url, title, baseBranch, headBranch, headSha, and status (draft|open|closed|merged).`,
       'When you discover separate follow-up work, you may propose a new TODO requirement by POSTing JSON to /agent/requirements.',
-      `Include sourceSessionId=${requirement.session.id}, parentRequirementId=${requirement.id}, title, description, and optionally provider (defaults to your provider).`,
+      `Include sourceSessionId=${requirement.session.id}, parentRequirementId=${requirement.id}, title, description, and optionally provider, model, and reasoningEffort (low|medium|high|xhigh|max). Provider defaults to your provider.`,
       'Agent-created requirements are proposals and do not start automatically.',
     ].join('\n');
   }

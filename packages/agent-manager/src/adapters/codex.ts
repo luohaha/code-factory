@@ -13,6 +13,8 @@ export class CodexAdapter implements AgentAdapter {
 
   buildRdInvocation(input: RdInvocationInput): AgentInvocation {
     const common = ['--json', '--color', 'never', '--dangerously-bypass-approvals-and-sandbox'];
+    if (input.model) common.push('--model', input.model);
+    if (input.reasoningEffort) common.push('-c', `model_reasoning_effort=${JSON.stringify(input.reasoningEffort)}`);
     const images = (input.imagePaths ?? []).flatMap((path) => ['--image', path]);
     if (input.developerInstructions) {
       common.push('-c', `developer_instructions=${JSON.stringify(input.developerInstructions)}`);
@@ -23,6 +25,10 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   buildReviewInvocation(input: ReviewInvocationInput): AgentInvocation {
+    const configurationArgs = [
+      ...(input.model ? ['--model', input.model] : []),
+      ...(input.reasoningEffort ? ['-c', `model_reasoning_effort=${JSON.stringify(input.reasoningEffort)}`] : []),
+    ];
     const instructionArgs = input.developerInstructions
       ? ['-c', `developer_instructions=${JSON.stringify(input.developerInstructions)}`]
       : [];
@@ -35,6 +41,7 @@ export class CodexAdapter implements AgentAdapter {
         'never',
         '--ephemeral',
         '--dangerously-bypass-approvals-and-sandbox',
+        ...configurationArgs,
         ...instructionArgs,
         '-',
       ],

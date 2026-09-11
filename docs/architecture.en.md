@@ -61,6 +61,7 @@ Every headless RD and Reviewer invocation skips interactive approval and CLI san
 
 - `status`: `todo | doing | waiting_confirmation | done | cancelled`;
 - `provider`: `codex | claude-code`;
+- optional `model` and `reasoningEffort` pin the CLI configuration for every RD Run in the Session;
 - `createdBy`: `human | rd_agent`;
 - an agent-proposed Requirement records `parentRequirementId` and `sourceSessionId`;
 - an agent proposal is created as TODO and does not start automatically, preventing uncontrolled recursive work.
@@ -83,6 +84,7 @@ Every headless RD and Reviewer invocation skips interactive approval and CLI san
 ### ReviewRequest
 
 - Can only be created manually by a human for an Open PR;
+- records the selected provider and optional model and reasoning effort for the one-off Reviewer Run;
 - requires the human to select `codex` or `claude-code`;
 - captures an immutable `targetHeadSha` when the request starts;
 - owns one short-lived Reviewer AgentRun and never creates an AgentSession;

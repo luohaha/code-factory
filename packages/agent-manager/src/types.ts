@@ -1,4 +1,5 @@
 export type AgentProvider = 'codex' | 'claude-code';
+export type AgentReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export type RequirementStatus =
   | 'todo'
@@ -27,6 +28,8 @@ export interface Requirement {
   description: string;
   status: RequirementStatus;
   provider: AgentProvider;
+  model: string | null;
+  reasoningEffort: AgentReasoningEffort | null;
   createdBy: RequirementCreator;
   parentRequirementId: string | null;
   sourceSessionId: string | null;
@@ -54,6 +57,8 @@ export interface AgentRun {
   sessionId: string | null;
   role: RunRole;
   provider: AgentProvider;
+  model: string | null;
+  reasoningEffort: AgentReasoningEffort | null;
   status: RunStatus;
   taskSummary: string;
   nativeSessionId: string | null;
@@ -120,6 +125,8 @@ export interface ReviewRequest {
   pullRequestId: string;
   runId: string;
   provider: AgentProvider;
+  model: string | null;
+  reasoningEffort: AgentReasoningEffort | null;
   targetHeadSha: string;
   status: ReviewRequestStatus;
   requestedBy: 'human';
@@ -136,6 +143,8 @@ export interface CreateRequirementInput {
   title: string;
   description: string;
   provider: AgentProvider;
+  model?: string;
+  reasoningEffort?: AgentReasoningEffort;
   createdBy?: RequirementCreator;
   parentRequirementId?: string;
   sourceSessionId?: string;

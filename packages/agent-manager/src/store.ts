@@ -1,5 +1,6 @@
 import type {
   AgentProvider,
+  AgentReasoningEffort,
   AgentRun,
   AgentSession,
   ManagerEvent,
@@ -27,6 +28,8 @@ export interface CreateRequirementRecord {
   title: string;
   description: string;
   provider: AgentProvider;
+  model?: string;
+  reasoningEffort?: AgentReasoningEffort;
   createdBy: RequirementCreator;
   parentRequirementId?: string;
   sourceSessionId?: string;
@@ -38,6 +41,8 @@ export interface BeginRunRecord {
   requirementId: string;
   role: RunRole;
   provider: AgentProvider;
+  model?: string;
+  reasoningEffort?: AgentReasoningEffort;
   taskSummary: string;
   inputFromSequence?: number;
   inputToSequence?: number;
@@ -109,6 +114,8 @@ export interface BeginReviewRequestRecord {
   pullRequestId: string;
   requirementId: string;
   provider: AgentProvider;
+  model?: string;
+  reasoningEffort?: AgentReasoningEffort;
   targetHeadSha: string;
   taskSummary: string;
   now: string;

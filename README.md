@@ -15,12 +15,12 @@ Code Factory is built around three first-class domain entities:
 The main runtime rules are:
 
 - One Agent Manager manages the workspace directory from which it was started.
-- A Requirement receives its RD AgentSession immediately when it is created. There is no agent pool or scheduling queue.
+- A Requirement receives its RD AgentSession immediately when it is created, with an optional model and reasoning-effort override. There is no agent pool or scheduling queue.
 - One AgentSession may produce multiple AgentRuns while preserving context through the native Codex thread ID or Claude Code session ID.
 - Different RD sessions may run concurrently, while a single session may have only one active RD Run.
 - The Requirement conversation is the RD message stream. Human and Reviewer messages arriving during a Run are queued without interrupting it. A human can explicitly interrupt the current Run, after which the same Session resumes with queued messages.
 - RD Agent output is visible in the conversation but is never sent back to the same agent as new input.
-- A human can request a review for an Open PR and explicitly choose Codex or Claude Code as the Reviewer.
+- A human can request a review for an Open PR, explicitly choose Codex or Claude Code as the Reviewer, and optionally override its model and reasoning effort.
 - Reviewer is a short-lived Run with no persistent AgentSession. Its result is added to the Requirement conversation and wakes the corresponding RD session.
 - A built-in PR reconciler polls GitHub for status changes, PR comments, review submissions, inline review comments, and newly failed CI checks. These events enter the same Requirement conversation and wake or queue for the RD session.
 - An RD Agent can call the local Agent API to register a newly created PR, refresh metadata changed by its own work, and propose a separate TODO Requirement. GitHub lifecycle state is subsequently owned by the Agent Manager reconciler rather than the RD Agent.
