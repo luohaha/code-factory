@@ -1,20 +1,20 @@
 # Agent Manager HTTP API Reference
 
-本文档描述当前 Agent Manager 对外提供的 HTTP API。它适用于 Web Dashboard、自动化脚本，以及由 Agent Manager 启动的 RD Agent。
+This document describes the HTTP API exposed by Agent Manager. It is intended for the Web dashboard, automation scripts, and RD Agents started by Agent Manager.
 
-若需要了解对话投递、Run 恢复和 Review 闭环等设计语义，请参阅 [HTTP 与事件协议](protocol.md)；领域模型和状态机见 [最终架构与领域模型](architecture.md)。
+For message delivery, Run recovery, and review-loop semantics, see [HTTP and Event Protocol](protocol.md). For the domain model and state machines, see [Architecture and Domain Model](architecture.en.md).
 
-## 1. 开始使用
+## 1. Getting started
 
-Agent Manager 默认监听 `127.0.0.1:4310`，API base URL 为：
+Agent Manager listens on 127.0.0.1:4310 by default. Its API base URL is:
 
 ~~~text
 http://127.0.0.1:4310/api
 ~~~
 
-Agent Manager 默认每 30 秒通过本机已认证的 `gh` CLI 同步 Draft/Open PR 的状态、评论、Review、行级 review comment 和 CI 失败。使用 `--pr-reconcile-interval SECONDS` 修改轮询间隔，设为 `0` 可关闭。同步产生的消息仍通过本文档中的 Requirement conversation 与 SSE 接口展示和投递。
+By default, Agent Manager uses the authenticated local GitHub CLI every 30 seconds to synchronize state, comments, reviews, inline review comments, and CI failures for Draft and Open PRs. Use --pr-reconcile-interval SECONDS to change the interval or 0 to disable polling. Reconciliation messages are exposed and delivered through the Requirement conversation and SSE endpoints documented here.
 
-可以先用健康检查确认服务和当前 workspace：
+Check the service and bound workspace first:
 
 ~~~bash
 curl http://127.0.0.1:4310/api/health
@@ -27,34 +27,34 @@ curl http://127.0.0.1:4310/api/health
 }
 ~~~
 
-除附件上传端点和 SSE 端点外，响应与请求均为 JSON。JSON POST 请求体不能超过 1 MB；附件上传使用原始二进制 body，单个不能超过 20 MB。当前 API 没有版本前缀。
+Requests and responses use JSON except for attachment uploads and SSE. JSON POST bodies are limited to 1 MB. Attachment uploads use a raw binary body and are limited to 20 MB per file. The API currently has no version prefix.
 
-服务默认只监听本机地址，尚不提供身份认证。通过 `--host` 暴露到其他网络前，应先评估访问风险。CLI 可用 `--allow-origin <origin>` 配置单个 CORS origin。
+The service listens only on the loopback interface by default and currently has no authentication. Assess the risk before exposing it through --host. Use --allow-origin <origin> to configure one CORS origin.
 
-## 2. 接口一览
+## 2. Endpoint summary
 
-| Method | Path | 用途 |
+| Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/health` | 健康检查 |
-| `GET` | `/api/workspace` | 查询当前 workspace 和数据库路径 |
-| `GET` | `/api/requirements` | 列出需求及其 RD Session |
-| `POST` | `/api/requirements` | 创建需求及其 RD Session |
-| `POST` | `/api/requirements/:id/start` | 启动或重试需求 |
-| `POST` | `/api/requirements/:id/reply` | 向需求对话发送人工消息 |
-| `POST` | `/api/requirements/:id/confirm` | 确认已完成的需求 |
-| `GET` | `/api/requirements/:id/messages` | 查询需求的完整对话 |
-| `POST` | `/api/requirements/:id/attachments` | 上传一个待发送的对话附件 |
-| `GET` | `/api/attachments/:id` | 读取或下载已上传附件 |
-| `GET` | `/api/sessions` | 列出 RD Session |
-| `GET` | `/api/runs` | 列出 RD 和 Reviewer Run |
-| `GET` | `/api/pull-requests` | 列出已登记的 PR |
-| `POST` | `/api/pull-requests/:id/review-requests` | 发起 PR Review |
-| `GET` | `/api/review-requests` | 列出 Review Request |
-| `GET` | `/api/events` | 订阅可恢复的 SSE 事件流 |
-| `POST` | `/api/agent/pull-requests` | RD Agent 登记或更新 PR |
-| `POST` | `/api/agent/requirements` | RD Agent 提议后续需求 |
+| GET | /api/health | Check service health |
+| GET | /api/workspace | Read the bound workspace and data paths |
+| GET | /api/requirements | List Requirements with their RD Sessions |
+| POST | /api/requirements | Create a Requirement and RD Session |
+| POST | /api/requirements/:id/start | Start or retry a Requirement |
+| POST | /api/requirements/:id/reply | Send a human conversation message |
+| POST | /api/requirements/:id/confirm | Confirm Requirement completion |
+| GET | /api/requirements/:id/messages | Read the complete Requirement conversation |
+| POST | /api/requirements/:id/attachments | Upload a conversation attachment |
+| GET | /api/attachments/:id | Read or download an attachment |
+| GET | /api/sessions | List RD Sessions |
+| GET | /api/runs | List RD and Reviewer Runs |
+| GET | /api/pull-requests | List registered Pull Requests |
+| POST | /api/pull-requests/:id/review-requests | Request a PR review |
+| GET | /api/review-requests | List Review Requests |
+| GET | /api/events | Subscribe to the resumable SSE stream |
+| POST | /api/agent/pull-requests | Register or update a PR from an RD Agent |
+| POST | /api/agent/requirements | Propose a follow-up Requirement from an RD Agent |
 
-路径参数中的 ID 应进行 URL 编码。Requirement、Session、Run、PR 和 Review Request 列表按最近更新时间或创建时间优先返回；消息和事件按序号升序返回。列表响应格式为：
+URL-encode IDs used in path parameters. Requirement, Session, Run, PR, and ReviewRequest lists are ordered with the most recently updated or created items first. Messages and events are ordered by ascending sequence number. List responses use:
 
 ~~~json
 {
@@ -62,11 +62,11 @@ curl http://127.0.0.1:4310/api/health
 }
 ~~~
 
-列表接口目前不支持分页；`GET /api/events` 首次连接时最多补发 200 个历史事件。
+List endpoints do not currently support pagination. A new GET /api/events connection replays at most 200 historical events.
 
-## 3. 数据模型
+## 3. Data models
 
-所有时间字段都是 ISO 8601 字符串。尚未产生的值以 `null` 返回，不会省略。
+All timestamps are ISO 8601 strings. Values that do not yet exist are returned as null rather than omitted.
 
 ### 3.1 Requirement
 
@@ -87,7 +87,7 @@ interface Requirement {
 }
 ~~~
 
-查询和创建 Requirement 时，响应总是内嵌它唯一绑定的 `session`。
+Requirement query and creation responses always embed the uniquely bound session.
 
 ### 3.2 AgentSession
 
@@ -106,7 +106,7 @@ interface AgentSession {
 }
 ~~~
 
-`nativeSessionId` 是 Codex 或 Claude Code 的原生会话 ID。`pendingMessageCount` 表示尚未成功投递给 RD 的外部消息数量。
+nativeSessionId is the native Codex or Claude Code session ID. pendingMessageCount is the number of external messages that RD has not successfully consumed.
 
 ### 3.3 AgentRun
 
@@ -114,7 +114,7 @@ interface AgentSession {
 interface AgentRun {
   id: string;                         // run_<uuid>
   requirementId: string;
-  sessionId: string | null;           // Reviewer Run 为 null
+  sessionId: string | null;           // null for Reviewer Runs
   role: 'rd' | 'reviewer';
   provider: 'codex' | 'claude-code';
   status: 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
@@ -129,7 +129,7 @@ interface AgentRun {
 }
 ~~~
 
-`inputFromSequence` 和 `inputToSequence` 记录本次 RD Run 捕获的需求消息范围；Reviewer Run 的这两个字段为 `null`。
+inputFromSequence and inputToSequence record the Requirement-message range captured by an RD Run. Both are null for Reviewer Runs.
 
 ### 3.4 RequirementMessage
 
@@ -159,7 +159,7 @@ interface MessageAttachment {
 }
 ~~~
 
-`sequence` 在单个 Requirement 内单调递增。`deliverToRd=true` 表示该消息需要由 RD 消费；RD 自己的输出不会再次投递给自身。
+sequence increases monotonically within a Requirement. deliverToRd=true means RD must consume the message. RD output is never delivered back to itself.
 
 ### 3.5 PullRequest
 
@@ -180,7 +180,7 @@ interface PullRequest {
 }
 ~~~
 
-`repository + number` 是 PR 的幂等键。
+repository + number is the idempotency key for a PR.
 
 ### 3.6 ReviewRequest
 
@@ -199,17 +199,15 @@ interface ReviewRequest {
 }
 ~~~
 
-Review 开始时会固定 `targetHeadSha`，因此结果只代表该版本。
+Agent Manager captures targetHeadSha when a review starts, so the ReviewRequest records the revision it represents. A timed-out Reviewer has AgentRun.status=timed_out and normalized ReviewRequest.status=failed.
 
-Reviewer Run 超时时，对应 `AgentRun.status` 为 `timed_out`，而 `ReviewRequest.status` 归一为 `failed`。
+## 4. Query endpoints
 
-## 4. 系统查询接口
+### GET /api/health
 
-### `GET /api/health`
+Returns service status and the workspace bound at Agent Manager startup.
 
-返回服务状态和 Agent Manager 启动时绑定的 workspace。
-
-成功响应：`200 OK`
+Success: 200 OK
 
 ~~~json
 {
@@ -218,9 +216,9 @@ Reviewer Run 超时时，对应 `AgentRun.status` 为 `timed_out`，而 `ReviewR
 }
 ~~~
 
-### `GET /api/workspace`
+### GET /api/workspace
 
-成功响应：`200 OK`
+Success: 200 OK
 
 ~~~json
 {
@@ -230,41 +228,39 @@ Reviewer Run 超时时，对应 `AgentRun.status` 为 `timed_out`，而 `ReviewR
 }
 ~~~
 
-`logFilePath` 指向当前活跃日志的稳定符号链接；实际日志文件按日期和大小滚动。
+logFilePath is a stable symlink to the active log; physical files rotate by date and size.
 
-### `GET /api/requirements`
+### GET /api/requirements
 
-返回所有未取消的 Requirement，每项包含对应的 `AgentSession`。
+Returns every non-cancelled Requirement, including its AgentSession.
 
-成功响应：`200 OK`，body 为 `{ "items": Requirement[] }`。
+Success: 200 OK with {"items": Requirement[]}.
 
-### `GET /api/sessions`
+### GET /api/sessions
 
-返回全部 RD Session。
+Returns all RD Sessions.
 
-成功响应：`200 OK`，body 为 `{ "items": AgentSession[] }`。
+Success: 200 OK with {"items": AgentSession[]}.
 
-### `GET /api/runs`
+### GET /api/runs
 
-可选 query 参数：
+Optional query parameters:
 
-| 参数 | 类型 | 说明 |
+| Parameter | Type | Meaning |
 | --- | --- | --- |
-| `requirementId` | string | 仅返回指定 Requirement 的 Run |
+| requirementId | string | Return only Runs for this Requirement |
 
-成功响应：`200 OK`，body 为 `{ "items": AgentRun[] }`。不存在的 `requirementId` 返回空数组。
+Success: 200 OK with {"items": AgentRun[]}. An unknown requirementId returns an empty array.
 
-### `GET /api/requirements/:id/messages`
+### GET /api/requirements/:id/messages
 
-按 `sequence` 升序返回指定 Requirement 的完整对话。
+Returns the complete Requirement conversation ordered by ascending sequence.
 
-成功响应：`200 OK`，body 为 `{ "items": RequirementMessage[] }`。
+Success: 200 OK with {"items": RequirementMessage[]}. Returns 404 Not Found for an unknown Requirement.
 
-指定 Requirement 不存在时返回 `404 Not Found`。
+### POST /api/requirements/:id/attachments
 
-### `POST /api/requirements/:id/attachments`
-
-上传一个附件并返回 Attachment。请求 body 是文件原始字节，不是 JSON；`X-File-Name` 使用 URI 编码后的原始文件名。单个文件最大 20 MB。PNG、JPEG、GIF 和 WebP 会按文件签名识别为 `kind=image`，其他内容为 `kind=file`。
+Uploads one attachment and returns MessageAttachment. The body is raw file bytes rather than JSON. X-File-Name contains the URI-encoded original filename. Files are limited to 20 MB. PNG, JPEG, GIF, and WebP are detected by signature as kind=image; all other content uses kind=file.
 
 ~~~bash
 curl -X POST http://127.0.0.1:4310/api/requirements/req_.../attachments \
@@ -273,72 +269,72 @@ curl -X POST http://127.0.0.1:4310/api/requirements/req_.../attachments \
   --data-binary @debug.log
 ~~~
 
-成功响应为 `201 Created`。上传后，将返回的 `id` 放入 `start` 或 `reply` 的 `attachmentIds`；每条消息最多包含 6 个附件。附件和关联消息都持久化，Agent Manager 重启后仍可读取。
+Success: 201 Created. Include the returned ID in attachmentIds on a later start or reply request. A message supports up to six attachments. Attachments and their messages persist across Agent Manager restarts.
 
-### `GET /api/attachments/:id`
+### GET /api/attachments/:id
 
-返回附件内容。安全的栅格图片使用 `Content-Disposition: inline`，其他文件强制使用 `attachment` 下载，并统一返回 `X-Content-Type-Options: nosniff`。Attachment 不存在时返回 `404 Not Found`。
+Returns attachment content. Safe raster images use Content-Disposition: inline. Other files are forced to download with attachment. Every response includes X-Content-Type-Options: nosniff. Returns 404 Not Found for an unknown attachment.
 
-### `GET /api/pull-requests`
+### GET /api/pull-requests
 
-可选 query 参数：
+Optional query parameters:
 
-| 参数 | 类型 | 说明 |
+| Parameter | Type | Meaning |
 | --- | --- | --- |
-| `requirementId` | string | 仅返回指定 Requirement 登记的 PR |
+| requirementId | string | Return only PRs registered for this Requirement |
 
-成功响应：`200 OK`，body 为 `{ "items": PullRequest[] }`。不存在的 `requirementId` 返回空数组。
+Success: 200 OK with {"items": PullRequest[]}. An unknown requirementId returns an empty array.
 
-### `GET /api/review-requests`
+### GET /api/review-requests
 
-可选 query 参数：
+Optional query parameters:
 
-| 参数 | 类型 | 说明 |
+| Parameter | Type | Meaning |
 | --- | --- | --- |
-| `pullRequestId` | string | 仅返回指定 PR 的 Review Request |
+| pullRequestId | string | Return only ReviewRequests for this PR |
 
-成功响应：`200 OK`，body 为 `{ "items": ReviewRequest[] }`。不存在的 `pullRequestId` 返回空数组。
+Success: 200 OK with {"items": ReviewRequest[]}. An unknown pullRequestId returns an empty array.
 
-## 5. Requirement 操作
+## 5. Requirement actions
 
-### `POST /api/requirements`
+### POST /api/requirements
 
-创建一个由人类提出的 Requirement，并同时创建它唯一绑定的 RD Session。创建后不会自动启动 Agent。
+Creates a human-authored Requirement and its uniquely bound RD Session. The Agent does not start automatically.
 
-请求体：
+Request body:
 
-| 字段 | 类型 | 必填 | 说明 |
+| Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
-| `title` | string | 是 | 去除首尾空白后不能为空 |
-| `description` | string | 是 | 去除首尾空白后不能为空 |
-| `provider` | string | 是 | `codex` 或 `claude-code` |
+| title | string | yes | Must be non-empty after trimming |
+| description | string | yes | Must be non-empty after trimming |
+| provider | string | yes | codex or claude-code |
 
 ~~~bash
 curl -X POST http://127.0.0.1:4310/api/requirements \
   -H 'Content-Type: application/json' \
   -d '{
-    "title": "为导出任务增加超时",
-    "description": "超时后停止子进程并记录失败原因",
+    "title": "Add an export timeout",
+    "description": "Stop the child process and record the failure when the timeout expires",
     "provider": "codex"
   }'
 ~~~
 
-成功响应：`201 Created`，body 为新建的 `Requirement`。其初始状态为 `todo`，Session 初始状态为 `idle`。
+Success: 201 Created with the new Requirement. Its initial status is todo and its Session state is idle.
 
-### `POST /api/requirements/:id/start`
+### POST /api/requirements/:id/start
 
-启动尚未运行的 Requirement，或重试一个失败的 RD Session。可选的 `message` 和 `attachmentIds` 会先写入需求对话，再随本次或下一次 Run 投递。
+Starts a Requirement that has not run, or retries a failed RD Session. Optional message and attachmentIds values are appended to the conversation before delivery in this or the next Run.
 
-请求体可为空，或为：
+The request body may be empty or contain:
 
 ~~~json
 {
-  "message": "先看截图复现问题，再补回归测试。",
+  "message": "Reproduce the issue from the screenshot, then add a regression test.",
   "attachmentIds": ["att_..."]
 }
 ~~~
 
-成功响应：`202 Accepted`
+Success: 202 Accepted
 
 ~~~json
 {
@@ -348,24 +344,24 @@ curl -X POST http://127.0.0.1:4310/api/requirements \
 }
 ~~~
 
-接口只表示任务已接受，Run 在后台执行。如果 Session 已在运行，接口仍返回 `202`；可选消息会排队供后续 Run 消费，但不会启动第二个并发 RD Run。通过 SSE 或查询 Run、Session 来跟踪结果。
+Acceptance does not mean the background Run has completed. If the Session is already running, the endpoint still returns 202; optional input is queued for the next Run and no second concurrent RD Run is started. Track completion through SSE or the Run and Session query endpoints.
 
-Requirement 不存在时返回 `404`；已经 `done` 或 `cancelled` 时返回 `409 Conflict`。
+Returns 404 for an unknown Requirement and 409 Conflict for a done or cancelled Requirement.
 
-### `POST /api/requirements/:id/reply`
+### POST /api/requirements/:id/reply
 
-向 Requirement 对话追加一条人工消息。Session 空闲时会自动启动 RD Run；正在运行时只排队，不中断当前 Run。
+Appends a human message to the Requirement conversation. An idle Session automatically starts an RD Run. A running Session queues the message without interruption.
 
-请求体：
+Request body:
 
 ~~~json
 {
-  "message": "请根据截图调整布局。",
+  "message": "Adjust the layout based on the screenshot.",
   "attachmentIds": ["att_..."]
 }
 ~~~
 
-成功响应：`202 Accepted`
+Success: 202 Accepted
 
 ~~~json
 {
@@ -379,7 +375,7 @@ Requirement 不存在时返回 `404`；已经 `done` 或 `cancelled` 时返回 `
     "sessionId": "ses_...",
     "runId": null,
     "author": "human",
-    "body": "请再覆盖超时后的重试路径。",
+    "body": "Also cover retry after a timeout.",
     "sequence": 3,
     "deliverToRd": true,
     "createdAt": "2026-09-11T02:30:00.000Z"
@@ -387,11 +383,11 @@ Requirement 不存在时返回 `404`；已经 `done` 或 `cancelled` 时返回 `
 }
 ~~~
 
-`message` 可在包含 `attachmentIds` 时为空。`queued` 表示收到消息时 RD Session 是否正在运行。文字和附件都为空时返回 `400`；Requirement 不存在时返回 `404`；已经 `done` 或 `cancelled` 时返回 `409`。
+message may be empty when attachmentIds is non-empty. queued reports whether the RD Session was running when the message arrived. Empty text and attachments return 400. An unknown Requirement returns 404. A done or cancelled Requirement returns 409.
 
-### `POST /api/requirements/:id/confirm`
+### POST /api/requirements/:id/confirm
 
-将处于 `waiting_confirmation` 的 Requirement 确认为 `done`，并将对应 Session 设为 `completed`。请求体可省略或使用空对象。
+Moves a Requirement from waiting_confirmation to done and its Session to completed. The request body may be omitted or be an empty object.
 
 ~~~bash
 curl -X POST http://127.0.0.1:4310/api/requirements/req_.../confirm \
@@ -399,31 +395,31 @@ curl -X POST http://127.0.0.1:4310/api/requirements/req_.../confirm \
   -d '{}'
 ~~~
 
-成功响应：`200 OK`，body 为更新后的 `Requirement`。Requirement 不存在时返回 `404`；状态不是 `waiting_confirmation` 时返回 `409`。
+Success: 200 OK with the updated Requirement. Returns 404 for an unknown Requirement or 409 when its status is not waiting_confirmation.
 
-## 6. Pull Request Review
+## 6. Pull Request review
 
-### `POST /api/pull-requests/:id/review-requests`
+### POST /api/pull-requests/:id/review-requests
 
-为一个已登记且状态为 `open` 的 PR 发起短生命周期 Reviewer Run。这里的 `:id` 是 Code Factory 的 `pr_<uuid>`，不是 GitHub PR number。
+Starts a short-lived Reviewer Run for a registered Open PR. The id is Code Factory's pr_<uuid>, not the GitHub PR number.
 
-请求体：
+Request body:
 
-| 字段 | 类型 | 必填 | 说明 |
+| Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
-| `provider` | string | 是 | `codex` 或 `claude-code` |
-| `prompt` | string | 否 | 追加到 Reviewer system/developer 指令的 Review 关注点；Reviewer 的任务 prompt 始终只是 `Review GitHub PR <url>` |
+| provider | string | yes | codex or claude-code |
+| prompt | string | no | Additional focus appended to Reviewer system/developer instructions; the task prompt remains Review GitHub PR <url> |
 
 ~~~bash
 curl -X POST http://127.0.0.1:4310/api/pull-requests/pr_.../review-requests \
   -H 'Content-Type: application/json' \
   -d '{
     "provider": "claude-code",
-    "prompt": "重点检查并发状态转换和失败恢复。"
+    "prompt": "Focus on concurrent state transitions and failure recovery."
   }'
 ~~~
 
-成功响应：`202 Accepted`
+Success: 202 Accepted
 
 ~~~json
 {
@@ -433,29 +429,29 @@ curl -X POST http://127.0.0.1:4310/api/pull-requests/pr_.../review-requests \
 }
 ~~~
 
-Reviewer 在后台运行，接口不会等待 Review 完成。PR 不存在时返回 `404`；PR 不是 `open` 或同一 PR 已有活跃 Review 时返回 `409`。
+The Reviewer runs in the background. The request does not wait for completion. Returns 404 for an unknown PR and 409 when the PR is not Open or already has an active review.
 
-## 7. RD Agent 接口
+## 7. RD Agent endpoints
 
-这两个接口供 Agent Manager 启动的 RD Agent 使用。Agent 会在 developer/system 指令中收到 API base URL、当前 Requirement ID 和 Session ID。
+These endpoints are called by RD Agents launched by Agent Manager. Their developer/system instructions contain the API base URL, current Requirement ID, and Session ID.
 
-### `POST /api/agent/pull-requests`
+### POST /api/agent/pull-requests
 
-登记或更新 GitHub PR 元数据。相同 `repository + number` 的后续请求更新同一条记录，但不能推进已登记 PR 的 lifecycle 状态；`draft/open/closed/merged` 由 PR Reconciler 根据 GitHub 推进。
+Registers or updates GitHub PR metadata. Later requests for the same repository + number update the same entity but cannot advance lifecycle state. The PR Reconciler owns draft/open/closed/merged state.
 
-请求体的所有字段均为必填：
+Every request field is required:
 
-| 字段 | 类型 | 说明 |
+| Field | Type | Meaning |
 | --- | --- | --- |
-| `requirementId` | string | PR 所属 Requirement ID |
-| `repository` | string | GitHub `owner/repository` |
-| `number` | positive integer | GitHub PR number |
-| `url` | string | PR URL |
-| `title` | string | PR 标题 |
-| `baseBranch` | string | 目标分支 |
-| `headBranch` | string | 来源分支 |
-| `headSha` | string | 当前 head commit SHA |
-| `status` | string | `draft`、`open`、`closed` 或 `merged` |
+| requirementId | string | Requirement that owns the PR |
+| repository | string | GitHub owner/repository |
+| number | positive integer | GitHub PR number |
+| url | string | PR URL |
+| title | string | PR title |
+| baseBranch | string | Target branch |
+| headBranch | string | Source branch |
+| headSha | string | Current head commit SHA |
+| status | string | draft, open, closed, or merged |
 
 ~~~bash
 curl -X POST http://127.0.0.1:4310/api/agent/pull-requests \
@@ -473,23 +469,23 @@ curl -X POST http://127.0.0.1:4310/api/agent/pull-requests \
   }'
 ~~~
 
-成功响应：`200 OK`，body 为创建或更新后的 `PullRequest`。Requirement 不存在时返回 `404`；字段无效时返回 `400`。
+Success: 200 OK with the created or updated PullRequest. Returns 404 for an unknown Requirement and 400 for invalid fields.
 
-Agent 应在 PR 创建后登记，并且只在自己的 push 或编辑改变标题、分支或 head SHA 等元数据时再次调用。首次登记后，请求中的 `status` 字段会被忽略并保留 Agent Manager 已记录的状态；GitHub 状态事件由 PR Reconciler 自动同步，Agent 收到相应 System 消息时不得重复调用该接口。
+An Agent should register a PR after creating it and call this endpoint again only when its own push or edit changes metadata such as title, branch, or head SHA. After initial registration, the requested status is ignored and the stored state is preserved. The PR Reconciler synchronizes GitHub state events; an Agent receiving the corresponding System message must not call this endpoint merely to repeat that state transition.
 
-### `POST /api/agent/requirements`
+### POST /api/agent/requirements
 
-提议一个与当前工作分开跟踪的后续 Requirement。新 Requirement 只以 `todo` 创建，不会自动运行。
+Proposes a follow-up Requirement that should be tracked separately from the current work. The new Requirement is created in todo and does not start automatically.
 
-请求体：
+Request body:
 
-| 字段 | 类型 | 必填 | 说明 |
+| Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
-| `sourceSessionId` | string | 是 | 发现后续工作的 RD Session |
-| `parentRequirementId` | string | 否 | 默认使用来源 Session 的 Requirement；若提供，必须与其一致 |
-| `title` | string | 是 | 后续需求标题 |
-| `description` | string | 是 | 后续需求描述 |
-| `provider` | string | 否 | `codex` 或 `claude-code`；默认继承来源 Session |
+| sourceSessionId | string | yes | RD Session that discovered the follow-up |
+| parentRequirementId | string | no | Defaults to the source Session Requirement and must match it if supplied |
+| title | string | yes | Follow-up title |
+| description | string | yes | Follow-up description |
+| provider | string | no | codex or claude-code; defaults to the source Session provider |
 
 ~~~bash
 curl -X POST http://127.0.0.1:4310/api/agent/requirements \
@@ -497,19 +493,19 @@ curl -X POST http://127.0.0.1:4310/api/agent/requirements \
   -d '{
     "sourceSessionId": "ses_...",
     "parentRequirementId": "req_...",
-    "title": "增加导出任务性能基准",
-    "description": "单独记录大数据集下的吞吐量和内存峰值",
+    "title": "Add an export performance benchmark",
+    "description": "Track throughput and peak memory for large datasets separately",
     "provider": "codex"
   }'
 ~~~
 
-成功响应：`201 Created`，body 为新建的 `Requirement`，其中 `createdBy` 为 `rd_agent`。来源 Session 不存在时返回 `404`；`parentRequirementId` 与来源 Session 不匹配或字段无效时返回 `400`。
+Success: 201 Created with the new Requirement and createdBy=rd_agent. Returns 404 for an unknown source Session and 400 when parentRequirementId does not match or another field is invalid.
 
-## 8. SSE 事件流
+## 8. SSE event stream
 
-### `GET /api/events`
+### GET /api/events
 
-建立 `text/event-stream` 连接并持续接收 Manager 事件。使用可选的 `after` query 参数补发 ID 大于指定值的历史事件：
+Opens a text/event-stream connection and continues receiving Manager events. Use the optional after query parameter to replay events with a larger ID:
 
 ~~~bash
 curl -N 'http://127.0.0.1:4310/api/events?after=41'
@@ -522,7 +518,7 @@ data: {"id":42,"type":"message.created","requirementId":"req_...","sessionId":"s
 
 ~~~
 
-每个 `data` 都是完整的 `ManagerEvent`：
+Every data value is a complete ManagerEvent:
 
 ~~~ts
 interface ManagerEvent {
@@ -536,28 +532,28 @@ interface ManagerEvent {
 }
 ~~~
 
-当前事件类型及主要 payload：
+Current event types and primary payloads:
 
-| 事件 | payload |
+| Event | Payload |
 | --- | --- |
-| `requirement.created` | `provider`、`createdBy` |
-| `requirement.completed` | 空对象 |
-| `message.created` | `message` |
-| `pull_request.created` | `pullRequest` |
-| `pull_request.updated` | `pullRequest` |
-| `review_request.started` | `reviewRequestId`、`pullRequestId`、`provider`、`targetHeadSha` |
-| `run.started` | RD Run 的 `role`、`provider`、`resumed` 和输入消息范围 |
-| `run.succeeded` | `role`、`exitCode`、`nativeSessionId`、`finalMessage`、`error` |
-| `run.failed` | 同上 |
-| `run.timed_out` | 同上 |
-| `run.cancelled` | 同上 |
-| `manager.reconciled` | 重启时修复的 `runIds` 和 `requirementIds` |
+| requirement.created | provider, createdBy |
+| requirement.completed | empty object |
+| message.created | message |
+| pull_request.created | pullRequest |
+| pull_request.updated | pullRequest |
+| review_request.started | reviewRequestId, pullRequestId, provider, targetHeadSha |
+| run.started | RD role, provider, resumed, and input message range |
+| run.succeeded | role, exitCode, nativeSessionId, finalMessage, error |
+| run.failed | same as run.succeeded |
+| run.timed_out | same as run.succeeded |
+| run.cancelled | same as run.succeeded |
+| manager.reconciled | runIds and requirementIds repaired at startup |
 
-客户端应保存最后成功处理的事件 ID，并在重连时作为 `after` 传入。若 `after` 缺失或不是有限数字，服务会从 `0` 开始补发；单次连接最多补发 200 个已有事件，之后继续推送实时事件。
+Clients should store the last successfully processed event ID and pass it as after when reconnecting. A missing or non-finite after value starts replay at 0. Each connection replays at most 200 existing events before continuing with live events.
 
-## 9. 典型调用流程
+## 9. Typical workflow
 
-下面的流程展示如何从命令行创建、启动并确认一个 Requirement。示例使用 `jq` 从响应中提取 ID。
+This example creates, starts, and confirms a Requirement from the command line. It uses jq to extract the ID.
 
 ~~~bash
 API=http://127.0.0.1:4310/api
@@ -566,8 +562,8 @@ requirement=$(
   curl -sS -X POST "$API/requirements" \
     -H 'Content-Type: application/json' \
     -d '{
-      "title": "补充导出超时处理",
-      "description": "实现超时并覆盖失败恢复测试",
+      "title": "Add export timeout handling",
+      "description": "Implement the timeout and cover failure recovery",
       "provider": "codex"
     }'
 )
@@ -575,25 +571,25 @@ requirement_id=$(printf '%s' "$requirement" | jq -r '.id')
 
 curl -sS -X POST "$API/requirements/$requirement_id/start" \
   -H 'Content-Type: application/json' \
-  -d '{"message":"请先运行现有测试。"}'
+  -d '{"message":"Run the existing tests first."}'
 ~~~
 
-另开一个终端订阅事件。生产客户端应记录收到的最后一个事件 ID，并在断线重连时传给 `after`：
+Subscribe to events in another terminal. Production clients should persist the latest event ID and supply it through after when reconnecting:
 
 ~~~bash
 API=http://127.0.0.1:4310/api
 curl -N "$API/events?after=0"
 ~~~
 
-执行期间可以继续追加消息。响应中的 `queued` 表明消息是等待下一个 Run，还是已经触发了新的 Run：
+Messages may be appended while execution is in progress. queued reports whether the message is waiting for the next Run or triggered a new one:
 
 ~~~bash
 curl -sS -X POST "$API/requirements/$requirement_id/reply" \
   -H 'Content-Type: application/json' \
-  -d '{"message":"同时检查超时后的子进程是否退出。"}'
+  -d '{"message":"Also verify that the child process exits after a timeout."}'
 ~~~
 
-当 `/api/requirements` 显示 Requirement 已进入 `waiting_confirmation`，检查结果后完成确认：
+When /api/requirements reports waiting_confirmation, inspect the result and confirm completion:
 
 ~~~bash
 curl -sS -X POST "$API/requirements/$requirement_id/confirm" \
@@ -601,11 +597,11 @@ curl -sS -X POST "$API/requirements/$requirement_id/confirm" \
   -d '{}'
 ~~~
 
-`start`、`reply` 和 Review 接口的 `202 Accepted` 只代表后台任务已接受。自动化调用方应以 SSE 事件或查询接口中的最终状态为准。
+A 202 Accepted response from start, reply, or review means only that the background task was accepted. Automation must use SSE or query final state.
 
-## 10. 错误响应
+## 10. Error responses
 
-错误统一返回 JSON：
+Errors use a consistent JSON shape:
 
 ~~~json
 {
@@ -613,11 +609,11 @@ curl -sS -X POST "$API/requirements/$requirement_id/confirm" \
 }
 ~~~
 
-| HTTP 状态 | 含义 |
+| HTTP status | Meaning |
 | --- | --- |
-| `400 Bad Request` | JSON 语法、body 类型或大小错误，或请求字段无效 |
-| `404 Not Found` | 指定的 Requirement、Session 或 PR 不存在 |
-| `409 Conflict` | 非法状态转换，或已存在不兼容的活跃 Run/Review |
-| `500 Internal Server Error` | 未分类的服务端错误 |
+| 400 Bad Request | Invalid JSON syntax, body type or size, or request fields |
+| 404 Not Found | Requirement, Session, attachment, or PR does not exist |
+| 409 Conflict | Illegal state transition or an incompatible active Run/Review already exists |
+| 500 Internal Server Error | Unclassified server error |
 
-后台 Agent Run 的失败不会把已经返回的 `202 Accepted` 改为 HTTP 错误。请通过 `/api/runs`、`/api/sessions`、`/api/review-requests` 或 SSE 事件读取最终状态。
+A background Agent Run failure cannot change an already returned 202 Accepted response. Read final state through /api/runs, /api/sessions, /api/review-requests, or SSE.

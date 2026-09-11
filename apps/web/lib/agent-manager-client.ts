@@ -130,7 +130,7 @@ export class AgentManagerApiError extends Error {
 
 export function normalizeManagerUrl(value: string): string {
   const url = new URL(value.trim());
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new TypeError('仅支持 HTTP 或 HTTPS 地址');
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new TypeError('Only HTTP and HTTPS URLs are supported');
   return url.toString().replace(/\/$/, '');
 }
 
@@ -199,10 +199,10 @@ export class AgentManagerClient {
         body: file,
       });
     } catch {
-      throw new AgentManagerApiError(`无法连接 Agent Manager：${this.baseUrl}`, 0);
+      throw new AgentManagerApiError(`Unable to connect to Agent Manager: ${this.baseUrl}`, 0);
     }
     const body = await response.json().catch(() => ({})) as { error?: string };
-    if (!response.ok) throw new AgentManagerApiError(body.error || `附件上传失败：${response.status}`, response.status);
+    if (!response.ok) throw new AgentManagerApiError(body.error || `Attachment upload failed: ${response.status}`, response.status);
     return body as MessageAttachmentDto;
   }
 
@@ -222,7 +222,7 @@ export class AgentManagerClient {
   }
 
   retryRequirement(id: string): Promise<{ accepted: true }> {
-    return this.action(id, 'start', { message: '继续上一次失败的任务。先检查当前仓库状态，再完成剩余工作并运行必要测试。' });
+    return this.action(id, 'start', { message: 'Continue the previously failed task. Inspect the current repository state first, then finish the remaining work and run the necessary tests.' });
   }
 
   connectEvents(callbacks: {
@@ -279,10 +279,10 @@ export class AgentManagerClient {
         headers,
       });
     } catch {
-      throw new AgentManagerApiError(`无法连接 Agent Manager：${this.baseUrl}`, 0);
+      throw new AgentManagerApiError(`Unable to connect to Agent Manager: ${this.baseUrl}`, 0);
     }
     const body = await response.json().catch(() => ({})) as { error?: string };
-    if (!response.ok) throw new AgentManagerApiError(body.error || `Agent Manager 返回 ${response.status}`, response.status);
+    if (!response.ok) throw new AgentManagerApiError(body.error || `Agent Manager returned ${response.status}`, response.status);
     return body as T;
   }
 }
