@@ -517,7 +517,55 @@ interface ManagerEvent {
 
 客户端应保存最后成功处理的事件 ID，并在重连时作为 `after` 传入。若 `after` 缺失或不是有限数字，服务会从 `0` 开始补发；单次连接最多补发 200 个已有事件，之后继续推送实时事件。
 
-## 9. 错误响应
+## 9. 典型调用流程
+
+下面的流程展示如何从命令行创建、启动并确认一个 Requirement。示例使用 `jq` 从响应中提取 ID。
+
+~~~bash
+API=http://127.0.0.1:4310/api
+
+requirement=$(
+  curl -sS -X POST "$API/requirements" \
+    -H 'Content-Type: application/json' \
+    -d '{
+      "title": "补充导出超时处理",
+      "description": "实现超时并覆盖失败恢复测试",
+      "provider": "codex"
+    }'
+)
+requirement_id=$(printf '%s' "$requirement" | jq -r '.id')
+
+curl -sS -X POST "$API/requirements/$requirement_id/start" \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"请先运行现有测试。"}'
+~~~
+
+另开一个终端订阅事件。生产客户端应记录收到的最后一个事件 ID，并在断线重连时传给 `after`：
+
+~~~bash
+API=http://127.0.0.1:4310/api
+curl -N "$API/events?after=0"
+~~~
+
+执行期间可以继续追加消息。响应中的 `queued` 表明消息是等待下一个 Run，还是已经触发了新的 Run：
+
+~~~bash
+curl -sS -X POST "$API/requirements/$requirement_id/reply" \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"同时检查超时后的子进程是否退出。"}'
+~~~
+
+当 `/api/requirements` 显示 Requirement 已进入 `waiting_confirmation`，检查结果后完成确认：
+
+~~~bash
+curl -sS -X POST "$API/requirements/$requirement_id/confirm" \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+~~~
+
+`start`、`reply` 和 Review 接口的 `202 Accepted` 只代表后台任务已接受。自动化调用方应以 SSE 事件或查询接口中的最终状态为准。
+
+## 10. 错误响应
 
 错误统一返回 JSON：
 
