@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+work/
+.DS_Store
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.tsbuildinfo
+/packages/agent-manager/dashboard/

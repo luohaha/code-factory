@@ -1,0 +1,149 @@
+export type AgentProvider = 'codex' | 'claude-code';
+
+export type RequirementStatus =
+  | 'todo'
+  | 'doing'
+  | 'waiting_confirmation'
+  | 'done'
+  | 'cancelled';
+
+export type SessionState =
+  | 'idle'
+  | 'running'
+  | 'waiting_human'
+  | 'failed'
+  | 'completed';
+
+export type RunRole = 'rd' | 'reviewer';
+export type RunStatus = 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
+export type MessageAuthor = 'human' | 'rd_agent' | 'reviewer' | 'system';
+export type RequirementCreator = 'human' | 'rd_agent';
+export type PullRequestStatus = 'draft' | 'open' | 'closed' | 'merged';
+export type ReviewRequestStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
+
+export interface Requirement {
+  id: string;
+  title: string;
+  description: string;
+  status: RequirementStatus;
+  provider: AgentProvider;
+  createdBy: RequirementCreator;
+  parentRequirementId: string | null;
+  sourceSessionId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+export interface AgentSession {
+  id: string;
+  requirementId: string;
+  provider: AgentProvider;
+  nativeSessionId: string | null;
+  state: SessionState;
+  lastError: string | null;
+  lastConsumedMessageSequence: number;
+  pendingMessageCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentRun {
+  id: string;
+  requirementId: string;
+  sessionId: string | null;
+  role: RunRole;
+  provider: AgentProvider;
+  status: RunStatus;
+  taskSummary: string;
+  nativeSessionId: string | null;
+  exitCode: number | null;
+  error: string | null;
+  inputFromSequence: number | null;
+  inputToSequence: number | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export interface ManagerEvent {
+  id: number;
+  type: string;
+  requirementId: string | null;
+  sessionId: string | null;
+  runId: string | null;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface RequirementMessage {
+  id: string;
+  requirementId: string;
+  sessionId: string;
+  runId: string | null;
+  author: MessageAuthor;
+  body: string;
+  sequence: number;
+  deliverToRd: boolean;
+  createdAt: string;
+}
+
+export interface PullRequest {
+  id: string;
+  requirementId: string;
+  repository: string;
+  number: number;
+  url: string;
+  title: string;
+  baseBranch: string;
+  headBranch: string;
+  headSha: string;
+  status: PullRequestStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReviewRequest {
+  id: string;
+  pullRequestId: string;
+  runId: string;
+  provider: AgentProvider;
+  targetHeadSha: string;
+  status: ReviewRequestStatus;
+  requestedBy: 'human';
+  error: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
+export interface RequirementWithSession extends Requirement {
+  session: AgentSession;
+}
+
+export interface CreateRequirementInput {
+  title: string;
+  description: string;
+  provider: AgentProvider;
+  createdBy?: RequirementCreator;
+  parentRequirementId?: string;
+  sourceSessionId?: string;
+}
+
+export interface TrackPullRequestInput {
+  requirementId: string;
+  repository: string;
+  number: number;
+  url: string;
+  title: string;
+  baseBranch: string;
+  headBranch: string;
+  headSha: string;
+  status: PullRequestStatus;
+}
+
+export interface RunOutcome {
+  status: Extract<RunStatus, 'succeeded' | 'failed' | 'timed_out' | 'cancelled'>;
+  exitCode: number | null;
+  nativeSessionId: string | null;
+  finalMessage: string | null;
+  error: string | null;
+}

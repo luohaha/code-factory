@@ -1,0 +1,28 @@
+{
+  "name": "@code-factory/agent-manager",
+  "version": "0.1.0",
+  "description": "Workspace-scoped manager for long-running Codex and Claude Code development sessions.",
+  "type": "module",
+  "bin": {
+    "code-factory-agent-manager": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "dashboard"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && npm run build:dashboard",
+    "build:dashboard": "npm --prefix ../../apps/web run build && node scripts/sync-dashboard.mjs",
+    "dev": "tsx src/cli.ts start",
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  }
+}

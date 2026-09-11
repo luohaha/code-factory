@@ -1,0 +1,90 @@
+# Headless Agent Runner
+
+## 1. 通用执行契约
+
+Agent Manager 只支持 `codex` 和 `claude` 两个本机 CLI。每次调用都遵循以下约束：
+
+- `cwd` 固定为 Agent Manager 启动目录；
+- `shell: false`，不拼接 shell 命令；
+- prompt 通过 stdin 传入，避免出现在进程参数和进程列表；
+- 继承当前进程环境，由 CLI 自己读取登录状态、配置、项目指令和 Skills；
+- 不传 `--cd`、`--add-dir` 或危险的权限绕过参数；
+- stdout 按 JSONL 解析，stderr 保留为错误摘要；
+- RD 默认超时 60 分钟，Reviewer 最长 30 分钟；超时先发 `SIGTERM`，2 秒后仍未退出则 `SIGKILL`；
+- 同一个 RD AgentSession 只允许一个活跃 Run；不同需求的 Session 不经调度即可并行运行。
+- 人类或 Reviewer 在 RD 运行期间发送的消息写入需求对话，当前 Run 结束后自动恢复同一原生 Session；
+- Agent Manager 为 RD 注入本地 Agent API 协议，项目指令和 Skills 仍由 CLI 根据 cwd 原生加载。
+
+## 2. Codex
+
+新建 RD 原生会话：
+
+```bash
+codex exec --json --color never --sandbox workspace-write \
+  -c 'developer_instructions="...Code Factory API contract..."' -
+```
+
+恢复原生会话：
+
+```bash
+codex exec --json --color never --sandbox workspace-write resume <thread-id> -
+```
+
+短程 Reviewer：
+
+```bash
+codex exec review --json --ephemeral --base <base-branch> -
+```
+
+`thread.started` 事件中的 `thread_id` 写入 AgentSession，后续 RD Run 复用它。Reviewer 使用 `--ephemeral`，不会形成可恢复的业务 Session。
+Codex 的 Code Factory 运行协议通过官方支持的 `developer_instructions` 配置覆盖项追加，不替换仓库中的 `AGENTS.md`。
+
+## 3. Claude Code
+
+新建 RD 原生会话：
+
+```bash
+claude --print --output-format stream-json --verbose \
+  --permission-mode acceptEdits --session-id <uuid> \
+  --append-system-prompt "...Code Factory API contract..."
+```
+
+恢复原生会话：
+
+```bash
+claude --print --output-format stream-json --verbose \
+  --permission-mode acceptEdits --resume <session-id>
+```
+
+短程 Reviewer：
+
+```bash
+claude --print --output-format stream-json --verbose \
+  --no-session-persistence
+```
+
+Reviewer 的 stdin 以 `/review` 开头，让 Claude Code 直接使用当前目录可用的原生 review skill；不覆盖 permission mode。`--no-session-persistence` 只负责保证它不会变成长生命周期会话。Reviewer 被要求使用 GitHub CLI/API 读取指定 PR/head SHA、发布评论且不修改共享工作区。
+
+## 4. 事件归一化
+
+Adapter 把两种 CLI 的 JSONL 映射为：
+
+- `session_started`：捕获原生 session id；
+- `message`：Agent 文本输出；
+- `completed`：模型回合结束；
+- `error`：结构化错误；
+- `other`：保留未知事件以便兼容 CLI 升级。
+
+Agent Manager 自己只依赖归一化字段，原始事件可作为诊断流输出。人类回复和归一化后的 Agent/Reviewer 文本消息会持久化到需求对话，并通过 `message.created` 实时推送；原始 JSONL 和工具噪声不写入数据库，避免无限增长。
+
+## 5. 恢复与失败
+
+- CLI 启动后只要观测到原生 session id，就立即写入 AgentSession；
+- Run 成功后先推进本次输入消息边界；有新外部消息时立即启动下一轮，否则 Requirement 进入 `waiting_confirmation`，Session 进入 `waiting_human`；
+- Run 失败或超时后，Requirement 保持 `doing`，Session 进入 `failed`；
+- 人类重试或回复时仍使用同一个 AgentSession；已有原生 id 就 resume，没有则重新创建原生会话；
+- Agent Manager 重启后不会把旧 PID 当成存活进程；启动 reconciliation 会把遗留 RD Run 标记为失败，并独立清理遗留 ReviewRequest，不污染 RD Session 状态。
+
+## 6. 安全边界
+
+Agent Manager 应只在用户信任的代码目录中启动，HTTP 默认只监听 `127.0.0.1`，并只允许 `http://localhost:3000` 的本地 Web 看板跨域访问；可用 `--allow-origin` 覆盖。API 不接受客户端指定 cwd。生产化前还需要增加本地访问令牌、Webhook 签名验证、敏感字段脱敏和运行日志清理策略。

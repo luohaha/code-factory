@@ -1,0 +1,240 @@
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+
+import { AgentManager } from './agent-manager.js';
+import { DashboardServer } from './dashboard-server.js';
+import { StoreConflictError, StoreNotFoundError } from './store.js';
+import type { AgentProvider, ManagerEvent, PullRequestStatus } from './types.js';
+
+export interface AgentManagerServerOptions {
+  host?: string;
+  port?: number;
+  allowedOrigin?: string;
+}
+
+function sendJson(response: ServerResponse, status: number, value: unknown): void {
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+  response.end(JSON.stringify(value));
+}
+
+async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+  let body = '';
+  for await (const chunk of request) {
+    body += String(chunk);
+    if (Buffer.byteLength(body) > 1_000_000) throw new RangeError('Request body exceeds 1 MB');
+  }
+  if (!body) return {};
+  const value: unknown = JSON.parse(body);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Expected a JSON object');
+  return value as Record<string, unknown>;
+}
+
+function stringField(body: Record<string, unknown>, name: string, required = false): string | undefined {
+  const value = body[name];
+  if (value === undefined && !required) return undefined;
+  if (typeof value !== 'string' || (required && !value.trim())) throw new TypeError(`${name} must be a non-empty string`);
+  return value;
+}
+
+function providerField(value: unknown): AgentProvider {
+  if (value !== 'codex' && value !== 'claude-code') throw new TypeError('provider must be codex or claude-code');
+  return value;
+}
+
+function pullRequestStatusField(value: unknown): PullRequestStatus {
+  if (value !== 'draft' && value !== 'open' && value !== 'closed' && value !== 'merged') {
+    throw new TypeError('status must be draft, open, closed, or merged');
+  }
+  return value;
+}
+
+function positiveIntegerField(body: Record<string, unknown>, name: string): number {
+  const value = body[name];
+  if (!Number.isInteger(value) || Number(value) <= 0) throw new TypeError(`${name} must be a positive integer`);
+  return Number(value);
+}
+
+export function createAgentManagerServer(manager: AgentManager, options: AgentManagerServerOptions = {}): Server {
+  const allowedOrigin = options.allowedOrigin;
+  const dashboard = new DashboardServer();
+  const server = createServer(async (request, response) => {
+    if (allowedOrigin) {
+      response.setHeader('access-control-allow-origin', allowedOrigin);
+      response.setHeader('access-control-allow-headers', 'content-type');
+      response.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
+    }
+    if (request.method === 'OPTIONS') {
+      response.writeHead(204).end();
+      return;
+    }
+
+    const url = new URL(request.url ?? '/', 'http://agent-manager.local');
+    try {
+      if (request.method === 'GET' && url.pathname === '/api/health') {
+        sendJson(response, 200, { ok: true, workspaceRoot: manager.workspaceRoot });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/workspace') {
+        sendJson(response, 200, { root: manager.workspaceRoot, databasePath: manager.databasePath });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/requirements') {
+        sendJson(response, 200, { items: manager.listRequirements() });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/sessions') {
+        sendJson(response, 200, { items: manager.listSessions() });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/runs') {
+        sendJson(response, 200, { items: manager.listRuns(url.searchParams.get('requirementId') ?? undefined) });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/pull-requests') {
+        sendJson(response, 200, { items: manager.listPullRequests(url.searchParams.get('requirementId') ?? undefined) });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/review-requests') {
+        sendJson(response, 200, { items: manager.listReviewRequests(url.searchParams.get('pullRequestId') ?? undefined) });
+        return;
+      }
+      const messages = url.pathname.match(/^\/api\/requirements\/([^/]+)\/messages$/);
+      if (request.method === 'GET' && messages) {
+        const requirementId = decodeURIComponent(messages[1]!);
+        sendJson(response, 200, { items: manager.listMessages(requirementId) });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/events') {
+        response.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+          connection: 'keep-alive',
+        });
+        const afterId = Number(url.searchParams.get('after') ?? 0);
+        for (const event of manager.listEvents(Number.isFinite(afterId) ? afterId : 0)) {
+          response.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+        }
+        const listener = (event: ManagerEvent) => {
+          response.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+        };
+        manager.on('event', listener);
+        request.once('close', () => manager.off('event', listener));
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/requirements') {
+        const body = await readJson(request);
+        const item = manager.createRequirement({
+          title: stringField(body, 'title', true)!,
+          description: stringField(body, 'description', true)!,
+          provider: providerField(body.provider),
+        });
+        sendJson(response, 201, item);
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/agent/requirements') {
+        const body = await readJson(request);
+        const sourceSessionId = stringField(body, 'sourceSessionId', true)!;
+        const source = manager.listSessions().find((session) => session.id === sourceSessionId);
+        if (!source) throw new StoreNotFoundError(`Session ${sourceSessionId} not found`);
+        const item = manager.createRequirement({
+          title: stringField(body, 'title', true)!,
+          description: stringField(body, 'description', true)!,
+          provider: body.provider === undefined ? source.provider : providerField(body.provider),
+          createdBy: 'rd_agent',
+          sourceSessionId,
+          parentRequirementId: stringField(body, 'parentRequirementId') ?? source.requirementId,
+        });
+        sendJson(response, 201, item);
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/agent/pull-requests') {
+        const body = await readJson(request);
+        const item = manager.trackPullRequest({
+          requirementId: stringField(body, 'requirementId', true)!,
+          repository: stringField(body, 'repository', true)!,
+          number: positiveIntegerField(body, 'number'),
+          url: stringField(body, 'url', true)!,
+          title: stringField(body, 'title', true)!,
+          baseBranch: stringField(body, 'baseBranch', true)!,
+          headBranch: stringField(body, 'headBranch', true)!,
+          headSha: stringField(body, 'headSha', true)!,
+          status: pullRequestStatusField(body.status),
+        });
+        sendJson(response, 200, item);
+        return;
+      }
+
+      const reviewRequest = url.pathname.match(/^\/api\/pull-requests\/([^/]+)\/review-requests$/);
+      if (request.method === 'POST' && reviewRequest) {
+        const pullRequestId = decodeURIComponent(reviewRequest[1]!);
+        const body = await readJson(request);
+        const provider = providerField(body.provider);
+        const prompt = stringField(body, 'prompt');
+        void manager.requestReview(pullRequestId, { provider, ...(prompt ? { prompt } : {}) })
+          .catch((error: unknown) => console.error('Reviewer run failed:', error));
+        sendJson(response, 202, { accepted: true, pullRequestId, provider });
+        return;
+      }
+
+      const action = url.pathname.match(/^\/api\/requirements\/([^/]+)\/(start|reply|confirm)$/);
+      if (request.method === 'POST' && action) {
+        const requirementId = decodeURIComponent(action[1]!);
+        const name = action[2]!;
+        const body = await readJson(request);
+        if (name === 'confirm') {
+          sendJson(response, 200, manager.confirmRequirement(requirementId));
+          return;
+        }
+        if (name === 'reply') {
+          const result = manager.postHumanMessage(requirementId, stringField(body, 'message', true)!);
+          sendJson(response, 202, { accepted: true, requirementId, action: name, queued: result.queued, message: result.message });
+          return;
+        }
+        const message = stringField(body, 'message');
+        void manager.runRequirement(requirementId, message).catch((error: unknown) => console.error('RD run failed:', error));
+        sendJson(response, 202, { accepted: true, requirementId, action: name });
+        return;
+      }
+
+      if (await dashboard.handle(request, response)) return;
+      sendJson(response, 404, {
+        error: 'Dashboard bundle not found. Run npm run build before starting Agent Manager.',
+      });
+    } catch (error) {
+      if (error instanceof StoreNotFoundError || (error instanceof Error && error.message.endsWith('not found'))) {
+        sendJson(response, 404, { error: error.message });
+      } else if (error instanceof StoreConflictError) {
+        sendJson(response, 409, { error: error.message });
+      } else if (error instanceof TypeError || error instanceof SyntaxError || error instanceof RangeError) {
+        sendJson(response, 400, { error: error.message });
+      } else {
+        console.error(error);
+        sendJson(response, 500, { error: 'Internal server error' });
+      }
+    }
+  });
+  server.on('listening', () => {
+    const address = server.address();
+    if (!address || typeof address === 'string') return;
+    const host = address.address === '::' || address.address === '0.0.0.0' ? '127.0.0.1' : address.address;
+    manager.setApiBaseUrl(`http://${host}:${address.port}/api`);
+  });
+  return server;
+}
+
+export async function listen(
+  server: Server,
+  options: AgentManagerServerOptions = {},
+): Promise<{ host: string; port: number }> {
+  const host = options.host ?? '127.0.0.1';
+  const port = options.port ?? 4310;
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, host, () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+  return { host, port };
+}

@@ -1,0 +1,141 @@
+# Agent Manager HTTP 与事件协议
+
+默认地址为 `http://127.0.0.1:4310`。API、SSE 和 Web 页面使用同一端口，只操作 Agent Manager 启动时绑定的 workspace。
+
+## 1. 查询接口
+
+~~~text
+GET /api/health
+GET /api/workspace
+GET /api/requirements
+GET /api/sessions
+GET /api/runs?requirementId=<id>
+GET /api/requirements/:id/messages
+GET /api/pull-requests?requirementId=<id>
+GET /api/review-requests?pullRequestId=<id>
+GET /api/events?after=<event-id>
+~~~
+
+`GET /api/events` 是可通过事件 id 恢复的 SSE 流。
+
+## 2. 人类接口
+
+创建需求：
+
+~~~http
+POST /api/requirements
+Content-Type: application/json
+
+{
+  "title": "Compaction Profile 增加分层耗时",
+  "description": "补齐 segment merge、encode 与 flush 的统计",
+  "provider": "codex"
+}
+~~~
+
+驱动需求：
+
+~~~text
+POST /api/requirements/:id/start
+POST /api/requirements/:id/reply
+POST /api/requirements/:id/confirm
+~~~
+
+`reply` 的 body 为 `{"message":"..."}`。如果 RD 正在运行，接口仍返回 `202`，`queued=true` 表示消息已进入需求对话并会在当前 Run 结束后处理；它不会因 Session 正在运行而返回 409。
+
+人工发起 PR Review：
+
+~~~http
+POST /api/pull-requests/:id/review-requests
+Content-Type: application/json
+
+{
+  "provider": "claude-code",
+  "prompt": "可选的额外 Review 关注点"
+}
+~~~
+
+只有 `open` PR 可以发起。每次请求捕获当前 head SHA，同一 PR 同时只允许一个活跃 Review。
+
+## 3. RD Agent 接口
+
+RD Agent 的 developer/system 指令中会收到 API base URL、Requirement ID 和 Session ID。
+
+登记或更新 PR：
+
+~~~http
+POST /api/agent/pull-requests
+Content-Type: application/json
+
+{
+  "requirementId": "req_...",
+  "repository": "org/repo",
+  "number": 184,
+  "url": "https://github.com/org/repo/pull/184",
+  "title": "Improve compaction",
+  "baseBranch": "main",
+  "headBranch": "feature/compaction",
+  "headSha": "abc123...",
+  "status": "open"
+}
+~~~
+
+`status` 必须是 `draft | open | closed | merged`。`repository + number` 幂等更新同一 PR。
+
+提议新的独立需求：
+
+~~~http
+POST /api/agent/requirements
+Content-Type: application/json
+
+{
+  "sourceSessionId": "ses_...",
+  "parentRequirementId": "req_...",
+  "title": "补充性能基准",
+  "description": "主线任务中发现的独立跟进项",
+  "provider": "codex"
+}
+~~~
+
+Provider 可省略并继承来源 Session。新需求以 `createdBy=rd_agent` 和 `TODO` 创建，不自动启动。
+
+## 4. 消息投递
+
+`GET /api/requirements/:id/messages` 返回统一对话。每条消息包含：
+
+- `sequence`：需求内单调递增序号；
+- `author`：`human | rd_agent | reviewer | system`；
+- `deliverToRd`：是否需要投递给 RD；
+- 可选的 `runId`。
+
+RD Run 记录 `inputFromSequence` 和 `inputToSequence`。成功后只推进到该输入边界；Run 执行期间到达的消息留给下一轮。RD Agent 自己的输出始终 `deliverToRd=false`。
+
+## 5. SSE 事件
+
+~~~text
+id: 42
+event: review_request.started
+data: {"id":42,"type":"review_request.started",...}
+~~~
+
+当前事件包括：
+
+- `requirement.created` / `requirement.completed`；
+- `message.created`；
+- `pull_request.created` / `pull_request.updated`；
+- `review_request.started`；
+- `run.started` / `run.succeeded` / `run.failed` / `run.timed_out` / `run.cancelled`；
+- `manager.reconciled`。
+
+## 6. 错误语义
+
+- `400`：字段、JSON 或 body 大小错误；
+- `404`：实体不存在；
+- `409`：非法状态转换、同一 PR 已有活跃 Review，或显式重复启动同一 Session；
+- `500`：未分类内部错误。
+
+人类向运行中的 RD 发送消息是正常行为，不属于冲突。
+
+## 7. 当前安全边界
+
+服务默认只监听 `127.0.0.1`，Agent API 依赖本机进程边界，尚未增加访问令牌。生产化前需要本地令牌、Webhook 签名校验和权限审计。
