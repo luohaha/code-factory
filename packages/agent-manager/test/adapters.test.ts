@@ -93,3 +93,45 @@ test('RD adapters inject manager guidance as developer or appended system instru
   assert.ok(flag >= 0);
   assert.equal(claude.args[flag + 1], 'Track PRs through Code Factory.');
 });
+
+test('adapters pass explicit model and reasoning effort to both RD and Reviewer CLIs', () => {
+  const codex = new CodexAdapter();
+  const codexRd = codex.buildRdInvocation({
+    prompt: 'implement it',
+    nativeSessionId: 'thread-1',
+    model: 'gpt-5.6',
+    reasoningEffort: 'max',
+  });
+  assert.deepEqual(codexRd.args.slice(codexRd.args.indexOf('--model'), codexRd.args.indexOf('--model') + 2), ['--model', 'gpt-5.6']);
+  assert.ok(codexRd.args.includes('model_reasoning_effort="max"'));
+
+  const codexReview = codex.buildReviewInvocation({
+    prompt: 'review it',
+    model: 'gpt-5.5',
+    reasoningEffort: 'high',
+  });
+  assert.ok(codexReview.args.includes('gpt-5.5'));
+  assert.ok(codexReview.args.includes('model_reasoning_effort="high"'));
+
+  const claude = new ClaudeCodeAdapter();
+  const claudeRd = claude.buildRdInvocation({
+    prompt: 'implement it',
+    nativeSessionId: null,
+    model: 'claude-opus-4-6',
+    reasoningEffort: 'xhigh',
+  });
+  assert.deepEqual(claudeRd.args.slice(claudeRd.args.indexOf('--model'), claudeRd.args.indexOf('--model') + 4), [
+    '--model',
+    'claude-opus-4-6',
+    '--effort',
+    'xhigh',
+  ]);
+
+  const claudeReview = claude.buildReviewInvocation({
+    prompt: 'review it',
+    model: 'sonnet',
+    reasoningEffort: 'medium',
+  });
+  assert.ok(claudeReview.args.includes('sonnet'));
+  assert.deepEqual(claudeReview.args.slice(claudeReview.args.indexOf('--effort'), claudeReview.args.indexOf('--effort') + 2), ['--effort', 'medium']);
+});

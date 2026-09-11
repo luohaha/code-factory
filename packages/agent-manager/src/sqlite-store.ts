@@ -41,6 +41,8 @@ function requirementFrom(row: Row): Requirement {
     description: String(row.description),
     status: String(row.status) as Requirement['status'],
     provider: String(row.provider) as Requirement['provider'],
+    model: row.model === null ? null : String(row.model),
+    reasoningEffort: row.reasoning_effort === null ? null : String(row.reasoning_effort) as Requirement['reasoningEffort'],
     createdBy: String(row.created_by) as Requirement['createdBy'],
     parentRequirementId: row.parent_requirement_id === null ? null : String(row.parent_requirement_id),
     sourceSessionId: row.source_session_id === null ? null : String(row.source_session_id),
@@ -72,6 +74,8 @@ function runFrom(row: Row): AgentRun {
     sessionId: row.session_id === null ? null : String(row.session_id),
     role: String(row.role) as AgentRun['role'],
     provider: String(row.provider) as AgentRun['provider'],
+    model: row.model === null ? null : String(row.model),
+    reasoningEffort: row.reasoning_effort === null ? null : String(row.reasoning_effort) as AgentRun['reasoningEffort'],
     status: String(row.status) as AgentRun['status'],
     taskSummary: String(row.task_summary),
     nativeSessionId: row.native_session_id === null ? null : String(row.native_session_id),
@@ -161,6 +165,8 @@ function reviewRequestFrom(row: Row): ReviewRequest {
     pullRequestId: String(row.pull_request_id),
     runId: String(row.run_id),
     provider: String(row.provider) as ReviewRequest['provider'],
+    model: row.model === null ? null : String(row.model),
+    reasoningEffort: row.reasoning_effort === null ? null : String(row.reasoning_effort) as ReviewRequest['reasoningEffort'],
     targetHeadSha: String(row.target_head_sha),
     status: String(row.status) as ReviewRequest['status'],
     requestedBy: 'human',
@@ -190,9 +196,9 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     this.#db.exec('BEGIN IMMEDIATE');
     try {
       this.#db.prepare(`INSERT INTO requirements
-        (id, title, description, status, provider, created_by, parent_requirement_id, source_session_id, created_at, updated_at)
-        VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, ?, ?)`)
-        .run(input.requirementId, input.title, input.description, input.provider, input.createdBy ?? 'human',
+        (id, title, description, status, provider, model, reasoning_effort, created_by, parent_requirement_id, source_session_id, created_at, updated_at)
+        VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(input.requirementId, input.title, input.description, input.provider, input.model ?? null, input.reasoningEffort ?? null, input.createdBy ?? 'human',
           input.parentRequirementId ?? null, input.sourceSessionId ?? null, input.now, input.now);
       this.#db.prepare(`INSERT INTO agent_sessions
         (id, requirement_id, provider, state, created_at, updated_at)
@@ -403,13 +409,13 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       if (!pullRequest) throw new StoreNotFoundError(`Pull request ${input.pullRequestId} not found`);
       if (pullRequest.status !== 'open') throw new StoreConflictError(`Pull request ${input.pullRequestId} is ${pullRequest.status}`);
       this.#db.prepare(`INSERT INTO agent_runs
-        (id, requirement_id, session_id, role, provider, status, task_summary, started_at)
-        VALUES (?, ?, NULL, 'reviewer', ?, 'running', ?, ?)`)
-        .run(input.runId, input.requirementId, input.provider, input.taskSummary, input.now);
+        (id, requirement_id, session_id, role, provider, model, reasoning_effort, status, task_summary, started_at)
+        VALUES (?, ?, NULL, 'reviewer', ?, ?, ?, 'running', ?, ?)`)
+        .run(input.runId, input.requirementId, input.provider, input.model ?? null, input.reasoningEffort ?? null, input.taskSummary, input.now);
       this.#db.prepare(`INSERT INTO review_requests
-        (id, pull_request_id, run_id, provider, target_head_sha, status, requested_by, created_at)
-        VALUES (?, ?, ?, ?, ?, 'running', 'human', ?)`)
-        .run(input.id, input.pullRequestId, input.runId, input.provider, input.targetHeadSha, input.now);
+        (id, pull_request_id, run_id, provider, model, reasoning_effort, target_head_sha, status, requested_by, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'running', 'human', ?)`)
+        .run(input.id, input.pullRequestId, input.runId, input.provider, input.model ?? null, input.reasoningEffort ?? null, input.targetHeadSha, input.now);
       this.#db.exec('COMMIT');
       return {
         pullRequest,
@@ -468,14 +474,16 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       }
 
       this.#db.prepare(`INSERT INTO agent_runs
-        (id, requirement_id, session_id, role, provider, status, task_summary, input_from_sequence, input_to_sequence, started_at)
-        VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)`)
+        (id, requirement_id, session_id, role, provider, model, reasoning_effort, status, task_summary, input_from_sequence, input_to_sequence, started_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)`)
         .run(
           input.runId,
           input.requirementId,
           input.role === 'rd' ? bundle.session.id : null,
           input.role,
           input.provider,
+          input.model ?? null,
+          input.reasoningEffort ?? null,
           input.taskSummary,
           input.inputFromSequence ?? null,
           input.inputToSequence ?? null,
@@ -662,11 +670,17 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     ensureColumn('requirements', 'created_by', "TEXT NOT NULL DEFAULT 'human' CHECK (created_by IN ('human', 'rd_agent'))");
     ensureColumn('requirements', 'parent_requirement_id', 'TEXT REFERENCES requirements(id) ON DELETE SET NULL');
     ensureColumn('requirements', 'source_session_id', 'TEXT');
+    ensureColumn('requirements', 'model', 'TEXT');
+    ensureColumn('requirements', 'reasoning_effort', "TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max'))");
     ensureColumn('agent_sessions', 'last_consumed_message_sequence', 'INTEGER NOT NULL DEFAULT 0');
+    ensureColumn('agent_runs', 'model', 'TEXT');
+    ensureColumn('agent_runs', 'reasoning_effort', "TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max'))");
     ensureColumn('agent_runs', 'input_from_sequence', 'INTEGER');
     ensureColumn('agent_runs', 'input_to_sequence', 'INTEGER');
     const sequenceAdded = ensureColumn('requirement_messages', 'sequence', 'INTEGER NOT NULL DEFAULT 0');
     ensureColumn('requirement_messages', 'deliver_to_rd', 'INTEGER NOT NULL DEFAULT 0 CHECK (deliver_to_rd IN (0, 1))');
+    ensureColumn('review_requests', 'model', 'TEXT');
+    ensureColumn('review_requests', 'reasoning_effort', "TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max'))");
     const attachmentTable = this.#db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'message_attachments'").get() as Row | undefined;
     const attachmentSql = attachmentTable?.sql === null || attachmentTable?.sql === undefined ? '' : String(attachmentTable.sql);
     if (!attachmentSql.includes("kind TEXT NOT NULL CHECK (kind IN ('image', 'file'))") || attachmentSql.includes('media_type IN')) {

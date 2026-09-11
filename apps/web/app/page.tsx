@@ -67,7 +67,9 @@ import {
   AgentManagerClient,
   DEFAULT_AGENT_MANAGER_URL,
   normalizeManagerUrl,
+  type AgentConfiguration,
   type AgentProvider,
+  type AgentReasoningEffort,
   type AgentRunDto,
   type ManagerEventDto,
   type MessageAttachmentDto,
@@ -158,6 +160,14 @@ const authorLabel: Record<RequirementMessageDto['author'], TranslationKey> = {
 
 function providerLabel(provider: AgentProvider): string {
   return provider === 'codex' ? 'Codex' : 'Claude Code';
+}
+
+function agentConfigurationLabel(configuration: {
+  provider: AgentProvider;
+  model: string | null;
+  reasoningEffort: AgentReasoningEffort | null;
+}): string {
+  return [providerLabel(configuration.provider), configuration.model, configuration.reasoningEffort].filter(Boolean).join(' · ');
 }
 
 function shortId(id: string): string {
@@ -322,7 +332,7 @@ function RequirementCard({
             <span className={`size-2 shrink-0 rounded-full ${stateDot[requirement.session.state]}`} />
             <span className="text-[10px] font-medium">RD · {t(stateLabel[requirement.session.state])}</span>
           </div>
-          <span className="shrink-0 font-mono text-[9px] text-muted-foreground">{providerLabel(requirement.provider)}</span>
+          <span className="max-w-32 shrink-0 truncate font-mono text-[9px] text-muted-foreground" title={agentConfigurationLabel(requirement)}>{agentConfigurationLabel(requirement)}</span>
         </div>
         <p className="mt-1.5 truncate font-mono text-[9px] text-muted-foreground">ses-{shortId(requirement.session.id)}</p>
         {run ? <p className="mt-2 text-[10px] text-foreground/70">{run.taskSummary} · {t(runStatusLabel[run.status])}</p> : null}
@@ -364,7 +374,7 @@ function SessionCard({ requirement, run, busy, onOpen, onRetry }: {
           <span className={`size-2 rounded-full ${stateDot[requirement.session.state]}`} />
           <span className="font-mono text-[10px] font-semibold">REQ-{shortId(requirement.id)}</span>
         </div>
-        <Badge variant="secondary" className="h-5 font-mono text-[9px]">{providerLabel(requirement.provider)}</Badge>
+        <Badge variant="secondary" className="h-5 max-w-40 truncate font-mono text-[9px]" title={agentConfigurationLabel(requirement)}>{agentConfigurationLabel(requirement)}</Badge>
       </div>
       <button type="button" className="mt-2.5 block w-full text-left" onClick={onOpen}>
         <h3 className="truncate text-xs font-semibold hover:underline">{requirement.title}</h3>
@@ -383,15 +393,76 @@ function SessionCard({ requirement, run, busy, onOpen, onRetry }: {
   );
 }
 
+function ReviewAgentControls({ activeReview, busy, onReview }: {
+  activeReview?: ReviewRequestDto;
+  busy: boolean;
+  onReview: (configuration: AgentConfiguration) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const [provider, setProvider] = useState<AgentProvider>(activeReview?.provider ?? 'codex');
+  const [model, setModel] = useState(activeReview?.model ?? '');
+  const [reasoningEffort, setReasoningEffort] = useState<'' | AgentReasoningEffort>(activeReview?.reasoningEffort ?? '');
+  const disabled = busy || Boolean(activeReview);
+
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <NativeSelect
+        size="sm"
+        value={activeReview?.provider ?? provider}
+        disabled={disabled}
+        onChange={(event) => setProvider(event.target.value as AgentProvider)}
+        className="w-full"
+        aria-label={t('Select Reviewer Agent')}
+      >
+        <NativeSelectOption value="codex">Codex Reviewer</NativeSelectOption>
+        <NativeSelectOption value="claude-code">Claude Reviewer</NativeSelectOption>
+      </NativeSelect>
+      <Input
+        value={activeReview ? activeReview.model ?? '' : model}
+        disabled={disabled}
+        onChange={(event) => setModel(event.target.value)}
+        placeholder={t('Use CLI default model')}
+        aria-label={t('Reviewer model')}
+        className="h-7 text-xs"
+      />
+      <NativeSelect
+        size="sm"
+        value={activeReview ? activeReview.reasoningEffort ?? '' : reasoningEffort}
+        disabled={disabled}
+        onChange={(event) => setReasoningEffort(event.target.value as '' | AgentReasoningEffort)}
+        className="w-full"
+        aria-label={t('Reviewer reasoning effort')}
+      >
+        <NativeSelectOption value="">{t('Default reasoning')}</NativeSelectOption>
+        <NativeSelectOption value="low">Low</NativeSelectOption>
+        <NativeSelectOption value="medium">Medium</NativeSelectOption>
+        <NativeSelectOption value="high">High</NativeSelectOption>
+        <NativeSelectOption value="xhigh">XHigh</NativeSelectOption>
+        <NativeSelectOption value="max">Max</NativeSelectOption>
+      </NativeSelect>
+      <Button
+        size="xs"
+        disabled={disabled}
+        onClick={() => void onReview({
+          provider,
+          ...(model.trim() ? { model: model.trim() } : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+        }).catch(() => undefined)}
+      >
+        {disabled ? <LoaderCircle className="animate-spin" /> : <ScanSearch data-icon="inline-start" />}
+        {activeReview ? t('Reviewing') : t('Request review')}
+      </Button>
+    </div>
+  );
+}
+
 function PullRequestCard({ pullRequest, requirement, activeReview, busy, onReview }: {
   pullRequest: PullRequestDto;
   requirement?: RequirementDto;
   activeReview?: ReviewRequestDto;
   busy: boolean;
-  onReview: (provider: AgentProvider) => Promise<void>;
+  onReview: (configuration: AgentConfiguration) => Promise<void>;
 }) {
-  const { t } = useI18n();
-  const [reviewer, setReviewer] = useState<AgentProvider>('codex');
   return (
     <article className="rounded-xl border border-border/80 bg-card p-3.5 shadow-[0_1px_2px_oklch(0.18_0.02_255/0.05)]">
       <div className="flex items-center justify-between gap-3">
@@ -406,15 +477,8 @@ function PullRequestCard({ pullRequest, requirement, activeReview, busy, onRevie
         <p className="mt-2 truncate text-[10px] text-foreground/75">REQ-{shortId(requirement.id)} · {requirement.title}</p>
       ) : null}
       {pullRequest.status === 'open' ? (
-        <div className="mt-3 grid grid-cols-[1fr_auto] gap-2 border-t border-border/70 pt-3">
-          <NativeSelect size="sm" value={reviewer} disabled={busy || Boolean(activeReview)} onChange={(event) => setReviewer(event.target.value as AgentProvider)} className="w-full">
-            <NativeSelectOption value="codex">Codex Reviewer</NativeSelectOption>
-            <NativeSelectOption value="claude-code">Claude Reviewer</NativeSelectOption>
-          </NativeSelect>
-          <Button size="xs" disabled={busy || Boolean(activeReview)} onClick={() => void onReview(reviewer).catch(() => undefined)}>
-            {busy || activeReview ? <LoaderCircle className="animate-spin" /> : <ScanSearch data-icon="inline-start" />}
-            {activeReview ? t('Reviewing') : t('Request review')}
-          </Button>
+        <div className="mt-3 border-t border-border/70 pt-3">
+          <ReviewAgentControls activeReview={activeReview} busy={busy} onReview={onReview} />
         </div>
       ) : null}
     </article>
@@ -425,10 +489,9 @@ function RequirementPullRequestCard({ pullRequest, activeReview, busy, onReview 
   pullRequest: PullRequestDto;
   activeReview?: ReviewRequestDto;
   busy: boolean;
-  onReview: (provider: AgentProvider) => Promise<void>;
+  onReview: (configuration: AgentConfiguration) => Promise<void>;
 }) {
   const { t } = useI18n();
-  const [reviewer, setReviewer] = useState<AgentProvider>('codex');
   const status = pullRequestColumns.find((column) => column.status === pullRequest.status);
 
   return (
@@ -453,22 +516,8 @@ function RequirementPullRequestCard({ pullRequest, activeReview, busy, onReview 
         </div>
 
         {pullRequest.status === 'open' ? (
-          <div className="flex shrink-0 items-center gap-2 border-t border-border/70 pt-3 sm:border-t-0 sm:pt-0">
-            <NativeSelect
-              size="sm"
-              value={reviewer}
-              disabled={busy || Boolean(activeReview)}
-              onChange={(event) => setReviewer(event.target.value as AgentProvider)}
-              className="min-w-0 flex-1 sm:w-40 sm:flex-none"
-              aria-label={t('Select Reviewer Agent')}
-            >
-              <NativeSelectOption value="codex">Codex Reviewer</NativeSelectOption>
-              <NativeSelectOption value="claude-code">Claude Reviewer</NativeSelectOption>
-            </NativeSelect>
-            <Button size="sm" disabled={busy || Boolean(activeReview)} onClick={() => void onReview(reviewer).catch(() => undefined)}>
-              {busy || activeReview ? <LoaderCircle className="animate-spin" /> : <ScanSearch data-icon="inline-start" />}
-              {activeReview ? t('Reviewing') : t('Request review')}
-            </Button>
+          <div className="w-full shrink-0 border-t border-border/70 pt-3 sm:w-96 sm:border-t-0 sm:pt-0">
+            <ReviewAgentControls activeReview={activeReview} busy={busy} onReview={onReview} />
           </div>
         ) : null}
       </div>
@@ -478,7 +527,7 @@ function RequirementPullRequestCard({ pullRequest, activeReview, busy, onReview 
 
 function NewRequirementDialog({ disabled, onCreate }: {
   disabled: boolean;
-  onCreate: (input: { title: string; description: string; provider: AgentProvider }) => Promise<void>;
+  onCreate: (input: { title: string; description: string } & AgentConfiguration) => Promise<void>;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -490,6 +539,8 @@ function NewRequirementDialog({ disabled, onCreate }: {
     const form = new FormData(formElement);
     const title = form.get('title');
     const description = form.get('description');
+    const model = form.get('model');
+    const reasoningEffort = form.get('reasoningEffort');
     if (typeof title !== 'string' || typeof description !== 'string') return;
     setSubmitting(true);
     try {
@@ -497,6 +548,10 @@ function NewRequirementDialog({ disabled, onCreate }: {
         title: title.trim(),
         description: description.trim(),
         provider: form.get('provider') === 'claude-code' ? 'claude-code' : 'codex',
+        ...(typeof model === 'string' && model.trim() ? { model: model.trim() } : {}),
+        ...(typeof reasoningEffort === 'string' && reasoningEffort
+          ? { reasoningEffort: reasoningEffort as AgentReasoningEffort }
+          : {}),
       });
       formElement.reset();
       setOpen(false);
@@ -530,6 +585,21 @@ function NewRequirementDialog({ disabled, onCreate }: {
               <NativeSelect id="requirement-provider" name="provider" className="w-full" defaultValue="codex">
                 <NativeSelectOption value="codex">Codex headless</NativeSelectOption>
                 <NativeSelectOption value="claude-code">Claude Code headless</NativeSelectOption>
+              </NativeSelect>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="requirement-model">{t('Model')}</FieldLabel>
+              <Input id="requirement-model" name="model" placeholder={t('Use CLI default model')} />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="requirement-reasoning-effort">{t('Reasoning effort')}</FieldLabel>
+              <NativeSelect id="requirement-reasoning-effort" name="reasoningEffort" className="w-full" defaultValue="">
+                <NativeSelectOption value="">{t('Default reasoning')}</NativeSelectOption>
+                <NativeSelectOption value="low">Low</NativeSelectOption>
+                <NativeSelectOption value="medium">Medium</NativeSelectOption>
+                <NativeSelectOption value="high">High</NativeSelectOption>
+                <NativeSelectOption value="xhigh">XHigh</NativeSelectOption>
+                <NativeSelectOption value="max">Max</NativeSelectOption>
               </NativeSelect>
             </Field>
           </FieldGroup>
@@ -616,7 +686,7 @@ function RequirementDetail({
   onReply: (message: string, attachments?: File[]) => Promise<void>;
   onInterrupt: () => Promise<void>;
   onConfirm: () => Promise<void>;
-  onReview: (pullRequestId: string, provider: AgentProvider) => Promise<void>;
+  onReview: (pullRequestId: string, configuration: AgentConfiguration) => Promise<void>;
   apiUrl: string;
 }) {
   const { locale, t } = useI18n();
@@ -713,7 +783,7 @@ function RequirementDetail({
           </div>
           <SheetTitle className="text-xl leading-7 font-semibold tracking-[-0.025em]">{requirement.title}</SheetTitle>
           <SheetDescription className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
-            <span>{providerLabel(requirement.provider)}</span>
+            <span>{agentConfigurationLabel(requirement)}</span>
             <span aria-hidden="true">·</span>
             <span className="font-mono">ses-{shortId(requirement.session.id)}</span>
           </SheetDescription>
@@ -1083,11 +1153,11 @@ function Dashboard() {
     }
   }
 
-  async function requestReview(pullRequestId: string, reviewer: AgentProvider): Promise<void> {
+  async function requestReview(pullRequestId: string, configuration: AgentConfiguration): Promise<void> {
     setBusyPullRequestId(pullRequestId);
     setError(null);
     try {
-      await client.requestReview(pullRequestId, reviewer);
+      await client.requestReview(pullRequestId, configuration);
       await reload(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t('Failed to request a review'));
@@ -1102,7 +1172,7 @@ function Dashboard() {
     return attachments.map((attachment) => attachment.id);
   }
 
-  async function createRequirement(input: { title: string; description: string; provider: AgentProvider }) {
+  async function createRequirement(input: { title: string; description: string } & AgentConfiguration) {
     setError(null);
     try {
       const created = await client.createRequirement(input);

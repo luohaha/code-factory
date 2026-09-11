@@ -58,13 +58,23 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
   const runner = new DeferredRunner();
   const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
   try {
-    const first = manager.createRequirement({ title: 'First', description: 'First task', provider: 'codex' });
+    const first = manager.createRequirement({
+      title: 'First',
+      description: 'First task',
+      provider: 'codex',
+      model: 'gpt-5.6',
+      reasoningEffort: 'max',
+    });
     const second = manager.createRequirement({ title: 'Second', description: 'Second task', provider: 'claude-code' });
 
     const firstExecution = manager.runRequirement(first.id);
     assert.equal(runner.requests[0]?.workspaceRoot, manager.workspaceRoot);
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
       value.includes('Agent Manager owns draft/open/closed/merged lifecycle synchronization')));
+    assert.ok(runner.requests[0]?.invocation.args.includes('gpt-5.6'));
+    assert.ok(runner.requests[0]?.invocation.args.includes('model_reasoning_effort="max"'));
+    assert.equal(manager.listRuns(first.id)[0]?.model, 'gpt-5.6');
+    assert.equal(manager.listRuns(first.id)[0]?.reasoningEffort, 'max');
     const secondExecution = manager.runRequirement(second.id);
     assert.equal(runner.requests[1]?.workspaceRoot, manager.workspaceRoot);
     const queued = manager.postHumanMessage(first.id, 'add another test');
@@ -87,6 +97,8 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.ok(runner.requests[2]?.invocation.args.includes('resume'));
     assert.ok(runner.requests[2]?.invocation.args.includes('native-thread-1'));
+    assert.ok(runner.requests[2]?.invocation.args.includes('gpt-5.6'));
+    assert.ok(runner.requests[2]?.invocation.args.includes('model_reasoning_effort="max"'));
     assert.match(runner.requests[2]?.invocation.input ?? '', /add another test/);
     assert.doesNotMatch(runner.requests[2]?.invocation.input ?? '', /Implementation is ready/);
     runner.resolvers[2]?.({
@@ -222,11 +234,21 @@ test('a human-requested PR review writes to the requirement conversation and wak
       headSha: 'abc123def456',
       status: 'open',
     });
-    const reviewExecution = manager.requestReview(pullRequest.id, { provider: 'claude-code' });
+    const reviewExecution = manager.requestReview(pullRequest.id, {
+      provider: 'claude-code',
+      model: 'claude-opus-4-6',
+      reasoningEffort: 'high',
+    });
     assert.equal(runner.requests[0]?.invocation.input, 'Review GitHub PR https://github.com/acme/repo/pull/7');
     assert.doesNotMatch(runner.requests[0]?.invocation.input ?? '', /abc123def456/);
     assert.ok(runner.requests[0]?.invocation.args.some((value) => value.includes('GitHub pull request reviewer')));
-    assert.equal(manager.listReviewRequests(pullRequest.id)[0]?.targetHeadSha, 'abc123def456');
+    assert.ok(runner.requests[0]?.invocation.args.includes('claude-opus-4-6'));
+    const modelArgument = runner.requests[0]?.invocation.args.indexOf('--model') ?? -1;
+    assert.deepEqual(runner.requests[0]?.invocation.args.slice(modelArgument, modelArgument + 4), ['--model', 'claude-opus-4-6', '--effort', 'high']);
+    const reviewRequest = manager.listReviewRequests(pullRequest.id)[0];
+    assert.equal(reviewRequest?.targetHeadSha, 'abc123def456');
+    assert.equal(reviewRequest?.model, 'claude-opus-4-6');
+    assert.equal(reviewRequest?.reasoningEffort, 'high');
     runner.requests[0]?.onEvent?.({ kind: 'message', message: 'Found one issue: comment URL', raw: {} });
     runner.resolvers[0]?.({
       status: 'succeeded', exitCode: 0, nativeSessionId: null, finalMessage: 'reviewed', error: null,

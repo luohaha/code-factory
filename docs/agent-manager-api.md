@@ -78,6 +78,8 @@ interface Requirement {
   description: string;
   status: 'todo' | 'doing' | 'waiting_confirmation' | 'done' | 'cancelled';
   provider: 'codex' | 'claude-code';
+  model: string | null;
+  reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
   createdBy: 'human' | 'rd_agent';
   parentRequirementId: string | null;
   sourceSessionId: string | null;
@@ -118,6 +120,8 @@ interface AgentRun {
   sessionId: string | null;           // null for Reviewer Runs
   role: 'rd' | 'reviewer';
   provider: 'codex' | 'claude-code';
+  model: string | null;
+  reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
   status: 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
   taskSummary: string;
   nativeSessionId: string | null;
@@ -191,6 +195,8 @@ interface ReviewRequest {
   pullRequestId: string;
   runId: string;
   provider: 'codex' | 'claude-code';
+  model: string | null;
+  reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
   targetHeadSha: string;
   status: 'running' | 'succeeded' | 'failed' | 'cancelled';
   requestedBy: 'human';
@@ -309,6 +315,8 @@ Request body:
 | title | string | yes | Must be non-empty after trimming |
 | description | string | yes | Must be non-empty after trimming |
 | provider | string | yes | codex or claude-code |
+| model | string | no | Model identifier passed to the selected CLI; defaults to CLI configuration |
+| reasoningEffort | string | no | low, medium, high, xhigh, or max; defaults to CLI configuration |
 
 ~~~bash
 curl -X POST http://127.0.0.1:4310/api/requirements \
@@ -316,7 +324,9 @@ curl -X POST http://127.0.0.1:4310/api/requirements \
   -d '{
     "title": "Add an export timeout",
     "description": "Stop the child process and record the failure when the timeout expires",
-    "provider": "codex"
+    "provider": "codex",
+    "model": "gpt-5.6",
+    "reasoningEffort": "high"
   }'
 ~~~
 
@@ -424,6 +434,8 @@ Request body:
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | provider | string | yes | codex or claude-code |
+| model | string | no | Model identifier passed to the selected CLI; defaults to CLI configuration |
+| reasoningEffort | string | no | low, medium, high, xhigh, or max; defaults to CLI configuration |
 | prompt | string | no | Additional focus appended to Reviewer system/developer instructions; the task prompt remains Review GitHub PR <url> |
 
 ~~~bash
@@ -431,6 +443,8 @@ curl -X POST http://127.0.0.1:4310/api/pull-requests/pr_.../review-requests \
   -H 'Content-Type: application/json' \
   -d '{
     "provider": "claude-code",
+    "model": "claude-opus-4-6",
+    "reasoningEffort": "high",
     "prompt": "Focus on concurrent state transitions and failure recovery."
   }'
 ~~~
@@ -441,7 +455,9 @@ Success: 202 Accepted
 {
   "accepted": true,
   "pullRequestId": "pr_...",
-  "provider": "claude-code"
+  "provider": "claude-code",
+  "model": "claude-opus-4-6",
+  "reasoningEffort": "high"
 }
 ~~~
 
@@ -502,6 +518,8 @@ Request body:
 | title | string | yes | Follow-up title |
 | description | string | yes | Follow-up description |
 | provider | string | no | codex or claude-code; defaults to the source Session provider |
+| model | string | no | Model identifier passed to the selected CLI; defaults to CLI configuration |
+| reasoningEffort | string | no | low, medium, high, xhigh, or max; defaults to CLI configuration |
 
 ~~~bash
 curl -X POST http://127.0.0.1:4310/api/agent/requirements \

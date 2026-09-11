@@ -38,6 +38,38 @@ class InterruptibleWaitingRunner implements AgentProcessRunner {
   }
 }
 
+test('HTTP API rejects unsupported reasoning effort values', async () => {
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    logger: createLogger({ level: 'silent' }),
+  });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/requirements`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Invalid configuration',
+        description: 'Reject an unsupported effort',
+        provider: 'codex',
+        reasoningEffort: 'ultra',
+      }),
+    });
+    assert.equal(response.status, 400);
+    assert.match((await response.json() as { error: string }).error, /reasoningEffort/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    manager.close();
+  }
+});
+
 test('HTTP reply queues by default and the interrupt action resumes the RD Agent with that message', async () => {
   const runner = new InterruptibleWaitingRunner();
   const manager = new AgentManager({
@@ -133,11 +165,24 @@ test('HTTP API exposes the persisted human and RD Agent conversation', async () 
     const createdResponse = await fetch(`${baseUrl}/api/requirements`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: 'http://localhost:3000' },
-      body: JSON.stringify({ title: 'Interactive task', description: 'Show the transcript', provider: 'codex' }),
+      body: JSON.stringify({
+        title: 'Interactive task',
+        description: 'Show the transcript',
+        provider: 'codex',
+        model: 'gpt-5.6',
+        reasoningEffort: 'xhigh',
+      }),
     });
     assert.equal(createdResponse.status, 201);
     assert.equal(createdResponse.headers.get('access-control-allow-origin'), 'http://localhost:3000');
-    const created = await createdResponse.json() as { id: string; session: { id: string } };
+    const created = await createdResponse.json() as {
+      id: string;
+      model: string | null;
+      reasoningEffort: string | null;
+      session: { id: string };
+    };
+    assert.equal(created.model, 'gpt-5.6');
+    assert.equal(created.reasoningEffort, 'xhigh');
 
     const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=', 'base64');
     const uploadResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/attachments`, {
@@ -177,6 +222,8 @@ test('HTTP API exposes the persisted human and RD Agent conversation', async () 
       body: JSON.stringify({ message: 'Please start with a regression test.', attachmentIds: [uploaded.id, uploadedFile.id] }),
     });
     assert.equal(startResponse.status, 202);
+    assert.ok(runner.request?.invocation.args.includes('gpt-5.6'));
+    assert.ok(runner.request?.invocation.args.includes('model_reasoning_effort="xhigh"'));
     assert.ok(runner.request?.invocation.args.includes(uploaded.localPath));
     assert.ok(!runner.request?.invocation.args.includes(uploadedFile.localPath));
     assert.match(runner.request?.invocation.input ?? '', /failure screenshot\.png/);
@@ -240,9 +287,14 @@ test('HTTP API exposes the persisted human and RD Agent conversation', async () 
     const reviewResponse = await fetch(`${baseUrl}/api/pull-requests/${pullRequest.id}/review-requests`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ provider: 'codex' }),
+      body: JSON.stringify({ provider: 'codex', model: 'gpt-5.5', reasoningEffort: 'max' }),
     });
     assert.equal(reviewResponse.status, 202);
+    assert.ok(runner.request?.invocation.args.includes('gpt-5.5'));
+    assert.ok(runner.request?.invocation.args.includes('model_reasoning_effort="max"'));
+    const persistedReview = manager.listReviewRequests(pullRequest.id)[0];
+    assert.equal(persistedReview?.model, 'gpt-5.5');
+    assert.equal(persistedReview?.reasoningEffort, 'max');
 
     const proposedResponse = await fetch(`${baseUrl}/api/agent/requirements`, {
       method: 'POST',

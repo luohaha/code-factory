@@ -1,4 +1,10 @@
 export type AgentProvider = 'codex' | 'claude-code';
+export type AgentReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export interface AgentConfiguration {
+  provider: AgentProvider;
+  model?: string;
+  reasoningEffort?: AgentReasoningEffort;
+}
 export type RequirementStatus = 'todo' | 'doing' | 'waiting_confirmation' | 'done' | 'cancelled';
 export type SessionState = 'idle' | 'running' | 'waiting_human' | 'failed' | 'completed';
 export type RunStatus = 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
@@ -22,6 +28,8 @@ export interface RequirementDto {
   description: string;
   status: RequirementStatus;
   provider: AgentProvider;
+  model: string | null;
+  reasoningEffort: AgentReasoningEffort | null;
   createdBy: 'human' | 'rd_agent';
   parentRequirementId: string | null;
   sourceSessionId: string | null;
@@ -37,6 +45,8 @@ export interface AgentRunDto {
   sessionId: string | null;
   role: 'rd' | 'reviewer';
   provider: AgentProvider;
+  model: string | null;
+  reasoningEffort: AgentReasoningEffort | null;
   status: RunStatus;
   taskSummary: string;
   nativeSessionId: string | null;
@@ -109,6 +119,8 @@ export interface ReviewRequestDto {
   pullRequestId: string;
   runId: string;
   provider: AgentProvider;
+  model: string | null;
+  reasoningEffort: AgentReasoningEffort | null;
   targetHeadSha: string;
   status: 'running' | 'succeeded' | 'failed' | 'cancelled';
   requestedBy: 'human';
@@ -172,7 +184,7 @@ export class AgentManagerClient {
     return response.items;
   }
 
-  createRequirement(input: { title: string; description: string; provider: AgentProvider }): Promise<RequirementDto> {
+  createRequirement(input: { title: string; description: string } & AgentConfiguration): Promise<RequirementDto> {
     return this.request('/api/requirements', { method: 'POST', body: JSON.stringify(input) });
   }
 
@@ -214,10 +226,10 @@ export class AgentManagerClient {
     return `${this.baseUrl}/api/attachments/${encodeURIComponent(id)}`;
   }
 
-  requestReview(id: string, provider: AgentProvider): Promise<{ accepted: true }> {
+  requestReview(id: string, configuration: AgentConfiguration): Promise<{ accepted: true }> {
     return this.request(`/api/pull-requests/${encodeURIComponent(id)}/review-requests`, {
       method: 'POST',
-      body: JSON.stringify({ provider }),
+      body: JSON.stringify(configuration),
     });
   }
 

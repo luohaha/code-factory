@@ -15,6 +15,7 @@ Agent Manager supports the local `codex` and `claude` CLIs. Every invocation fol
 - one RD AgentSession may have only one active Run, while Sessions for different Requirements may run concurrently;
 - Human or Reviewer messages received during an RD Run are appended to the Requirement conversation without interrupting it. Only an explicit human interrupt stops the current Run, after which queued messages continue in the same native Session;
 - Agent Manager injects the local Agent API contract into RD Agents; project instructions and Skills are still loaded natively from the working directory.
+- each invocation may include an explicit model and reasoning effort (`low | medium | high | xhigh | max`); omitted values continue to use the CLI configuration.
 
 ## 2. Codex
 
@@ -22,6 +23,7 @@ Start a native RD session:
 
 ```bash
 codex exec --json --color never --dangerously-bypass-approvals-and-sandbox \
+  --model <model> -c 'model_reasoning_effort="high"' \
   -c 'developer_instructions="...Code Factory API contract..."' -
 ```
 
@@ -29,6 +31,7 @@ Resume a native RD session:
 
 ```bash
 codex exec --json --color never --dangerously-bypass-approvals-and-sandbox \
+  --model <model> -c 'model_reasoning_effort="high"' \
   resume <thread-id> -
 ```
 
@@ -37,6 +40,7 @@ Run a short-lived Reviewer:
 ```bash
 codex exec --json --color never --ephemeral \
   --dangerously-bypass-approvals-and-sandbox \
+  --model <model> -c 'model_reasoning_effort="high"' \
   -c 'developer_instructions="...GitHub review contract..."' -
 ```
 
@@ -51,6 +55,7 @@ Start a native RD session:
 ```bash
 claude --print --output-format stream-json --verbose \
   --dangerously-skip-permissions --session-id <uuid> \
+  --model <model> --effort high \
   --append-system-prompt "...Code Factory API contract..."
 ```
 
@@ -58,17 +63,21 @@ Resume a native RD session:
 
 ```bash
 claude --print --output-format stream-json --verbose \
-  --dangerously-skip-permissions --resume <session-id>
+  --dangerously-skip-permissions --model <model> --effort high \
+  --resume <session-id>
 ```
 
 Run a short-lived Reviewer:
 
 ```bash
 claude --print --output-format stream-json --verbose \
-  --no-session-persistence --dangerously-skip-permissions
+  --no-session-persistence --dangerously-skip-permissions \
+  --model <model> --effort high
 ```
 
 Claude Reviewers also run as ordinary headless Agents instead of invoking `/review`. They receive `Review GitHub PR <url>` through stdin. `--no-session-persistence` prevents them from becoming long-lived Sessions.
+
+The model and reasoning flags shown above are optional. RD choices are stored on the Requirement and applied again when its native Session resumes. Reviewer choices are stored on both the ReviewRequest and AgentRun so each review can use a different configuration.
 
 Codex and Claude Code share the same Reviewer system/developer instructions: inspect the target PR through the GitHub CLI/API, record the head SHA at the start and verify it again before publishing, publish GitHub review comments, and do not modify the shared workspace. Agent Manager still captures `ReviewRequest.targetHeadSha` internally when the review is requested; it does not need to appear in the task prompt.
 

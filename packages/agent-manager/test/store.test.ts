@@ -19,10 +19,14 @@ test('a requirement is created atomically with exactly one RD session', () => {
       title: 'Improve compaction',
       description: 'Add timing details',
       provider: 'codex',
+      model: 'gpt-5.6',
+      reasoningEffort: 'high',
       createdBy: 'human',
       now,
     });
     assert.equal(item.status, 'todo');
+    assert.equal(item.model, 'gpt-5.6');
+    assert.equal(item.reasoningEffort, 'high');
     assert.equal(item.session.requirementId, item.id);
     assert.equal(item.session.state, 'idle');
     assert.equal(store.listSessions().length, 1);
@@ -170,11 +174,17 @@ test('an open PR starts one ephemeral reviewer without changing its RD session',
       pullRequestId: pullRequest.id,
       requirementId: 'req-1',
       provider: 'codex',
+      model: 'gpt-5.5',
+      reasoningEffort: 'max',
       targetHeadSha: pullRequest.headSha,
       taskSummary: 'review main',
       now,
     });
     assert.equal(started.run.sessionId, null);
+    assert.equal(started.run.model, 'gpt-5.5');
+    assert.equal(started.run.reasoningEffort, 'max');
+    assert.equal(started.reviewRequest.model, 'gpt-5.5');
+    assert.equal(started.reviewRequest.reasoningEffort, 'max');
     assert.equal(store.getRequirement('req-1')?.session.state, 'idle');
     assert.throws(() => store.beginReviewRequest({
       id: 'review-request-2',
@@ -332,6 +342,43 @@ test('legacy image-only attachment storage migrates to general files', () => {
     assert.equal(attachment.kind, 'file');
   } finally {
     store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('legacy databases add nullable model and reasoning configuration columns', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-store-test-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(`
+    CREATE TABLE requirements (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL,
+      provider TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
+    ) STRICT;
+    CREATE TABLE agent_runs (
+      id TEXT PRIMARY KEY, requirement_id TEXT NOT NULL, session_id TEXT, role TEXT NOT NULL,
+      provider TEXT NOT NULL, status TEXT NOT NULL, task_summary TEXT NOT NULL, native_session_id TEXT,
+      exit_code INTEGER, error TEXT, started_at TEXT NOT NULL, finished_at TEXT
+    ) STRICT;
+    CREATE TABLE review_requests (
+      id TEXT PRIMARY KEY, pull_request_id TEXT NOT NULL, run_id TEXT NOT NULL, provider TEXT NOT NULL,
+      target_head_sha TEXT NOT NULL, status TEXT NOT NULL, requested_by TEXT NOT NULL, error TEXT,
+      created_at TEXT NOT NULL, finished_at TEXT
+    ) STRICT;
+  `);
+  legacy.close();
+
+  const store = new SqliteAgentManagerStore(databasePath);
+  store.close();
+  const migrated = new DatabaseSync(databasePath);
+  try {
+    for (const table of ['requirements', 'agent_runs', 'review_requests']) {
+      const columns = migrated.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+      assert.ok(columns.some((column) => column.name === 'model'), `${table} should contain model`);
+      assert.ok(columns.some((column) => column.name === 'reasoning_effort'), `${table} should contain reasoning_effort`);
+    }
+  } finally {
+    migrated.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });

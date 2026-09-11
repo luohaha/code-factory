@@ -1,4 +1,4 @@
-import type { AgentProvider } from '../types.js';
+import type { AgentProvider, AgentReasoningEffort } from '../types.js';
 
 export interface AgentInvocation {
   command: string;
@@ -16,12 +16,16 @@ export interface NormalizedAgentEvent {
 export interface RdInvocationInput {
   prompt: string;
   nativeSessionId: string | null;
+  model?: string;
+  reasoningEffort?: AgentReasoningEffort;
   developerInstructions?: string;
   imagePaths?: string[];
 }
 
 export interface ReviewInvocationInput {
   prompt: string;
+  model?: string;
+  reasoningEffort?: AgentReasoningEffort;
   developerInstructions?: string;
 }
 
