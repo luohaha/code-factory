@@ -1,18 +1,24 @@
 'use client';
 
-import { type SyntheticEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { type SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   Activity,
   Bot,
   Check,
   CircleDot,
   Clock3,
+  FileText,
   FolderGit2,
   ExternalLink,
+  GitBranch,
   GitPullRequest,
   LayoutDashboard,
   LoaderCircle,
+  MessagesSquare,
   MessageSquareReply,
+  Paperclip,
   Play,
   Plus,
   RefreshCw,
@@ -25,6 +31,7 @@ import {
   TriangleAlert,
   UserRound,
   WifiOff,
+  X,
   Zap,
 } from 'lucide-react';
 
@@ -61,6 +68,7 @@ import {
   type AgentProvider,
   type AgentRunDto,
   type ManagerEventDto,
+  type MessageAttachmentDto,
   type PullRequestDto,
   type PullRequestStatus,
   type RequirementDto,
@@ -164,6 +172,94 @@ function formatTime(value: string): string {
     minute: '2-digit',
   }).format(new Date(value));
 }
+
+function MessageBody({ body, inverted = false }: { body: string; inverted?: boolean }) {
+  return (
+    <div className={`message-markdown ${inverted ? 'message-markdown-inverted' : ''}`}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
+        }}
+      >
+        {body}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.ceil(value / 1024)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function MessageAttachments({ attachments, apiUrl }: { attachments: MessageAttachmentDto[]; apiUrl: string }) {
+  if (attachments.length === 0) return null;
+  const images = attachments.filter((attachment) => attachment.kind === 'image');
+  const files = attachments.filter((attachment) => attachment.kind !== 'image');
+  return (
+    <div className="space-y-2">
+      {images.length > 0 ? (
+        <div className={`grid gap-2 ${images.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+          {images.map((attachment) => {
+            const url = `${apiUrl}/api/attachments/${encodeURIComponent(attachment.id)}`;
+            return (
+              <a
+                key={attachment.id}
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                className="group relative block min-w-0 overflow-hidden rounded-xl border border-black/8 bg-black/4 dark:border-white/10 dark:bg-white/5"
+                title={`打开 ${attachment.fileName}`}
+              >
+                {/* oxlint-disable-next-line next/no-img-element -- Attachment URLs are dynamic local API resources. */}
+                <img
+                  src={url}
+                  alt={attachment.fileName}
+                  loading="lazy"
+                  className="max-h-72 min-h-24 w-full object-cover transition duration-200 group-hover:scale-[1.015]"
+                />
+                <span className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-2 py-1 text-[9px] text-white opacity-0 backdrop-blur-sm transition group-hover:opacity-100">
+                  {attachment.fileName}
+                </span>
+              </a>
+            );
+          })}
+        </div>
+      ) : null}
+      {files.length > 0 ? (
+        <div className="space-y-1.5">
+          {files.map((attachment) => (
+            <a
+              key={attachment.id}
+              href={`${apiUrl}/api/attachments/${encodeURIComponent(attachment.id)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="flex min-w-0 items-center gap-2.5 rounded-xl border border-black/8 bg-black/4 px-3 py-2.5 transition hover:bg-black/7 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/8"
+            >
+              <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-background/70 text-foreground"><FileText className="size-4" /></span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[11px] font-medium">{attachment.fileName}</span>
+                <span className="mt-0.5 block text-[9px] opacity-65">{formatBytes(attachment.byteSize)} · {attachment.mediaType}</span>
+              </span>
+            </a>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+interface DraftAttachment {
+  id: string;
+  file: File;
+  previewUrl: string | null;
+}
+
+const previewableImageTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+const maxAttachmentBytes = 20 * 1024 * 1024;
+const maxAttachmentsPerMessage = 6;
 
 function latestRun(requirementId: string, runs: AgentRunDto[]): AgentRunDto | undefined {
   return runs.find((run) => run.requirementId === requirementId);
@@ -309,6 +405,60 @@ function PullRequestCard({ pullRequest, requirement, activeReview, busy, onRevie
   );
 }
 
+function RequirementPullRequestCard({ pullRequest, activeReview, busy, onReview }: {
+  pullRequest: PullRequestDto;
+  activeReview?: ReviewRequestDto;
+  busy: boolean;
+  onReview: (provider: AgentProvider) => Promise<void>;
+}) {
+  const [reviewer, setReviewer] = useState<AgentProvider>('codex');
+  const status = pullRequestColumns.find((column) => column.status === pullRequest.status);
+
+  return (
+    <article className="rounded-xl border border-border/80 bg-card px-4 py-3.5 shadow-[0_1px_2px_oklch(0.18_0.02_255/0.04)]">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline" className="h-5 font-mono text-[10px]">{pullRequest.repository}#{pullRequest.number}</Badge>
+            <span className="flex items-center gap-1.5 text-[9px] font-medium text-muted-foreground">
+              <span className={`size-1.5 rounded-full ${status?.tone ?? 'bg-slate-400'}`} />
+              {status?.title ?? pullRequest.status.toUpperCase()}
+            </span>
+            <span className="font-mono text-[9px] text-muted-foreground">{pullRequest.headSha.slice(0, 8)}</span>
+          </div>
+          <a href={pullRequest.url} target="_blank" rel="noreferrer" className="mt-2 flex w-fit max-w-full items-start gap-1.5 text-[13px] leading-5 font-semibold hover:underline">
+            <span className="min-w-0">{pullRequest.title}</span><ExternalLink className="mt-0.5 size-3 shrink-0" />
+          </a>
+          <p className="mt-1 flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
+            <GitBranch className="size-3 shrink-0" />
+            <span className="truncate">{pullRequest.headBranch} → {pullRequest.baseBranch}</span>
+          </p>
+        </div>
+
+        {pullRequest.status === 'open' ? (
+          <div className="flex shrink-0 items-center gap-2 border-t border-border/70 pt-3 sm:border-t-0 sm:pt-0">
+            <NativeSelect
+              size="sm"
+              value={reviewer}
+              disabled={busy || Boolean(activeReview)}
+              onChange={(event) => setReviewer(event.target.value as AgentProvider)}
+              className="min-w-0 flex-1 sm:w-40 sm:flex-none"
+              aria-label="选择 Reviewer Agent"
+            >
+              <NativeSelectOption value="codex">Codex Reviewer</NativeSelectOption>
+              <NativeSelectOption value="claude-code">Claude Reviewer</NativeSelectOption>
+            </NativeSelect>
+            <Button size="sm" disabled={busy || Boolean(activeReview)} onClick={() => void onReview(reviewer).catch(() => undefined)}>
+              {busy || activeReview ? <LoaderCircle className="animate-spin" /> : <ScanSearch data-icon="inline-start" />}
+              {activeReview ? 'Review 中' : '发起 Review'}
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
 function NewRequirementDialog({ disabled, onCreate }: {
   disabled: boolean;
   onCreate: (input: { title: string; description: string; provider: AgentProvider }) => Promise<void>;
@@ -431,6 +581,7 @@ function RequirementDetail({
   onReply,
   onConfirm,
   onReview,
+  apiUrl,
 }: {
   requirement: RequirementDto | null;
   runs: AgentRunDto[];
@@ -441,13 +592,38 @@ function RequirementDetail({
   busy: boolean;
   busyPullRequestId: string | null;
   onOpenChange: (open: boolean) => void;
-  onStart: (message?: string) => Promise<void>;
-  onReply: (message: string) => Promise<void>;
+  onStart: (message?: string, attachments?: File[]) => Promise<void>;
+  onReply: (message: string, attachments?: File[]) => Promise<void>;
   onConfirm: () => Promise<void>;
   onReview: (pullRequestId: string, provider: AgentProvider) => Promise<void>;
+  apiUrl: string;
 }) {
   const [message, setMessage] = useState('');
+  const [draftAttachments, setDraftAttachments] = useState<DraftAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const conversationEndRef = useRef<HTMLDivElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const draftAttachmentsRef = useRef<DraftAttachment[]>([]);
   const open = requirement !== null;
+  const requirementId = requirement?.id;
+
+  useEffect(() => {
+    if (!requirementId || messageLoading) return;
+    const frame = window.requestAnimationFrame(() => {
+      conversationEndRef.current?.scrollIntoView({ block: 'end' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [messageLoading, messages.length, requirementId]);
+
+  useEffect(() => {
+    draftAttachmentsRef.current = draftAttachments;
+  }, [draftAttachments]);
+
+  useEffect(() => () => {
+    for (const attachment of draftAttachmentsRef.current) {
+      if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+    }
+  }, []);
 
   if (!requirement) return <Sheet open={false} onOpenChange={onOpenChange} />;
   const canWrite = requirement.status !== 'done' && requirement.status !== 'cancelled';
@@ -455,21 +631,57 @@ function RequirementDetail({
   async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
     event.preventDefault();
     const body = message.trim();
-    if (!body || !canWrite) return;
+    if ((!body && draftAttachments.length === 0) || !canWrite) return;
+    const attachmentFiles = draftAttachments.map((attachment) => attachment.file);
     try {
-      if (requirement!.status === 'todo') await onStart(body);
-      else await onReply(body);
+      if (requirement!.status === 'todo') await onStart(body || undefined, attachmentFiles);
+      else await onReply(body, attachmentFiles);
       setMessage('');
+      for (const attachment of draftAttachments) {
+        if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+      }
+      setDraftAttachments([]);
+      setAttachmentError(null);
     } catch {
       // Keep the reply in the editor so it can be retried.
     }
   }
 
+  function addAttachments(files: File[]) {
+    const remaining = maxAttachmentsPerMessage - draftAttachments.length;
+    if (files.some((file) => file.size > maxAttachmentBytes)) {
+      setAttachmentError('单个附件不能超过 20 MB。');
+      return;
+    }
+    if (files.length > remaining) {
+      setAttachmentError(`每条消息最多发送 ${maxAttachmentsPerMessage} 个附件。`);
+      return;
+    }
+    setDraftAttachments((current) => [
+      ...current,
+      ...files.map((file) => ({
+        id: crypto.randomUUID(),
+        file,
+        previewUrl: previewableImageTypes.has(file.type) ? URL.createObjectURL(file) : null,
+      })),
+    ]);
+    setAttachmentError(null);
+  }
+
+  function removeAttachment(id: string) {
+    setDraftAttachments((current) => {
+      const removed = current.find((attachment) => attachment.id === id);
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+      return current.filter((attachment) => attachment.id !== id);
+    });
+    setAttachmentError(null);
+  }
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full gap-0 sm:max-w-[720px]" side="right">
-        <SheetHeader className="border-b border-border px-5 py-4 pr-12">
-          <div className="mb-2 flex items-center gap-2">
+      <SheetContent className="data-[side=right]:w-full! data-[side=right]:max-w-none! gap-0 sm:data-[side=right]:w-[min(820px,calc(100vw-48px))]!" side="right">
+        <SheetHeader className="border-b border-border bg-card px-5 py-4 pr-12 sm:px-6">
+          <div className="mb-2.5 flex items-center gap-2">
             <Badge variant="outline" className="font-mono text-[10px]">REQ-{shortId(requirement.id)}</Badge>
             <Badge variant="secondary" className="text-[10px]">{statusLabel[requirement.status]}</Badge>
             <span className="ml-auto flex items-center gap-1.5 text-[10px] text-muted-foreground">
@@ -477,53 +689,55 @@ function RequirementDetail({
               {stateLabel[requirement.session.state]}
             </span>
           </div>
-          <SheetTitle className="text-lg font-semibold tracking-[-0.02em]">{requirement.title}</SheetTitle>
-          <SheetDescription className="mt-1 text-xs">
-            {providerLabel(requirement.provider)} · ses-{shortId(requirement.session.id)}
+          <SheetTitle className="text-xl leading-7 font-semibold tracking-[-0.025em]">{requirement.title}</SheetTitle>
+          <SheetDescription className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+            <span>{providerLabel(requirement.provider)}</span>
+            <span aria-hidden="true">·</span>
+            <span className="font-mono">ses-{shortId(requirement.session.id)}</span>
           </SheetDescription>
         </SheetHeader>
 
-        <div className="grid grid-cols-1 border-b border-border bg-muted/25 sm:grid-cols-[1fr_180px]">
-          <div className="border-b border-border px-5 py-3 sm:border-r sm:border-b-0">
-            <p className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">需求描述</p>
-            <p className="mt-1.5 text-xs leading-5 whitespace-pre-wrap">{requirement.description}</p>
-          </div>
-          <div className="px-5 py-3 text-[10px] text-muted-foreground">
-            <p>创建于 {formatTime(requirement.createdAt)}</p>
-            <p className="mt-1">共 {runs.length} 个 Run</p>
-            <p className="mt-1 truncate" title={requirement.session.nativeSessionId ?? undefined}>
-              Native: {requirement.session.nativeSessionId ? shortId(requirement.session.nativeSessionId) : '尚未建立'}
-            </p>
-          </div>
-        </div>
+        <ScrollArea className="min-h-0 flex-1 bg-muted/15">
+          <div className="px-5 py-5 sm:px-6">
+            <section className="rounded-xl border border-border/80 bg-card px-4 py-3.5">
+              <p className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">需求描述</p>
+              <p className="mt-1.5 text-xs leading-5 whitespace-pre-wrap">{requirement.description}</p>
+              <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 border-t border-border/70 pt-3 text-[10px] text-muted-foreground sm:grid-cols-3">
+                <div><dt className="sr-only">创建时间</dt><dd>创建于 {formatTime(requirement.createdAt)}</dd></div>
+                <div><dt className="sr-only">Run 数量</dt><dd>共 {runs.length} 个 Run</dd></div>
+                <div className="col-span-2 min-w-0 sm:col-span-1"><dt className="sr-only">原生 Session</dt><dd className="truncate" title={requirement.session.nativeSessionId ?? undefined}>Native: {requirement.session.nativeSessionId ? shortId(requirement.session.nativeSessionId) : '尚未建立'}</dd></div>
+              </dl>
+            </section>
 
-        {pullRequests.length > 0 ? (
-          <div className="border-b border-border px-5 py-4">
-            <div className="mb-2 flex items-center gap-2">
-              <GitPullRequest className="size-3.5" />
-              <p className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">Pull Requests</p>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {pullRequests.map((pullRequest) => (
-                <PullRequestCard
-                  key={pullRequest.id}
-                  pullRequest={pullRequest}
-                  activeReview={reviewRequests.find((review) => review.pullRequestId === pullRequest.id && review.status === 'running')}
-                  busy={busyPullRequestId === pullRequest.id}
-                  onReview={(provider) => onReview(pullRequest.id, provider)}
-                />
-              ))}
-            </div>
-          </div>
-        ) : null}
+            {pullRequests.length > 0 ? (
+              <section className="mt-5" aria-labelledby="linked-pull-requests">
+                <div className="mb-2.5 flex items-center gap-2">
+                  <GitPullRequest className="size-3.5 text-muted-foreground" />
+                  <h3 id="linked-pull-requests" className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">关联 Pull Requests</h3>
+                  <Badge variant="secondary" className="ml-1 h-5 min-w-5 justify-center px-1.5 font-mono text-[9px]">{pullRequests.length}</Badge>
+                </div>
+                <div className="space-y-2">
+                  {pullRequests.map((pullRequest) => (
+                    <RequirementPullRequestCard
+                      key={pullRequest.id}
+                      pullRequest={pullRequest}
+                      activeReview={reviewRequests.find((review) => review.pullRequestId === pullRequest.id && review.status === 'running')}
+                      busy={busyPullRequestId === pullRequest.id}
+                      onReview={(provider) => onReview(pullRequest.id, provider)}
+                    />
+                  ))}
+                </div>
+              </section>
+            ) : null}
 
-        <ScrollArea className="min-h-0 flex-1">
-          <div className="space-y-4 px-5 py-5">
-            <div className="flex items-center gap-3">
-              <span className="h-px flex-1 bg-border" />
-              <span className="text-[10px] font-medium text-muted-foreground">活动与对话</span>
-              <span className="h-px flex-1 bg-border" />
-            </div>
+            <section className="mt-6" aria-labelledby="requirement-conversation">
+              <div className="mb-4 flex items-center gap-2 border-b border-border/80 pb-3">
+                <span className="grid size-7 place-items-center rounded-lg bg-primary/8 text-primary"><MessagesSquare className="size-3.5" /></span>
+                <div>
+                  <h3 id="requirement-conversation" className="text-xs font-semibold">活动与对话</h3>
+                  <p className="mt-0.5 text-[9px] text-muted-foreground">{messages.length} 条消息 · 与同一个 RD Session 持续沟通</p>
+                </div>
+              </div>
 
             {messageLoading ? (
               <div className="flex items-center justify-center gap-2 py-10 text-xs text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />加载消息</div>
@@ -536,63 +750,164 @@ function RequirementDetail({
               </div>
             ) : null}
 
+            <div className="space-y-3" aria-live="polite">
             {messages.map((item) => {
               const human = item.author === 'human';
               const system = item.author === 'system';
+              const reviewer = item.author === 'reviewer';
+              const attachments = item.attachments ?? [];
+              if (system) {
+                return (
+                  <article key={item.id} className="flex items-start gap-3 rounded-xl border border-sky-500/15 bg-sky-500/6 px-3.5 py-3 text-sky-950 dark:text-sky-100">
+                    <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md bg-sky-500/12 text-sky-600 dark:text-sky-300"><Activity className="size-3.5" /></span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-[10px] font-semibold">系统事件</span>
+                        <span className="shrink-0 text-[9px] text-muted-foreground">{formatTime(item.createdAt)}</span>
+                      </div>
+                      {item.body ? <div className="mt-1 text-[11px] leading-5 break-words"><MessageBody body={item.body} /></div> : null}
+                      {attachments.length > 0 ? <div className="mt-2"><MessageAttachments attachments={attachments} apiUrl={apiUrl} /></div> : null}
+                    </div>
+                  </article>
+                );
+              }
               return (
                 <article key={item.id} className={`flex gap-3 ${human ? 'flex-row-reverse' : ''}`}>
-                  <span className={`grid size-7 shrink-0 place-items-center rounded-lg ${system ? 'bg-rose-500/10 text-rose-600' : human ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground'}`}>
-                    {human ? <UserRound className="size-3.5" /> : system ? <TriangleAlert className="size-3.5" /> : <Bot className="size-3.5" />}
+                  <span className={`grid size-8 shrink-0 place-items-center rounded-xl ${human ? 'bg-primary text-primary-foreground' : reviewer ? 'bg-violet-500/12 text-violet-700 dark:text-violet-300' : 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'}`}>
+                    {human ? <UserRound className="size-3.5" /> : <Bot className="size-3.5" />}
                   </span>
-                  <div className={`min-w-0 max-w-[84%] ${human ? 'text-right' : ''}`}>
+                  <div className={`min-w-0 max-w-[86%] ${human ? 'text-right' : ''}`}>
                     <div className={`flex items-center gap-2 ${human ? 'justify-end' : ''}`}>
                       <span className="text-[10px] font-semibold">{authorLabel[item.author]}</span>
                       <span className="text-[9px] text-muted-foreground">{formatTime(item.createdAt)}</span>
                     </div>
-                    <div className={`mt-1.5 rounded-xl px-3 py-2.5 text-left text-xs leading-5 whitespace-pre-wrap ${system ? 'bg-rose-500/8 text-rose-700 dark:text-rose-300' : human ? 'bg-primary text-primary-foreground' : 'bg-muted/75'}`}>
-                      {item.body}
+                    <div className={`mt-1.5 rounded-2xl px-3.5 py-2.5 text-left text-xs leading-5 break-words shadow-[0_1px_2px_oklch(0.18_0.02_255/0.04)] ${human ? 'rounded-tr-md bg-primary text-primary-foreground' : reviewer ? 'rounded-tl-md border border-violet-500/15 bg-violet-500/7' : 'rounded-tl-md border border-border/80 bg-card'}`}>
+                      {item.body ? <MessageBody body={item.body} inverted={human} /> : null}
+                      {attachments.length > 0 ? <div className={item.body ? 'mt-2.5' : ''}><MessageAttachments attachments={attachments} apiUrl={apiUrl} /></div> : null}
                     </div>
                   </div>
                 </article>
               );
             })}
+            </div>
 
             {requirement.session.state === 'running' ? (
-              <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                <span className="grid size-7 place-items-center rounded-lg bg-emerald-500/10 text-emerald-600"><Bot className="size-3.5" /></span>
+              <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
+                <span className="grid size-8 place-items-center rounded-xl bg-emerald-500/12 text-emerald-600"><Bot className="size-3.5" /></span>
                 <span className="flex items-center gap-2"><LoaderCircle className="size-3.5 animate-spin" />RD Agent 正在工作，输出会自动更新…</span>
               </div>
             ) : null}
             {requirement.session.pendingMessageCount > 0 ? (
-              <div className="rounded-lg bg-amber-500/8 px-3 py-2 text-[10px] text-amber-700 dark:text-amber-300">
+              <div className="mt-3 rounded-lg bg-amber-500/8 px-3 py-2 text-[10px] text-amber-700 dark:text-amber-300">
                 {requirement.session.pendingMessageCount} 条外部消息将在当前 Run 结束后由 RD Agent 处理。
               </div>
             ) : null}
+              <div ref={conversationEndRef} aria-hidden="true" />
+            </section>
           </div>
         </ScrollArea>
 
-        <div className="border-t border-border bg-card p-4">
+        <div className="border-t border-border bg-card px-4 py-3 sm:px-6">
           {requirement.status === 'waiting_confirmation' ? (
-            <div className="mb-3 flex items-center justify-between gap-3 rounded-lg bg-violet-500/8 px-3 py-2 text-[11px] text-violet-700 dark:text-violet-300">
-              <span>Agent 已汇报完成。可以继续回复，也可以确认需求完成。</span>
-              <Button size="xs" disabled={busy} onClick={() => void onConfirm().catch(() => undefined)}><Check data-icon="inline-start" />确认完成</Button>
+            <div className="mb-2.5 flex items-center justify-between gap-3 rounded-xl border border-violet-500/15 bg-violet-500/7 px-3 py-2 text-[10px] text-violet-700 dark:text-violet-300">
+              <span>Agent 已汇报完成，仍可继续追问。</span>
+              <Button size="xs" className="shrink-0" disabled={busy} onClick={() => void onConfirm().catch(() => undefined)}><Check data-icon="inline-start" />确认完成</Button>
             </div>
           ) : null}
-          <form className="flex items-end gap-2" onSubmit={submit}>
+          <form
+            className="rounded-2xl border border-input bg-background p-2 shadow-[0_3px_16px_oklch(0.18_0.02_255/0.07)] transition focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/15"
+            onSubmit={submit}
+          >
+            {draftAttachments.length > 0 ? (
+              <div className="mb-1.5 flex gap-2 overflow-x-auto px-1 pt-1">
+                {draftAttachments.map((attachment) => (
+                  <div key={attachment.id} className={`group relative h-16 shrink-0 overflow-hidden rounded-xl border border-border bg-muted ${attachment.previewUrl ? 'w-16' : 'w-48'}`}>
+                    {attachment.previewUrl ? (
+                      <>
+                        {/* oxlint-disable-next-line next/no-img-element -- Blob previews cannot use the framework image optimizer. */}
+                        <img src={attachment.previewUrl} alt={attachment.file.name} className="size-full object-cover" />
+                      </>
+                    ) : (
+                      <div className="flex size-full items-center gap-2.5 px-3 pr-8">
+                        <FileText className="size-5 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0">
+                          <span className="block truncate text-[10px] font-medium">{attachment.file.name}</span>
+                          <span className="mt-0.5 block text-[9px] text-muted-foreground">{formatBytes(attachment.file.size)}</span>
+                        </span>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className="absolute top-1 right-1 grid size-5 place-items-center rounded-full bg-black/65 text-white opacity-80 transition hover:opacity-100"
+                      aria-label={`移除 ${attachment.file.name}`}
+                      onClick={() => removeAttachment(attachment.id)}
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <Textarea
               aria-label="回复 RD Agent"
               value={message}
               onChange={(event) => setMessage(event.target.value)}
+              onPaste={(event) => {
+                const attachments = Array.from(event.clipboardData.files);
+                if (attachments.length === 0) return;
+                event.preventDefault();
+                addAttachments(attachments);
+              }}
+              onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }}
+              onDrop={(event) => {
+                if (event.dataTransfer.files.length === 0) return;
+                event.preventDefault();
+                addAttachments(Array.from(event.dataTransfer.files));
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
               disabled={!canWrite || busy}
-              className="min-h-18 resize-none text-xs"
-              placeholder={requirement.status === 'todo' ? '补充要求并开始执行…' : requirement.session.state === 'running' ? '发送消息；当前 Run 结束后自动处理…' : canWrite ? '回复 RD Agent，继续同一个 Session…' : '当前状态暂不可回复'}
+              className="max-h-36 min-h-14 resize-none border-0 bg-transparent px-2 py-1.5 text-xs shadow-none focus-visible:border-transparent focus-visible:ring-0 disabled:bg-transparent"
+              placeholder={requirement.status === 'todo' ? '补充要求并开始执行，可粘贴或拖入附件…' : requirement.session.state === 'running' ? '发送消息或附件；当前 Run 结束后自动处理…' : canWrite ? '回复 RD Agent，可粘贴或拖入附件…' : '当前状态暂不可回复'}
             />
-            <Button type="submit" size="icon" disabled={!canWrite || busy || !message.trim()} aria-label="发送回复">
-              {busy ? <LoaderCircle className="animate-spin" /> : <Send />}
-            </Button>
+            <div className="mt-1 flex items-center justify-between gap-3 px-1">
+              <div className="flex min-w-0 items-center gap-2">
+                <input
+                  ref={attachmentInputRef}
+                  type="file"
+                  className="sr-only"
+                  multiple
+                  disabled={!canWrite || busy}
+                  onChange={(event) => {
+                    addAttachments(Array.from(event.currentTarget.files ?? []));
+                    event.currentTarget.value = '';
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="rounded-xl text-muted-foreground"
+                  disabled={!canWrite || busy || draftAttachments.length >= maxAttachmentsPerMessage}
+                  aria-label="添加附件"
+                  onClick={() => attachmentInputRef.current?.click()}
+                >
+                  <Paperclip />
+                </Button>
+                <span className="truncate text-[9px] text-muted-foreground">Enter 发送 · 最多 6 个附件</span>
+              </div>
+              <Button type="submit" size="icon-sm" className="rounded-xl" disabled={!canWrite || busy || (!message.trim() && draftAttachments.length === 0)} aria-label="发送回复">
+                {busy ? <LoaderCircle className="animate-spin" /> : <Send />}
+              </Button>
+            </div>
           </form>
+          {attachmentError ? <p className="mt-1.5 px-1 text-[10px] text-destructive">{attachmentError}</p> : null}
           {requirement.status === 'todo' ? (
-            <Button className="mt-2 w-full" variant="outline" size="sm" disabled={busy} onClick={() => void onStart()}>
+            <Button className="mt-2 w-full" variant="ghost" size="xs" disabled={busy} onClick={() => void onStart()}>
               <Play data-icon="inline-start" />不补充，直接开始
             </Button>
           ) : null}
@@ -751,6 +1066,11 @@ export default function Home() {
     } finally {
       setBusyPullRequestId(null);
     }
+  }
+
+  async function uploadMessageAttachments(requirementId: string, files: File[]): Promise<string[]> {
+    const attachments = await Promise.all(files.map((file) => client.uploadMessageAttachment(requirementId, file)));
+    return attachments.map((attachment) => attachment.id);
   }
 
   async function createRequirement(input: { title: string; description: string; provider: AgentProvider }) {
@@ -960,9 +1280,16 @@ export default function Home() {
         messageLoading={messageLoading}
         busy={selectedRequirement ? busyId === selectedRequirement.id : false}
         busyPullRequestId={busyPullRequestId}
+        apiUrl={apiUrl}
         onOpenChange={(open) => { if (!open) setSelectedId(null); }}
-        onStart={(message) => selectedRequirement ? runAction(selectedRequirement.id, () => client.startRequirement(selectedRequirement.id, message)) : Promise.resolve()}
-        onReply={(message) => selectedRequirement ? runAction(selectedRequirement.id, () => client.replyToRequirement(selectedRequirement.id, message)) : Promise.resolve()}
+        onStart={(message, attachments = []) => selectedRequirement ? runAction(selectedRequirement.id, async () => {
+          const attachmentIds = await uploadMessageAttachments(selectedRequirement.id, attachments);
+          return await client.startRequirement(selectedRequirement.id, message, attachmentIds);
+        }) : Promise.resolve()}
+        onReply={(message, attachments = []) => selectedRequirement ? runAction(selectedRequirement.id, async () => {
+          const attachmentIds = await uploadMessageAttachments(selectedRequirement.id, attachments);
+          return await client.replyToRequirement(selectedRequirement.id, message, attachmentIds);
+        }) : Promise.resolve()}
         onConfirm={() => selectedRequirement ? runAction(selectedRequirement.id, () => client.confirmRequirement(selectedRequirement.id)) : Promise.resolve()}
         onReview={requestReview}
       />

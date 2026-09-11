@@ -12,6 +12,8 @@ Agent Manager 默认监听 `127.0.0.1:4310`，API base URL 为：
 http://127.0.0.1:4310/api
 ~~~
 
+Agent Manager 默认每 30 秒通过本机已认证的 `gh` CLI 同步 Draft/Open PR 的状态、评论、Review、行级 review comment 和 CI 失败。使用 `--pr-reconcile-interval SECONDS` 修改轮询间隔，设为 `0` 可关闭。同步产生的消息仍通过本文档中的 Requirement conversation 与 SSE 接口展示和投递。
+
 可以先用健康检查确认服务和当前 workspace：
 
 ~~~bash
@@ -25,7 +27,7 @@ curl http://127.0.0.1:4310/api/health
 }
 ~~~
 
-除 SSE 端点外，响应均为 JSON。POST 请求应发送 `Content-Type: application/json`，请求体必须是 JSON 对象且不能超过 1 MB。当前 API 没有版本前缀。
+除附件上传端点和 SSE 端点外，响应与请求均为 JSON。JSON POST 请求体不能超过 1 MB；附件上传使用原始二进制 body，单个不能超过 20 MB。当前 API 没有版本前缀。
 
 服务默认只监听本机地址，尚不提供身份认证。通过 `--host` 暴露到其他网络前，应先评估访问风险。CLI 可用 `--allow-origin <origin>` 配置单个 CORS origin。
 
@@ -41,6 +43,8 @@ curl http://127.0.0.1:4310/api/health
 | `POST` | `/api/requirements/:id/reply` | 向需求对话发送人工消息 |
 | `POST` | `/api/requirements/:id/confirm` | 确认已完成的需求 |
 | `GET` | `/api/requirements/:id/messages` | 查询需求的完整对话 |
+| `POST` | `/api/requirements/:id/attachments` | 上传一个待发送的对话附件 |
+| `GET` | `/api/attachments/:id` | 读取或下载已上传附件 |
 | `GET` | `/api/sessions` | 列出 RD Session |
 | `GET` | `/api/runs` | 列出 RD 和 Reviewer Run |
 | `GET` | `/api/pull-requests` | 列出已登记的 PR |
@@ -137,8 +141,20 @@ interface RequirementMessage {
   runId: string | null;
   author: 'human' | 'rd_agent' | 'reviewer' | 'system';
   body: string;
+  attachments: MessageAttachment[];
   sequence: number;
   deliverToRd: boolean;
+  createdAt: string;
+}
+
+interface MessageAttachment {
+  id: string;                         // att_<uuid>
+  requirementId: string;
+  messageId: string | null;
+  fileName: string;
+  kind: 'image' | 'file';
+  mediaType: string;
+  byteSize: number;
   createdAt: string;
 }
 ~~~
@@ -243,6 +259,23 @@ Reviewer Run 超时时，对应 `AgentRun.status` 为 `timed_out`，而 `ReviewR
 
 指定 Requirement 不存在时返回 `404 Not Found`。
 
+### `POST /api/requirements/:id/attachments`
+
+上传一个附件并返回 Attachment。请求 body 是文件原始字节，不是 JSON；`X-File-Name` 使用 URI 编码后的原始文件名。单个文件最大 20 MB。PNG、JPEG、GIF 和 WebP 会按文件签名识别为 `kind=image`，其他内容为 `kind=file`。
+
+~~~bash
+curl -X POST http://127.0.0.1:4310/api/requirements/req_.../attachments \
+  -H 'Content-Type: text/plain' \
+  -H 'X-File-Name: debug.log' \
+  --data-binary @debug.log
+~~~
+
+成功响应为 `201 Created`。上传后，将返回的 `id` 放入 `start` 或 `reply` 的 `attachmentIds`；每条消息最多包含 6 个附件。附件和关联消息都持久化，Agent Manager 重启后仍可读取。
+
+### `GET /api/attachments/:id`
+
+返回附件内容。安全的栅格图片使用 `Content-Disposition: inline`，其他文件强制使用 `attachment` 下载，并统一返回 `X-Content-Type-Options: nosniff`。Attachment 不存在时返回 `404 Not Found`。
+
 ### `GET /api/pull-requests`
 
 可选 query 参数：
@@ -291,13 +324,14 @@ curl -X POST http://127.0.0.1:4310/api/requirements \
 
 ### `POST /api/requirements/:id/start`
 
-启动尚未运行的 Requirement，或重试一个失败的 RD Session。可选的 `message` 会先写入需求对话，再随本次或下一次 Run 投递。
+启动尚未运行的 Requirement，或重试一个失败的 RD Session。可选的 `message` 和 `attachmentIds` 会先写入需求对话，再随本次或下一次 Run 投递。
 
 请求体可为空，或为：
 
 ~~~json
 {
-  "message": "先补回归测试，再实现修复。"
+  "message": "先看截图复现问题，再补回归测试。",
+  "attachmentIds": ["att_..."]
 }
 ~~~
 
@@ -323,7 +357,8 @@ Requirement 不存在时返回 `404`；已经 `done` 或 `cancelled` 时返回 `
 
 ~~~json
 {
-  "message": "请再覆盖超时后的重试路径。"
+  "message": "请根据截图调整布局。",
+  "attachmentIds": ["att_..."]
 }
 ~~~
 
@@ -349,7 +384,7 @@ Requirement 不存在时返回 `404`；已经 `done` 或 `cancelled` 时返回 `
 }
 ~~~
 
-`queued` 表示收到消息时 RD Session 是否正在运行。空消息返回 `400`；Requirement 不存在时返回 `404`；已经 `done` 或 `cancelled` 时返回 `409`。
+`message` 可在包含 `attachmentIds` 时为空。`queued` 表示收到消息时 RD Session 是否正在运行。文字和附件都为空时返回 `400`；Requirement 不存在时返回 `404`；已经 `done` 或 `cancelled` 时返回 `409`。
 
 ### `POST /api/requirements/:id/confirm`
 

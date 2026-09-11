@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { readFile } from 'node:fs/promises';
 
-import { AgentManager } from './agent-manager.js';
+import { AgentManager, MAX_MESSAGE_ATTACHMENT_BYTES } from './agent-manager.js';
 import { DashboardServer } from './dashboard-server.js';
 import { StoreConflictError, StoreNotFoundError } from './store.js';
 import type { AgentProvider, ManagerEvent, PullRequestStatus } from './types.js';
@@ -28,6 +29,18 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
   return value as Record<string, unknown>;
 }
 
+async function readBinary(request: IncomingMessage, limit: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let byteSize = 0;
+  for await (const chunk of request) {
+    const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    byteSize += value.length;
+    if (byteSize > limit) throw new RangeError(`Request body exceeds ${limit / 1024 / 1024} MB`);
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks, byteSize);
+}
+
 function stringField(body: Record<string, unknown>, name: string, required = false): string | undefined {
   const value = body[name];
   if (value === undefined && !required) return undefined;
@@ -53,13 +66,33 @@ function positiveIntegerField(body: Record<string, unknown>, name: string): numb
   return Number(value);
 }
 
+function stringArrayField(body: Record<string, unknown>, name: string): string[] {
+  const value = body[name];
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || !item.trim())) {
+    throw new TypeError(`${name} must be an array of non-empty strings`);
+  }
+  return value as string[];
+}
+
+function fileNameHeader(request: IncomingMessage): string {
+  const header = request.headers['x-file-name'];
+  const value = Array.isArray(header) ? header[0] : header;
+  if (!value) return 'attachment';
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw new TypeError('x-file-name must be URI encoded');
+  }
+}
+
 export function createAgentManagerServer(manager: AgentManager, options: AgentManagerServerOptions = {}): Server {
   const allowedOrigin = options.allowedOrigin;
   const dashboard = new DashboardServer();
   const server = createServer(async (request, response) => {
     if (allowedOrigin) {
       response.setHeader('access-control-allow-origin', allowedOrigin);
-      response.setHeader('access-control-allow-headers', 'content-type');
+      response.setHeader('access-control-allow-headers', 'content-type, x-file-name');
       response.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
     }
     if (request.method === 'OPTIONS') {
@@ -97,10 +130,37 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         sendJson(response, 200, { items: manager.listReviewRequests(url.searchParams.get('pullRequestId') ?? undefined) });
         return;
       }
+      const attachment = url.pathname.match(/^\/api\/attachments\/([^/]+)$/);
+      if (request.method === 'GET' && attachment) {
+        const attachmentId = decodeURIComponent(attachment[1]!);
+        const item = manager.getMessageAttachment(attachmentId);
+        if (!item) throw new StoreNotFoundError(`Attachment ${attachmentId} not found`);
+        const data = await readFile(item.localPath);
+        response.writeHead(200, {
+          'content-type': item.mediaType,
+          'content-length': data.length,
+          'content-disposition': `${item.kind === 'image' ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(item.fileName)}`,
+          'cache-control': 'private, max-age=31536000, immutable',
+          'x-content-type-options': 'nosniff',
+        });
+        response.end(data);
+        return;
+      }
       const messages = url.pathname.match(/^\/api\/requirements\/([^/]+)\/messages$/);
       if (request.method === 'GET' && messages) {
         const requirementId = decodeURIComponent(messages[1]!);
         sendJson(response, 200, { items: manager.listMessages(requirementId) });
+        return;
+      }
+      const attachmentUpload = url.pathname.match(/^\/api\/requirements\/([^/]+)\/attachments$/);
+      if (request.method === 'POST' && attachmentUpload) {
+        const requirementId = decodeURIComponent(attachmentUpload[1]!);
+        const item = manager.uploadMessageAttachment(requirementId, {
+          fileName: fileNameHeader(request),
+          mediaType: Array.isArray(request.headers['content-type']) ? request.headers['content-type'][0] : request.headers['content-type'],
+          data: await readBinary(request, MAX_MESSAGE_ATTACHMENT_BYTES),
+        });
+        sendJson(response, 201, item);
         return;
       }
       if (request.method === 'GET' && url.pathname === '/api/events') {
@@ -187,12 +247,17 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           return;
         }
         if (name === 'reply') {
-          const result = manager.postHumanMessage(requirementId, stringField(body, 'message', true)!);
+          const result = manager.postHumanMessage(
+            requirementId,
+            stringField(body, 'message') ?? '',
+            stringArrayField(body, 'attachmentIds'),
+          );
           sendJson(response, 202, { accepted: true, requirementId, action: name, queued: result.queued, message: result.message });
           return;
         }
         const message = stringField(body, 'message');
-        void manager.runRequirement(requirementId, message).catch((error: unknown) => console.error('RD run failed:', error));
+        const attachmentIds = stringArrayField(body, 'attachmentIds');
+        void manager.runRequirement(requirementId, message, attachmentIds).catch((error: unknown) => console.error('RD run failed:', error));
         sendJson(response, 202, { accepted: true, requirementId, action: name });
         return;
       }

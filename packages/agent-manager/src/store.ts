@@ -3,6 +3,7 @@ import type {
   AgentRun,
   AgentSession,
   ManagerEvent,
+  MessageAttachment,
   MessageAuthor,
   Requirement,
   RequirementMessage,
@@ -60,8 +61,32 @@ export interface AppendMessageRecord {
   runId?: string;
   author: MessageAuthor;
   body: string;
+  attachmentIds?: string[];
   deliverToRd: boolean;
   now: string;
+}
+
+export interface CreateMessageAttachmentRecord {
+  id: string;
+  requirementId: string;
+  fileName: string;
+  kind: MessageAttachment['kind'];
+  mediaType: string;
+  byteSize: number;
+  localPath: string;
+  now: string;
+}
+
+export interface AppendExternalMessageRecord extends AppendMessageRecord {
+  pullRequestId: string;
+  sourceKey: string;
+}
+
+export interface PullRequestObservation {
+  pullRequestId: string;
+  initializedAt: string;
+  checkStates: Record<string, string>;
+  updatedAt: string;
 }
 
 export interface UpsertPullRequestRecord {
@@ -97,12 +122,17 @@ export interface AgentManagerStore {
   listRequirements(): RequirementWithSession[];
   listSessions(): AgentSession[];
   listRuns(requirementId?: string): AgentRun[];
+  createMessageAttachment(input: CreateMessageAttachmentRecord): MessageAttachment;
+  getMessageAttachment(id: string): MessageAttachment | null;
   appendMessage(input: AppendMessageRecord): RequirementMessage;
+  appendExternalMessage(input: AppendExternalMessageRecord): RequirementMessage | null;
   listMessages(requirementId: string): RequirementMessage[];
   listPendingRdMessages(requirementId: string): RequirementMessage[];
   upsertPullRequest(input: UpsertPullRequestRecord): PullRequest;
   getPullRequest(id: string): PullRequest | null;
   listPullRequests(requirementId?: string): PullRequest[];
+  ensurePullRequestObservation(pullRequestId: string, now: string): { observation: PullRequestObservation; created: boolean };
+  updatePullRequestCheckStates(pullRequestId: string, checkStates: Record<string, string>, now: string): PullRequestObservation;
   beginReviewRequest(input: BeginReviewRequestRecord): { pullRequest: PullRequest; reviewRequest: ReviewRequest; run: AgentRun };
   finishReviewRequest(id: string, outcome: RunOutcome, now: string): ReviewRequest;
   listReviewRequests(pullRequestId?: string): ReviewRequest[];

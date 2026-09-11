@@ -82,8 +82,21 @@ export interface RequirementMessage {
   runId: string | null;
   author: MessageAuthor;
   body: string;
+  attachments: MessageAttachment[];
   sequence: number;
   deliverToRd: boolean;
+  createdAt: string;
+}
+
+export interface MessageAttachment {
+  id: string;
+  requirementId: string;
+  messageId: string | null;
+  fileName: string;
+  kind: 'image' | 'file';
+  mediaType: string;
+  byteSize: number;
+  localPath: string;
   createdAt: string;
 }
 

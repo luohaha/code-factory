@@ -17,6 +17,7 @@ export interface RdInvocationInput {
   prompt: string;
   nativeSessionId: string | null;
   developerInstructions?: string;
+  imagePaths?: string[];
 }
 
 export interface ReviewInvocationInput {

@@ -70,8 +70,20 @@ export interface RequirementMessageDto {
   runId: string | null;
   author: 'human' | 'rd_agent' | 'reviewer' | 'system';
   body: string;
+  attachments: MessageAttachmentDto[];
   sequence: number;
   deliverToRd: boolean;
+  createdAt: string;
+}
+
+export interface MessageAttachmentDto {
+  id: string;
+  requirementId: string;
+  messageId: string | null;
+  fileName: string;
+  kind: 'image' | 'file';
+  mediaType: string;
+  byteSize: number;
   createdAt: string;
 }
 
@@ -164,12 +176,38 @@ export class AgentManagerClient {
     return this.request('/api/requirements', { method: 'POST', body: JSON.stringify(input) });
   }
 
-  startRequirement(id: string, message?: string): Promise<{ accepted: true }> {
-    return this.action(id, 'start', message ? { message } : {});
+  startRequirement(id: string, message?: string, attachmentIds: string[] = []): Promise<{ accepted: true }> {
+    return this.action(id, 'start', {
+      ...(message ? { message } : {}),
+      ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
+    });
   }
 
-  replyToRequirement(id: string, message: string): Promise<{ accepted: true; queued: boolean }> {
-    return this.action(id, 'reply', { message });
+  replyToRequirement(id: string, message: string, attachmentIds: string[] = []): Promise<{ accepted: true; queued: boolean }> {
+    return this.action(id, 'reply', { message, attachmentIds });
+  }
+
+  async uploadMessageAttachment(requirementId: string, file: File): Promise<MessageAttachmentDto> {
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/api/requirements/${encodeURIComponent(requirementId)}/attachments`, {
+        method: 'POST',
+        headers: {
+          'content-type': file.type || 'application/octet-stream',
+          'x-file-name': encodeURIComponent(file.name || 'attachment'),
+        },
+        body: file,
+      });
+    } catch {
+      throw new AgentManagerApiError(`无法连接 Agent Manager：${this.baseUrl}`, 0);
+    }
+    const body = await response.json().catch(() => ({})) as { error?: string };
+    if (!response.ok) throw new AgentManagerApiError(body.error || `附件上传失败：${response.status}`, response.status);
+    return body as MessageAttachmentDto;
+  }
+
+  attachmentUrl(id: string): string {
+    return `${this.baseUrl}/api/attachments/${encodeURIComponent(id)}`;
   }
 
   requestReview(id: string, provider: AgentProvider): Promise<{ accepted: true }> {

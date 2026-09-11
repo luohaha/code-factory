@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { AgentManager } from '../src/agent-manager.ts';
+import type { GitHubClient, GitHubPullRequestSnapshot } from '../src/github-client.ts';
 import type { AgentProcessRunner, ProcessRunRequest } from '../src/process-runner.ts';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
 import type { RunOutcome } from '../src/types.ts';
@@ -13,6 +14,22 @@ class DeferredRunner implements AgentProcessRunner {
   run(request: ProcessRunRequest): Promise<RunOutcome> {
     this.requests.push(request);
     return new Promise((resolve) => this.resolvers.push(resolve));
+  }
+}
+
+class SequenceGitHubClient implements GitHubClient {
+  readonly #snapshots: GitHubPullRequestSnapshot[];
+  #index = 0;
+
+  constructor(snapshots: GitHubPullRequestSnapshot[]) {
+    this.#snapshots = snapshots;
+  }
+
+  inspectPullRequest(): Promise<GitHubPullRequestSnapshot> {
+    const snapshot = this.#snapshots[Math.min(this.#index, this.#snapshots.length - 1)];
+    this.#index += 1;
+    if (!snapshot) throw new Error('No GitHub snapshot configured');
+    return Promise.resolve(snapshot);
   }
 }
 
@@ -107,6 +124,124 @@ test('a human-requested PR review writes to the requirement conversation and wak
       status: 'succeeded', exitCode: 0, nativeSessionId: 'rd-session', finalMessage: 'fixed', error: null,
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
+  } finally {
+    manager.close();
+  }
+});
+
+test('PR reconciliation delivers new review activity, CI failures, and status changes to the RD session once', async () => {
+  const pendingCheck = {
+    key: 'CheckRun:CI:test:https://github.com/acme/repo/actions/runs/1',
+    name: 'test',
+    workflow: 'CI',
+    status: 'IN_PROGRESS',
+    conclusion: null,
+    url: 'https://github.com/acme/repo/actions/runs/1',
+    completedAt: null,
+  };
+  const failedCheck = {
+    ...pendingCheck,
+    status: 'COMPLETED',
+    conclusion: 'FAILURE',
+    completedAt: '2099-01-01T00:02:00.000Z',
+  };
+  const openSnapshot: GitHubPullRequestSnapshot = {
+    status: 'open',
+    title: 'Feature',
+    url: 'https://github.com/acme/repo/pull/7',
+    baseBranch: 'main',
+    headBranch: 'feature',
+    headSha: 'abc123def456',
+    updatedAt: '2099-01-01T00:00:00.000Z',
+    reviewActivity: [{
+      kind: 'review_comment',
+      id: 'old-comment',
+      author: 'reviewer',
+      body: 'Historical feedback',
+      url: 'https://github.com/acme/repo/pull/7#discussion-old',
+      createdAt: '2020-01-01T00:00:00.000Z',
+      state: null,
+      path: 'src/old.ts',
+      line: 1,
+    }],
+    checks: [pendingCheck],
+  };
+  const activitySnapshot: GitHubPullRequestSnapshot = {
+    ...openSnapshot,
+    updatedAt: '2099-01-01T00:02:00.000Z',
+    reviewActivity: [...openSnapshot.reviewActivity, {
+      kind: 'review_comment',
+      id: 'new-comment',
+      author: 'reviewer',
+      body: 'Please cover the retry path.',
+      url: 'https://github.com/acme/repo/pull/7#discussion-new',
+      createdAt: '2099-01-01T00:01:00.000Z',
+      state: null,
+      path: 'src/retry.ts',
+      line: 42,
+    }],
+    checks: [failedCheck],
+  };
+  const mergedSnapshot: GitHubPullRequestSnapshot = {
+    ...activitySnapshot,
+    status: 'merged',
+    updatedAt: '2099-01-01T00:03:00.000Z',
+  };
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    githubClient: new SequenceGitHubClient([openSnapshot, activitySnapshot, activitySnapshot, mergedSnapshot]),
+  });
+  try {
+    const requirement = manager.createRequirement({ title: 'Feature', description: 'Open a PR', provider: 'codex' });
+    const pullRequest = manager.trackPullRequest({
+      requirementId: requirement.id,
+      repository: 'acme/repo',
+      number: 7,
+      url: openSnapshot.url,
+      title: openSnapshot.title,
+      baseBranch: openSnapshot.baseBranch,
+      headBranch: openSnapshot.headBranch,
+      headSha: openSnapshot.headSha,
+      status: 'open',
+    });
+
+    await manager.reconcilePullRequests();
+    assert.equal(manager.listMessages(requirement.id).length, 0);
+
+    await manager.reconcilePullRequests();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(runner.requests.length, 1);
+    assert.match(runner.requests[0]?.invocation.input ?? '', /Please cover the retry path/);
+    assert.match(runner.requests[0]?.invocation.input ?? '', /GitHub CI failed/);
+
+    await manager.reconcilePullRequests();
+    assert.equal(manager.listMessages(requirement.id).length, 2);
+
+    await manager.reconcilePullRequests();
+    assert.equal(manager.listPullRequests().find((item) => item.id === pullRequest.id)?.status, 'merged');
+    assert.equal(manager.listMessages(requirement.id).length, 3);
+    assert.equal(runner.requests.length, 1);
+
+    runner.resolvers[0]?.({
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'rd-session', finalMessage: 'fixed', error: null,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(runner.requests.length, 2);
+    assert.match(runner.requests[1]?.invocation.input ?? '', /open -> merged/);
+
+    runner.resolvers[1]?.({
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'rd-session', finalMessage: 'merged', error: null,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(manager.listMessages(requirement.id).slice(0, 3).map((message) => message.author), [
+      'reviewer',
+      'system',
+      'system',
+    ]);
+    assert.ok(manager.listMessages(requirement.id).slice(0, 3).every((message) => message.deliverToRd));
   } finally {
     manager.close();
   }

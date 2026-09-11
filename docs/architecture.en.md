@@ -36,6 +36,7 @@ flowchart LR
   RD -->|Track PR / Propose requirement| API[Agent API]
   API --> M
   RV -->|GitHub inline comments| GH[GitHub PR]
+  GH -->|Poll status, comments, reviews, CI| M
   RV -->|Reviewer message| M
 ~~~
 
@@ -125,6 +126,18 @@ Reviewer does not change Requirement or RD AgentSession state and does not need 
 
 If the PR head SHA changes, previous reviews remain historical results for the old revision. A human must request another review for the new revision.
 
+### PR Reconciliation
+
+Agent Manager polls each tracked Draft/Open PR through the authenticated local `gh` CLI every 30 seconds by default. It observes:
+
+- Draft/Open/Closed/Merged status and head-SHA changes;
+- general PR comments, submitted reviews, and inline review comments;
+- CI checks that newly enter a failed, errored, cancelled, timed-out, or action-required conclusion.
+
+New review activity is appended as a Reviewer message. PR status and CI failures are appended as System messages. All are marked for RD delivery while the Requirement is active: an idle RD session resumes immediately, while a running session consumes them in order after its current Run. DONE or CANCELLED Requirements retain the messages for visibility without being reopened.
+
+Observation baselines and external event receipts are persisted in SQLite. This prevents duplicate delivery across polling cycles and Agent Manager restarts. When an older PR is first adopted, existing comments and CI results form the baseline instead of being replayed, while a stale stored PR status is corrected immediately. `--pr-reconcile-interval SECONDS` changes the interval; `0` disables polling.
+
 ## 6. State Machines
 
 Requirement:
@@ -185,4 +198,4 @@ Running `npx @code-factory/agent-manager start` serves the API, SSE stream, and 
 
 ## 10. Current Boundary
 
-The Reviewer is instructed to use the GitHub CLI/API to publish inline comments, but structured verification that those comments were successfully posted is not implemented yet. GitHub webhook synchronization, stale-review indicators after head-SHA changes, access tokens, and optional worktree isolation remain future work.
+The Reviewer is instructed to use the GitHub CLI/API to publish inline comments, but structured verification that every expected comment was posted is not implemented yet. Reconciliation currently uses local `gh` polling; GitHub webhook synchronization, stale-review indicators after head-SHA changes, access tokens, and optional worktree isolation remain future work.

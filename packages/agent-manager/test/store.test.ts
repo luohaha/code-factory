@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
 import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
@@ -202,6 +206,144 @@ test('human and Agent messages are stored as an ordered requirement conversation
       status: 'succeeded', exitCode: 0, nativeSessionId: 'native-1', finalMessage: 'done', error: null,
     }, '2026-09-10T12:00:02.000Z');
     assert.equal(store.listPendingRdMessages('req-1').length, 0);
+  } finally {
+    store.close();
+  }
+});
+
+test('image attachments are claimed by one requirement message', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-1',
+      sessionId: 'ses-1',
+      title: 'Inspect screenshot',
+      description: 'Use the supplied image',
+      provider: 'codex',
+      createdBy: 'human',
+      now,
+    });
+    store.createMessageAttachment({
+      id: 'att-1',
+      requirementId: 'req-1',
+      fileName: 'bug.png',
+      kind: 'image',
+      mediaType: 'image/png',
+      byteSize: 128,
+      localPath: '/tmp/bug.png',
+      now,
+    });
+    const message = store.appendMessage({
+      id: 'msg-1',
+      requirementId: 'req-1',
+      sessionId: 'ses-1',
+      author: 'human',
+      body: '',
+      attachmentIds: ['att-1'],
+      deliverToRd: true,
+      now,
+    });
+
+    assert.equal(message.body, '');
+    assert.equal(message.attachments[0]?.fileName, 'bug.png');
+    assert.equal(store.getMessageAttachment('att-1')?.messageId, 'msg-1');
+    assert.throws(() => store.appendMessage({
+      id: 'msg-2',
+      requirementId: 'req-1',
+      sessionId: 'ses-1',
+      author: 'human',
+      body: 'reuse it',
+      attachmentIds: ['att-1'],
+      deliverToRd: true,
+      now,
+    }), StoreConflictError);
+  } finally {
+    store.close();
+  }
+});
+
+test('legacy image-only attachment storage migrates to general files', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-store-test-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(`CREATE TABLE message_attachments (
+    id TEXT PRIMARY KEY,
+    requirement_id TEXT NOT NULL,
+    message_id TEXT,
+    file_name TEXT NOT NULL,
+    media_type TEXT NOT NULL CHECK (media_type IN ('image/png', 'image/jpeg', 'image/gif', 'image/webp')),
+    byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+    local_path TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+  ) STRICT`);
+  legacy.close();
+
+  const store = new SqliteAgentManagerStore(databasePath);
+  try {
+    store.createRequirement({
+      requirementId: 'req-1',
+      sessionId: 'ses-1',
+      title: 'Inspect logs',
+      description: 'Use a text attachment',
+      provider: 'claude-code',
+      createdBy: 'human',
+      now,
+    });
+    const attachment = store.createMessageAttachment({
+      id: 'att-1',
+      requirementId: 'req-1',
+      fileName: 'debug.log',
+      kind: 'file',
+      mediaType: 'text/plain',
+      byteSize: 42,
+      localPath: '/tmp/debug.log',
+      now,
+    });
+    assert.equal(attachment.kind, 'file');
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('external GitHub event messages are persisted idempotently', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-1',
+      sessionId: 'ses-1',
+      title: 'Requirement',
+      description: 'Description',
+      provider: 'codex',
+      createdBy: 'human',
+      now,
+    });
+    store.upsertPullRequest({
+      id: 'pr-1',
+      requirementId: 'req-1',
+      repository: 'acme/repo',
+      number: 42,
+      url: 'https://github.com/acme/repo/pull/42',
+      title: 'Feature',
+      baseBranch: 'main',
+      headBranch: 'feature',
+      headSha: 'abc123',
+      status: 'open',
+      now,
+    });
+    const input = {
+      pullRequestId: 'pr-1',
+      sourceKey: 'github:pr-1:comment:1',
+      requirementId: 'req-1',
+      sessionId: 'ses-1',
+      author: 'reviewer' as const,
+      body: 'Please add a test.',
+      deliverToRd: true,
+      now,
+    };
+    assert.ok(store.appendExternalMessage({ id: 'msg-1', ...input }));
+    assert.equal(store.appendExternalMessage({ id: 'msg-2', ...input }), null);
+    assert.equal(store.listMessages('req-1').length, 1);
   } finally {
     store.close();
   }

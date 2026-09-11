@@ -14,6 +14,19 @@ test('Codex starts and resumes through stdin without overriding the workspace', 
   const resumed = adapter.buildRdInvocation({ prompt: 'continue', nativeSessionId: 'thread-1' });
   assert.deepEqual(resumed.args, ['exec', '--json', '--color', 'never', '--dangerously-bypass-approvals-and-sandbox', 'resume', 'thread-1', '-']);
   assert.ok(!resumed.args.includes('--cd'));
+
+  const withImages = adapter.buildRdInvocation({
+    prompt: 'inspect screenshots',
+    nativeSessionId: 'thread-1',
+    imagePaths: ['/tmp/first.png', '/tmp/second.webp'],
+  });
+  assert.deepEqual(withImages.args.slice(-5), [
+    '--image',
+    '/tmp/first.png',
+    '--image',
+    '/tmp/second.webp',
+    '-',
+  ]);
 });
 
 test('Codex reviewer is ephemeral and scoped to a base branch', () => {

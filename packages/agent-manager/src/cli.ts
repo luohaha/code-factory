@@ -10,7 +10,7 @@ function option(name: string): string | undefined {
 }
 
 function usage(): never {
-  console.error('Usage: code-factory-agent-manager start [--host 127.0.0.1] [--port 4310] [--db PATH] [--allow-origin ORIGIN] [--open]');
+  console.error('Usage: code-factory-agent-manager start [--host 127.0.0.1] [--port 4310] [--db PATH] [--allow-origin ORIGIN] [--pr-reconcile-interval SECONDS] [--open]');
   process.exit(1);
 }
 
@@ -19,6 +19,9 @@ if (process.argv[2] !== 'start') usage();
 const portValue = option('--port');
 const port = portValue === undefined ? 4310 : Number(portValue);
 if (!Number.isInteger(port) || port < 1 || port > 65_535) usage();
+const reconcileIntervalValue = option('--pr-reconcile-interval');
+const reconcileIntervalSeconds = reconcileIntervalValue === undefined ? 30 : Number(reconcileIntervalValue);
+if (!Number.isInteger(reconcileIntervalSeconds) || reconcileIntervalSeconds < 0) usage();
 
 const databasePath = option('--db');
 const allowedOrigin = option('--allow-origin') ?? 'http://localhost:3000';
@@ -29,6 +32,7 @@ const server = createAgentManagerServer(manager, {
   allowedOrigin,
 });
 const address = await listen(server, { host: option('--host') ?? '127.0.0.1', port });
+if (reconcileIntervalSeconds > 0) manager.startPullRequestReconciler(reconcileIntervalSeconds * 1_000);
 const displayHost = address.host === '0.0.0.0' || address.host === '::' ? '127.0.0.1' : address.host;
 const dashboardUrl = `http://${displayHost}:${address.port}/`;
 
@@ -37,6 +41,7 @@ console.log(`Workspace: ${manager.workspaceRoot}`);
 console.log(`Database:  ${manager.databasePath}`);
 console.log(`Dashboard: ${dashboardUrl}`);
 console.log(`API:       ${dashboardUrl}api`);
+console.log(`PR reconciler: ${reconcileIntervalSeconds > 0 ? `every ${reconcileIntervalSeconds}s` : 'disabled'}`);
 console.log('Warning: headless agents run with the current user\'s full filesystem and network permissions.');
 
 if (process.argv.includes('--open')) {
