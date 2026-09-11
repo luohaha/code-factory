@@ -115,14 +115,15 @@ Only when the native session is lost and must be recovered may Agent Manager reb
 ~~~text
 Open PR
   → A human selects a Reviewer Agent and clicks Request review
-  → Reviewer runs the native review workflow against the captured head SHA
+  → Agent Manager sends `Review GitHub PR <url>` to the Reviewer
+  → Reviewer inspects the target PR through the shared prompt contract
   → Reviewer publishes inline comments through the GitHub CLI/API
   → Reviewer summary is appended to the associated Requirement conversation
   → The message is marked deliverToRd=true
   → An idle RD resumes immediately; a running RD resumes after its current Run
 ~~~
 
-Reviewer does not change Requirement or RD AgentSession state and does not need to run serially with RD. It must read the specified PR and SHA through the GitHub API without checking out or modifying the shared working directory.
+Codex and Claude Code Reviewers both run as ordinary short-lived headless agents; neither invokes a native review command or skill that targets the local working tree. A Reviewer does not change Requirement or RD AgentSession state and does not need to run serially with RD. It must read the specified PR through the GitHub API without checking out or modifying the shared working directory. Agent Manager still records the trigger-time revision internally as `ReviewRequest.targetHeadSha`.
 
 If the PR head SHA changes, previous reviews remain historical results for the old revision. A human must request another review for the new revision.
 

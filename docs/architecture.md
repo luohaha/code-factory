@@ -106,14 +106,15 @@ Agent Manager 只额外注入一段 Code Factory 协议指令，告诉 RD 当前
 ~~~text
 Open PR
   → 人类点击 Request review 并选择 Agent
-  → Reviewer 对捕获的 head SHA 执行原生 review
+  → Agent Manager 向 Reviewer 发送 `Review GitHub PR <url>`
+  → Reviewer 通过统一 prompt 协议检查目标 PR
   → Reviewer 通过 GitHub CLI/API 发布行级评论
   → Reviewer 摘要写入对应 Requirement 对话
   → 消息标记 deliverToRd=true
   → 空闲 RD 立即 resume；运行中 RD 在当前 Run 结束后 resume
 ~~~
 
-Reviewer 不改变 Requirement 或 RD Session 状态，也不需要与 RD Run 串行。它必须通过 GitHub API 读取目标 PR/SHA，不能 checkout 或修改共享工作目录。PR head SHA 更新后，旧 Review 仅代表旧版本，需要人类再次发起 Review。
+Codex 和 Claude Code Reviewer 都以普通的短程 headless Agent 运行，不调用面向本地工作树的原生 review 命令或 skill。Reviewer 不改变 Requirement 或 RD Session 状态，也不需要与 RD Run 串行。它必须通过 GitHub API 读取目标 PR，不能 checkout 或修改共享工作目录。Agent Manager 仍在 `ReviewRequest.targetHeadSha` 内部记录触发时的版本；PR head SHA 更新后，旧 Review 仅代表旧版本，需要人类再次发起 Review。
 
 ### PR Reconciler
 

@@ -23,21 +23,22 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   buildReviewInvocation(input: ReviewInvocationInput): AgentInvocation {
-    const instructions = [input.developerInstructions, input.prompt].filter(Boolean).join('\n\n');
+    const instructionArgs = input.developerInstructions
+      ? ['-c', `developer_instructions=${JSON.stringify(input.developerInstructions)}`]
+      : [];
     return {
       command: 'codex',
       args: [
         'exec',
-        'review',
         '--json',
+        '--color',
+        'never',
         '--ephemeral',
         '--dangerously-bypass-approvals-and-sandbox',
-        '-c',
-        `developer_instructions=${JSON.stringify(instructions)}`,
-        '--base',
-        input.baseBranch,
+        ...instructionArgs,
+        '-',
       ],
-      input: '',
+      input: input.prompt,
     };
   }
 

@@ -47,7 +47,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
         '--dangerously-skip-permissions',
         ...instructionArgs,
       ],
-      input: `/review Review the current changes against ${input.baseBranch}. ${input.prompt}`,
+      input: input.prompt,
     };
   }
 

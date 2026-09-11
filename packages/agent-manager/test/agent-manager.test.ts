@@ -145,7 +145,10 @@ test('a human-requested PR review writes to the requirement conversation and wak
       status: 'open',
     });
     const reviewExecution = manager.requestReview(pullRequest.id, { provider: 'claude-code' });
-    assert.match(runner.requests[0]?.invocation.input ?? '', /^\/review/);
+    assert.equal(runner.requests[0]?.invocation.input, 'Review GitHub PR https://github.com/acme/repo/pull/7');
+    assert.doesNotMatch(runner.requests[0]?.invocation.input ?? '', /abc123def456/);
+    assert.ok(runner.requests[0]?.invocation.args.some((value) => value.includes('GitHub pull request reviewer')));
+    assert.equal(manager.listReviewRequests(pullRequest.id)[0]?.targetHeadSha, 'abc123def456');
     runner.requests[0]?.onEvent?.({ kind: 'message', message: 'Found one issue: comment URL', raw: {} });
     runner.resolvers[0]?.({
       status: 'succeeded', exitCode: 0, nativeSessionId: null, finalMessage: 'reviewed', error: null,

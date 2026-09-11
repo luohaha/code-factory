@@ -22,7 +22,6 @@ export interface RdInvocationInput {
 
 export interface ReviewInvocationInput {
   prompt: string;
-  baseBranch: string;
   developerInstructions?: string;
 }
 
