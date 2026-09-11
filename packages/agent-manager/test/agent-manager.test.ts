@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import type { AgentTrigger, AgentTriggerContext, AgentTriggerMessage } from '../src/agent-trigger.ts';
 import { AgentManager } from '../src/agent-manager.ts';
 import type { GitHubClient, GitHubPullRequestSnapshot } from '../src/github-client.ts';
 import { silentLogger } from '../src/logger.ts';
@@ -53,6 +54,26 @@ class SequenceGitHubClient implements GitHubClient {
   }
 }
 
+class TestAgentTrigger implements AgentTrigger {
+  readonly id = 'slack.thread';
+  readonly source = 'slack';
+  context: AgentTriggerContext | null = null;
+  stopCount = 0;
+
+  start(context: AgentTriggerContext): void {
+    this.context = context;
+  }
+
+  stop(): void {
+    this.stopCount += 1;
+  }
+
+  deliver(message: AgentTriggerMessage) {
+    if (!this.context) throw new Error('Trigger has not started');
+    return this.context.deliver(message);
+  }
+}
+
 test('Agent Manager queues conversation messages during a Run and resumes without replaying RD output', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new DeferredRunner();
@@ -71,6 +92,12 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
     assert.equal(runner.requests[0]?.workspaceRoot, manager.workspaceRoot);
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
       value.includes('Agent Manager owns draft/open/closed/merged lifecycle synchronization')));
+    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
+      value.includes('http://127.0.0.1:4310/api/agent/pull-requests')));
+    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
+      value.includes('http://127.0.0.1:4310/api/agent/requirements')));
+    assert.ok(runner.requests[0]?.invocation.args.every((value) =>
+      !value.includes('Agent-created requirements are proposals and do not start automatically.')));
     assert.ok(runner.requests[0]?.invocation.args.includes('gpt-5.6'));
     assert.ok(runner.requests[0]?.invocation.args.includes('model_reasoning_effort="max"'));
     assert.equal(manager.listRuns(first.id)[0]?.model, 'gpt-5.6');
@@ -117,6 +144,54 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
       error: null,
     });
     await secondExecution;
+  } finally {
+    manager.close();
+  }
+});
+
+test('a pluggable Agent Trigger delivers, deduplicates, and wakes the target RD session', async () => {
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    logger: silentLogger,
+  });
+  const trigger = new TestAgentTrigger();
+  try {
+    const requirement = manager.createRequirement({
+      title: 'Slack follow-up',
+      description: 'Process thread replies',
+      provider: 'codex',
+    });
+    manager.startAgentTrigger(trigger);
+    const message = {
+      requirementId: requirement.id,
+      idempotencyKey: 'thread-1:message-1',
+      author: 'human' as const,
+      body: 'Please also cover the retry path.',
+      metadata: { threadId: 'thread-1' },
+    };
+    assert.ok(trigger.deliver(message));
+    assert.equal(trigger.deliver(message), null);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(runner.requests.length, 1);
+    assert.match(runner.requests[0]?.invocation.input ?? '', /Please also cover the retry path/);
+    const event = manager.listEvents().find((item) => item.type === 'message.created');
+    assert.equal(event?.payload.source, 'slack');
+    assert.equal(event?.payload.triggerId, 'slack.thread');
+    assert.equal(event?.payload.threadId, 'thread-1');
+
+    manager.stopAgentTrigger(trigger.id);
+    assert.equal(trigger.stopCount, 1);
+    assert.equal(trigger.deliver({ ...message, idempotencyKey: 'thread-1:message-2' }), null);
+    assert.equal(manager.listMessages(requirement.id).length, 1);
+
+    runner.resolvers[0]?.({
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'rd-session', finalMessage: 'updated', error: null,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
   } finally {
     manager.close();
   }

@@ -22,7 +22,7 @@ The main runtime rules are:
 - RD Agent output is visible in the conversation but is never sent back to the same agent as new input.
 - A human can request a review for an Open PR, explicitly choose Codex or Claude Code as the Reviewer, and optionally override its model and reasoning effort.
 - Reviewer is a short-lived Run with no persistent AgentSession. Its result is added to the Requirement conversation and wakes the corresponding RD session.
-- A built-in PR reconciler polls GitHub for status changes, PR comments, review submissions, inline review comments, and newly failed CI checks. These events enter the same Requirement conversation and wake or queue for the RD session.
+- A built-in PR Agent Trigger polls GitHub for status changes, PR comments, review submissions, inline review comments, and newly failed CI checks. `AgentTrigger` is the extension point for future sources such as Slack threads; Agent Manager owns deduplication, conversation delivery, and RD wake-up behavior.
 - An RD Agent can call the local Agent API to register a newly created PR, refresh metadata changed by its own work, and propose a separate TODO Requirement. GitHub lifecycle state is subsequently owned by the Agent Manager reconciler rather than the RD Agent.
 - Child-process cwd is always the Agent Manager startup directory. Project instructions, Skills, and configuration are loaded according to the native Codex or Claude Code directory rules.
 - Every headless RD and Reviewer skips CLI approval and sandbox checks, so it runs with the launching user's full filesystem, network, and command-execution permissions. Start Agent Manager only in a trusted workspace.
@@ -137,4 +137,4 @@ npm run build
 
 The current implementation includes the Agent Manager core, SQLite Store, HTTP/SSE API, Codex and Claude Code adapters, conversation-driven RD continuation, PR tracking, manually triggered Reviewer Runs, and the bundled Web dashboard.
 
-Reviewer agents are instructed to publish inline comments through the GitHub CLI/API. The polling reconciler observes GitHub state but does not yet structurally verify that a requested Reviewer posted every expected comment. Webhook-based synchronization, stale-review indicators after a head-SHA change, local access tokens, detailed tool-execution logs, and optional worktree isolation remain future work.
+Reviewer agents are instructed to publish inline comments through the GitHub CLI/API. The polling reconciler observes GitHub state but does not yet structurally verify that a requested Reviewer posted every expected comment. The `AgentTrigger` extension API is currently code-level; dynamic trigger discovery/configuration and a Slack implementation remain future work. Webhook-based synchronization, stale-review indicators after a head-SHA change, local access tokens, detailed tool-execution logs, and optional worktree isolation also remain future work.

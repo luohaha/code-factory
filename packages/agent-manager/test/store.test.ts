@@ -383,7 +383,7 @@ test('legacy databases add nullable model and reasoning configuration columns', 
   }
 });
 
-test('external GitHub event messages are persisted idempotently', () => {
+test('Agent Trigger messages are source-neutral and idempotent within each trigger', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {
     store.createRequirement({
@@ -395,34 +395,80 @@ test('external GitHub event messages are persisted idempotently', () => {
       createdBy: 'human',
       now,
     });
-    store.upsertPullRequest({
-      id: 'pr-1',
-      requirementId: 'req-1',
-      repository: 'acme/repo',
-      number: 42,
-      url: 'https://github.com/acme/repo/pull/42',
-      title: 'Feature',
-      baseBranch: 'main',
-      headBranch: 'feature',
-      headSha: 'abc123',
-      status: 'open',
-      now,
-    });
     const input = {
-      pullRequestId: 'pr-1',
-      sourceKey: 'github:pr-1:comment:1',
+      triggerId: 'slack.thread',
+      idempotencyKey: 'thread-1:message-1',
       requirementId: 'req-1',
       sessionId: 'ses-1',
-      author: 'reviewer' as const,
-      body: 'Please add a test.',
+      author: 'human' as const,
+      body: 'Please add a retry test.',
       deliverToRd: true,
       now,
     };
-    assert.ok(store.appendExternalMessage({ id: 'msg-1', ...input }));
-    assert.equal(store.appendExternalMessage({ id: 'msg-2', ...input }), null);
-    assert.equal(store.listMessages('req-1').length, 1);
+    assert.ok(store.appendAgentTriggerMessage({ id: 'msg-1', ...input }));
+    assert.equal(store.appendAgentTriggerMessage({ id: 'msg-2', ...input }), null);
+    assert.ok(store.appendAgentTriggerMessage({ id: 'msg-3', ...input, triggerId: 'another.trigger' }));
+    assert.equal(store.listMessages('req-1').length, 2);
   } finally {
     store.close();
+  }
+});
+
+test('legacy GitHub event receipts migrate without replaying delivered messages', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-trigger-receipts-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const initial = new SqliteAgentManagerStore(databasePath);
+  initial.createRequirement({
+    requirementId: 'req-1',
+    sessionId: 'ses-1',
+    title: 'Requirement',
+    description: 'Description',
+    provider: 'codex',
+    createdBy: 'human',
+    now,
+  });
+  initial.upsertPullRequest({
+    id: 'pr-1',
+    requirementId: 'req-1',
+    repository: 'acme/repo',
+    number: 42,
+    url: 'https://github.com/acme/repo/pull/42',
+    title: 'Feature',
+    baseBranch: 'main',
+    headBranch: 'feature',
+    headSha: 'abc123',
+    status: 'open',
+    now,
+  });
+  initial.close();
+
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(`CREATE TABLE external_event_receipts (
+    source_key TEXT PRIMARY KEY,
+    pull_request_id TEXT NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL
+  ) STRICT`);
+  legacy.prepare(`INSERT INTO external_event_receipts
+    (source_key, pull_request_id, created_at) VALUES (?, ?, ?)`)
+    .run('github:pr-1:comment:1', 'pr-1', now);
+  legacy.close();
+
+  const migrated = new SqliteAgentManagerStore(databasePath);
+  try {
+    assert.equal(migrated.appendAgentTriggerMessage({
+      id: 'msg-1',
+      triggerId: 'github.pull-request',
+      idempotencyKey: 'github:pr-1:comment:1',
+      requirementId: 'req-1',
+      sessionId: 'ses-1',
+      author: 'reviewer',
+      body: 'Already delivered',
+      deliverToRd: true,
+      now,
+    }), null);
+  } finally {
+    migrated.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
