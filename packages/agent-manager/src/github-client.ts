@@ -15,7 +15,6 @@ export interface GitHubReviewActivity {
   path: string | null;
   line: number | null;
 }
-
 export interface GitHubCheck {
   key: string;
   name: string;
@@ -205,4 +204,3 @@ export class GhCliGitHubClient implements GitHubClient {
     });
   }
 }
-
