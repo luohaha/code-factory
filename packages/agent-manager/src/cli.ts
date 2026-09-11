@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { AgentManager } from './agent-manager.js';
 import { isLogLevel } from './logger.js';
 import { createAgentManagerServer, listen } from './server.js';
+import { formatStartupBanner } from './startup-banner.js';
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -57,12 +58,22 @@ const address = await listen(server, { host: option('--host') ?? '127.0.0.1', po
 if (reconcileIntervalSeconds > 0) manager.startPullRequestReconciler(reconcileIntervalSeconds * 1_000);
 const displayHost = address.host === '0.0.0.0' || address.host === '::' ? '127.0.0.1' : address.host;
 const dashboardUrl = `http://${displayHost}:${address.port}/`;
+const apiUrl = `${dashboardUrl}api`;
+
+process.stdout.write(`${formatStartupBanner({
+  workspaceRoot: manager.workspaceRoot,
+  databasePath: manager.databasePath,
+  logFilePath: manager.logFilePath,
+  dashboardUrl,
+  apiUrl,
+  pullRequestReconcileIntervalSeconds: reconcileIntervalSeconds,
+})}\n`);
 
 logger.info('Code Factory Agent Manager started', {
   workspaceRoot: manager.workspaceRoot,
   databasePath: manager.databasePath,
   dashboardUrl,
-  apiUrl: `${dashboardUrl}api`,
+  apiUrl,
   logFilePath: manager.logFilePath,
   pullRequestReconcileIntervalSeconds: reconcileIntervalSeconds,
 });

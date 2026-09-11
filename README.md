@@ -71,7 +71,9 @@ Agent Manager writes structured JSONL logs to the workspace data directory by de
 tail -f ~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log
 ~~~
 
-No operational logs are written to stdout or stderr. The default log level is `info`;
+The CLI always prints a short startup banner with the Workspace, Database, log path,
+Dashboard URL, API URL, and PR reconciler interval. Other operational logs are not
+written to stdout or stderr. The default log level is `info`;
 set `CODE_FACTORY_LOG_LEVEL` or pass `--log-level debug|info|warn|error|silent`
 to change it. Override the destination with `CODE_FACTORY_LOG_FILE` or
 `--log-file PATH`. Lifecycle logs include Requirement, Session, Run, PR, and HTTP
