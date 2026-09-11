@@ -22,6 +22,7 @@ The main runtime rules are:
 - RD Agent output is visible in the conversation but is never sent back to the same agent as new input.
 - A human can request a review for an Open PR and explicitly choose Codex or Claude Code as the Reviewer.
 - Reviewer is a short-lived Run with no persistent AgentSession. Its result is added to the Requirement conversation and wakes the corresponding RD session.
+- A built-in PR reconciler polls GitHub for status changes, PR comments, review submissions, inline review comments, and newly failed CI checks. These events enter the same Requirement conversation and wake or queue for the RD session.
 - An RD Agent can call the local Agent API to register or update a PR and propose a separate TODO Requirement.
 - Child-process cwd is always the Agent Manager startup directory. Project instructions, Skills, and configuration are loaded according to the native Codex or Claude Code directory rules.
 - Every headless RD and Reviewer skips CLI approval and sandbox checks, so it runs with the launching user's full filesystem, network, and command-execution permissions. Start Agent Manager only in a trusted workspace.
@@ -36,7 +37,7 @@ The bundled dashboard provides three views:
 - Pull Request board: `DRAFT / OPEN / CLOSED / MERGED`
 - RD Session board: `Idle / Running / Waiting for human / Failed / Completed`
 
-Opening a Requirement displays its description, linked PRs, Run information, and unified conversation. The input remains available while RD is running; new messages wait in the conversation and are automatically delivered during the next Run.
+Opening a Requirement displays its description, linked PRs, Run information, and unified conversation. Human messages can include pasted, dropped, or selected images and general file attachments. Images render inline; other files remain downloadable and are passed to the RD Agent by local path. The input remains available while RD is running, and new messages wait in the conversation for the next Run.
 
 ## Quick Start
 
@@ -44,6 +45,7 @@ Requirements:
 
 - Node.js 22.13 or newer
 - At least one installed and authenticated Agent CLI: `codex` or `claude`
+- GitHub CLI (`gh`) installed and authenticated for PR reconciliation and review workflows
 
 Build from this repository:
 
@@ -79,10 +81,18 @@ npx @code-factory/agent-manager start --open
 
 The Web dashboard, HTTP API, and SSE event stream use the same process and port. No separate Web deployment is required.
 
+By default, Agent Manager reconciles every tracked Draft/Open PR every 30 seconds. Change the interval or disable polling with:
+
+~~~bash
+npx @code-factory/agent-manager start --pr-reconcile-interval 10
+npx @code-factory/agent-manager start --pr-reconcile-interval 0
+~~~
+
 Workspace data is stored outside the managed repository:
 
 ~~~text
 ~/.code-factory/workspaces/<workspace-hash>/factory.sqlite
+~/.code-factory/workspaces/<workspace-hash>/attachments/
 ~~~
 
 ## Verification
@@ -112,4 +122,4 @@ npm run build
 
 The current implementation includes the Agent Manager core, SQLite Store, HTTP/SSE API, Codex and Claude Code adapters, conversation-driven RD continuation, PR tracking, manually triggered Reviewer Runs, and the bundled Web dashboard.
 
-Reviewer agents are instructed to publish inline comments through the GitHub CLI/API, but Code Factory does not yet verify those comments structurally. GitHub webhook synchronization, stale-review indicators after a head-SHA change, local access tokens, detailed tool-execution logs, and optional worktree isolation remain future work.
+Reviewer agents are instructed to publish inline comments through the GitHub CLI/API. The polling reconciler observes GitHub state but does not yet structurally verify that a requested Reviewer posted every expected comment. Webhook-based synchronization, stale-review indicators after a head-SHA change, local access tokens, detailed tool-execution logs, and optional worktree isolation remain future work.

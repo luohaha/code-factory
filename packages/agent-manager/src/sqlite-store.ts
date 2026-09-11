@@ -5,11 +5,14 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { schemaStatements } from './schema.js';
 import {
   type AgentManagerStore,
+  type AppendExternalMessageRecord,
   type AppendMessageRecord,
   type AppendEventRecord,
   type BeginReviewRequestRecord,
   type BeginRunRecord,
+  type CreateMessageAttachmentRecord,
   type CreateRequirementRecord,
+  type PullRequestObservation,
   type UpsertPullRequestRecord,
   StoreConflictError,
   StoreNotFoundError,
@@ -18,6 +21,7 @@ import type {
   AgentRun,
   AgentSession,
   ManagerEvent,
+  MessageAttachment,
   Requirement,
   RequirementMessage,
   PullRequest,
@@ -92,7 +96,21 @@ function eventFrom(row: Row): ManagerEvent {
   };
 }
 
-function messageFrom(row: Row): RequirementMessage {
+function attachmentFrom(row: Row): MessageAttachment {
+  return {
+    id: String(row.id),
+    requirementId: String(row.requirement_id),
+    messageId: row.message_id === null ? null : String(row.message_id),
+    fileName: String(row.file_name),
+    kind: String(row.kind) as MessageAttachment['kind'],
+    mediaType: String(row.media_type),
+    byteSize: Number(row.byte_size),
+    localPath: String(row.local_path),
+    createdAt: String(row.created_at),
+  };
+}
+
+function messageFrom(row: Row, attachments: MessageAttachment[] = []): RequirementMessage {
   return {
     id: String(row.id),
     requirementId: String(row.requirement_id),
@@ -100,6 +118,7 @@ function messageFrom(row: Row): RequirementMessage {
     runId: row.run_id === null ? null : String(row.run_id),
     author: String(row.author) as RequirementMessage['author'],
     body: String(row.body),
+    attachments,
     sequence: Number(row.sequence),
     deliverToRd: Number(row.deliver_to_rd) === 1,
     createdAt: String(row.created_at),
@@ -119,6 +138,19 @@ function pullRequestFrom(row: Row): PullRequest {
     headSha: String(row.head_sha),
     status: String(row.status) as PullRequest['status'],
     createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function pullRequestObservationFrom(row: Row): PullRequestObservation {
+  const parsed = JSON.parse(String(row.check_states_json)) as unknown;
+  const checkStates = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+    : {};
+  return {
+    pullRequestId: String(row.pull_request_id),
+    initializedAt: String(row.initialized_at),
+    checkStates,
     updatedAt: String(row.updated_at),
   };
 }
@@ -211,11 +243,45 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     return (rows as Row[]).map(runFrom);
   }
 
+  createMessageAttachment(input: CreateMessageAttachmentRecord): MessageAttachment {
+    this.requireBundle(input.requirementId);
+    this.#db.prepare(`INSERT INTO message_attachments
+      (id, requirement_id, message_id, file_name, kind, media_type, byte_size, local_path, created_at)
+      VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)`).run(
+      input.id,
+      input.requirementId,
+      input.fileName,
+      input.kind,
+      input.mediaType,
+      input.byteSize,
+      input.localPath,
+      input.now,
+    );
+    return attachmentFrom(this.#db.prepare('SELECT * FROM message_attachments WHERE id = ?').get(input.id) as Row);
+  }
+
+  getMessageAttachment(id: string): MessageAttachment | null {
+    const row = this.#db.prepare('SELECT * FROM message_attachments WHERE id = ?').get(id) as Row | undefined;
+    return row ? attachmentFrom(row) : null;
+  }
+
   appendMessage(input: AppendMessageRecord): RequirementMessage {
     const body = input.body.trim();
-    if (!body) throw new TypeError('Message body cannot be empty');
+    const attachmentIds = input.attachmentIds ?? [];
+    if (!body && attachmentIds.length === 0) throw new TypeError('Message body or attachment is required');
+    if (attachmentIds.length > 6) throw new TypeError('A message can contain at most 6 attachments');
+    if (new Set(attachmentIds).size !== attachmentIds.length) throw new TypeError('attachmentIds must be unique');
     this.#db.exec('BEGIN IMMEDIATE');
     try {
+      for (const attachmentId of attachmentIds) {
+        const attachment = this.#db.prepare(`SELECT requirement_id, message_id FROM message_attachments
+          WHERE id = ?`).get(attachmentId) as Row | undefined;
+        if (!attachment) throw new StoreNotFoundError(`Attachment ${attachmentId} not found`);
+        if (String(attachment.requirement_id) !== input.requirementId) {
+          throw new StoreConflictError(`Attachment ${attachmentId} belongs to another requirement`);
+        }
+        if (attachment.message_id !== null) throw new StoreConflictError(`Attachment ${attachmentId} is already attached`);
+      }
       const next = this.#db.prepare(`SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence
         FROM requirement_messages WHERE requirement_id = ?`).get(input.requirementId) as Row;
       this.#db.prepare(`INSERT INTO requirement_messages
@@ -223,6 +289,38 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(input.id, input.requirementId, input.sessionId, input.runId ?? null, input.author,
           body, Number(next.sequence), (input.deliverToRd ?? (input.author === 'human' || input.author === 'reviewer')) ? 1 : 0, input.now);
+      for (const attachmentId of attachmentIds) {
+        this.#db.prepare('UPDATE message_attachments SET message_id = ? WHERE id = ?').run(input.id, attachmentId);
+      }
+      this.#db.exec('COMMIT');
+    } catch (error) {
+      this.#db.exec('ROLLBACK');
+      throw error;
+    }
+    const row = this.#db.prepare('SELECT * FROM requirement_messages WHERE id = ?').get(input.id) as Row;
+    return messageFrom(row, this.listMessageAttachments(input.id));
+  }
+
+  appendExternalMessage(input: AppendExternalMessageRecord): RequirementMessage | null {
+    const body = input.body.trim();
+    if (!body) throw new TypeError('Message body cannot be empty');
+    this.#db.exec('BEGIN IMMEDIATE');
+    try {
+      const receipt = this.#db.prepare(`INSERT INTO external_event_receipts
+        (source_key, pull_request_id, created_at) VALUES (?, ?, ?)
+        ON CONFLICT(source_key) DO NOTHING`)
+        .run(input.sourceKey, input.pullRequestId, input.now);
+      if (receipt.changes === 0) {
+        this.#db.exec('COMMIT');
+        return null;
+      }
+      const next = this.#db.prepare(`SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence
+        FROM requirement_messages WHERE requirement_id = ?`).get(input.requirementId) as Row;
+      this.#db.prepare(`INSERT INTO requirement_messages
+        (id, requirement_id, session_id, run_id, author, body, sequence, deliver_to_rd, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(input.id, input.requirementId, input.sessionId, input.runId ?? null, input.author,
+          body, Number(next.sequence), input.deliverToRd ? 1 : 0, input.now);
       this.#db.exec('COMMIT');
     } catch (error) {
       this.#db.exec('ROLLBACK');
@@ -235,14 +333,16 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
   listMessages(requirementId: string): RequirementMessage[] {
     if (!this.getRequirement(requirementId)) throw new StoreNotFoundError(`Requirement ${requirementId} not found`);
     return (this.#db.prepare(`SELECT * FROM requirement_messages
-      WHERE requirement_id = ? ORDER BY sequence ASC`).all(requirementId) as Row[]).map(messageFrom);
+      WHERE requirement_id = ? ORDER BY sequence ASC`).all(requirementId) as Row[])
+      .map((row) => messageFrom(row, this.listMessageAttachments(String(row.id))));
   }
 
   listPendingRdMessages(requirementId: string): RequirementMessage[] {
     const bundle = this.requireBundle(requirementId);
     return (this.#db.prepare(`SELECT * FROM requirement_messages
       WHERE requirement_id = ? AND deliver_to_rd = 1 AND sequence > ? ORDER BY sequence ASC`)
-      .all(requirementId, bundle.session.lastConsumedMessageSequence) as Row[]).map(messageFrom);
+      .all(requirementId, bundle.session.lastConsumedMessageSequence) as Row[])
+      .map((row) => messageFrom(row, this.listMessageAttachments(String(row.id))));
   }
 
   upsertPullRequest(input: UpsertPullRequestRecord): PullRequest {
@@ -270,6 +370,30 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       ? this.#db.prepare('SELECT * FROM pull_requests WHERE requirement_id = ? ORDER BY updated_at DESC').all(requirementId)
       : this.#db.prepare('SELECT * FROM pull_requests ORDER BY updated_at DESC').all();
     return (rows as Row[]).map(pullRequestFrom);
+  }
+
+  ensurePullRequestObservation(pullRequestId: string, now: string): { observation: PullRequestObservation; created: boolean } {
+    const result = this.#db.prepare(`INSERT INTO pull_request_observations
+      (pull_request_id, initialized_at, check_states_json, updated_at) VALUES (?, ?, '{}', ?)
+      ON CONFLICT(pull_request_id) DO NOTHING`).run(pullRequestId, now, now);
+    const row = this.#db.prepare('SELECT * FROM pull_request_observations WHERE pull_request_id = ?')
+      .get(pullRequestId) as Row | undefined;
+    if (!row) throw new StoreNotFoundError(`Pull request ${pullRequestId} not found`);
+    return { observation: pullRequestObservationFrom(row), created: result.changes > 0 };
+  }
+
+  updatePullRequestCheckStates(
+    pullRequestId: string,
+    checkStates: Record<string, string>,
+    now: string,
+  ): PullRequestObservation {
+    const result = this.#db.prepare(`UPDATE pull_request_observations
+      SET check_states_json = ?, updated_at = ? WHERE pull_request_id = ?`)
+      .run(JSON.stringify(checkStates), now, pullRequestId);
+    if (result.changes === 0) throw new StoreNotFoundError(`Pull request observation ${pullRequestId} not found`);
+    const row = this.#db.prepare('SELECT * FROM pull_request_observations WHERE pull_request_id = ?')
+      .get(pullRequestId) as Row;
+    return pullRequestObservationFrom(row);
   }
 
   beginReviewRequest(input: BeginReviewRequestRecord): { pullRequest: PullRequest; reviewRequest: ReviewRequest; run: AgentRun } {
@@ -506,6 +630,11 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     return bundle;
   }
 
+  private listMessageAttachments(messageId: string): MessageAttachment[] {
+    return (this.#db.prepare(`SELECT * FROM message_attachments
+      WHERE message_id = ? ORDER BY created_at ASC, id ASC`).all(messageId) as Row[]).map(attachmentFrom);
+  }
+
   private requireRun(id: string): AgentRun {
     const row = this.#db.prepare('SELECT * FROM agent_runs WHERE id = ?').get(id) as Row | undefined;
     if (!row) throw new StoreNotFoundError(`Run ${id} not found`);
@@ -533,6 +662,34 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     ensureColumn('agent_runs', 'input_to_sequence', 'INTEGER');
     const sequenceAdded = ensureColumn('requirement_messages', 'sequence', 'INTEGER NOT NULL DEFAULT 0');
     ensureColumn('requirement_messages', 'deliver_to_rd', 'INTEGER NOT NULL DEFAULT 0 CHECK (deliver_to_rd IN (0, 1))');
+    const attachmentTable = this.#db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'message_attachments'").get() as Row | undefined;
+    const attachmentSql = attachmentTable?.sql === null || attachmentTable?.sql === undefined ? '' : String(attachmentTable.sql);
+    if (!attachmentSql.includes("kind TEXT NOT NULL CHECK (kind IN ('image', 'file'))") || attachmentSql.includes('media_type IN')) {
+      this.#db.exec(`BEGIN IMMEDIATE;
+        DROP INDEX IF EXISTS attachments_requirement_created;
+        ALTER TABLE message_attachments RENAME TO legacy_message_attachments;
+        CREATE TABLE message_attachments (
+          id TEXT PRIMARY KEY,
+          requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+          message_id TEXT REFERENCES requirement_messages(id) ON DELETE CASCADE,
+          file_name TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('image', 'file')),
+          media_type TEXT NOT NULL,
+          byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+          local_path TEXT NOT NULL UNIQUE,
+          created_at TEXT NOT NULL
+        ) STRICT;
+        INSERT INTO message_attachments
+          (id, requirement_id, message_id, file_name, kind, media_type, byte_size, local_path, created_at)
+          SELECT id, requirement_id, message_id, file_name,
+            CASE WHEN media_type IN ('image/png', 'image/jpeg', 'image/gif', 'image/webp') THEN 'image' ELSE 'file' END,
+            media_type, byte_size, local_path, created_at
+          FROM legacy_message_attachments;
+        DROP TABLE legacy_message_attachments;
+        CREATE INDEX attachments_requirement_created
+          ON message_attachments (requirement_id, created_at, id);
+        COMMIT;`);
+    }
     this.#db.prepare("UPDATE agent_sessions SET state = 'waiting_human' WHERE state = 'waiting_review'").run();
     if (sequenceAdded) {
       const requirements = this.#db.prepare('SELECT DISTINCT requirement_id FROM requirement_messages').all() as Row[];

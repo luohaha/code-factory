@@ -36,6 +36,7 @@ flowchart LR
   RD -->|登记 PR / 提议新需求| API[Agent API]
   API --> M
   RV -->|GitHub 行级评论| GH[GitHub PR]
+  GH -->|轮询状态、评论、Review、CI| M
   RV -->|Reviewer 消息| M
 ~~~
 
@@ -113,6 +114,18 @@ Open PR
 ~~~
 
 Reviewer 不改变 Requirement 或 RD Session 状态，也不需要与 RD Run 串行。它必须通过 GitHub API 读取目标 PR/SHA，不能 checkout 或修改共享工作目录。PR head SHA 更新后，旧 Review 仅代表旧版本，需要人类再次发起 Review。
+
+### PR Reconciler
+
+Agent Manager 默认每 30 秒通过本机已认证的 `gh` CLI 轮询所有已跟踪的 Draft/Open PR，监听：
+
+- Draft/Open/Closed/Merged 状态及 head SHA 变化；
+- PR 普通评论、已提交 Review 和行级 review comment；
+- 新进入失败、错误、取消、超时或需要人工处理结论的 CI check。
+
+新的 review 活动作为 Reviewer 消息写入需求对话，PR 状态和 CI 失败作为 System 消息写入。Requirement 仍活跃时，这些消息都会投递给 RD：空闲 Session 立即 resume，运行中的 Session 在当前 Run 完成后按顺序消费。DONE/CANCELLED Requirement 只保留可见消息，不重新唤醒。
+
+SQLite 持久化 observation baseline 和 external event receipt，避免轮询或 Agent Manager 重启后重复投递。首次接管旧 PR 时，已有评论和 CI 结果只作为基线，不回放历史消息；但数据库中落后的 PR 状态会立即修正。可用 `--pr-reconcile-interval SECONDS` 修改间隔，设为 `0` 可关闭轮询。
 
 ## 6. 状态机
 

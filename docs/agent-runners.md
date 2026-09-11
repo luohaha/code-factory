@@ -79,7 +79,19 @@ Adapter 把两种 CLI 的 JSONL 映射为：
 
 Agent Manager 自己只依赖归一化字段，原始事件可作为诊断流输出。人类回复和归一化后的 Agent/Reviewer 文本消息会持久化到需求对话，并通过 `message.created` 实时推送；原始 JSONL 和工具噪声不写入数据库，避免无限增长。
 
-## 5. 恢复与失败
+## 5. PR Reconciler
+
+Agent Manager 启动后默认每 30 秒通过本机 `gh` CLI 轮询 Draft/Open PR。轮询读取 PR 状态、head SHA、普通 PR 评论、Review、行级 review comment 和 CI check：
+
+- PR 状态变化与 CI 失败作为 System 消息；
+- PR/Review 评论作为 Reviewer 消息，并用明显边界标记为不可信外部反馈；
+- 活跃 Requirement 的消息设置 `deliverToRd=true`，复用既有对话游标触发或排队下一轮 RD Run；
+- SQLite observation 保存 CI 前态，external event receipt 对评论、状态和 CI 事件持久去重；
+- 首次接管旧 PR 时不回放已有评论和 CI，只修正落后的 PR 状态。
+
+`--pr-reconcile-interval SECONDS` 可修改轮询间隔，`0` 关闭轮询。轮询需要启动用户已经通过 `gh auth login` 完成认证。
+
+## 6. 恢复与失败
 
 - CLI 启动后只要观测到原生 session id，就立即写入 AgentSession；
 - Run 成功后先推进本次输入消息边界；有新外部消息时立即启动下一轮，否则 Requirement 进入 `waiting_confirmation`，Session 进入 `waiting_human`；
@@ -87,7 +99,7 @@ Agent Manager 自己只依赖归一化字段，原始事件可作为诊断流输
 - 人类重试或回复时仍使用同一个 AgentSession；已有原生 id 就 resume，没有则重新创建原生会话；
 - Agent Manager 重启后不会把旧 PID 当成存活进程；启动 reconciliation 会把遗留 RD Run 标记为失败，并独立清理遗留 ReviewRequest，不污染 RD Session 状态。
 
-## 6. 安全边界
+## 7. 安全边界
 
 Agent Manager 应只在用户信任的代码目录中启动。所有 headless RD 和 Reviewer 都会跳过 CLI 审批与沙箱检查，继承启动用户的完整文件系统、网络和命令执行权限；Agent Manager 启动时会明确打印此警告。Reviewer 的“只读”是 prompt 约束，不是操作系统级隔离。
 

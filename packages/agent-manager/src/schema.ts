@@ -61,6 +61,17 @@ export const schemaStatements = [
     deliver_to_rd INTEGER NOT NULL DEFAULT 0 CHECK (deliver_to_rd IN (0, 1)),
     created_at TEXT NOT NULL
   ) STRICT`,
+  `CREATE TABLE IF NOT EXISTS message_attachments (
+    id TEXT PRIMARY KEY,
+    requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+    message_id TEXT REFERENCES requirement_messages(id) ON DELETE CASCADE,
+    file_name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('image', 'file')),
+    media_type TEXT NOT NULL,
+    byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+    local_path TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+  ) STRICT`,
   `CREATE TABLE IF NOT EXISTS pull_requests (
     id TEXT PRIMARY KEY,
     requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
@@ -75,6 +86,17 @@ export const schemaStatements = [
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE (repository, number)
+  ) STRICT`,
+  `CREATE TABLE IF NOT EXISTS pull_request_observations (
+    pull_request_id TEXT PRIMARY KEY REFERENCES pull_requests(id) ON DELETE CASCADE,
+    initialized_at TEXT NOT NULL,
+    check_states_json TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL
+  ) STRICT`,
+  `CREATE TABLE IF NOT EXISTS external_event_receipts (
+    source_key TEXT PRIMARY KEY,
+    pull_request_id TEXT NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL
   ) STRICT`,
   `CREATE TABLE IF NOT EXISTS review_requests (
     id TEXT PRIMARY KEY,
@@ -102,8 +124,12 @@ export const schemaStatements = [
     ON manager_events (id, created_at)`,
   `CREATE INDEX IF NOT EXISTS messages_requirement_created
     ON requirement_messages (requirement_id, created_at, id)`,
+  `CREATE INDEX IF NOT EXISTS attachments_requirement_created
+    ON message_attachments (requirement_id, created_at, id)`,
   `CREATE INDEX IF NOT EXISTS pull_requests_requirement_updated
     ON pull_requests (requirement_id, updated_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS external_event_receipts_pull_request
+    ON external_event_receipts (pull_request_id, created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS review_requests_pull_request_created
     ON review_requests (pull_request_id, created_at DESC)`,
 ] as const;

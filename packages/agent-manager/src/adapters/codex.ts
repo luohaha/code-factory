@@ -13,12 +13,13 @@ export class CodexAdapter implements AgentAdapter {
 
   buildRdInvocation(input: RdInvocationInput): AgentInvocation {
     const common = ['--json', '--color', 'never', '--dangerously-bypass-approvals-and-sandbox'];
+    const images = (input.imagePaths ?? []).flatMap((path) => ['--image', path]);
     if (input.developerInstructions) {
       common.push('-c', `developer_instructions=${JSON.stringify(input.developerInstructions)}`);
     }
     return input.nativeSessionId
-      ? { command: 'codex', args: ['exec', ...common, 'resume', input.nativeSessionId, '-'], input: input.prompt }
-      : { command: 'codex', args: ['exec', ...common, '-'], input: input.prompt };
+      ? { command: 'codex', args: ['exec', ...common, 'resume', input.nativeSessionId, ...images, '-'], input: input.prompt }
+      : { command: 'codex', args: ['exec', ...common, ...images, '-'], input: input.prompt };
   }
 
   buildReviewInvocation(input: ReviewInvocationInput): AgentInvocation {
