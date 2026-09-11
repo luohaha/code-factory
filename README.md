@@ -65,13 +65,16 @@ cd ~/starrocks
 npx @code-factory/agent-manager start
 ~~~
 
-Agent Manager prints a local dashboard URL:
+Agent Manager prints structured JSONL logs containing the local dashboard URL:
 
 ~~~text
-Dashboard: http://127.0.0.1:4310/
-API:       http://127.0.0.1:4310/api
-Warning: headless agents run with the current user's full filesystem and network permissions.
+{"timestamp":"2026-09-11T03:00:00.000Z","level":"info","message":"Code Factory Agent Manager started","component":"agent-manager","workspaceRoot":"/path/to/repo","databasePath":"/home/user/.code-factory/workspaces/1234/factory.sqlite","dashboardUrl":"http://127.0.0.1:4310/","apiUrl":"http://127.0.0.1:4310/api","pullRequestReconcileIntervalSeconds":30}
 ~~~
+
+The default log level is `info`. Set `CODE_FACTORY_LOG_LEVEL` or pass
+`--log-level debug|info|warn|error|silent` to change it. Lifecycle logs include
+Requirement, Session, Run, PR, and HTTP identifiers, but omit prompts, conversation
+bodies, and raw Agent output.
 
 Open the Dashboard URL to use Code Factory. Pass `--open` to open it automatically:
 

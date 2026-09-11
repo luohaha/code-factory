@@ -104,3 +104,9 @@ Agent Manager 启动后默认每 30 秒通过本机 `gh` CLI 轮询 Draft/Open P
 Agent Manager 应只在用户信任的代码目录中启动。所有 headless RD 和 Reviewer 都会跳过 CLI 审批与沙箱检查，继承启动用户的完整文件系统、网络和命令执行权限；Agent Manager 启动时会明确打印此警告。Reviewer 的“只读”是 prompt 约束，不是操作系统级隔离。
 
 HTTP 默认只监听 `127.0.0.1`，并只允许 `http://localhost:3000` 的本地 Web 看板跨域访问；可用 `--allow-origin` 覆盖。API 不接受客户端指定 cwd。生产化前还需要增加本地访问令牌、Webhook 签名验证、敏感字段脱敏和运行日志清理策略。
+
+## 7. 运行日志
+
+CLI 以 JSONL 输出 Agent Manager、Requirement、Run、PR reconciliation 和 HTTP 请求生命周期日志。默认级别为 `info`，可通过 `--log-level debug|info|warn|error|silent` 或 `CODE_FACTORY_LOG_LEVEL` 调整；命令行参数优先于环境变量。`warn` 和 `error` 写入 stderr，其余级别写入 stdout。
+
+日志只包含关联排障所需的 ID、状态、耗时和错误，不记录 prompt、对话正文或 Agent 原始 stdout。作为库使用时可向 `AgentManager` 或 `createAgentManagerServer` 注入自定义 `Logger`；默认库实例保持静默，由宿主决定日志目标与策略。

@@ -13,6 +13,7 @@ import {
   type GitHubClient,
   type GitHubReviewActivity,
 } from './github-client.js';
+import { silentLogger, type Logger } from './logger.js';
 import { HeadlessProcessRunner, type AgentProcessRunner, type ProcessRunRequest } from './process-runner.js';
 import { SqliteAgentManagerStore } from './sqlite-store.js';
 import type { AgentManagerStore } from './store.js';
@@ -37,6 +38,7 @@ export interface AgentManagerOptions {
   store?: AgentManagerStore;
   runner?: AgentProcessRunner;
   githubClient?: GitHubClient;
+  logger?: Logger;
   timeoutMs?: number;
   maxOutputBytes?: number;
 }
@@ -53,6 +55,7 @@ export class AgentManager extends EventEmitter {
   readonly workspaceRoot: string;
   readonly databasePath: string;
   readonly attachmentDirectory: string;
+  readonly logger: Logger;
   readonly #store: AgentManagerStore;
   readonly #runner: AgentProcessRunner;
   readonly #githubClient: GitHubClient;
@@ -69,6 +72,7 @@ export class AgentManager extends EventEmitter {
     this.workspaceRoot = realpathSync(options.workspaceRoot ?? process.cwd());
     this.databasePath = options.databasePath ?? defaultDatabasePath(this.workspaceRoot);
     this.attachmentDirectory = options.attachmentDirectory ?? join(dirname(this.databasePath), 'attachments');
+    this.logger = options.logger ?? silentLogger;
     this.#store = options.store ?? new SqliteAgentManagerStore(this.databasePath);
     this.#runner = options.runner ?? new HeadlessProcessRunner();
     this.#githubClient = options.githubClient ?? new GhCliGitHubClient(this.workspaceRoot);
@@ -76,7 +80,17 @@ export class AgentManager extends EventEmitter {
     this.#timeoutMs = options.timeoutMs ?? 60 * 60 * 1_000;
     this.#maxOutputBytes = options.maxOutputBytes ?? 2 * 1024 * 1024;
     const reconciled = this.#store.reconcileInterruptedRuns(new Date().toISOString());
-    if (reconciled.runIds.length > 0) this.publish({ type: 'manager.reconciled', payload: reconciled });
+    if (reconciled.runIds.length > 0) {
+      this.logger.warn('Interrupted runs reconciled', {
+        runIds: reconciled.runIds,
+        requirementIds: reconciled.requirementIds,
+      });
+      this.publish({ type: 'manager.reconciled', payload: reconciled });
+    }
+    this.logger.info('Agent Manager initialized', {
+      workspaceRoot: this.workspaceRoot,
+      databasePath: this.databasePath,
+    });
   }
 
   setApiBaseUrl(value: string): void {
@@ -84,10 +98,12 @@ export class AgentManager extends EventEmitter {
   }
 
   close(): void {
+    if (this.#closed) return;
     this.#closed = true;
     if (this.#pullRequestReconcileTimer) clearInterval(this.#pullRequestReconcileTimer);
     this.#pullRequestReconcileTimer = null;
     this.#store.close();
+    this.logger.info('Agent Manager closed');
   }
 
   startPullRequestReconciler(intervalMs = 30_000): void {
@@ -97,12 +113,13 @@ export class AgentManager extends EventEmitter {
     if (this.#pullRequestReconcileTimer) return;
     const reconcile = () => {
       void this.reconcilePullRequests().catch((error: unknown) => {
-        console.error('Pull request reconciliation failed:', error);
+        this.logger.error('Pull request reconciliation failed', { error });
       });
     };
     reconcile();
     this.#pullRequestReconcileTimer = setInterval(reconcile, intervalMs);
     this.#pullRequestReconcileTimer.unref();
+    this.logger.info('Pull request reconciler started', { intervalMs });
   }
 
   async reconcilePullRequests(): Promise<void> {
@@ -150,6 +167,12 @@ export class AgentManager extends EventEmitter {
       sessionId,
       payload: { provider: input.provider, createdBy: requirement.createdBy },
     });
+    this.logger.info('Requirement created', {
+      requirementId,
+      sessionId,
+      provider: input.provider,
+      createdBy: requirement.createdBy,
+    });
     return requirement;
   }
 
@@ -196,7 +219,7 @@ export class AgentManager extends EventEmitter {
     mkdirSync(this.attachmentDirectory, { recursive: true });
     writeFileSync(localPath, input.data, { flag: 'wx', mode: 0o600 });
     try {
-      return this.#store.createMessageAttachment({
+      const attachment = this.#store.createMessageAttachment({
         id,
         requirementId,
         fileName,
@@ -206,6 +229,14 @@ export class AgentManager extends EventEmitter {
         localPath,
         now: new Date().toISOString(),
       });
+      this.logger.info('Message attachment uploaded', {
+        attachmentId: attachment.id,
+        requirementId,
+        kind: attachment.kind,
+        mediaType: attachment.mediaType,
+        byteSize: attachment.byteSize,
+      });
+      return attachment;
     } catch (error) {
       try {
         unlinkSync(localPath);
@@ -249,6 +280,14 @@ export class AgentManager extends EventEmitter {
       requirementId: pullRequest.requirementId,
       sessionId: this.requireRequirement(pullRequest.requirementId).session.id,
       payload: { pullRequest },
+    });
+    this.logger.info(previous ? 'Pull request updated' : 'Pull request tracked', {
+      pullRequestId: pullRequest.id,
+      requirementId: pullRequest.requirementId,
+      repository: pullRequest.repository,
+      number: pullRequest.number,
+      status: pullRequest.status,
+      headSha: pullRequest.headSha,
     });
     return pullRequest;
   }
@@ -305,7 +344,11 @@ export class AgentManager extends EventEmitter {
       deliverToRd: true,
     });
     const queued = requirement.session.state === 'running';
-    if (!queued) void this.startRdRun(requirementId).catch((error: unknown) => console.error('RD run failed:', error));
+    if (!queued) {
+      void this.startRdRun(requirementId).catch((error: unknown) => {
+        this.logger.error('RD run failed unexpectedly', { requirementId, error });
+      });
+    }
     return { message, queued };
   }
 
@@ -313,6 +356,7 @@ export class AgentManager extends EventEmitter {
     pullRequestId: string,
     options: { provider: AgentProvider; prompt?: string },
   ): Promise<RunOutcome> {
+    const startedAt = performance.now();
     const pullRequest = this.requirePullRequest(pullRequestId);
     const requirement = this.requireRequirement(pullRequest.requirementId);
     const runId = `run_${randomUUID()}`;
@@ -333,6 +377,14 @@ export class AgentManager extends EventEmitter {
       sessionId: requirement.session.id,
       runId,
       payload: { reviewRequestId, pullRequestId, provider: options.provider, targetHeadSha: pullRequest.headSha },
+    });
+    this.logger.info('Review run started', {
+      requirementId: requirement.id,
+      runId,
+      reviewRequestId,
+      pullRequestId,
+      provider: options.provider,
+      targetHeadSha: pullRequest.headSha,
     });
 
     const adapter = this.#adapters[options.provider];
@@ -382,6 +434,7 @@ export class AgentManager extends EventEmitter {
         });
       }
       this.publishOutcome(requirement.id, requirement.session.id, runId, 'reviewer', outcome);
+      this.logRunOutcome(requirement.id, runId, 'reviewer', outcome, performance.now() - startedAt);
       if (outcome.status === 'succeeded') this.schedulePendingRdMessages(requirement.id);
       return outcome;
     });
@@ -395,10 +448,12 @@ export class AgentManager extends EventEmitter {
       new Date().toISOString(),
     );
     this.publish({ type: 'requirement.completed', requirementId, sessionId: current.session.id, payload: {} });
+    this.logger.info('Requirement completed', { requirementId, sessionId: current.session.id });
     return current;
   }
 
   private startRdRun(requirementId: string): Promise<RequirementWithSession> {
+    const startedAt = performance.now();
     const requirement = this.requireRequirement(requirementId);
     const pendingMessages = this.#store.listPendingRdMessages(requirementId);
     const runId = `run_${randomUUID()}`;
@@ -434,6 +489,14 @@ export class AgentManager extends EventEmitter {
         inputToSequence: inputToSequence ?? null,
       },
     });
+    this.logger.info('RD run started', {
+      requirementId,
+      sessionId: started.session.id,
+      runId,
+      provider: requirement.provider,
+      resumed: isResume,
+      pendingMessageCount: pendingMessages.length,
+    });
 
     const adapter = this.#adapters[requirement.provider];
     let lastAgentMessage = '';
@@ -450,6 +513,12 @@ export class AgentManager extends EventEmitter {
       maxOutputBytes: this.#maxOutputBytes,
       onNativeSession: (nativeSessionId) => {
         this.#store.setNativeSessionId(started.session.id, nativeSessionId, new Date().toISOString());
+        this.logger.debug('Native agent session captured', {
+          requirementId,
+          sessionId: started.session.id,
+          runId,
+          nativeSessionId,
+        });
       },
       onOutput: (line) => this.emit('output', { runId, line }),
       onEvent: (event) => {
@@ -479,6 +548,7 @@ export class AgentManager extends EventEmitter {
         });
       }
       this.publishOutcome(requirementId, current.session.id, runId, 'rd', outcome);
+      this.logRunOutcome(requirementId, runId, 'rd', outcome, performance.now() - startedAt);
       if (outcome.status === 'succeeded') this.schedulePendingRdMessages(requirementId);
       return current;
     });
@@ -489,7 +559,9 @@ export class AgentManager extends EventEmitter {
       const current = this.requireRequirement(requirementId);
       if (current.status === 'done' || current.status === 'cancelled' || current.session.state === 'running') return;
       if (this.#store.listPendingRdMessages(requirementId).length === 0) return;
-      void this.startRdRun(requirementId).catch((error: unknown) => console.error('RD run failed:', error));
+      void this.startRdRun(requirementId).catch((error: unknown) => {
+        this.logger.error('RD run failed unexpectedly', { requirementId, error });
+      });
     });
   }
 
@@ -672,6 +744,13 @@ export class AgentManager extends EventEmitter {
   }): ManagerEvent {
     const event = this.#store.appendEvent({ ...input, now: new Date().toISOString() });
     this.emit('event', event);
+    this.logger.debug('Manager event published', {
+      eventId: event.id,
+      eventType: event.type,
+      ...(event.requirementId ? { requirementId: event.requirementId } : {}),
+      ...(event.sessionId ? { sessionId: event.sessionId } : {}),
+      ...(event.runId ? { runId: event.runId } : {}),
+    });
     return event;
   }
 
@@ -719,6 +798,27 @@ export class AgentManager extends EventEmitter {
       payload: { message },
     });
     return message;
+  }
+
+  private logRunOutcome(
+    requirementId: string,
+    runId: string,
+    role: 'rd' | 'reviewer',
+    outcome: RunOutcome,
+    durationMs: number,
+  ): void {
+    const context = {
+      requirementId,
+      runId,
+      role,
+      status: outcome.status,
+      exitCode: outcome.exitCode,
+      nativeSessionId: outcome.nativeSessionId,
+      durationMs: Math.round(durationMs * 100) / 100,
+      ...(outcome.error ? { error: outcome.error } : {}),
+    };
+    if (outcome.status === 'succeeded') this.logger.info('Agent run finished', context);
+    else this.logger.error('Agent run finished', context);
   }
 
   private execute(request: ProcessRunRequest): Promise<RunOutcome> {
