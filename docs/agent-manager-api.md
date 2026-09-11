@@ -392,7 +392,7 @@ Requirement 不存在时返回 `404`；已经 `done` 或 `cancelled` 时返回 `
 
 ### `POST /api/requirements/:id/interrupt`
 
-打断当前 Requirement 的 RD Run，不追加消息。请求体可省略或使用空对象。Agent Manager 先向子进程发送 `SIGTERM`，2 秒后仍未退出则发送 `SIGKILL`；Run 最终记录为 `cancelled`，Session 回到 `waiting_human`。
+打断当前 Requirement 的 RD Run，不追加消息。请求体可省略或使用空对象。Agent Manager 会终止 CLI 及其启动的整棵工具进程树；POSIX 平台先发送 `SIGTERM`，2 秒后仍有后代存活则向进程组发送 `SIGKILL`，Windows 使用 `taskkill /T /F`。进程树停止后 Run 才记录为 `cancelled`，Session 回到 `waiting_human`。
 
 ~~~json
 {

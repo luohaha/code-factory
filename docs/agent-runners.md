@@ -10,8 +10,8 @@ Agent Manager 只支持 `codex` 和 `claude` 两个本机 CLI。每次调用都�
 - 继承当前进程环境，由 CLI 自己读取登录状态、配置、项目指令和 Skills；
 - 不传 `--cd` 或 `--add-dir`；Codex 和 Claude Code 均以无交互审批、无 CLI 沙箱限制的模式运行；
 - stdout 按 JSONL 解析，stderr 保留为错误摘要；
-- RD 默认超时 60 分钟，Reviewer 最长 30 分钟；超时先发 `SIGTERM`，2 秒后仍未退出则 `SIGKILL`；
-- 人类打断 RD Run 时同样先发 `SIGTERM`，2 秒后仍未退出则 `SIGKILL`，并把 Run 记录为 `cancelled`；
+- RD 默认超时 60 分钟，Reviewer 最长 30 分钟；超时会终止 CLI 及其启动的整棵工具进程树；
+- 人类打断 RD Run 时，POSIX 平台先向独立进程组发送 `SIGTERM`，2 秒后仍有后代存活则发送 `SIGKILL`；Windows 使用 `taskkill /T /F`。进程树停止后 Run 才记录为 `cancelled`；
 - 同一个 RD AgentSession 只允许一个活跃 Run；不同需求的 Session 不经调度即可并行运行。
 - 人类或 Reviewer 在 RD 运行期间发送的消息只写入需求对话，不触发打断；只有人类显式点击“打断”才会停止当前 Run，随后用同一原生 Session 处理排队消息；
 - Agent Manager 为 RD 注入本地 Agent API 协议，项目指令和 Skills 仍由 CLI 根据 cwd 原生加载。
