@@ -1,10 +1,10 @@
-# Agent Manager HTTP 与事件协议
+# Agent Manager HTTP and Event Protocol
 
-默认地址为 `http://127.0.0.1:4310`。API、SSE 和 Web 页面使用同一端口，只操作 Agent Manager 启动时绑定的 workspace。
+The default address is `http://127.0.0.1:4310`. The API, SSE stream, and Web dashboard share one port and operate only on the workspace bound when Agent Manager starts.
 
-逐接口的请求字段、响应模型、状态码和 `curl` 示例见 [Agent Manager HTTP API Reference](agent-manager-api.md)。本文档重点说明消息投递与事件协议。
+See the [Agent Manager HTTP API Reference](agent-manager-api.md) for request fields, response models, status codes, and `curl` examples. This document focuses on message delivery and event semantics.
 
-## 1. 查询接口
+## 1. Query endpoints
 
 ~~~text
 GET /api/health
@@ -19,24 +19,24 @@ GET /api/review-requests?pullRequestId=<id>
 GET /api/events?after=<event-id>
 ~~~
 
-`GET /api/events` 是可通过事件 id 恢复的 SSE 流。
+`GET /api/events` is an SSE stream that can replay events after a known event ID.
 
-## 2. 人类接口
+## 2. Human endpoints
 
-创建需求：
+Create a Requirement:
 
 ~~~http
 POST /api/requirements
 Content-Type: application/json
 
 {
-  "title": "Compaction Profile 增加分层耗时",
-  "description": "补齐 segment merge、encode 与 flush 的统计",
+  "title": "Add tiered timings to the compaction profile",
+  "description": "Report segment merge, encode, and flush durations",
   "provider": "codex"
 }
 ~~~
 
-驱动需求：
+Drive a Requirement:
 
 ~~~text
 POST /api/requirements/:id/start
@@ -46,9 +46,11 @@ POST /api/requirements/:id/confirm
 POST /api/requirements/:id/attachments
 ~~~
 
-文件先以原始二进制 body 上传到 `attachments` 端点，再把返回的 ID 作为 `attachmentIds` 随 `start` 或 `reply` 发送。每条消息最多 6 个附件、单个最大 20 MB；PNG、JPEG、GIF、WebP 会作为图片预览，其他文件作为普通附件下载。`reply` 的 JSON body 为 `{"message":"...","attachmentIds":["att_..."]}`；包含附件时文字可为空。RD 正在运行时，回复始终只追加到对话并排队，不会打断当前 Run。只有显式调用 `interrupt` 端点（Web 看板中的“打断”按钮）才会停止当前 RD Run。
+Upload a file as the raw binary request body to the `attachments` endpoint, then include the returned ID in `attachmentIds` on `start` or `reply`. A message supports up to six attachments of at most 20 MB each. PNG, JPEG, GIF, and WebP files are previewed as images; other files are downloaded as regular attachments. A reply body has the form `{"message":"...","attachmentIds":["att_..."]}` and may omit text when attachments are present. While RD is running, replies are appended and queued without interrupting the current Run. Only an explicit call to `interrupt`—the Web dashboard's Interrupt button—stops the current RD Run.
 
-人工发起 PR Review：
+If RD is running, `reply` still returns `202`. `queued=true` means the message was appended to the Requirement conversation and will be handled after the current Run; an active Session is not a conflict.
+
+Request a PR review:
 
 ~~~http
 POST /api/pull-requests/:id/review-requests
@@ -56,17 +58,17 @@ Content-Type: application/json
 
 {
   "provider": "claude-code",
-  "prompt": "可选的额外 Review 关注点"
+  "prompt": "Optional additional review focus"
 }
 ~~~
 
-只有 `open` PR 可以发起。每次请求捕获当前 head SHA，同一 PR 同时只允许一个活跃 Review。
+Only Open PRs can be reviewed. Each request captures the current head SHA, and a PR may have only one active ReviewRequest.
 
-## 3. RD Agent 接口
+## 3. RD Agent endpoints
 
-RD Agent 的 developer/system 指令中会收到 API base URL、Requirement ID 和 Session ID。
+RD developer/system instructions contain the API base URL, Requirement ID, and Session ID.
 
-登记或更新 PR：
+Register or update a PR:
 
 ~~~http
 POST /api/agent/pull-requests
@@ -85,9 +87,9 @@ Content-Type: application/json
 }
 ~~~
 
-`status` 必须是 `draft | open | closed | merged`，仅用于首次登记。`repository + number` 幂等更新同一 PR 的元数据，但后续请求不能改变 lifecycle 状态；状态由 PR Reconciler 根据 GitHub 自动同步。
+`status` must be `draft | open | closed | merged` and is used only on initial registration. `repository + number` idempotently updates PR metadata. Later Agent requests cannot change lifecycle state; the PR Reconciler synchronizes it from GitHub.
 
-提议新的独立需求：
+Propose a separate Requirement:
 
 ~~~http
 POST /api/agent/requirements
@@ -96,27 +98,27 @@ Content-Type: application/json
 {
   "sourceSessionId": "ses_...",
   "parentRequirementId": "req_...",
-  "title": "补充性能基准",
-  "description": "主线任务中发现的独立跟进项",
+  "title": "Add a performance benchmark",
+  "description": "Track throughput and peak memory as a separate follow-up",
   "provider": "codex"
 }
 ~~~
 
-Provider 可省略并继承来源 Session。新需求以 `createdBy=rd_agent` 和 `TODO` 创建，不自动启动。
+`provider` is optional and defaults to the source Session provider. The proposed Requirement is created as `createdBy=rd_agent` in TODO and does not start automatically.
 
-## 4. 消息投递
+## 4. Message delivery
 
-`GET /api/requirements/:id/messages` 返回统一对话。每条消息包含：
+`GET /api/requirements/:id/messages` returns the unified conversation. Each message contains:
 
-- `sequence`：需求内单调递增序号；
-- `author`：`human | rd_agent | reviewer | system`；
-- `deliverToRd`：是否需要投递给 RD；
-- 可选的 `runId`；
-- `attachments`：持久化附件列表；Codex 图片使用原生图片参数，其他文件通过本地绝对路径读取；Claude Code 通过消息中的本地绝对路径读取全部附件。
+- `sequence`: a monotonically increasing number within the Requirement;
+- `author`: `human | rd_agent | reviewer | system`;
+- `deliverToRd`: whether RD must consume the message;
+- optional `runId`;
+- `attachments`: persisted attachments; Codex receives images through native image arguments and reads other files by local absolute path, while Claude Code reads every attachment from the local absolute paths in the message.
 
-RD Run 记录 `inputFromSequence` 和 `inputToSequence`。成功后只推进到该输入边界；Run 执行期间到达的消息留给下一轮。RD Agent 自己的输出始终 `deliverToRd=false`。
+An RD Run records `inputFromSequence` and `inputToSequence`. On success, only that captured input boundary is consumed. Messages arriving during the Run remain for the next Run. RD Agent output always uses `deliverToRd=false`.
 
-## 5. SSE 事件
+## 5. SSE events
 
 ~~~text
 id: 42
@@ -124,26 +126,26 @@ event: review_request.started
 data: {"id":42,"type":"review_request.started",...}
 ~~~
 
-当前事件包括：
+Current event types include:
 
-- `requirement.created` / `requirement.completed`；
-- `message.created`；
-- `pull_request.created` / `pull_request.updated`；
-- `review_request.started`；
-- `run.started` / `run.succeeded` / `run.failed` / `run.timed_out` / `run.cancelled`；
-- `manager.reconciled`。
+- `requirement.created` / `requirement.completed`;
+- `message.created`;
+- `pull_request.created` / `pull_request.updated`;
+- `review_request.started`;
+- `run.started` / `run.succeeded` / `run.failed` / `run.timed_out` / `run.cancelled`;
+- `manager.reconciled`.
 
-PR Reconciler 通过 `pull_request.updated` 推送 GitHub 状态/head SHA 变化。新的 PR 评论、Review、行级 review comment 和 CI 失败会先写入需求对话，再通过 `message.created` 推送；事件 payload 带有 `source: "github"` 和 `pullRequestId`。外部事件使用 SQLite receipt 持久去重，Agent Manager 重启后不会重复投递。
+The PR Reconciler publishes GitHub state and head-SHA changes through `pull_request.updated`. New PR comments, reviews, inline review comments, and CI failures are first stored in the Requirement conversation and then published through `message.created`. Their payload includes `source: "github"` and `pullRequestId`. SQLite receipts deduplicate external events across Agent Manager restarts.
 
-## 6. 错误语义
+## 6. Error semantics
 
-- `400`：字段、JSON 或 body 大小错误；
-- `404`：实体不存在；
-- `409`：非法状态转换、同一 PR 已有活跃 Review，或显式重复启动同一 Session；
-- `500`：未分类内部错误。
+- `400`: invalid fields, JSON, or request-body size;
+- `404`: entity not found;
+- `409`: illegal state transition, an active review already exists for the PR, or an explicit duplicate start for the same Session;
+- `500`: unclassified internal error.
 
-人类向运行中的 RD 发送消息是正常行为，不属于冲突。
+Sending a human message to a running RD Session is normal and is not a conflict.
 
-## 7. 当前安全边界
+## 7. Current security boundary
 
-服务默认只监听 `127.0.0.1`，Agent API 依赖本机进程边界，尚未增加访问令牌。生产化前需要本地令牌、Webhook 签名校验和权限审计。
+The service listens only on `127.0.0.1` by default. The Agent API currently relies on the local process boundary and has no access token. Production use requires a local token, webhook signature validation, and permission auditing.

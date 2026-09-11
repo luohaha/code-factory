@@ -125,8 +125,7 @@ npm run build
 
 ## Design Documentation
 
-- [Final architecture and domain model — English](docs/architecture.en.md)
-- [最终架构与领域模型 — 中文](docs/architecture.md)
+- [Final architecture and domain model](docs/architecture.en.md)
 - [Headless Agent Runner](docs/agent-runners.md)
 - [Agent Manager HTTP API Reference](docs/agent-manager-api.md)
 - [HTTP and event protocol](docs/protocol.md)

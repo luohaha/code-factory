@@ -88,17 +88,17 @@ const requirementColumns: Array<{
   description: string;
   tone: string;
 }> = [
-  { status: 'todo', title: 'TODO', description: 'Session 已绑定，尚未开始', tone: 'bg-sky-500' },
-  { status: 'doing', title: 'DOING', description: '执行任务或等待 PR 事件', tone: 'bg-amber-500' },
-  { status: 'waiting_confirmation', title: '待确认', description: '可回复继续，或确认完成', tone: 'bg-violet-500' },
-  { status: 'done', title: 'DONE', description: '已由人类确认完成', tone: 'bg-emerald-600' },
+  { status: 'todo', title: 'TODO', description: 'Session assigned, not started', tone: 'bg-sky-500' },
+  { status: 'doing', title: 'DOING', description: 'Working or awaiting PR events', tone: 'bg-amber-500' },
+  { status: 'waiting_confirmation', title: 'AWAITING CONFIRMATION', description: 'Reply to continue or confirm completion', tone: 'bg-violet-500' },
+  { status: 'done', title: 'DONE', description: 'Completion confirmed by a human', tone: 'bg-emerald-600' },
 ];
 
 const pullRequestColumns: Array<{ status: PullRequestStatus; title: string; description: string; tone: string }> = [
-  { status: 'draft', title: 'DRAFT', description: '仍在准备，暂不发起 Review', tone: 'bg-slate-400' },
-  { status: 'open', title: 'OPEN', description: '可由人类选择 Agent 发起 Review', tone: 'bg-emerald-500' },
-  { status: 'closed', title: 'CLOSED', description: '已关闭且未合并', tone: 'bg-rose-500' },
-  { status: 'merged', title: 'MERGED', description: '已合并到目标分支', tone: 'bg-violet-500' },
+  { status: 'draft', title: 'DRAFT', description: 'Still in preparation; review unavailable', tone: 'bg-slate-400' },
+  { status: 'open', title: 'OPEN', description: 'A human can request an Agent review', tone: 'bg-emerald-500' },
+  { status: 'closed', title: 'CLOSED', description: 'Closed without being merged', tone: 'bg-rose-500' },
+  { status: 'merged', title: 'MERGED', description: 'Merged into the target branch', tone: 'bg-violet-500' },
 ];
 
 const sessionColumns: Array<{
@@ -107,19 +107,19 @@ const sessionColumns: Array<{
   description: string;
   tone: string;
 }> = [
-  { state: 'idle', title: '未运行', description: 'Session 已绑定，尚无 Run', tone: 'bg-slate-400' },
-  { state: 'running', title: '执行中', description: 'Headless CLI 正在运行', tone: 'bg-emerald-500' },
-  { state: 'waiting_human', title: '等待人类', description: '等待回复或完成确认', tone: 'bg-violet-500' },
-  { state: 'failed', title: '异常', description: '可在原 Session 中继续', tone: 'bg-rose-500' },
-  { state: 'completed', title: '已结束', description: '需求完成，Session 已归档', tone: 'bg-teal-600' },
+  { state: 'idle', title: 'IDLE', description: 'Session assigned, no Run yet', tone: 'bg-slate-400' },
+  { state: 'running', title: 'RUNNING', description: 'Headless CLI is running', tone: 'bg-emerald-500' },
+  { state: 'waiting_human', title: 'WAITING FOR HUMAN', description: 'Awaiting a reply or completion confirmation', tone: 'bg-violet-500' },
+  { state: 'failed', title: 'FAILED', description: 'Can continue in the original Session', tone: 'bg-rose-500' },
+  { state: 'completed', title: 'COMPLETED', description: 'Requirement complete; Session archived', tone: 'bg-teal-600' },
 ];
 
 const stateLabel: Record<SessionState, string> = {
-  idle: '未运行',
-  running: '执行中',
-  waiting_human: '等待人类',
-  failed: '异常',
-  completed: '已结束',
+  idle: 'Idle',
+  running: 'Running',
+  waiting_human: 'Waiting for human',
+  failed: 'Failed',
+  completed: 'Completed',
 };
 
 const stateDot: Record<SessionState, string> = {
@@ -133,16 +133,16 @@ const stateDot: Record<SessionState, string> = {
 const statusLabel: Record<RequirementStatus, string> = {
   todo: 'TODO',
   doing: 'DOING',
-  waiting_confirmation: '待确认',
+  waiting_confirmation: 'Awaiting confirmation',
   done: 'DONE',
-  cancelled: '已取消',
+  cancelled: 'Cancelled',
 };
 
 const authorLabel: Record<RequirementMessageDto['author'], string> = {
-  human: '人类',
+  human: 'Human',
   rd_agent: 'RD Agent',
   reviewer: 'Reviewer',
-  system: '系统',
+  system: 'System',
 };
 
 function providerLabel(provider: AgentProvider): string {
@@ -156,17 +156,17 @@ function shortId(id: string): string {
 
 function formatAge(value: string): string {
   const milliseconds = Date.now() - new Date(value).getTime();
-  if (!Number.isFinite(milliseconds) || milliseconds < 0) return '刚刚';
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return 'just now';
   const minutes = Math.floor(milliseconds / 60_000);
-  if (minutes < 1) return '刚刚';
-  if (minutes < 60) return `${minutes} 分钟`;
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时`;
-  return `${Math.floor(hours / 24)} 天`;
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
 }
 
 function formatTime(value: string): string {
-  return new Intl.DateTimeFormat('zh-CN', {
+  return new Intl.DateTimeFormat('en-US', {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -212,7 +212,7 @@ function MessageAttachments({ attachments, apiUrl }: { attachments: MessageAttac
                 target="_blank"
                 rel="noreferrer"
                 className="group relative block min-w-0 overflow-hidden rounded-xl border border-black/8 bg-black/4 dark:border-white/10 dark:bg-white/5"
-                title={`打开 ${attachment.fileName}`}
+                title={`Open ${attachment.fileName}`}
               >
                 {/* oxlint-disable-next-line next/no-img-element -- Attachment URLs are dynamic local API resources. */}
                 <img
@@ -314,23 +314,23 @@ function RequirementCard({
         <p className="mt-1.5 truncate font-mono text-[9px] text-muted-foreground">ses-{shortId(requirement.session.id)}</p>
         {run ? <p className="mt-2 text-[10px] text-foreground/70">{run.taskSummary} · {run.status}</p> : null}
         {requirement.session.pendingMessageCount > 0 ? (
-          <p className="mt-2 text-[10px] font-medium text-amber-600">{requirement.session.pendingMessageCount} 条消息待处理</p>
+          <p className="mt-2 text-[10px] font-medium text-amber-600">{requirement.session.pendingMessageCount} messages pending</p>
         ) : null}
       </div>
 
       {requirement.status === 'todo' ? (
         <Button size="xs" className="mt-3 w-full" disabled={busy} onClick={onStart}>
-          {busy ? <LoaderCircle className="animate-spin" /> : <Play data-icon="inline-start" />}开始执行
+          {busy ? <LoaderCircle className="animate-spin" /> : <Play data-icon="inline-start" />}Start
         </Button>
       ) : null}
       {requirement.status === 'waiting_confirmation' ? (
         <div className="mt-3 grid grid-cols-2 gap-2">
-          <Button size="xs" variant="outline" disabled={busy} onClick={onOpen}><MessageSquareReply data-icon="inline-start" />回复</Button>
-          <Button size="xs" disabled={busy} onClick={onConfirm}><Check data-icon="inline-start" />确认完成</Button>
+          <Button size="xs" variant="outline" disabled={busy} onClick={onOpen}><MessageSquareReply data-icon="inline-start" />Reply</Button>
+          <Button size="xs" disabled={busy} onClick={onConfirm}><Check data-icon="inline-start" />Confirm completion</Button>
         </div>
       ) : null}
       {requirement.status === 'doing' && requirement.session.state !== 'running' ? (
-        <Button size="xs" variant="outline" className="mt-3 w-full" onClick={onOpen}><MessageSquareReply data-icon="inline-start" />打开对话</Button>
+        <Button size="xs" variant="outline" className="mt-3 w-full" onClick={onOpen}><MessageSquareReply data-icon="inline-start" />Open conversation</Button>
       ) : null}
     </article>
   );
@@ -358,11 +358,11 @@ function SessionCard({ requirement, run, busy, onOpen, onRetry }: {
       </button>
       {run ? <p className="mt-2.5 text-[10px] leading-4 text-foreground/75">{run.taskSummary} · {run.status}</p> : null}
       {requirement.session.pendingMessageCount > 0 ? (
-        <p className="mt-2 text-[10px] font-medium text-amber-600">{requirement.session.pendingMessageCount} 条外部消息待处理</p>
+        <p className="mt-2 text-[10px] font-medium text-amber-600">{requirement.session.pendingMessageCount} external messages pending</p>
       ) : null}
       {requirement.session.lastError ? (
         <Button size="xs" variant="destructive" className="mt-3 w-full" disabled={busy} onClick={onRetry}>
-          {busy ? <LoaderCircle className="animate-spin" /> : <RotateCcw data-icon="inline-start" />}重试原 Session
+          {busy ? <LoaderCircle className="animate-spin" /> : <RotateCcw data-icon="inline-start" />}Retry original Session
         </Button>
       ) : null}
     </article>
@@ -398,7 +398,7 @@ function PullRequestCard({ pullRequest, requirement, activeReview, busy, onRevie
           </NativeSelect>
           <Button size="xs" disabled={busy || Boolean(activeReview)} onClick={() => void onReview(reviewer).catch(() => undefined)}>
             {busy || activeReview ? <LoaderCircle className="animate-spin" /> : <ScanSearch data-icon="inline-start" />}
-            {activeReview ? 'Review 中' : 'Request review'}
+            {activeReview ? 'Reviewing' : 'Request review'}
           </Button>
         </div>
       ) : null}
@@ -444,14 +444,14 @@ function RequirementPullRequestCard({ pullRequest, activeReview, busy, onReview 
               disabled={busy || Boolean(activeReview)}
               onChange={(event) => setReviewer(event.target.value as AgentProvider)}
               className="min-w-0 flex-1 sm:w-40 sm:flex-none"
-              aria-label="选择 Reviewer Agent"
+              aria-label="Select Reviewer Agent"
             >
               <NativeSelectOption value="codex">Codex Reviewer</NativeSelectOption>
               <NativeSelectOption value="claude-code">Claude Reviewer</NativeSelectOption>
             </NativeSelect>
             <Button size="sm" disabled={busy || Boolean(activeReview)} onClick={() => void onReview(reviewer).catch(() => undefined)}>
               {busy || activeReview ? <LoaderCircle className="animate-spin" /> : <ScanSearch data-icon="inline-start" />}
-              {activeReview ? 'Review 中' : '发起 Review'}
+              {activeReview ? 'Reviewing' : 'Request review'}
             </Button>
           </div>
         ) : null}
@@ -492,21 +492,21 @@ function NewRequirementDialog({ disabled, onCreate }: {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button size="sm" disabled={disabled} />}><Plus data-icon="inline-start" />新建需求</DialogTrigger>
+      <DialogTrigger render={<Button size="sm" disabled={disabled} />}><Plus data-icon="inline-start" />New requirement</DialogTrigger>
       <DialogContent className="sm:max-w-lg">
         <form onSubmit={submit}>
           <DialogHeader>
-            <DialogTitle>创建需求与 RD Session</DialogTitle>
-            <DialogDescription>创建时立即绑定唯一 Session，不经过调度或 Agent 分配。</DialogDescription>
+            <DialogTitle>Create a requirement and RD Session</DialogTitle>
+            <DialogDescription>A unique Session is assigned immediately, with no scheduling or Agent allocation.</DialogDescription>
           </DialogHeader>
           <FieldGroup className="my-5 gap-4">
             <Field>
-              <FieldLabel htmlFor="requirement-title">需求标题</FieldLabel>
-              <Input id="requirement-title" name="title" required placeholder="例如：优化主键表批量导入吞吐" />
+              <FieldLabel htmlFor="requirement-title">Requirement title</FieldLabel>
+              <Input id="requirement-title" name="title" required placeholder="For example: improve bulk import throughput" />
             </Field>
             <Field>
-              <FieldLabel htmlFor="requirement-description">任务内容与完成条件</FieldLabel>
-              <Textarea id="requirement-description" name="description" required placeholder="功能开发、测试验证或性能优化目标" />
+              <FieldLabel htmlFor="requirement-description">Task and acceptance criteria</FieldLabel>
+              <Textarea id="requirement-description" name="description" required placeholder="Feature work, validation, or performance goals" />
             </Field>
             <Field>
               <FieldLabel htmlFor="requirement-provider">RD Agent</FieldLabel>
@@ -517,8 +517,8 @@ function NewRequirementDialog({ disabled, onCreate }: {
             </Field>
           </FieldGroup>
           <DialogFooter>
-            <DialogClose render={<Button type="button" variant="outline" />}>取消</DialogClose>
-            <Button type="submit" disabled={submitting}>{submitting ? <LoaderCircle className="animate-spin" /> : null}创建</Button>
+            <DialogClose render={<Button type="button" variant="outline" />}>Cancel</DialogClose>
+            <Button type="submit" disabled={submitting}>{submitting ? <LoaderCircle className="animate-spin" /> : null}Create</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -538,29 +538,29 @@ function ConnectionDialog({ apiUrl, onConnect }: { apiUrl: string; onConnect: (u
       setError(null);
       setOpen(false);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '地址无效');
+      setError(caught instanceof Error ? caught.message : 'Invalid URL');
     }
   }
 
   return (
     <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (next) setValue(apiUrl); }}>
-      <DialogTrigger render={<Button variant="outline" size="icon" aria-label="Agent Manager 连接设置" />}><Settings2 /></DialogTrigger>
+      <DialogTrigger render={<Button variant="outline" size="icon" aria-label="Agent Manager connection settings" />}><Settings2 /></DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <form onSubmit={submit}>
           <DialogHeader>
-            <DialogTitle>连接 Agent Manager</DialogTitle>
-            <DialogDescription>地址保存在当前浏览器，不会写入项目或上传到站点。</DialogDescription>
+            <DialogTitle>Connect to Agent Manager</DialogTitle>
+            <DialogDescription>The URL is stored in this browser and is not written to the project or uploaded.</DialogDescription>
           </DialogHeader>
           <FieldGroup className="my-5">
             <Field>
-              <FieldLabel htmlFor="manager-url">HTTP 地址</FieldLabel>
+              <FieldLabel htmlFor="manager-url">HTTP URL</FieldLabel>
               <Input id="manager-url" value={value} onChange={(event) => setValue(event.target.value)} placeholder={DEFAULT_AGENT_MANAGER_URL} />
             </Field>
             {error ? <p className="text-xs text-destructive">{error}</p> : null}
           </FieldGroup>
           <DialogFooter>
-            <DialogClose render={<Button type="button" variant="outline" />}>取消</DialogClose>
-            <Button type="submit">连接</Button>
+            <DialogClose render={<Button type="button" variant="outline" />}>Cancel</DialogClose>
+            <Button type="submit">Connect</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -653,11 +653,11 @@ function RequirementDetail({
   function addAttachments(files: File[]) {
     const remaining = maxAttachmentsPerMessage - draftAttachments.length;
     if (files.some((file) => file.size > maxAttachmentBytes)) {
-      setAttachmentError('单个附件不能超过 20 MB。');
+      setAttachmentError('Each attachment must be 20 MB or smaller.');
       return;
     }
     if (files.length > remaining) {
-      setAttachmentError(`每条消息最多发送 ${maxAttachmentsPerMessage} 个附件。`);
+      setAttachmentError(`Each message supports up to ${maxAttachmentsPerMessage} attachments.`);
       return;
     }
     setDraftAttachments((current) => [
@@ -703,12 +703,12 @@ function RequirementDetail({
         <ScrollArea className="min-h-0 flex-1 bg-muted/15">
           <div className="px-5 py-5 sm:px-6">
             <section className="rounded-xl border border-border/80 bg-card px-4 py-3.5">
-              <p className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">需求描述</p>
+              <p className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">Requirement description</p>
               <p className="mt-1.5 text-xs leading-5 whitespace-pre-wrap">{requirement.description}</p>
               <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 border-t border-border/70 pt-3 text-[10px] text-muted-foreground sm:grid-cols-3">
-                <div><dt className="sr-only">创建时间</dt><dd>创建于 {formatTime(requirement.createdAt)}</dd></div>
-                <div><dt className="sr-only">Run 数量</dt><dd>共 {runs.length} 个 Run</dd></div>
-                <div className="col-span-2 min-w-0 sm:col-span-1"><dt className="sr-only">原生 Session</dt><dd className="truncate" title={requirement.session.nativeSessionId ?? undefined}>Native: {requirement.session.nativeSessionId ? shortId(requirement.session.nativeSessionId) : '尚未建立'}</dd></div>
+                <div><dt className="sr-only">Created at</dt><dd>Created {formatTime(requirement.createdAt)}</dd></div>
+                <div><dt className="sr-only">Run count</dt><dd>{runs.length} Runs</dd></div>
+                <div className="col-span-2 min-w-0 sm:col-span-1"><dt className="sr-only">Native Session</dt><dd className="truncate" title={requirement.session.nativeSessionId ?? undefined}>Native: {requirement.session.nativeSessionId ? shortId(requirement.session.nativeSessionId) : 'Not created'}</dd></div>
               </dl>
             </section>
 
@@ -716,7 +716,7 @@ function RequirementDetail({
               <section className="mt-5" aria-labelledby="linked-pull-requests">
                 <div className="mb-2.5 flex items-center gap-2">
                   <GitPullRequest className="size-3.5 text-muted-foreground" />
-                  <h3 id="linked-pull-requests" className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">关联 Pull Requests</h3>
+                  <h3 id="linked-pull-requests" className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">Linked Pull Requests</h3>
                   <Badge variant="secondary" className="ml-1 h-5 min-w-5 justify-center px-1.5 font-mono text-[9px]">{pullRequests.length}</Badge>
                 </div>
                 <div className="space-y-2">
@@ -737,19 +737,19 @@ function RequirementDetail({
               <div className="mb-4 flex items-center gap-2 border-b border-border/80 pb-3">
                 <span className="grid size-7 place-items-center rounded-lg bg-primary/8 text-primary"><MessagesSquare className="size-3.5" /></span>
                 <div>
-                  <h3 id="requirement-conversation" className="text-xs font-semibold">活动与对话</h3>
-                  <p className="mt-0.5 text-[9px] text-muted-foreground">{messages.length} 条消息 · 与同一个 RD Session 持续沟通</p>
+                  <h3 id="requirement-conversation" className="text-xs font-semibold">Activity and conversation</h3>
+                  <p className="mt-0.5 text-[9px] text-muted-foreground">{messages.length} messages · Continue with the same RD Session</p>
                 </div>
               </div>
 
             {messageLoading ? (
-              <div className="flex items-center justify-center gap-2 py-10 text-xs text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />加载消息</div>
+              <div className="flex items-center justify-center gap-2 py-10 text-xs text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />Loading messages</div>
             ) : null}
             {!messageLoading && messages.length === 0 ? (
               <div className="rounded-xl border border-dashed border-border px-4 py-8 text-center">
                 <Bot className="mx-auto size-5 text-muted-foreground" />
-                <p className="mt-2 text-xs font-medium">还没有 Agent 输出</p>
-                <p className="mt-1 text-[10px] text-muted-foreground">开始需求后，RD Agent 的消息会实时出现在这里。</p>
+                <p className="mt-2 text-xs font-medium">No Agent output yet</p>
+                <p className="mt-1 text-[10px] text-muted-foreground">RD Agent messages will appear here in real time after the requirement starts.</p>
               </div>
             ) : null}
 
@@ -765,7 +765,7 @@ function RequirementDetail({
                     <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md bg-sky-500/12 text-sky-600 dark:text-sky-300"><Activity className="size-3.5" /></span>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-3">
-                        <span className="text-[10px] font-semibold">系统事件</span>
+                        <span className="text-[10px] font-semibold">System event</span>
                         <span className="shrink-0 text-[9px] text-muted-foreground">{formatTime(item.createdAt)}</span>
                       </div>
                       {item.body ? <div className="mt-1 text-[11px] leading-5 break-words"><MessageBody body={item.body} /></div> : null}
@@ -797,15 +797,15 @@ function RequirementDetail({
             {requirement.session.state === 'running' ? (
               <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
                 <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-emerald-500/12 text-emerald-600"><Bot className="size-3.5" /></span>
-                <span className="flex min-w-0 flex-1 items-center gap-2"><LoaderCircle className="size-3.5 shrink-0 animate-spin" />RD Agent 正在工作；新消息默认排队。</span>
+                <span className="flex min-w-0 flex-1 items-center gap-2"><LoaderCircle className="size-3.5 shrink-0 animate-spin" />RD Agent is working; new messages are queued by default.</span>
                 <Button type="button" variant="ghost" size="xs" className="shrink-0 text-amber-700 dark:text-amber-300" disabled={busy} onClick={() => void onInterrupt().catch(() => undefined)}>
-                  <Square data-icon="inline-start" />打断
+                  <Square data-icon="inline-start" />Interrupt
                 </Button>
               </div>
             ) : null}
             {requirement.session.pendingMessageCount > 0 ? (
               <div className="mt-3 rounded-lg bg-amber-500/8 px-3 py-2 text-[10px] text-amber-700 dark:text-amber-300">
-                {requirement.session.pendingMessageCount} 条外部消息将在{requirement.session.state === 'running' ? '当前 Run 结束后' : '下一次 Run 中'}由 RD Agent 处理。
+                {requirement.session.pendingMessageCount} external messages will be processed by the RD Agent {requirement.session.state === 'running' ? 'after the current Run' : 'during the next Run'}.
               </div>
             ) : null}
               <div ref={conversationEndRef} aria-hidden="true" />
@@ -816,8 +816,8 @@ function RequirementDetail({
         <div className="border-t border-border bg-card px-4 py-3 sm:px-6">
           {requirement.status === 'waiting_confirmation' ? (
             <div className="mb-2.5 flex items-center justify-between gap-3 rounded-xl border border-violet-500/15 bg-violet-500/7 px-3 py-2 text-[10px] text-violet-700 dark:text-violet-300">
-              <span>Agent 已汇报完成，仍可继续追问。</span>
-              <Button size="xs" className="shrink-0" disabled={busy} onClick={() => void onConfirm().catch(() => undefined)}><Check data-icon="inline-start" />确认完成</Button>
+              <span>The Agent reported completion. You can still ask follow-up questions.</span>
+              <Button size="xs" className="shrink-0" disabled={busy} onClick={() => void onConfirm().catch(() => undefined)}><Check data-icon="inline-start" />Confirm completion</Button>
             </div>
           ) : null}
           <form
@@ -845,7 +845,7 @@ function RequirementDetail({
                     <button
                       type="button"
                       className="absolute top-1 right-1 grid size-5 place-items-center rounded-full bg-black/65 text-white opacity-80 transition hover:opacity-100"
-                      aria-label={`移除 ${attachment.file.name}`}
+                      aria-label={`Remove ${attachment.file.name}`}
                       onClick={() => removeAttachment(attachment.id)}
                     >
                       <X className="size-3" />
@@ -855,7 +855,7 @@ function RequirementDetail({
               </div>
             ) : null}
             <Textarea
-              aria-label="回复 RD Agent"
+              aria-label="Reply to RD Agent"
               value={message}
               onChange={(event) => setMessage(event.target.value)}
               onPaste={(event) => {
@@ -878,7 +878,7 @@ function RequirementDetail({
               }}
               disabled={!canWrite || busy}
               className="max-h-36 min-h-14 resize-none border-0 bg-transparent px-2 py-1.5 text-xs shadow-none focus-visible:border-transparent focus-visible:ring-0 disabled:bg-transparent"
-              placeholder={requirement.status === 'todo' ? '补充要求并开始执行，可粘贴或拖入附件…' : requirement.session.state === 'running' ? '发送消息或附件；默认等待下一次 Run 处理…' : canWrite ? '回复 RD Agent，可粘贴或拖入附件…' : '当前状态暂不可回复'}
+              placeholder={requirement.status === 'todo' ? 'Add instructions and start; paste or drop attachments…' : requirement.session.state === 'running' ? 'Send a message or attachment; it will wait for the next Run by default…' : canWrite ? 'Reply to the RD Agent; paste or drop attachments…' : 'Replies are unavailable in the current state'}
             />
             <div className="mt-1 flex items-center justify-between gap-3 px-1">
               <div className="flex min-w-0 items-center gap-2">
@@ -899,14 +899,14 @@ function RequirementDetail({
                   size="icon-sm"
                   className="rounded-xl text-muted-foreground"
                   disabled={!canWrite || busy || draftAttachments.length >= maxAttachmentsPerMessage}
-                  aria-label="添加附件"
+                  aria-label="Add attachment"
                   onClick={() => attachmentInputRef.current?.click()}
                 >
                   <Paperclip />
                 </Button>
-                <span className="truncate text-[9px] text-muted-foreground">Enter 发送 · 最多 6 个附件</span>
+                <span className="truncate text-[9px] text-muted-foreground">Enter to send · Up to 6 attachments</span>
               </div>
-              <Button type="submit" size="icon-sm" className="rounded-xl" disabled={!canWrite || busy || (!message.trim() && draftAttachments.length === 0)} aria-label="发送回复">
+              <Button type="submit" size="icon-sm" className="rounded-xl" disabled={!canWrite || busy || (!message.trim() && draftAttachments.length === 0)} aria-label="Send reply">
                 {busy ? <LoaderCircle className="animate-spin" /> : <Send />}
               </Button>
             </div>
@@ -914,7 +914,7 @@ function RequirementDetail({
           {attachmentError ? <p className="mt-1.5 px-1 text-[10px] text-destructive">{attachmentError}</p> : null}
           {requirement.status === 'todo' ? (
             <Button className="mt-2 w-full" variant="ghost" size="xs" disabled={busy} onClick={() => void onStart()}>
-              <Play data-icon="inline-start" />不补充，直接开始
+              <Play data-icon="inline-start" />Start without additional instructions
             </Button>
           ) : null}
         </div>
@@ -966,7 +966,7 @@ export default function Home() {
       setLastSynced(new Date());
     } catch (caught) {
       setConnection('offline');
-      setError(caught instanceof Error ? caught.message : '无法连接 Agent Manager');
+      setError(caught instanceof Error ? caught.message : 'Unable to connect to Agent Manager');
     } finally {
       if (showLoading) setLoading(false);
     }
@@ -1012,7 +1012,7 @@ export default function Home() {
       setMessageLoading(true);
       client.listMessages(selectedId)
         .then((items) => { if (!cancelled) setMessages(items); })
-        .catch((caught: unknown) => { if (!cancelled) setError(caught instanceof Error ? caught.message : '消息加载失败'); })
+        .catch((caught: unknown) => { if (!cancelled) setError(caught instanceof Error ? caught.message : 'Failed to load messages'); })
         .finally(() => { if (!cancelled) setMessageLoading(false); });
     }, 0);
     return () => {
@@ -1052,8 +1052,8 @@ export default function Home() {
       await reload(false);
       setMessageRevision((value) => value + 1);
     } catch (caught) {
-      const prefix = caught instanceof AgentManagerApiError && caught.status === 409 ? '当前操作与已有状态冲突，请刷新后重试。' : '';
-      setError(prefix || (caught instanceof Error ? caught.message : '操作失败'));
+      const prefix = caught instanceof AgentManagerApiError && caught.status === 409 ? 'This action conflicts with the current state. Refresh and try again.' : '';
+      setError(prefix || (caught instanceof Error ? caught.message : 'Operation failed'));
       throw caught;
     } finally {
       setBusyId(null);
@@ -1067,7 +1067,7 @@ export default function Home() {
       await client.requestReview(pullRequestId, reviewer);
       await reload(false);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Review Request 发起失败');
+      setError(caught instanceof Error ? caught.message : 'Failed to request a review');
       throw caught;
     } finally {
       setBusyPullRequestId(null);
@@ -1087,7 +1087,7 @@ export default function Home() {
       setSelectedId(created.id);
       setView('requirements');
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '创建需求失败');
+      setError(caught instanceof Error ? caught.message : 'Failed to create requirement');
       throw caught;
     }
   }
@@ -1103,7 +1103,7 @@ export default function Home() {
   const activeSessions = requirements.filter((item) => item.session.state === 'running').length;
   const waitingHumans = requirements.filter((item) => item.session.state === 'waiting_human').length;
   const failures = requirements.filter((item) => item.session.state === 'failed').length;
-  const workspaceLabel = workspace?.root ?? '未连接 workspace';
+  const workspaceLabel = workspace?.root ?? 'Workspace not connected';
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -1117,8 +1117,8 @@ export default function Home() {
             </div>
           </div>
 
-          <nav className="ml-1 flex h-full items-center gap-1 sm:ml-5" aria-label="主导航">
-            <Button variant="ghost" size="sm" className={view === 'requirements' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('requirements')}><LayoutDashboard data-icon="inline-start" />需求</Button>
+          <nav className="ml-1 flex h-full items-center gap-1 sm:ml-5" aria-label="Main navigation">
+            <Button variant="ghost" size="sm" className={view === 'requirements' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('requirements')}><LayoutDashboard data-icon="inline-start" />Requirements</Button>
             <Button variant="ghost" size="sm" className={view === 'pull_requests' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('pull_requests')}><GitPullRequest data-icon="inline-start" />PR</Button>
             <Button variant="ghost" size="sm" className={view === 'sessions' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('sessions')}><Activity data-icon="inline-start" />Sessions</Button>
           </nav>
@@ -1128,7 +1128,7 @@ export default function Home() {
               <CircleDot className={`size-3 shrink-0 ${connection === 'online' ? 'text-emerald-500' : connection === 'reconnecting' ? 'text-amber-500' : 'text-rose-500'}`} />
               <span className="truncate font-mono">{workspaceLabel}</span>
             </div>
-            <Button variant="outline" size="icon" aria-label="刷新" disabled={loading} onClick={() => void reload(true)}><RefreshCw className={loading ? 'animate-spin' : ''} /></Button>
+            <Button variant="outline" size="icon" aria-label="Refresh" disabled={loading} onClick={() => void reload(true)}><RefreshCw className={loading ? 'animate-spin' : ''} /></Button>
             <ConnectionDialog apiUrl={apiUrl} onConnect={connect} />
             <NewRequirementDialog disabled={connection !== 'online'} onCreate={createRequirement} />
           </div>
@@ -1140,27 +1140,27 @@ export default function Home() {
           <div>
             <div className="flex items-center gap-2">
               <h1 id="overview-title" className="text-xl font-semibold tracking-[-0.03em]">
-                {view === 'requirements' ? '需求工作流' : view === 'pull_requests' ? 'Pull Requests' : 'RD Agent Sessions'}
+                {view === 'requirements' ? 'Requirement workflow' : view === 'pull_requests' ? 'Pull Requests' : 'RD Agent Sessions'}
               </h1>
               <Badge variant="secondary" className="font-mono text-[9px]">{connection === 'online' ? 'LIVE' : 'OFFLINE'}</Badge>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               {view === 'requirements'
-                ? '需求对话是 RD Agent 的消息流，运行中也可以继续发送'
+                ? 'The requirement conversation is the RD Agent message stream; messages remain available while it runs'
                 : view === 'pull_requests'
-                  ? 'Open PR 可由人类选择 Codex 或 Claude 发起一次性 Review'
-                  : 'Session 继承 Agent Manager 的工作目录与原生 Skills'}
+                  ? 'A human can select Codex or Claude to run a one-off review on an Open PR'
+                  : 'Sessions inherit the Agent Manager working directory and native Skills'}
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-5 text-xs">
-            <div><span className="mr-1.5 text-lg font-semibold tabular-nums">{activeSessions}</span><span className="text-muted-foreground">执行中</span></div>
-            <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-violet-600">{waitingHumans}</span><span className="text-muted-foreground">等人类</span></div>
-            <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-rose-600">{failures}</span><span className="text-muted-foreground">异常</span></div>
+            <div><span className="mr-1.5 text-lg font-semibold tabular-nums">{activeSessions}</span><span className="text-muted-foreground">Running</span></div>
+            <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-violet-600">{waitingHumans}</span><span className="text-muted-foreground">Waiting for human</span></div>
+            <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-rose-600">{failures}</span><span className="text-muted-foreground">Failed</span></div>
             <div className="hidden h-7 w-px bg-border sm:block" />
             <div className="relative hidden sm:block">
               <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input aria-label="搜索需求或 Session" value={query} onChange={(event) => setQuery(event.target.value)} className="w-56 pr-3 pl-8 text-xs" placeholder="搜索需求或 Session" />
+              <Input aria-label="Search requirements or Sessions" value={query} onChange={(event) => setQuery(event.target.value)} className="w-56 pr-3 pl-8 text-xs" placeholder="Search requirements or Sessions" />
             </div>
           </div>
         </div>
@@ -1170,19 +1170,19 @@ export default function Home() {
         <div className="px-4 pt-4 lg:px-6">
           <Alert variant="destructive">
             <WifiOff />
-            <AlertTitle>{connection === 'offline' ? 'Agent Manager 未连接' : '操作未完成'}</AlertTitle>
-            <AlertDescription>{error} {connection === 'offline' ? '请确认 Agent Manager 已启动，并允许 http://localhost:3000 访问。' : ''}</AlertDescription>
+            <AlertTitle>{connection === 'offline' ? 'Agent Manager not connected' : 'Operation incomplete'}</AlertTitle>
+            <AlertDescription>{error} {connection === 'offline' ? 'Confirm that Agent Manager is running and allows access from http://localhost:3000.' : ''}</AlertDescription>
           </Alert>
         </div>
       ) : null}
 
       <div className="flex items-center gap-2 border-b border-border/70 px-4 py-2.5 lg:px-6">
         <Button variant="secondary" size="xs" title={workspace?.root}><FolderGit2 data-icon="inline-start" />{workspaceLabel}</Button>
-        <Button variant={provider === 'all' ? 'ghost' : 'secondary'} size="xs" className={provider === 'all' ? 'text-muted-foreground' : ''} onClick={cycleProvider}>{provider === 'all' ? '全部 Agent' : providerLabel(provider)}</Button>
-        <span className="ml-auto text-[10px] text-muted-foreground">{lastSynced ? `最后同步 ${lastSynced.toLocaleTimeString('zh-CN')}` : apiUrl}</span>
+        <Button variant={provider === 'all' ? 'ghost' : 'secondary'} size="xs" className={provider === 'all' ? 'text-muted-foreground' : ''} onClick={cycleProvider}>{provider === 'all' ? 'All Agents' : providerLabel(provider)}</Button>
+        <span className="ml-auto text-[10px] text-muted-foreground">{lastSynced ? `Last synced ${lastSynced.toLocaleTimeString('en-US')}` : apiUrl}</span>
       </div>
 
-      <section className="kanban-scroll overflow-x-auto" aria-label={view === 'requirements' ? '需求看板' : view === 'pull_requests' ? 'Pull Request 看板' : 'Agent Session 看板'}>
+      <section className="kanban-scroll overflow-x-auto" aria-label={view === 'requirements' ? 'Requirement board' : view === 'pull_requests' ? 'Pull Request board' : 'Agent Session board'}>
         {view === 'requirements' ? (
           <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-4 gap-4 p-4 lg:p-5">
             {requirementColumns.map((column) => {
@@ -1205,7 +1205,7 @@ export default function Home() {
                         onConfirm={() => void runAction(item.id, () => client.confirmRequirement(item.id)).catch(() => undefined)}
                       />
                     ))}
-                    {items.length === 0 ? <div className="grid min-h-24 place-items-center rounded-xl border border-dashed border-border text-[10px] text-muted-foreground">{loading ? '正在加载…' : '当前无需求'}</div> : null}
+                    {items.length === 0 ? <div className="grid min-h-24 place-items-center rounded-xl border border-dashed border-border text-[10px] text-muted-foreground">{loading ? 'Loading…' : 'No requirements'}</div> : null}
                   </div>
                 </section>
               );
@@ -1238,7 +1238,7 @@ export default function Home() {
                     ))}
                     {items.length === 0 ? (
                       <div className="grid min-h-24 place-items-center rounded-xl border border-dashed border-border text-[10px] text-muted-foreground">
-                        {loading ? '正在加载…' : '当前无 PR'}
+                        {loading ? 'Loading…' : 'No Pull Requests'}
                       </div>
                     ) : null}
                   </div>
@@ -1267,7 +1267,7 @@ export default function Home() {
                         onRetry={() => void runAction(item.id, () => client.retryRequirement(item.id)).catch(() => undefined)}
                       />
                     ))}
-                    {items.length === 0 ? <div className="grid min-h-24 place-items-center rounded-xl border border-dashed border-border text-[10px] text-muted-foreground">当前无 Session</div> : null}
+                    {items.length === 0 ? <div className="grid min-h-24 place-items-center rounded-xl border border-dashed border-border text-[10px] text-muted-foreground">No Sessions</div> : null}
                   </div>
                 </section>
               );
@@ -1303,7 +1303,7 @@ export default function Home() {
 
       <div className="fixed right-4 bottom-4 hidden items-center gap-2 rounded-lg border border-border bg-card/95 px-3 py-2 text-[10px] text-muted-foreground shadow-lg backdrop-blur sm:flex">
         <Terminal className="size-3.5" />
-        <span>{connection === 'online' ? 'Agent Manager 在线' : connection === 'reconnecting' ? '正在重连' : 'Agent Manager 离线'}</span>
+        <span>{connection === 'online' ? 'Agent Manager online' : connection === 'reconnecting' ? 'Reconnecting' : 'Agent Manager offline'}</span>
         <span className={`size-1.5 rounded-full ${connection === 'online' ? 'bg-emerald-500' : connection === 'reconnecting' ? 'bg-amber-500' : 'bg-rose-500'}`} />
       </div>
     </main>

@@ -14,12 +14,12 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: 'Code Factory · Agent Manager',
-  description: 'Workspace 级需求与长生命周期 RD Agent Session 看板。',
+  description: 'A workspace-scoped dashboard for requirements and long-lived RD Agent sessions.',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="zh-CN">
+    <html lang="en">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         {children}
       </body>

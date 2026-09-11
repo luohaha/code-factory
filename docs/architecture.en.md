@@ -1,6 +1,6 @@
 # Code Factory — Final Architecture
 
-Chinese version: [architecture.md](architecture.md)
+Additional references: [HTTP and event protocol](protocol.md) · [Agent Manager HTTP API](agent-manager-api.md)
 
 ## 1. Domain Model
 
