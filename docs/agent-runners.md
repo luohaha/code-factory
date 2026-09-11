@@ -6,7 +6,7 @@ Agent Manager 只支持 `codex` 和 `claude` 两个本机 CLI。每次调用都�
 
 - `cwd` 固定为 Agent Manager 启动目录；
 - `shell: false`，不拼接 shell 命令；
-- prompt 通过 stdin 传入，避免出现在进程参数和进程列表；
+- RD 与 Claude Reviewer 的 prompt 通过 stdin 传入，避免出现在进程参数和进程列表；Codex Reviewer 受 CLI 参数约束，Review 指令通过 `developer_instructions` 注入；
 - 继承当前进程环境，由 CLI 自己读取登录状态、配置、项目指令和 Skills；
 - 不传 `--cd` 或 `--add-dir`；Codex 和 Claude Code 均以无交互审批、无 CLI 沙箱限制的模式运行；
 - stdout 按 JSONL 解析，stderr 保留为错误摘要；
@@ -35,11 +35,13 @@ codex exec --json --color never --dangerously-bypass-approvals-and-sandbox \
 
 ```bash
 codex exec review --json --ephemeral \
-  --dangerously-bypass-approvals-and-sandbox --base <base-branch> -
+  --dangerously-bypass-approvals-and-sandbox \
+  -c 'developer_instructions="...PR URL, head SHA, review contract..."' \
+  --base <base-branch>
 ```
 
 `thread.started` 事件中的 `thread_id` 写入 AgentSession，后续 RD Run 复用它。Reviewer 使用 `--ephemeral`，不会形成可恢复的业务 Session。
-Codex 的 Code Factory 运行协议通过官方支持的 `developer_instructions` 配置覆盖项追加，不替换仓库中的 `AGENTS.md`。
+Codex 的 Code Factory 运行协议通过官方支持的 `developer_instructions` 配置覆盖项追加，不替换仓库中的 `AGENTS.md`。`codex exec review` 不允许同时使用 `--base` 和位置参数 `[PROMPT]`，因此 Reviewer 不传 stdin 占位符 `-`，而是把指定 PR、不可变 head SHA 和 Review 约束一并注入 `developer_instructions`。
 
 ## 3. Claude Code
 

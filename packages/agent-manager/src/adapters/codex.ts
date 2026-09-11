@@ -23,9 +23,7 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   buildReviewInvocation(input: ReviewInvocationInput): AgentInvocation {
-    const instructionArgs = input.developerInstructions
-      ? ['-c', `developer_instructions=${JSON.stringify(input.developerInstructions)}`]
-      : [];
+    const instructions = [input.developerInstructions, input.prompt].filter(Boolean).join('\n\n');
     return {
       command: 'codex',
       args: [
@@ -34,12 +32,12 @@ export class CodexAdapter implements AgentAdapter {
         '--json',
         '--ephemeral',
         '--dangerously-bypass-approvals-and-sandbox',
-        ...instructionArgs,
+        '-c',
+        `developer_instructions=${JSON.stringify(instructions)}`,
         '--base',
         input.baseBranch,
-        '-',
       ],
-      input: input.prompt,
+      input: '',
     };
   }
 
