@@ -230,6 +230,8 @@ Reviewer Run 超时时，对应 `AgentRun.status` 为 `timed_out`，而 `ReviewR
 }
 ~~~
 
+`logFilePath` 指向当前活跃日志的稳定符号链接；实际日志文件按日期和大小滚动。
+
 ### `GET /api/requirements`
 
 返回所有未取消的 Requirement，每项包含对应的 `AgentSession`。

@@ -11,7 +11,7 @@ function option(name: string): string | undefined {
 }
 
 function usage(): never {
-  process.stderr.write('Usage: code-factory-agent-manager start [--host 127.0.0.1] [--port 4310] [--db PATH] [--allow-origin ORIGIN] [--pr-reconcile-interval SECONDS] [--log-level debug|info|warn|error|silent] [--log-file PATH] [--open]\n');
+  process.stderr.write('Usage: code-factory-agent-manager start [--host 127.0.0.1] [--port 4310] [--db PATH] [--allow-origin ORIGIN] [--pr-reconcile-interval SECONDS] [--log-level debug|info|warn|error|silent] [--log-file PATH] [--log-max-size SIZE] [--log-max-files COUNT_OR_DAYS] [--open]\n');
   process.exit(1);
 }
 
@@ -33,10 +33,18 @@ if (!isLogLevel(logLevel)) usage();
 const logFilePathOption = option('--log-file');
 if (process.argv.includes('--log-file') && logFilePathOption === undefined) usage();
 const logFilePath = logFilePathOption ?? process.env.CODE_FACTORY_LOG_FILE;
+const logMaxSizeOption = option('--log-max-size');
+if (process.argv.includes('--log-max-size') && logMaxSizeOption === undefined) usage();
+const logMaxSize = logMaxSizeOption ?? process.env.CODE_FACTORY_LOG_MAX_SIZE;
+const logMaxFilesOption = option('--log-max-files');
+if (process.argv.includes('--log-max-files') && logMaxFilesOption === undefined) usage();
+const logMaxFiles = logMaxFilesOption ?? process.env.CODE_FACTORY_LOG_MAX_FILES;
 const manager = new AgentManager({
   ...(databasePath ? { databasePath } : {}),
   logLevel,
   ...(logFilePath ? { logFilePath } : {}),
+  ...(logMaxSize ? { logMaxSize } : {}),
+  ...(logMaxFiles ? { logMaxFiles } : {}),
 });
 const logger = manager.logger;
 const server = createAgentManagerServer(manager, {
@@ -70,9 +78,9 @@ if (process.argv.includes('--open')) {
 
 const shutdown = () => {
   logger.info('Agent Manager shutting down');
-  server.close(() => {
-    manager.close();
-    process.exit(0);
+  server.close(async () => {
+    await manager.close();
+    process.exitCode = 0;
   });
 };
 process.once('SIGINT', shutdown);

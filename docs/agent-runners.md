@@ -109,4 +109,6 @@ HTTP 默认只监听 `127.0.0.1`，并只允许 `http://localhost:3000` 的本�
 
 Agent Manager 默认把自身、Requirement、Run、PR reconciliation 和 HTTP 请求生命周期日志以 JSONL 追加到 `~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log`，不向 stdout 或 stderr 打印运行日志。默认级别为 `info`，可通过 `--log-level debug|info|warn|error|silent` 或 `CODE_FACTORY_LOG_LEVEL` 调整；可通过 `--log-file PATH` 或 `CODE_FACTORY_LOG_FILE` 修改文件位置，命令行参数优先于环境变量。日志文件创建权限为 `0600`。
 
+底层使用 `winston` 和 `winston-daily-rotate-file`。默认按本地日期写入 `agent-manager-YYYY-MM-DD.log`，单个文件达到 20 MB 后继续按大小切分，保留 14 天；`agent-manager.log` 是指向当前文件的稳定符号链接。`--log-max-size SIZE` / `CODE_FACTORY_LOG_MAX_SIZE` 可修改单文件上限，`--log-max-files COUNT_OR_DAYS` / `CODE_FACTORY_LOG_MAX_FILES` 可修改保留文件数或天数。
+
 日志只包含关联排障所需的 ID、状态、耗时和错误，不记录 prompt、对话正文或 Agent 原始 stdout。直接通过库构造 `AgentManager` 时也默认写文件；宿主仍可注入自定义 `Logger`，显式接管日志目标与策略。

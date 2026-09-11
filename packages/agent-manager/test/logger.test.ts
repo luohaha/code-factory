@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -61,7 +61,7 @@ test('child logger adds context and safely serializes errors and circular values
   assert.equal(entry.count, '1');
 });
 
-test('file logger appends every log level to a private JSONL file', () => {
+test('file logger appends every log level to a private JSONL file', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-logger-'));
   const filePath = join(directory, 'nested', 'agent-manager.log');
   try {
@@ -72,6 +72,7 @@ test('file logger appends every log level to a private JSONL file', () => {
     });
     logger.info('started');
     logger.error('failed', { error: 'boom' });
+    await logger.close?.();
 
     const entries = readFileSync(filePath, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
     assert.deepEqual(entries.map((entry) => entry.level), ['info', 'error']);
@@ -82,7 +83,25 @@ test('file logger appends every log level to a private JSONL file', () => {
   }
 });
 
-test('Agent Manager writes to the workspace logs directory by default', () => {
+test('file logger rotates dated files when they reach the size limit', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-logger-rotation-'));
+  const filePath = join(directory, 'agent-manager.log');
+  try {
+    const logger = createFileLogger({ filePath, maxSize: '1k', maxFiles: 20 });
+    for (let index = 0; index < 40; index += 1) {
+      logger.info('sized entry', { index, payload: 'x'.repeat(200) });
+    }
+    await logger.close?.();
+
+    const rotatedFiles = readdirSync(directory)
+      .filter((name) => /^agent-manager-\d{4}-\d{2}-\d{2}\.log(?:\.\d+)?$/.test(name));
+    assert.ok(rotatedFiles.length > 1, `expected size rotation, received: ${rotatedFiles.join(', ')}`);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Agent Manager writes to the workspace logs directory by default', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-manager-log-'));
   const logFilePath = join(directory, 'logs', 'agent-manager.log');
   const manager = new AgentManager({
@@ -97,7 +116,7 @@ test('Agent Manager writes to the workspace logs directory by default', () => {
       provider: 'codex',
     });
   } finally {
-    manager.close();
+    await manager.close();
   }
 
   try {
