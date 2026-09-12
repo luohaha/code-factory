@@ -2,12 +2,21 @@ import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, delimiter, dirname, join, resolve } from 'node:path';
 
 import { ClaudeCodeAdapter } from './adapters/claude-code.js';
 import { CodexAdapter } from './adapters/codex.js';
 import type { AgentAdapter } from './adapters/types.js';
 import type { AgentTrigger, AgentTriggerContext, AgentTriggerMessage } from './agent-trigger.js';
+import {
+  CODE_FACTORY_API_URL,
+  CODE_FACTORY_REQUIREMENT_ID,
+  CODE_FACTORY_SESSION_ID,
+} from './code-factory-cli.js';
+import {
+  installCodeFactoryCliLauncher,
+  type CodeFactoryCliInvocation,
+} from './code-factory-cli-launcher.js';
 import { GhCliGitHubClient, type GitHubClient } from './github-client.js';
 import { createFileLogger, type Logger, type LogLevel } from './logger.js';
 import { HeadlessProcessRunner, type AgentProcessRunner, type ProcessRunRequest } from './process-runner.js';
@@ -43,6 +52,7 @@ export interface AgentManagerOptions {
   logMaxFiles?: string | number;
   timeoutMs?: number;
   maxOutputBytes?: number;
+  agentCliInvocation?: CodeFactoryCliInvocation;
 }
 
 export function defaultDatabasePath(workspaceRoot: string): string {
@@ -79,6 +89,7 @@ export class AgentManager extends EventEmitter {
   readonly #adapters: Record<AgentProvider, AgentAdapter>;
   readonly #timeoutMs: number;
   readonly #maxOutputBytes: number;
+  readonly #agentCliBinDirectory: string | null;
   readonly #activeRdRuns = new Map<string, { runId: string; controller: AbortController }>();
   readonly #agentTriggers = new Map<string, AgentTrigger>();
   readonly #pullRequestReconciler: PullRequestReconciler;
@@ -106,6 +117,9 @@ export class AgentManager extends EventEmitter {
     this.#adapters = { codex: new CodexAdapter(), 'claude-code': new ClaudeCodeAdapter() };
     this.#timeoutMs = options.timeoutMs ?? 60 * 60 * 1_000;
     this.#maxOutputBytes = options.maxOutputBytes ?? 2 * 1024 * 1024;
+    this.#agentCliBinDirectory = options.agentCliInvocation && this.databasePath !== ':memory:'
+      ? installCodeFactoryCliLauncher(dirname(this.databasePath), options.agentCliInvocation)
+      : null;
     this.#pullRequestReconciler = new PullRequestReconciler({
       store: this.#store,
       githubClient: options.githubClient ?? new GhCliGitHubClient(this.workspaceRoot),
@@ -617,11 +631,12 @@ export class AgentManager extends EventEmitter {
         nativeSessionId: requirement.session.nativeSessionId,
         ...(requirement.model ? { model: requirement.model } : {}),
         ...(requirement.reasoningEffort ? { reasoningEffort: requirement.reasoningEffort } : {}),
-        developerInstructions: this.buildRdDeveloperInstructions(requirement),
+        developerInstructions: this.buildRdDeveloperInstructions(),
         imagePaths,
       }),
       adapter,
       workspaceRoot: this.workspaceRoot,
+      environment: this.buildRdEnvironment(requirement),
       timeoutMs: this.#timeoutMs,
       maxOutputBytes: this.#maxOutputBytes,
       signal: controller.signal,
@@ -752,20 +767,29 @@ export class AgentManager extends EventEmitter {
       : 'Continue the current requirement. Inspect the current repository state, complete remaining work, and run necessary tests.';
   }
 
-  private buildRdDeveloperInstructions(requirement: RequirementWithSession): string {
-    const pullRequestsEndpoint = `${this.#apiBaseUrl}/agent/pull-requests`;
-    const requirementsEndpoint = `${this.#apiBaseUrl}/agent/requirements`;
+  private buildRdDeveloperInstructions(): string {
     return [
       'You are the long-lived RD Agent for one Code Factory requirement.',
       'If this requirement requires code changes, first inspect the existing Git worktrees. Reuse a worktree dedicated to this requirement, or create a new worktree and feature branch; make all edits, tests, commits, pushes, and pull-request changes there to avoid conflicts with other RD sessions.',
       'Do not move, discard, or overwrite pre-existing changes in the shared workspace.',
-      `Immediately after you create a GitHub pull request for this requirement, register it by POSTing JSON to ${pullRequestsEndpoint}.`,
-      `The payload must include requirementId=${requirement.id}, repository, number, url, title, baseBranch, headBranch, headSha, and status (draft|open|closed|merged).`,
-      'Call that endpoint again only when your own push or edit changes PR metadata such as title, branches, or headSha.',
-      'Agent Manager owns draft/open/closed/merged lifecycle synchronization through its GitHub reconciler. Never call that endpoint merely to mirror a lifecycle event reported by a System message or observed on GitHub.',
-      `When you discover separate follow-up work, you may propose a linked TODO requirement by POSTing JSON to ${requirementsEndpoint}.`,
-      `Include sourceSessionId=${requirement.session.id}, parentRequirementId=${requirement.id}, title, description, and optionally provider, model, and reasoningEffort (low|medium|high|xhigh|max). Provider defaults to your provider.`,
+      'Use code-factory-cli for Code Factory control-plane actions. Run code-factory-cli --help or code-factory-cli <command> --help for usage; do not call the underlying HTTP endpoints directly.',
+      'Immediately after you create a GitHub pull request for this requirement, run code-factory-cli pr register. Run it again only when your own push or edit changes PR metadata such as its title, branches, or head SHA.',
+      'Agent Manager owns draft/open/closed/merged lifecycle synchronization through its GitHub reconciler. Never run the registration command merely to mirror a lifecycle event reported by a System message or observed on GitHub.',
+      'When you discover separate follow-up work, you may propose a linked TODO requirement with code-factory-cli requirement propose.',
     ].join('\n');
+  }
+
+  private buildRdEnvironment(requirement: RequirementWithSession): Readonly<Record<string, string>> {
+    return {
+      [CODE_FACTORY_API_URL]: this.#apiBaseUrl,
+      [CODE_FACTORY_REQUIREMENT_ID]: requirement.id,
+      [CODE_FACTORY_SESSION_ID]: requirement.session.id,
+      ...(this.#agentCliBinDirectory ? {
+        PATH: process.env.PATH
+          ? `${this.#agentCliBinDirectory}${delimiter}${process.env.PATH}`
+          : this.#agentCliBinDirectory,
+      } : {}),
+    };
   }
 
   private requireRequirement(id: string): RequirementWithSession {

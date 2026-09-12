@@ -33,7 +33,8 @@ flowchart LR
   M <--> DB[(SQLite)]
   M -->|Same cwd, long-lived resume| RD[Codex / Claude Code RD]
   M -->|Short-lived, no persistent session| RV[Codex / Claude Code Reviewer]
-  RD -->|Track PR / Propose requirement| API[Agent API]
+  RD -->|Register PR / Propose requirement| CLI[code-factory-cli]
+  CLI --> API[Agent API]
   API --> M
   RV -->|GitHub inline comments| GH[GitHub PR]
   GH -->|Poll status, comments, reviews, CI| T[PR Agent Trigger]
@@ -43,7 +44,7 @@ flowchart LR
 
 At startup, Agent Manager fixes the workspace to `realpath(process.cwd())`. Every RD and Reviewer child process uses that directory. Codex and Claude Code discover AGENTS.md, CLAUDE.md, Skills, and configuration according to their native directory rules.
 
-Agent Manager adds only a Code Factory protocol instruction containing the current Requirement ID, Session ID, and local Agent API. It does not copy or replace the project’s own instructions or Skills.
+Agent Manager adds only Code Factory behavioral instructions that identify the relevant `code-factory-cli` commands. It places a private CLI launcher on the RD process's `PATH` and injects `CODE_FACTORY_API_URL`, `CODE_FACTORY_REQUIREMENT_ID`, and `CODE_FACTORY_SESSION_ID`; HTTP paths and payload schemas remain in CLI help instead of the model prompt. It does not copy or replace the project’s own instructions or Skills.
 
 For example:
 
@@ -148,7 +149,7 @@ New review activity is appended as a Reviewer message. PR status and CI failures
 
 Observation baselines and trigger-scoped receipts are persisted in SQLite. This prevents duplicate delivery across polling cycles and Agent Manager restarts. When an older PR is first adopted, existing comments and CI results form the baseline instead of being replayed, while a stale stored PR status is corrected immediately. `--pr-reconcile-interval SECONDS` changes the interval; `0` disables polling.
 
-GitHub and the PR reconciler exclusively advance PR lifecycle state. The RD Agent registers a PR after creating it and may refresh metadata when its own push or edit changes the head SHA, title, or branches, but the Agent API cannot change `draft/open/closed/merged` for an existing PR. Reconciler status messages explicitly say that the state is already persisted, so the RD Agent must not mirror the event.
+GitHub and the PR reconciler exclusively advance PR lifecycle state. The RD Agent uses `code-factory-cli pr register` after creating a PR and may run it again when its own push or edit changes the head SHA, title, or branches, but the underlying Agent API cannot change `draft/open/closed/merged` for an existing PR. Reconciler status messages explicitly say that the state is already persisted, so the RD Agent must not mirror the event.
 
 ## 6. State Machines
 

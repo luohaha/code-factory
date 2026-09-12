@@ -4,7 +4,8 @@
   "description": "Workspace-scoped manager for long-running Codex and Claude Code development sessions.",
   "type": "module",
   "bin": {
-    "code-factory-agent-manager": "dist/cli.js"
+    "code-factory-agent-manager": "dist/cli.js",
+    "code-factory-cli": "dist/code-factory-cli-main.js"
   },
   "files": [
     "dist",

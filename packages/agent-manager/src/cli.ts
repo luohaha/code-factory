@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 import { AgentManager } from './agent-manager.js';
 import { isLogLevel } from './logger.js';
@@ -40,12 +41,21 @@ const logMaxSize = logMaxSizeOption ?? process.env.CODE_FACTORY_LOG_MAX_SIZE;
 const logMaxFilesOption = option('--log-max-files');
 if (process.argv.includes('--log-max-files') && logMaxFilesOption === undefined) usage();
 const logMaxFiles = logMaxFilesOption ?? process.env.CODE_FACTORY_LOG_MAX_FILES;
+const sourceExecution = import.meta.url.endsWith('.ts');
+const agentCliEntrypoint = fileURLToPath(new URL(
+  sourceExecution ? './code-factory-cli-main.ts' : './code-factory-cli-main.js',
+  import.meta.url,
+));
 const manager = new AgentManager({
   ...(databasePath ? { databasePath } : {}),
   logLevel,
   ...(logFilePath ? { logFilePath } : {}),
   ...(logMaxSize ? { logMaxSize } : {}),
   ...(logMaxFiles ? { logMaxFiles } : {}),
+  agentCliInvocation: {
+    command: process.execPath,
+    args: [...(sourceExecution ? process.execArgv : []), agentCliEntrypoint],
+  },
 });
 const logger = manager.logger;
 const server = createAgentManagerServer(manager, {
