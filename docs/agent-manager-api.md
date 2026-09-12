@@ -12,7 +12,7 @@ Agent Manager listens on 127.0.0.1:4310 by default. Its API base URL is:
 http://127.0.0.1:4310/api
 ~~~
 
-By default, Agent Manager uses the authenticated local GitHub CLI every 30 seconds to synchronize state, comments, reviews, inline review comments, and CI failures for Draft and Open PRs. Use --pr-reconcile-interval SECONDS to change the interval or 0 to disable polling. Reconciliation messages are exposed and delivered through the Requirement conversation and SSE endpoints documented here.
+By default, Agent Manager uses the authenticated local GitHub CLI every 30 seconds to synchronize state, comments, reviews, inline review comments, CI failures, and merge conflicts for Draft and Open PRs. Use --pr-reconcile-interval SECONDS to change the interval or 0 to disable polling. Reconciliation messages are exposed and delivered through the Requirement conversation and SSE endpoints documented here.
 
 Check the service and bound workspace first:
 

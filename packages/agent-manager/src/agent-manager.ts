@@ -12,6 +12,13 @@ import { GhCliGitHubClient, type GitHubClient } from './github-client.js';
 import { createFileLogger, type Logger, type LogLevel } from './logger.js';
 import { HeadlessProcessRunner, type AgentProcessRunner, type ProcessRunRequest } from './process-runner.js';
 import { PullRequestReconciler } from './pull-request-reconciler.js';
+import {
+  PullRequestCiFailureTrigger,
+  PullRequestCommentTrigger,
+  PullRequestConflictTrigger,
+  PullRequestStatusTrigger,
+  type PullRequestSnapshotTrigger,
+} from './pull-request-triggers.js';
 import { SqliteAgentManagerStore } from './sqlite-store.js';
 import type { AgentManagerStore } from './store.js';
 import { StoreConflictError, StoreNotFoundError } from './store.js';
@@ -82,6 +89,7 @@ export class AgentManager extends EventEmitter {
   readonly #activeRdRuns = new Map<string, { runId: string; controller: AbortController }>();
   readonly #agentTriggers = new Map<string, AgentTrigger>();
   readonly #pullRequestReconciler: PullRequestReconciler;
+  readonly #pullRequestTriggers: readonly PullRequestSnapshotTrigger[];
   #apiBaseUrl = 'http://127.0.0.1:4310/api';
   #closed = false;
   #closePromise: Promise<void> | null = null;
@@ -115,6 +123,12 @@ export class AgentManager extends EventEmitter {
       },
       isClosed: () => this.#closed,
     });
+    this.#pullRequestTriggers = [
+      new PullRequestStatusTrigger(this.#pullRequestReconciler),
+      new PullRequestCommentTrigger(this.#pullRequestReconciler),
+      new PullRequestCiFailureTrigger(this.#pullRequestReconciler),
+      new PullRequestConflictTrigger(this.#pullRequestReconciler),
+    ];
     const reconciled = this.#store.reconcileInterruptedRuns(new Date().toISOString());
     if (reconciled.runIds.length > 0) {
       this.logger.warn('Interrupted runs reconciled', {
@@ -138,6 +152,7 @@ export class AgentManager extends EventEmitter {
     if (this.#closePromise) return this.#closePromise;
     if (this.#closed) return Promise.resolve();
     this.#closed = true;
+    this.#pullRequestReconciler.stop();
     for (const trigger of this.#agentTriggers.values()) {
       try {
         trigger.stop();
@@ -160,13 +175,37 @@ export class AgentManager extends EventEmitter {
     if (!Number.isFinite(intervalMs) || intervalMs < 1_000) {
       throw new RangeError('Pull request reconcile interval must be at least 1000ms');
     }
-    if (this.#agentTriggers.has(this.#pullRequestReconciler.id)) return;
-    this.#pullRequestReconciler.setInterval(intervalMs);
-    this.startAgentTrigger(this.#pullRequestReconciler);
+    for (const trigger of this.#pullRequestTriggers) {
+      const current = this.#agentTriggers.get(trigger.id);
+      if (current && current !== trigger) {
+        throw new StoreConflictError(`Agent trigger ${trigger.id} is already running`);
+      }
+    }
+    if (this.#pullRequestReconciler.isRunning
+      && this.#pullRequestTriggers.every((trigger) => this.#agentTriggers.get(trigger.id) === trigger)) return;
+
+    const wasRunning = this.#pullRequestReconciler.isRunning;
+    if (!wasRunning) this.#pullRequestReconciler.setInterval(intervalMs);
+    const started: string[] = [];
+    try {
+      for (const trigger of this.#pullRequestTriggers) {
+        if (this.#agentTriggers.get(trigger.id) === trigger) continue;
+        this.startAgentTrigger(trigger);
+        started.push(trigger.id);
+      }
+      this.#pullRequestReconciler.start();
+    } catch (error) {
+      for (const triggerId of started) this.stopAgentTrigger(triggerId);
+      if (!wasRunning) this.#pullRequestReconciler.stop();
+      throw error;
+    }
   }
 
   async reconcilePullRequests(): Promise<void> {
-    await this.#pullRequestReconciler.reconcile(this.triggerContext(this.#pullRequestReconciler));
+    await this.#pullRequestReconciler.reconcile(this.#pullRequestTriggers.map((trigger) => ({
+      trigger,
+      context: this.triggerContext(trigger),
+    })));
   }
 
   /** Starts a pluggable source that can forward external messages to RD Agents. */
