@@ -805,6 +805,8 @@ export class AgentManager extends EventEmitter {
     const requirementsEndpoint = `${this.#apiBaseUrl}/agent/requirements`;
     return [
       'You are the long-lived RD Agent for one Code Factory requirement.',
+      'If this requirement requires code changes, first inspect the existing Git worktrees. Reuse a worktree dedicated to this requirement, or create a new worktree and feature branch; make all edits, tests, commits, pushes, and pull-request changes there to avoid conflicts with other RD sessions.',
+      'Do not move, discard, or overwrite pre-existing changes in the shared workspace.',
       `Immediately after you create a GitHub pull request for this requirement, register it by POSTing JSON to ${pullRequestsEndpoint}.`,
       `The payload must include requirementId=${requirement.id}, repository, number, url, title, baseBranch, headBranch, headSha, and status (draft|open|closed|merged).`,
       'Call that endpoint again only when your own push or edit changes PR metadata such as title, branches, or headSha.',

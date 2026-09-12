@@ -72,6 +72,10 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
       value.includes('Agent Manager owns draft/open/closed/merged lifecycle synchronization')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
+      value.includes('Reuse a worktree dedicated to this requirement')));
+    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
+      value.includes('Do not move, discard, or overwrite pre-existing changes')));
+    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
       value.includes('http://127.0.0.1:4310/api/agent/pull-requests')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
       value.includes('http://127.0.0.1:4310/api/agent/requirements')));

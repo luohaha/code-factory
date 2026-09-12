@@ -196,4 +196,4 @@ npm run build
 
 The current implementation includes the Agent Manager core, SQLite Store, HTTP/SSE API, Codex and Claude Code adapters, conversation-driven RD continuation, PR tracking, manually triggered Reviewer runs, and the bundled Web dashboard.
 
-Webhook-based synchronization, stale-review indicators after a head-SHA change, local access tokens, detailed tool-execution logs, and optional worktree isolation remain future work. Concurrent RD sessions currently share one working directory and can conflict on files or Git state.
+Webhook-based synchronization, stale-review indicators after a head-SHA change, local access tokens, detailed tool-execution logs, and Manager-enforced worktree isolation remain future work. RD Agents are instructed to create or reuse a Requirement-specific Git worktree before changing code, but Agent Manager does not provision or enforce that isolation; every child process still starts in the shared Manager workspace.

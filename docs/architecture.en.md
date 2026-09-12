@@ -51,7 +51,7 @@ cd ~/starrocks
 npx @code-factory/agent-manager start
 ~~~
 
-All agents launched by that process use `~/starrocks` as their working directory.
+All agents launched by that process initially use `~/starrocks` as their working directory. Before changing code, an RD Agent is instructed to create or reuse a Git worktree dedicated to its Requirement and perform the work there. Agent Manager does not currently provision or enforce that isolation.
 
 Every headless RD and Reviewer invocation skips interactive approval and CLI sandbox checks. It therefore inherits the launching user's full filesystem, network, and command-execution permissions. Agent Manager must only be started in a trusted workspace. Reviewers remain behaviorally read-only through their task instructions; this is not an operating-system security boundary.
 
@@ -174,7 +174,7 @@ DRAFT → OPEN → MERGED
 - RD Sessions belonging to different Requirements may run concurrently.
 - Reviewer is an independent, behaviorally read-only, short-lived task and may run concurrently with RD.
 - One PR may have at most one active ReviewRequest.
-- All processes share the Agent Manager working directory by default. Concurrent RD Sessions can therefore conflict on files or Git state. The MVP exposes this risk instead of hiding it behind a global lock. Optional worktree isolation can be added later.
+- All processes start in the Agent Manager working directory. RD developer instructions require code-changing work to create or reuse a Requirement-specific Git worktree, but Agent Manager does not provision or enforce that isolation. Concurrent RD Sessions can still conflict on files or Git state if the instruction is not followed.
 
 ## 8. Persistence
 
@@ -205,4 +205,4 @@ Running `npx @code-factory/agent-manager start` serves the API, SSE stream, and 
 
 ## 10. Current Boundary
 
-The Reviewer is instructed to use the GitHub CLI/API to publish inline comments, but structured verification that every expected comment was posted is not implemented yet. Reconciliation currently uses local `gh` polling; GitHub webhook synchronization, stale-review indicators after head-SHA changes, access tokens, and optional worktree isolation remain future work.
+The Reviewer is instructed to use the GitHub CLI/API to publish inline comments, but structured verification that every expected comment was posted is not implemented yet. Reconciliation currently uses local `gh` polling; GitHub webhook synchronization, stale-review indicators after head-SHA changes, access tokens, and Manager-enforced worktree isolation remain future work.

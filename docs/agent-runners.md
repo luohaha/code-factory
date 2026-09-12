@@ -15,6 +15,7 @@ Agent Manager supports the local `codex` and `claude` CLIs. Every invocation fol
 - one RD AgentSession may have only one active Run, while Sessions for different Requirements may run concurrently;
 - Human or Reviewer messages received during an RD Run are appended to the Requirement conversation without interrupting it. Only an explicit human interrupt stops the current Run, after which queued messages continue in the same native Session;
 - Agent Manager injects the local Agent API contract into RD Agents; project instructions and Skills are still loaded natively from the working directory.
+- Before changing code, RD Agents are instructed to create or reuse a Git worktree dedicated to the Requirement and leave pre-existing shared-workspace changes untouched. This is a behavioral instruction: every child process still starts in the Agent Manager workspace, and Agent Manager does not provision or enforce the worktree.
 - each invocation may include an explicit model and reasoning effort (`low | medium | high | xhigh | max`); omitted values continue to use the CLI configuration.
 
 ## 2. Codex
