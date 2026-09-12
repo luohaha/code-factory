@@ -663,10 +663,12 @@ function ManagerConfigurationDialog({
   configuration,
   disabled,
   onSave,
+  workspace,
 }: {
   configuration: AgentManagerConfigurationSnapshot | null;
   disabled: boolean;
   onSave: (values: Partial<AgentManagerConfiguration>) => Promise<void>;
+  workspace: WorkspaceDto | null;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -764,11 +766,11 @@ function ManagerConfigurationDialog({
                   </Field>
                   <Field className="sm:col-span-2">
                     <FieldLabel htmlFor="configuration-database">{t('Database path')}</FieldLabel>
-                    <Input id="configuration-database" value={values.databasePath ?? ''} onChange={(event) => update('databasePath', event.target.value.trim() ? event.target.value : null)} placeholder={t('Use workspace default')} />
+                    <Input id="configuration-database" value={values.databasePath ?? ''} onChange={(event) => update('databasePath', event.target.value.trim() ? event.target.value : null)} placeholder={workspace?.databasePath ?? t('Use workspace default')} />
                   </Field>
                   <Field className="sm:col-span-2">
                     <FieldLabel htmlFor="configuration-log-file">{t('Log file path')}</FieldLabel>
-                    <Input id="configuration-log-file" value={values.logFilePath ?? ''} onChange={(event) => update('logFilePath', event.target.value.trim() ? event.target.value : null)} placeholder={t('Use workspace default')} />
+                    <Input id="configuration-log-file" value={values.logFilePath ?? ''} onChange={(event) => update('logFilePath', event.target.value.trim() ? event.target.value : null)} placeholder={workspace?.logFilePath ?? t('Use workspace default')} />
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="configuration-log-size">{t('Log rotation size')}</FieldLabel>
@@ -1379,7 +1381,7 @@ function Dashboard() {
             </div>
             <Button variant="outline" size="sm" aria-label={t('Switch language')} onClick={() => setLocale(locale === 'en' ? 'zh-CN' : 'en')}><Languages data-icon="inline-start" />{locale === 'en' ? t('Chinese') : t('English')}</Button>
             <Button variant="outline" size="icon" aria-label={t('Refresh')} disabled={loading} onClick={() => void reload(true)}><RefreshCw className={loading ? 'animate-spin' : ''} /></Button>
-            <ManagerConfigurationDialog configuration={configuration} disabled={connection !== 'online'} onSave={saveConfiguration} />
+            <ManagerConfigurationDialog configuration={configuration} disabled={connection !== 'online'} onSave={saveConfiguration} workspace={workspace} />
             <ConnectionDialog apiUrl={apiUrl} onConnect={connect} />
             <NewRequirementDialog disabled={connection !== 'online'} onCreate={createRequirement} />
           </div>
