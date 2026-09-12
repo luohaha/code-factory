@@ -465,7 +465,12 @@ The Reviewer runs in the background. The request does not wait for completion. R
 
 ## 7. RD Agent endpoints
 
-These endpoints are called by RD Agents launched by Agent Manager. Their developer/system instructions contain the API base URL, current Requirement ID, and Session ID.
+These endpoints are the transport used by `code-factory-cli` and other trusted local integrations. RD Agents launched by Agent Manager should use the CLI rather than construct HTTP requests: their instructions name the relevant commands, while Agent Manager injects the API URL, current Requirement ID, and Session ID through the environment.
+
+~~~bash
+code-factory-cli pr register --help
+code-factory-cli requirement propose --help
+~~~
 
 ### POST /api/agent/pull-requests
 

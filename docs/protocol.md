@@ -66,7 +66,7 @@ Only Open PRs can be reviewed. Each request captures the current head SHA, and a
 
 ## 3. RD Agent endpoints
 
-RD developer/system instructions contain the API base URL, Requirement ID, and Session ID.
+RD developer/system instructions name the relevant `code-factory-cli` commands rather than embedding this HTTP schema. Agent Manager injects the API base URL, Requirement ID, and Session ID as CLI environment context. The commands below remain the canonical transport protocol used by the CLI and other integrations.
 
 Register or update a PR:
 

@@ -72,7 +72,7 @@ export class PullRequestStatusTrigger extends PullRequestAgentTrigger {
         `${pullRequest.status} -> ${snapshot.status}`,
         `PR: ${snapshot.url}`,
         `Head: ${snapshot.headSha}`,
-        'Agent Manager has already persisted this lifecycle state from GitHub. Do not call /api/agent/pull-requests to mirror this event.',
+        'Agent Manager has already persisted this lifecycle state from GitHub. Do not run code-factory-cli pr register to mirror this event.',
       ].join('\n'),
       metadata: { pullRequestId: pullRequest.id },
     });
