@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
 import { AgentManager } from '../src/agent-manager.ts';
+import { DEFAULT_AGENT_MANAGER_CONFIGURATION } from '../src/configuration.ts';
 import { createLogger } from '../src/logger.ts';
 import type { AgentProcessRunner, ProcessRunRequest } from '../src/process-runner.ts';
 import { createAgentManagerServer } from '../src/server.ts';
@@ -37,6 +38,64 @@ class InterruptibleWaitingRunner implements AgentProcessRunner {
     });
   }
 }
+
+test('HTTP API reads, validates, persists, and applies Agent Manager configuration', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-config-api-'));
+  const configurationFilePath = join(directory, 'config.json');
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    logger: createLogger({ level: 'info', stdout: { write: () => undefined }, stderr: { write: () => undefined } }),
+    configuration: { ...DEFAULT_AGENT_MANAGER_CONFIGURATION, pullRequestReconcileIntervalSeconds: 0 },
+    configurationFilePath,
+  });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const initialResponse = await fetch(`${baseUrl}/api/configuration`);
+    assert.equal(initialResponse.status, 200);
+    const initial = await initialResponse.json() as { path: string; values: { port: number }; restartRequired: boolean };
+    assert.equal(initial.path, configurationFilePath);
+    assert.equal(initial.values.port, 4310);
+    assert.equal(initial.restartRequired, false);
+
+    const updateResponse = await fetch(`${baseUrl}/api/configuration`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ port: 8080, logLevel: 'debug' }),
+    });
+    assert.equal(updateResponse.status, 200);
+    const updated = await updateResponse.json() as {
+      values: { port: number; logLevel: string };
+      restartRequired: boolean;
+      restartRequiredFields: string[];
+    };
+    assert.equal(updated.values.port, 8080);
+    assert.equal(updated.values.logLevel, 'debug');
+    assert.equal(updated.restartRequired, true);
+    assert.deepEqual(updated.restartRequiredFields, ['port']);
+    assert.equal(manager.logger.level, 'debug');
+    assert.deepEqual(JSON.parse(readFileSync(configurationFilePath, 'utf8')), updated.values);
+
+    const invalidResponse = await fetch(`${baseUrl}/api/configuration`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pullRequestReconcileIntervalSeconds: -1 }),
+    });
+    assert.equal(invalidResponse.status, 400);
+    assert.equal(manager.getConfiguration().values.pullRequestReconcileIntervalSeconds, 0);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test('HTTP API rejects unsupported reasoning effort values', async () => {
   const manager = new AgentManager({

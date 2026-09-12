@@ -10,6 +10,7 @@ export type LogContext = Readonly<Record<string, unknown>>;
 
 export interface Logger {
   readonly level: LogLevel;
+  setLevel?(level: LogLevel): void;
   debug(message: string, context?: LogContext): void;
   info(message: string, context?: LogContext): void;
   warn(message: string, context?: LogContext): void;
@@ -56,44 +57,46 @@ export function isLogLevel(value: unknown): value is LogLevel {
 }
 
 export function createLogger(options: LoggerOptions = {}): Logger {
-  const level = options.level ?? 'info';
-  if (!isLogLevel(level)) throw new TypeError(`Unsupported log level: ${String(level)}`);
+  const initialLevel = options.level ?? 'info';
+  if (!isLogLevel(initialLevel)) throw new TypeError(`Unsupported log level: ${String(initialLevel)}`);
   const stdout = options.stdout ?? process.stdout;
   const stderr = options.stderr ?? process.stderr;
   const now = options.now ?? (() => new Date());
-  const baseContext = cleanContext(options.context ?? {});
+  const state = { level: initialLevel };
 
-  const log = (entryLevel: Exclude<LogLevel, 'silent'>, message: string, context?: LogContext): void => {
-    if (priorities[entryLevel] < priorities[level]) return;
-    try {
-      const record = {
-        timestamp: now().toISOString(),
-        level: entryLevel,
-        message,
-        ...baseContext,
-        ...cleanContext(context ?? {}),
-      };
-      const line = `${safeStringify(record)}\n`;
-      (entryLevel === 'warn' || entryLevel === 'error' ? stderr : stdout).write(line);
-    } catch {
-      // Diagnostic output must never interrupt Agent Manager work.
-    }
+  const makeLogger = (baseContext: Record<string, unknown>): Logger => {
+    const log = (entryLevel: Exclude<LogLevel, 'silent'>, message: string, context?: LogContext): void => {
+      if (priorities[entryLevel] < priorities[state.level]) return;
+      try {
+        const record = {
+          timestamp: now().toISOString(),
+          level: entryLevel,
+          message,
+          ...baseContext,
+          ...cleanContext(context ?? {}),
+        };
+        const line = `${safeStringify(record)}\n`;
+        (entryLevel === 'warn' || entryLevel === 'error' ? stderr : stdout).write(line);
+      } catch {
+        // Diagnostic output must never interrupt Agent Manager work.
+      }
+    };
+
+    return {
+      get level() { return state.level; },
+      setLevel: (level) => {
+        if (!isLogLevel(level)) throw new TypeError(`Unsupported log level: ${String(level)}`);
+        state.level = level;
+      },
+      debug: (message, context) => log('debug', message, context),
+      info: (message, context) => log('info', message, context),
+      warn: (message, context) => log('warn', message, context),
+      error: (message, context) => log('error', message, context),
+      child: (context) => makeLogger({ ...baseContext, ...cleanContext(context) }),
+    };
   };
 
-  return {
-    level,
-    debug: (message, context) => log('debug', message, context),
-    info: (message, context) => log('info', message, context),
-    warn: (message, context) => log('warn', message, context),
-    error: (message, context) => log('error', message, context),
-    child: (context) => createLogger({
-      level,
-      context: { ...baseContext, ...cleanContext(context) },
-      stdout,
-      stderr,
-      now,
-    }),
-  };
+  return makeLogger(cleanContext(options.context ?? {}));
 }
 
 export function createFileLogger(options: FileLoggerOptions): Logger {
@@ -144,7 +147,7 @@ export function createFileLogger(options: FileLoggerOptions): Logger {
     });
     return closePromise;
   };
-  return wrapWinstonLogger(winstonLogger, level, cleanContext(options.context ?? {}), close);
+  return wrapWinstonLogger(winstonLogger, { level }, cleanContext(options.context ?? {}), close);
 }
 
 export const silentLogger: Logger = createLogger({
@@ -159,12 +162,12 @@ function cleanContext(context: LogContext): Record<string, unknown> {
 
 function wrapWinstonLogger(
   target: winston.Logger,
-  level: LogLevel,
+  state: { level: LogLevel },
   baseContext: Record<string, unknown>,
   closeTarget?: () => Promise<void>,
 ): Logger {
   const log = (entryLevel: Exclude<LogLevel, 'silent'>, message: string, context?: LogContext): void => {
-    if (priorities[entryLevel] < priorities[level]) return;
+    if (priorities[entryLevel] < priorities[state.level]) return;
     try {
       target.log({
         ...baseContext,
@@ -177,14 +180,20 @@ function wrapWinstonLogger(
     }
   };
   return {
-    level,
+    get level() { return state.level; },
+    setLevel: (level) => {
+      if (!isLogLevel(level)) throw new TypeError(`Unsupported log level: ${String(level)}`);
+      state.level = level;
+      target.level = level === 'silent' ? 'info' : level;
+      target.silent = level === 'silent';
+    },
     debug: (message, context) => log('debug', message, context),
     info: (message, context) => log('info', message, context),
     warn: (message, context) => log('warn', message, context),
     error: (message, context) => log('error', message, context),
     child: (context) => wrapWinstonLogger(
       target,
-      level,
+      state,
       { ...baseContext, ...cleanContext(context) },
       undefined,
     ),

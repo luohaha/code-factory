@@ -12,7 +12,7 @@ Agent Manager listens on 127.0.0.1:4310 by default. Its API base URL is:
 http://127.0.0.1:4310/api
 ~~~
 
-By default, Agent Manager uses the authenticated local GitHub CLI every 30 seconds to synchronize state, comments, reviews, inline review comments, and CI failures for Draft and Open PRs. Use --pr-reconcile-interval SECONDS to change the interval or 0 to disable polling. Reconciliation messages are exposed and delivered through the Requirement conversation and SSE endpoints documented here.
+By default, Agent Manager uses the authenticated local GitHub CLI every 30 seconds to synchronize state, comments, reviews, inline review comments, and CI failures for Draft and Open PRs. Change `pullRequestReconcileIntervalSeconds` through the configuration API or dashboard; use `0` to disable polling. Reconciliation messages are exposed and delivered through the Requirement conversation and SSE endpoints documented here.
 
 Check the service and bound workspace first:
 
@@ -27,9 +27,9 @@ curl http://127.0.0.1:4310/api/health
 }
 ~~~
 
-Requests and responses use JSON except for attachment uploads and SSE. JSON POST bodies are limited to 1 MB. Attachment uploads use a raw binary body and are limited to 20 MB per file. The API currently has no version prefix.
+Requests and responses use JSON except for attachment uploads and SSE. JSON request bodies are limited to 1 MB. Attachment uploads use a raw binary body and are limited to 20 MB per file. The API currently has no version prefix.
 
-The service listens only on the loopback interface by default and currently has no authentication. Assess the risk before exposing it through --host. Use --allow-origin <origin> to configure one CORS origin.
+The service listens only on the loopback interface by default and currently has no authentication. Assess the risk before exposing it. Changes to `host`, `port`, and `allowedOrigin` are persisted through the configuration API and require a restart.
 
 ## 2. Endpoint summary
 
@@ -37,6 +37,8 @@ The service listens only on the loopback interface by default and currently has 
 | --- | --- | --- |
 | GET | /api/health | Check service health |
 | GET | /api/workspace | Read the bound workspace and data paths |
+| GET | /api/configuration | Read desired Agent Manager configuration and restart status |
+| PATCH | /api/configuration | Validate, persist, and apply configuration changes |
 | GET | /api/requirements | List Requirements with their RD Sessions |
 | POST | /api/requirements | Create a Requirement and RD Session |
 | POST | /api/requirements/:id/start | Start or retry a Requirement |
@@ -236,6 +238,42 @@ Success: 200 OK
 ~~~
 
 logFilePath is a stable symlink to the active log; physical files rotate by date and size.
+
+### GET /api/configuration
+
+Returns the configuration file path, desired values, and any fields saved for the next restart.
+
+~~~json
+{
+  "path": "/home/user/.code-factory/workspaces/7a60b5f8c3d94945/config.json",
+  "values": {
+    "host": "127.0.0.1",
+    "port": 4310,
+    "allowedOrigin": "http://localhost:3000",
+    "openDashboard": false,
+    "databasePath": null,
+    "pullRequestReconcileIntervalSeconds": 30,
+    "logLevel": "info",
+    "logFilePath": null,
+    "logMaxSize": "20m",
+    "logMaxFiles": "14d"
+  },
+  "restartRequired": false,
+  "restartRequiredFields": []
+}
+~~~
+
+### PATCH /api/configuration
+
+Accepts any subset of `values`. The complete validated document is atomically written to the configuration file. `pullRequestReconcileIntervalSeconds` and `logLevel` apply immediately. All other fields are persisted, returned in `restartRequiredFields`, and apply on restart.
+
+~~~bash
+curl -X PATCH http://127.0.0.1:4310/api/configuration \
+  -H 'Content-Type: application/json' \
+  -d '{"pullRequestReconcileIntervalSeconds":10,"logLevel":"debug"}'
+~~~
+
+`port` must be an integer from 1 to 65535. The reconcile interval must be a non-negative integer. `logLevel` accepts `debug`, `info`, `warn`, `error`, or `silent`. Paths and origins accept a non-empty string or `null`; a null database or log path selects its workspace default, while a null origin disables CORS. Unknown fields return 400 Bad Request.
 
 ### GET /api/requirements
 
@@ -582,6 +620,7 @@ Current event types and primary payloads:
 | run.timed_out | same as run.succeeded |
 | run.cancelled | same as run.succeeded |
 | manager.reconciled | runIds and requirementIds repaired at startup |
+| manager.configuration.updated | changedFields, restartRequired, restartRequiredFields |
 
 Clients should store the last successfully processed event ID and pass it as after when reconnecting. A missing or non-finite after value starts replay at 0. Each connection replays at most 200 existing events before continuing with live events.
 

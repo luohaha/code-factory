@@ -6,6 +6,7 @@ import { formatStartupBanner } from '../src/startup-banner.ts';
 test('startup banner always exposes workspace paths and service URLs', () => {
   assert.equal(formatStartupBanner({
     workspaceRoot: '/workspace/starrocks',
+    configurationFilePath: '/data/config.json',
     databasePath: '/data/factory.sqlite',
     logFilePath: '/data/logs/agent-manager.log',
     dashboardUrl: 'http://127.0.0.1:4310/',
@@ -14,6 +15,7 @@ test('startup banner always exposes workspace paths and service URLs', () => {
   }), [
     'Code Factory Agent Manager started',
     'Workspace: /workspace/starrocks',
+    'Config:    /data/config.json',
     'Database:  /data/factory.sqlite',
     'Logs:      /data/logs/agent-manager.log',
     'Dashboard: http://127.0.0.1:4310/',
@@ -26,6 +28,7 @@ test('startup banner always exposes workspace paths and service URLs', () => {
 test('startup banner reports disabled reconciliation and an injected logger', () => {
   const banner = formatStartupBanner({
     workspaceRoot: '/workspace/repo',
+    configurationFilePath: '/data/config.json',
     databasePath: ':memory:',
     logFilePath: null,
     dashboardUrl: 'http://127.0.0.1:9000/',

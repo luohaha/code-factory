@@ -3,6 +3,7 @@ export * from './adapters/codex.js';
 export * from './adapters/types.js';
 export * from './agent-trigger.js';
 export * from './agent-manager.js';
+export * from './configuration.js';
 export * from './dashboard-server.js';
 export * from './logger.js';
 export * from './process-runner.js';

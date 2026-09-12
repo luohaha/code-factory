@@ -47,6 +47,8 @@ node /path/to/code-factory/packages/agent-manager/dist/cli.js start --open
 
 The startup directory becomes the managed workspace and the working directory for every RD and Reviewer agent. By default, the dashboard is available at [http://127.0.0.1:4310](http://127.0.0.1:4310).
 
+On first start, Agent Manager creates a workspace-scoped configuration file at `~/.code-factory/workspaces/<workspace-hash>/config.json`. The dashboard settings dialog can edit it. PR reconciliation intervals and log levels are applied immediately; network, storage, browser, and log-rotation changes are saved for the next restart.
+
 ### Choose a port
 
 Use `--port` followed by an integer from `1` to `65535`:
@@ -89,6 +91,7 @@ node /path/to/code-factory/packages/agent-manager/dist/cli.js start \
 
 | Option | Default | Description |
 | --- | --- | --- |
+| `--config PATH` | Workspace data directory | JSON configuration file path. |
 | `--host HOST` | `127.0.0.1` | HTTP listen address. |
 | `--port PORT` | `4310` | Dashboard, HTTP API, and SSE port (`1`–`65535`). |
 | `--open` | Off | Open the dashboard in the default browser after startup. |
@@ -99,6 +102,25 @@ node /path/to/code-factory/packages/agent-manager/dist/cli.js start \
 | `--log-file PATH` | Workspace log directory | Structured JSONL log destination. |
 | `--log-max-size SIZE` | `20m` | Rotate the active log after it reaches this size. |
 | `--log-max-files COUNT_OR_DAYS` | `14d` | Number of rotated logs or retention period. |
+
+Configuration file values are used by default. Command-line options remain available as one-process overrides for compatibility; logging environment variables take precedence over the file, and command-line options take precedence over both. Relative database and log paths are resolved from the managed workspace.
+
+~~~json
+{
+  "host": "127.0.0.1",
+  "port": 4310,
+  "allowedOrigin": "http://localhost:3000",
+  "openDashboard": false,
+  "databasePath": null,
+  "pullRequestReconcileIntervalSeconds": 30,
+  "logLevel": "info",
+  "logFilePath": null,
+  "logMaxSize": "20m",
+  "logMaxFiles": "14d"
+}
+~~~
+
+`databasePath` and `logFilePath` use the workspace defaults when set to `null`; `allowedOrigin: null` disables CORS headers. Set `pullRequestReconcileIntervalSeconds` to `0` to disable GitHub polling.
 
 When the npm package is published, the equivalent command will be:
 
@@ -143,7 +165,7 @@ The bundled dashboard provides three views:
 
 Opening a Requirement shows its description, linked PRs, run information, and unified Human/RD/Reviewer conversation. Messages support images and file attachments. New input can be queued while RD is running, or the current run can be interrupted so the same session handles the correction immediately.
 
-The dashboard supports English and Simplified Chinese, remembers the selected locale, and initially follows the browser language.
+The dashboard supports English and Simplified Chinese, remembers the selected locale, and initially follows the browser language. Its Agent Manager settings dialog persists workspace configuration and identifies changes that require a restart.
 
 The Web dashboard, HTTP API, and SSE event stream run in the same process and use the same port. No separate Web deployment is required.
 
@@ -152,12 +174,13 @@ The Web dashboard, HTTP API, and SSE event stream run in the same process and us
 Workspace data is stored outside the managed repository by default:
 
 ~~~text
+~/.code-factory/workspaces/<workspace-hash>/config.json
 ~/.code-factory/workspaces/<workspace-hash>/factory.sqlite
 ~/.code-factory/workspaces/<workspace-hash>/attachments/
 ~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log
 ~~~
 
-The CLI prints a startup banner containing the workspace, database, log path, dashboard URL, API URL, and PR reconciliation interval. Operational logs are written as structured JSONL and omit prompts, conversation bodies, and raw Agent output.
+The CLI prints a startup banner containing the workspace, configuration, database, log path, dashboard URL, API URL, and PR reconciliation interval. Operational logs are written as structured JSONL and omit prompts, conversation bodies, and raw Agent output.
 
 Follow the active log with:
 
@@ -165,7 +188,7 @@ Follow the active log with:
 tail -f ~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log
 ~~~
 
-Logging can also be configured with `CODE_FACTORY_LOG_LEVEL`, `CODE_FACTORY_LOG_FILE`, `CODE_FACTORY_LOG_MAX_SIZE`, and `CODE_FACTORY_LOG_MAX_FILES`. Command-line options take precedence over their environment-variable equivalents.
+Logging can also be configured with `CODE_FACTORY_LOG_LEVEL`, `CODE_FACTORY_LOG_FILE`, `CODE_FACTORY_LOG_MAX_SIZE`, and `CODE_FACTORY_LOG_MAX_FILES`. Command-line options take precedence over their environment-variable equivalents, which take precedence over configuration-file values.
 
 ## Security Model
 

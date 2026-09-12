@@ -109,7 +109,7 @@ By default, Agent Manager polls Draft and Open PRs every 30 seconds through the 
 - SQLite observation state tracks previous CI state, while Agent Trigger receipts deduplicate comments, state changes, and CI events across restarts;
 - the first observation of an existing PR establishes a baseline without replaying old comments or CI results, while still correcting stale PR state.
 
-Use `--pr-reconcile-interval SECONDS` to change the interval or `0` to disable polling. Reconciliation requires the launching user to be authenticated with `gh auth login`.
+Set `pullRequestReconcileIntervalSeconds` in the workspace configuration or dashboard to change the interval dynamically; `0` disables polling. The compatible `--pr-reconcile-interval SECONDS` launch override is also available. Reconciliation requires the launching user to be authenticated with `gh auth login`.
 
 ## 6. Recovery and failure
 
@@ -124,12 +124,12 @@ Use `--pr-reconcile-interval SECONDS` to change the interval or `0` to disable p
 
 Run Agent Manager only inside trusted workspaces. Every headless RD and Reviewer skips CLI approvals and sandbox checks, inheriting the launching user's filesystem, network, and command-execution permissions. The startup banner and log record this warning. Reviewer read-only behavior is enforced by instructions, not by an operating-system boundary.
 
-HTTP listens on `127.0.0.1` by default and permits the local dashboard origin `http://localhost:3000`. Use `--allow-origin` to override it. API clients cannot choose the child process working directory. Production hardening still requires a local access token, webhook signature validation, sensitive-field redaction, and a log-retention policy.
+HTTP listens on `127.0.0.1` by default and permits the local dashboard origin `http://localhost:3000`. Change `host` or `allowedOrigin` in the workspace configuration (or use the compatible CLI overrides) and restart to apply it. API clients cannot choose the child process working directory. Production hardening still requires a local access token, webhook signature validation, sensitive-field redaction, and a log-retention policy.
 
 ## 8. Runtime logs
 
-Agent Manager appends JSONL lifecycle logs for the manager, Requirements, Runs, PR reconciliation, and HTTP requests to `~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log`. The CLI always prints one startup banner containing the Workspace, Database, log path, Dashboard URL, API URL, and Reconciler interval; it otherwise emits no runtime logs to stdout or stderr. The default level is `info`. Configure it with `--log-level debug|info|warn|error|silent` or `CODE_FACTORY_LOG_LEVEL`, and configure the destination with `--log-file PATH` or `CODE_FACTORY_LOG_FILE`. Command-line values take precedence. Log files use mode `0600`.
+Agent Manager appends JSONL lifecycle logs for the manager, Requirements, Runs, PR reconciliation, and HTTP requests to `~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log`. The CLI always prints one startup banner containing the Workspace, configuration, Database, log path, Dashboard URL, API URL, and Reconciler interval; it otherwise emits no runtime logs to stdout or stderr. The default level is `info`. Configure it in `config.json`, with `CODE_FACTORY_LOG_LEVEL`, or with `--log-level`; later sources in that list take precedence. Log-level updates through the API apply immediately. Log destination and rotation changes apply after restart. Log files use mode `0600`.
 
-Logging uses `winston` and `winston-daily-rotate-file`. Files rotate by local date and after reaching 20 MB, with 14 days retained by default. `agent-manager.log` is a stable symlink to the current file. Use `--log-max-size SIZE` or `CODE_FACTORY_LOG_MAX_SIZE` to change the per-file limit, and `--log-max-files COUNT_OR_DAYS` or `CODE_FACTORY_LOG_MAX_FILES` to change retention.
+Logging uses `winston` and `winston-daily-rotate-file`. Files rotate by local date and after reaching 20 MB, with 14 days retained by default. `agent-manager.log` is a stable symlink to the current file. Set `logMaxSize` and `logMaxFiles` in the workspace configuration; the existing environment variables and CLI flags remain launch-time overrides.
 
 Logs contain only IDs, states, durations, and errors needed for diagnostics. They do not contain prompts, conversation bodies, or raw Agent stdout. Library users may inject a custom `Logger` to own the destination and policy.

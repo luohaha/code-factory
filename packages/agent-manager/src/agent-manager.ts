@@ -1,13 +1,22 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { ClaudeCodeAdapter } from './adapters/claude-code.js';
 import { CodexAdapter } from './adapters/codex.js';
 import type { AgentAdapter } from './adapters/types.js';
 import type { AgentTrigger, AgentTriggerContext, AgentTriggerMessage } from './agent-trigger.js';
+import {
+  DEFAULT_AGENT_MANAGER_CONFIGURATION,
+  DYNAMIC_CONFIGURATION_FIELDS,
+  defaultWorkspaceDataDirectory,
+  validateAgentManagerConfigurationPatch,
+  writeAgentManagerConfiguration,
+  type AgentManagerConfiguration,
+  type AgentManagerConfigurationPatch,
+  type AgentManagerConfigurationSnapshot,
+} from './configuration.js';
 import { GhCliGitHubClient, type GitHubClient } from './github-client.js';
 import { createFileLogger, type Logger, type LogLevel } from './logger.js';
 import { HeadlessProcessRunner, type AgentProcessRunner, type ProcessRunRequest } from './process-runner.js';
@@ -43,11 +52,12 @@ export interface AgentManagerOptions {
   logMaxFiles?: string | number;
   timeoutMs?: number;
   maxOutputBytes?: number;
+  configuration?: AgentManagerConfiguration;
+  configurationFilePath?: string;
 }
 
 export function defaultDatabasePath(workspaceRoot: string): string {
-  const key = createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 16);
-  return join(homedir(), '.code-factory', 'workspaces', key, 'factory.sqlite');
+  return join(defaultWorkspaceDataDirectory(workspaceRoot), 'factory.sqlite');
 }
 
 export function defaultLogFilePath(databasePath: string): string {
@@ -82,6 +92,10 @@ export class AgentManager extends EventEmitter {
   readonly #activeRdRuns = new Map<string, { runId: string; controller: AbortController }>();
   readonly #agentTriggers = new Map<string, AgentTrigger>();
   readonly #pullRequestReconciler: PullRequestReconciler;
+  readonly #configurationFilePath: string | null;
+  readonly #startupConfiguration: AgentManagerConfiguration;
+  #configuration: AgentManagerConfiguration;
+  #pullRequestReconcileIntervalSeconds: number | null = null;
   #apiBaseUrl = 'http://127.0.0.1:4310/api';
   #closed = false;
   #closePromise: Promise<void> | null = null;
@@ -89,17 +103,30 @@ export class AgentManager extends EventEmitter {
   constructor(options: AgentManagerOptions = {}) {
     super();
     this.workspaceRoot = realpathSync(options.workspaceRoot ?? process.cwd());
-    this.databasePath = options.databasePath ?? defaultDatabasePath(this.workspaceRoot);
+    const configuredLogLevel = options.configuration?.logLevel ?? options.logLevel ?? options.logger?.level
+      ?? DEFAULT_AGENT_MANAGER_CONFIGURATION.logLevel;
+    this.#configuration = {
+      ...DEFAULT_AGENT_MANAGER_CONFIGURATION,
+      ...options.configuration,
+      ...(options.databasePath === undefined ? {} : { databasePath: options.databasePath }),
+      ...(options.logFilePath === undefined ? {} : { logFilePath: options.logFilePath }),
+      logLevel: configuredLogLevel,
+      ...(options.logMaxSize === undefined ? {} : { logMaxSize: options.logMaxSize }),
+      ...(options.logMaxFiles === undefined ? {} : { logMaxFiles: options.logMaxFiles }),
+    };
+    this.#startupConfiguration = { ...this.#configuration };
+    this.#configurationFilePath = options.configurationFilePath ? resolve(options.configurationFilePath) : null;
+    this.databasePath = options.databasePath ?? this.#configuration.databasePath ?? defaultDatabasePath(this.workspaceRoot);
     this.attachmentDirectory = options.attachmentDirectory ?? join(dirname(this.databasePath), 'attachments');
     this.logFilePath = options.logger
       ? null
-      : resolve(options.logFilePath ?? defaultLogFilePath(this.databasePath));
+      : resolve(options.logFilePath ?? this.#configuration.logFilePath ?? defaultLogFilePath(this.databasePath));
     this.logger = options.logger ?? createFileLogger({
       filePath: this.logFilePath!,
-      level: options.logLevel ?? 'info',
+      level: configuredLogLevel,
       context: { component: 'agent-manager' },
-      ...(options.logMaxSize === undefined ? {} : { maxSize: options.logMaxSize }),
-      ...(options.logMaxFiles === undefined ? {} : { maxFiles: options.logMaxFiles }),
+      maxSize: this.#configuration.logMaxSize,
+      maxFiles: this.#configuration.logMaxFiles,
     });
     this.#store = options.store ?? new SqliteAgentManagerStore(this.databasePath);
     this.#runner = options.runner ?? new HeadlessProcessRunner();
@@ -134,6 +161,57 @@ export class AgentManager extends EventEmitter {
     this.#apiBaseUrl = value.replace(/\/$/, '');
   }
 
+  getConfiguration(): AgentManagerConfigurationSnapshot {
+    const restartRequiredFields = (Object.keys(this.#configuration) as Array<keyof AgentManagerConfiguration>)
+      .filter((field) => !DYNAMIC_CONFIGURATION_FIELDS.has(field))
+      .filter((field) => this.#configuration[field] !== this.#startupConfiguration[field]);
+    return {
+      path: this.#configurationFilePath,
+      values: { ...this.#configuration },
+      restartRequired: restartRequiredFields.length > 0,
+      restartRequiredFields,
+    };
+  }
+
+  updateConfiguration(patch: AgentManagerConfigurationPatch): AgentManagerConfigurationSnapshot {
+    if (this.#closed) throw new Error('Agent Manager is closed');
+    const validatedPatch = validateAgentManagerConfigurationPatch(patch);
+    const changedFields = (Object.keys(validatedPatch) as Array<keyof AgentManagerConfiguration>)
+      .filter((field) => validatedPatch[field] !== this.#configuration[field]);
+    if (changedFields.length === 0) return this.getConfiguration();
+    const next = { ...this.#configuration, ...validatedPatch };
+    if (changedFields.includes('logLevel') && !this.logger.setLevel) {
+      throw new TypeError('The injected logger does not support dynamic log level changes');
+    }
+    if (this.#configurationFilePath) writeAgentManagerConfiguration(this.#configurationFilePath, next);
+
+    const previous = this.#configuration;
+    this.#configuration = next;
+    if (previous.pullRequestReconcileIntervalSeconds !== next.pullRequestReconcileIntervalSeconds) {
+      this.configurePullRequestReconciler(next.pullRequestReconcileIntervalSeconds);
+    }
+    if (previous.logLevel !== next.logLevel) this.logger.setLevel?.(next.logLevel);
+    const snapshot = this.getConfiguration();
+    this.publish({
+      type: 'manager.configuration.updated',
+      payload: {
+        changedFields,
+        restartRequired: snapshot.restartRequired,
+        restartRequiredFields: snapshot.restartRequiredFields,
+      },
+    });
+    this.logger.info('Agent Manager configuration updated', {
+      changedFields,
+      restartRequired: snapshot.restartRequired,
+      restartRequiredFields: snapshot.restartRequiredFields,
+    });
+    return snapshot;
+  }
+
+  startConfiguredServices(): void {
+    this.configurePullRequestReconciler(this.#configuration.pullRequestReconcileIntervalSeconds);
+  }
+
   close(): Promise<void> {
     if (this.#closePromise) return this.#closePromise;
     if (this.#closed) return Promise.resolve();
@@ -163,6 +241,18 @@ export class AgentManager extends EventEmitter {
     if (this.#agentTriggers.has(this.#pullRequestReconciler.id)) return;
     this.#pullRequestReconciler.setInterval(intervalMs);
     this.startAgentTrigger(this.#pullRequestReconciler);
+    this.#pullRequestReconcileIntervalSeconds = intervalMs / 1_000;
+  }
+
+  configurePullRequestReconciler(intervalSeconds: number): void {
+    if (!Number.isInteger(intervalSeconds) || intervalSeconds < 0) {
+      throw new RangeError('Pull request reconcile interval must be a non-negative integer number of seconds');
+    }
+    const running = this.#agentTriggers.has(this.#pullRequestReconciler.id);
+    if (this.#pullRequestReconcileIntervalSeconds === intervalSeconds && (intervalSeconds === 0 || running)) return;
+    if (running) this.stopAgentTrigger(this.#pullRequestReconciler.id);
+    this.#pullRequestReconcileIntervalSeconds = intervalSeconds;
+    if (intervalSeconds > 0) this.startPullRequestReconciler(intervalSeconds * 1_000);
   }
 
   async reconcilePullRequests(): Promise<void> {

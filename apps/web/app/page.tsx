@@ -28,6 +28,7 @@ import {
   Search,
   Send,
   Settings2,
+  SlidersHorizontal,
   Square,
   Terminal,
   TriangleAlert,
@@ -68,6 +69,8 @@ import {
   DEFAULT_AGENT_MANAGER_URL,
   normalizeManagerUrl,
   type AgentConfiguration,
+  type AgentManagerConfiguration,
+  type AgentManagerConfigurationSnapshot,
   type AgentProvider,
   type AgentReasoningEffort,
   type AgentRunDto,
@@ -656,6 +659,140 @@ function ConnectionDialog({ apiUrl, onConnect }: { apiUrl: string; onConnect: (u
   );
 }
 
+function ManagerConfigurationDialog({
+  configuration,
+  disabled,
+  onSave,
+}: {
+  configuration: AgentManagerConfigurationSnapshot | null;
+  disabled: boolean;
+  onSave: (values: AgentManagerConfiguration) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [values, setValues] = useState<AgentManagerConfiguration | null>(configuration?.values ?? null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function update<K extends keyof AgentManagerConfiguration>(field: K, value: AgentManagerConfiguration[K]) {
+    setValues((current) => current ? { ...current, [field]: value } : current);
+  }
+
+  async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
+    event.preventDefault();
+    if (!values) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSave(values);
+      setOpen(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t('Failed to save configuration'));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) {
+          setValues(configuration?.values ?? null);
+          setError(null);
+        }
+      }}
+    >
+      <DialogTrigger render={<Button variant="outline" size="icon" disabled={disabled} aria-label={t('Agent Manager configuration')} />}>
+        <SlidersHorizontal />
+      </DialogTrigger>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+        <form onSubmit={submit}>
+          <DialogHeader>
+            <DialogTitle>{t('Agent Manager configuration')}</DialogTitle>
+            <DialogDescription>{t('Reconciliation and log level changes apply immediately. Other settings take effect after restart.')}</DialogDescription>
+          </DialogHeader>
+          {configuration?.restartRequired ? (
+            <Alert className="mt-4">
+              <TriangleAlert />
+              <AlertTitle>{t('Restart required')}</AlertTitle>
+              <AlertDescription>{t('One or more saved settings will apply the next time Agent Manager starts.')}</AlertDescription>
+            </Alert>
+          ) : null}
+          {values ? (
+            <FieldGroup className="my-5 gap-5">
+              <div>
+                <p className="mb-3 text-xs font-semibold">{t('Runtime settings')}</p>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field>
+                    <FieldLabel htmlFor="configuration-reconcile-interval">{t('PR reconcile interval (seconds)')}</FieldLabel>
+                    <Input id="configuration-reconcile-interval" type="number" min="0" step="1" value={values.pullRequestReconcileIntervalSeconds} onChange={(event) => update('pullRequestReconcileIntervalSeconds', Number(event.target.value))} required />
+                    <p className="text-[10px] text-muted-foreground">{t('Use 0 to disable GitHub polling.')}</p>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="configuration-log-level">{t('Log level')}</FieldLabel>
+                    <NativeSelect id="configuration-log-level" value={values.logLevel} onChange={(event) => update('logLevel', event.target.value as AgentManagerConfiguration['logLevel'])}>
+                      <NativeSelectOption value="debug">debug</NativeSelectOption>
+                      <NativeSelectOption value="info">info</NativeSelectOption>
+                      <NativeSelectOption value="warn">warn</NativeSelectOption>
+                      <NativeSelectOption value="error">error</NativeSelectOption>
+                      <NativeSelectOption value="silent">silent</NativeSelectOption>
+                    </NativeSelect>
+                  </Field>
+                </div>
+              </div>
+              <div>
+                <p className="mb-3 text-xs font-semibold">{t('Startup settings')}</p>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field>
+                    <FieldLabel htmlFor="configuration-host">{t('Listen host')}</FieldLabel>
+                    <Input id="configuration-host" value={values.host} onChange={(event) => update('host', event.target.value)} required />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="configuration-port">{t('Listen port')}</FieldLabel>
+                    <Input id="configuration-port" type="number" min="1" max="65535" step="1" value={values.port} onChange={(event) => update('port', Number(event.target.value))} required />
+                  </Field>
+                  <Field className="sm:col-span-2">
+                    <FieldLabel htmlFor="configuration-origin">{t('Allowed CORS origin')}</FieldLabel>
+                    <Input id="configuration-origin" value={values.allowedOrigin ?? ''} onChange={(event) => update('allowedOrigin', event.target.value.trim() ? event.target.value : null)} placeholder={t('Leave empty to disable CORS')} />
+                  </Field>
+                  <Field className="sm:col-span-2">
+                    <FieldLabel htmlFor="configuration-database">{t('Database path')}</FieldLabel>
+                    <Input id="configuration-database" value={values.databasePath ?? ''} onChange={(event) => update('databasePath', event.target.value.trim() ? event.target.value : null)} placeholder={t('Use workspace default')} />
+                  </Field>
+                  <Field className="sm:col-span-2">
+                    <FieldLabel htmlFor="configuration-log-file">{t('Log file path')}</FieldLabel>
+                    <Input id="configuration-log-file" value={values.logFilePath ?? ''} onChange={(event) => update('logFilePath', event.target.value.trim() ? event.target.value : null)} placeholder={t('Use workspace default')} />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="configuration-log-size">{t('Log rotation size')}</FieldLabel>
+                    <Input id="configuration-log-size" value={values.logMaxSize} onChange={(event) => update('logMaxSize', event.target.value)} required />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="configuration-log-files">{t('Log retention')}</FieldLabel>
+                    <Input id="configuration-log-files" value={values.logMaxFiles} onChange={(event) => update('logMaxFiles', event.target.value)} required />
+                  </Field>
+                  <label className="flex items-center gap-2 text-xs sm:col-span-2">
+                    <input type="checkbox" checked={values.openDashboard} onChange={(event) => update('openDashboard', event.target.checked)} />
+                    {t('Open dashboard when Agent Manager starts')}
+                  </label>
+                </div>
+              </div>
+              {configuration?.path ? <p className="break-all font-mono text-[10px] text-muted-foreground">{t('Configuration file')}: {configuration.path}</p> : null}
+              {error ? <p className="text-xs text-destructive">{error}</p> : null}
+            </FieldGroup>
+          ) : <p className="my-6 text-xs text-muted-foreground">{t('Configuration unavailable')}</p>}
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="outline" />}>{t('Cancel')}</DialogClose>
+            <Button type="submit" disabled={!values || submitting}>{submitting ? <LoaderCircle className="animate-spin" /> : null}{t('Save')}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function RequirementDetail({
   requirement,
   runs,
@@ -1021,6 +1158,7 @@ function Dashboard() {
   const [apiUrl, setApiUrl] = useState(DEFAULT_AGENT_MANAGER_URL);
   const [connection, setConnection] = useState<ConnectionState>('connecting');
   const [workspace, setWorkspace] = useState<WorkspaceDto | null>(null);
+  const [configuration, setConfiguration] = useState<AgentManagerConfigurationSnapshot | null>(null);
   const [requirements, setRequirements] = useState<RequirementDto[]>([]);
   const [runs, setRuns] = useState<AgentRunDto[]>([]);
   const [pullRequests, setPullRequests] = useState<PullRequestDto[]>([]);
@@ -1042,14 +1180,16 @@ function Dashboard() {
   const reload = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
     try {
-      const [nextWorkspace, nextRequirements, nextRuns, nextPullRequests, nextReviewRequests] = await Promise.all([
+      const [nextWorkspace, nextConfiguration, nextRequirements, nextRuns, nextPullRequests, nextReviewRequests] = await Promise.all([
         client.getWorkspace(),
+        client.getConfiguration(),
         client.listRequirements(),
         client.listRuns(),
         client.listPullRequests(),
         client.listReviewRequests(),
       ]);
       setWorkspace(nextWorkspace);
+      setConfiguration(nextConfiguration);
       setRequirements(nextRequirements);
       setRuns(nextRuns);
       setPullRequests(nextPullRequests);
@@ -1185,6 +1325,17 @@ function Dashboard() {
     }
   }
 
+  async function saveConfiguration(values: AgentManagerConfiguration): Promise<void> {
+    setError(null);
+    try {
+      const next = await client.updateConfiguration(values);
+      setConfiguration(next);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t('Failed to save configuration'));
+      throw caught;
+    }
+  }
+
   function connect(url: string) {
     window.localStorage.setItem('code-factory.agent-manager-url', url);
     setApiUrl(url);
@@ -1223,6 +1374,7 @@ function Dashboard() {
             </div>
             <Button variant="outline" size="sm" aria-label={t('Switch language')} onClick={() => setLocale(locale === 'en' ? 'zh-CN' : 'en')}><Languages data-icon="inline-start" />{locale === 'en' ? t('Chinese') : t('English')}</Button>
             <Button variant="outline" size="icon" aria-label={t('Refresh')} disabled={loading} onClick={() => void reload(true)}><RefreshCw className={loading ? 'animate-spin' : ''} /></Button>
+            <ManagerConfigurationDialog configuration={configuration} disabled={connection !== 'online'} onSave={saveConfiguration} />
             <ConnectionDialog apiUrl={apiUrl} onConnect={connect} />
             <NewRequirementDialog disabled={connection !== 'online'} onCreate={createRequirement} />
           </div>

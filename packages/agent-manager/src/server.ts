@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { readFile } from 'node:fs/promises';
 
 import { AgentManager, MAX_MESSAGE_ATTACHMENT_BYTES } from './agent-manager.js';
+import { validateAgentManagerConfigurationPatch } from './configuration.js';
 import { DashboardServer } from './dashboard-server.js';
 import type { Logger } from './logger.js';
 import { StoreConflictError, StoreNotFoundError } from './store.js';
@@ -116,7 +117,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
     if (allowedOrigin) {
       response.setHeader('access-control-allow-origin', allowedOrigin);
       response.setHeader('access-control-allow-headers', 'content-type, x-file-name');
-      response.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
+      response.setHeader('access-control-allow-methods', 'GET, POST, PATCH, OPTIONS');
     }
     if (request.method === 'OPTIONS') {
       response.writeHead(204).end();
@@ -135,6 +136,15 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           databasePath: manager.databasePath,
           logFilePath: manager.logFilePath,
         });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/configuration') {
+        sendJson(response, 200, manager.getConfiguration());
+        return;
+      }
+      if (request.method === 'PATCH' && url.pathname === '/api/configuration') {
+        const patch = validateAgentManagerConfigurationPatch(await readJson(request));
+        sendJson(response, 200, manager.updateConfiguration(patch));
         return;
       }
       if (request.method === 'GET' && url.pathname === '/api/requirements') {
