@@ -97,10 +97,12 @@ export const schemaStatements = [
     check_states_json TEXT NOT NULL DEFAULT '{}',
     updated_at TEXT NOT NULL
   ) STRICT`,
-  `CREATE TABLE IF NOT EXISTS external_event_receipts (
-    source_key TEXT PRIMARY KEY,
-    pull_request_id TEXT NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
-    created_at TEXT NOT NULL
+  `CREATE TABLE IF NOT EXISTS agent_trigger_receipts (
+    trigger_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (trigger_id, idempotency_key)
   ) STRICT`,
   `CREATE TABLE IF NOT EXISTS review_requests (
     id TEXT PRIMARY KEY,
@@ -134,8 +136,8 @@ export const schemaStatements = [
     ON message_attachments (requirement_id, created_at, id)`,
   `CREATE INDEX IF NOT EXISTS pull_requests_requirement_updated
     ON pull_requests (requirement_id, updated_at DESC)`,
-  `CREATE INDEX IF NOT EXISTS external_event_receipts_pull_request
-    ON external_event_receipts (pull_request_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS agent_trigger_receipts_requirement
+    ON agent_trigger_receipts (requirement_id, created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS review_requests_pull_request_created
     ON review_requests (pull_request_id, created_at DESC)`,
 ] as const;

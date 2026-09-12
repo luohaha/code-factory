@@ -37,7 +37,8 @@ flowchart LR
   RD -->|Track PR / Propose requirement| API[Agent API]
   API --> M
   RV -->|GitHub inline comments| GH[GitHub PR]
-  GH -->|Poll status, comments, reviews, CI| M
+  GH -->|Poll status, comments, reviews, CI| T[PR Agent Trigger]
+  T -->|Normalized messages| M
   RV -->|Reviewer message| M
 ~~~
 
@@ -132,7 +133,13 @@ Codex and Claude Code Reviewers both run as ordinary short-lived headless agents
 
 If the PR head SHA changes, previous reviews remain historical results for the old revision. A human must request another review for the new revision.
 
-### PR Reconciliation
+### Agent Triggers
+
+`AgentTrigger` is the narrow integration boundary between external event sources and RD sessions. Each trigger owns source-specific polling or listening and emits normalized messages with a target Requirement and a trigger-scoped idempotency key. Agent Manager owns durable deduplication, conversation persistence, event publication, and the decision to start an idle RD session or queue input for a running one.
+
+Trigger lifecycle is explicit through `startAgentTrigger()` and `stopAgentTrigger()`. Once stopped, a trigger's delivery context is invalidated. Receipts refer to Requirements rather than Pull Requests, so a future trigger such as a Slack-thread listener does not need GitHub-shaped persistence.
+
+### PR Reconciliation Trigger
 
 Agent Manager polls each tracked Draft/Open PR through the authenticated local `gh` CLI every 30 seconds by default. It observes:
 
@@ -142,7 +149,7 @@ Agent Manager polls each tracked Draft/Open PR through the authenticated local `
 
 New review activity is appended as a Reviewer message. PR status and CI failures are appended as System messages. All are marked for RD delivery while the Requirement is active: an idle RD session resumes immediately, while a running session consumes them in order after its current Run. DONE or CANCELLED Requirements retain the messages for visibility without being reopened.
 
-Observation baselines and external event receipts are persisted in SQLite. This prevents duplicate delivery across polling cycles and Agent Manager restarts. When an older PR is first adopted, existing comments and CI results form the baseline instead of being replayed, while a stale stored PR status is corrected immediately. `--pr-reconcile-interval SECONDS` changes the interval; `0` disables polling.
+Observation baselines and trigger-scoped receipts are persisted in SQLite. This prevents duplicate delivery across polling cycles and Agent Manager restarts. When an older PR is first adopted, existing comments and CI results form the baseline instead of being replayed, while a stale stored PR status is corrected immediately. `--pr-reconcile-interval SECONDS` changes the interval; `0` disables polling.
 
 GitHub and the PR reconciler exclusively advance PR lifecycle state. The RD Agent registers a PR after creating it and may refresh metadata when its own push or edit changes the head SHA, title, or branches, but the Agent API cannot change `draft/open/closed/merged` for an existing PR. Reconciler status messages explicitly say that the state is already persisted, so the RD Agent must not mirror the event.
 
@@ -208,4 +215,4 @@ Running `npx @code-factory/agent-manager start` serves the API, SSE stream, and 
 
 ## 10. Current Boundary
 
-The Reviewer is instructed to use the GitHub CLI/API to publish inline comments, but structured verification that every expected comment was posted is not implemented yet. Reconciliation currently uses local `gh` polling; GitHub webhook synchronization, stale-review indicators after head-SHA changes, access tokens, and optional worktree isolation remain future work. The daemon supervisor recovers an exited Agent Manager process, but it does not register itself with systemd, launchd, or Windows Service Control Manager and therefore does not provide machine-reboot recovery.
+The Reviewer is instructed to use the GitHub CLI/API to publish inline comments, but structured verification that every expected comment was posted is not implemented yet. The Agent Trigger extension API is code-level; dynamic trigger discovery/configuration and a Slack trigger are not implemented. Reconciliation currently uses local `gh` polling; GitHub webhook synchronization, stale-review indicators after head-SHA changes, access tokens, and optional worktree isolation remain future work. The daemon supervisor recovers an exited Agent Manager process, but it does not register itself with systemd, launchd, or Windows Service Control Manager and therefore does not provide machine-reboot recovery.

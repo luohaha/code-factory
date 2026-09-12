@@ -87,6 +87,11 @@ export interface AppendExternalMessageRecord extends AppendMessageRecord {
   sourceKey: string;
 }
 
+export interface AppendAgentTriggerMessageRecord extends AppendMessageRecord {
+  triggerId: string;
+  idempotencyKey: string;
+}
+
 export interface PullRequestObservation {
   pullRequestId: string;
   initializedAt: string;
@@ -132,6 +137,8 @@ export interface AgentManagerStore {
   createMessageAttachment(input: CreateMessageAttachmentRecord): MessageAttachment;
   getMessageAttachment(id: string): MessageAttachment | null;
   appendMessage(input: AppendMessageRecord): RequirementMessage;
+  appendAgentTriggerMessage(input: AppendAgentTriggerMessageRecord): RequirementMessage | null;
+  /** @deprecated Use appendAgentTriggerMessage for source-neutral trigger delivery. */
   appendExternalMessage(input: AppendExternalMessageRecord): RequirementMessage | null;
   listMessages(requirementId: string): RequirementMessage[];
   listPendingRdMessages(requirementId: string): RequirementMessage[];
