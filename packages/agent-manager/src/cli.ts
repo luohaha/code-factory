@@ -2,6 +2,7 @@
 import { spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { AgentManager } from './agent-manager.js';
 import {
@@ -95,6 +96,11 @@ async function runForeground(args: readonly string[]): Promise<void> {
     logMaxSize,
     logMaxFiles,
   });
+  const sourceExecution = import.meta.url.endsWith('.ts');
+  const agentCliEntrypoint = fileURLToPath(new URL(
+    sourceExecution ? './code-factory-cli-main.ts' : './code-factory-cli-main.js',
+    import.meta.url,
+  ));
   const manager = new AgentManager({
     workspaceRoot,
     configuration,
@@ -104,6 +110,10 @@ async function runForeground(args: readonly string[]): Promise<void> {
     ...(logFilePath ? { logFilePath } : {}),
     logMaxSize,
     logMaxFiles,
+    agentCliInvocation: {
+      command: process.execPath,
+      args: [...(sourceExecution ? process.execArgv : []), agentCliEntrypoint],
+    },
   });
   const logger = manager.logger;
   const server = createAgentManagerServer(manager, {

@@ -4,6 +4,11 @@ import test from 'node:test';
 import type { AgentTrigger, AgentTriggerContext, AgentTriggerMessage } from '../src/agent-trigger.ts';
 import { AgentManager } from '../src/agent-manager.ts';
 import { DEFAULT_AGENT_MANAGER_CONFIGURATION } from '../src/configuration.ts';
+import {
+  CODE_FACTORY_API_URL,
+  CODE_FACTORY_REQUIREMENT_ID,
+  CODE_FACTORY_SESSION_ID,
+} from '../src/code-factory-cli.ts';
 import type { GitHubClient, GitHubPullRequestSnapshot } from '../src/github-client.ts';
 import { silentLogger } from '../src/logger.ts';
 import type { AgentProcessRunner, ProcessRunRequest } from '../src/process-runner.ts';
@@ -149,6 +154,21 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
     assert.equal(runner.requests[0]?.workspaceRoot, manager.workspaceRoot);
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
       value.includes('Agent Manager owns draft/open/closed/merged lifecycle synchronization')));
+    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
+      value.includes('Reuse a worktree dedicated to this requirement')));
+    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
+      value.includes('Do not move, discard, or overwrite pre-existing changes')));
+    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
+      value.includes('code-factory-cli pr register')));
+    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
+      value.includes('code-factory-cli requirement propose')));
+    assert.ok(runner.requests[0]?.invocation.args.every((value) =>
+      !value.includes('/agent/pull-requests') && !value.includes('/agent/requirements')));
+    assert.ok(runner.requests[0]?.invocation.args.every((value) =>
+      !value.includes('Agent-created requirements are proposals and do not start automatically.')));
+    assert.equal(runner.requests[0]?.environment?.[CODE_FACTORY_API_URL], 'http://127.0.0.1:4310/api');
+    assert.equal(runner.requests[0]?.environment?.[CODE_FACTORY_REQUIREMENT_ID], first.id);
+    assert.equal(runner.requests[0]?.environment?.[CODE_FACTORY_SESSION_ID], first.session.id);
     assert.ok(runner.requests[0]?.invocation.args.includes('gpt-5.6'));
     assert.ok(runner.requests[0]?.invocation.args.includes('model_reasoning_effort="max"'));
     assert.equal(manager.listRuns(first.id)[0]?.model, 'gpt-5.6');
@@ -501,7 +521,8 @@ test('PR reconciliation delivers new review activity, CI failures, and status ch
     assert.equal(runner.requests.length, 2);
     assert.match(runner.requests[1]?.invocation.input ?? '', /open -> merged/);
     assert.match(runner.requests[1]?.invocation.input ?? '', /already persisted this lifecycle state/);
-    assert.match(runner.requests[1]?.invocation.input ?? '', /Do not call \/api\/agent\/pull-requests/);
+    assert.match(runner.requests[1]?.invocation.input ?? '', /Do not run code-factory-cli pr register/);
+    assert.doesNotMatch(runner.requests[1]?.invocation.input ?? '', /\/api\/agent\/pull-requests/);
 
     runner.resolvers[1]?.({
       status: 'succeeded', exitCode: 0, nativeSessionId: 'rd-session', finalMessage: 'merged', error: null,

@@ -34,7 +34,8 @@ flowchart LR
   M <--> DB[(SQLite)]
   M -->|Same cwd, long-lived resume| RD[Codex / Claude Code RD]
   M -->|Short-lived, no persistent session| RV[Codex / Claude Code Reviewer]
-  RD -->|Track PR / Propose requirement| API[Agent API]
+  RD -->|Register PR / Propose requirement| CLI[code-factory-cli]
+  CLI --> API[Agent API]
   API --> M
   RV -->|GitHub inline comments| GH[GitHub PR]
   GH -->|Poll status, comments, reviews, CI| T[PR Agent Trigger]
@@ -46,7 +47,7 @@ At startup, Agent Manager fixes the workspace to `realpath(process.cwd())`. Ever
 
 Agent Manager's own settings are workspace-scoped in `~/.code-factory/workspaces/<workspace-hash>/config.json` by default. The CLI loads this file before constructing storage, logging, HTTP, and trigger services. Existing command-line flags remain process-local overrides, and `--config PATH` selects another file. The API and dashboard can atomically update the file. PR reconciliation intervals and log levels are reconfigured in the running process; HTTP binding, CORS, storage paths, startup browser behavior, and log rotation are marked as requiring a restart.
 
-Agent Manager adds only a Code Factory protocol instruction containing the current Requirement ID, Session ID, and local Agent API. It does not copy or replace the project’s own instructions or Skills.
+Agent Manager adds only Code Factory behavioral instructions that identify the relevant `code-factory-cli` commands. It places a private CLI launcher on the RD process's `PATH` and injects `CODE_FACTORY_API_URL`, `CODE_FACTORY_REQUIREMENT_ID`, and `CODE_FACTORY_SESSION_ID`; HTTP paths and payload schemas remain in CLI help instead of the model prompt. It does not copy or replace the project’s own instructions or Skills.
 
 For example:
 
@@ -55,7 +56,7 @@ cd ~/starrocks
 npx @code-factory/agent-manager start
 ~~~
 
-All agents launched by that process use `~/starrocks` as their working directory.
+All agents launched by that process initially use `~/starrocks` as their working directory. Before changing code, an RD Agent is instructed to create or reuse a Git worktree dedicated to its Requirement and perform the work there. Agent Manager does not currently provision or enforce that isolation.
 
 Agent Manager may run in the foreground or beneath its workspace-scoped daemon supervisor. `start --daemon` detaches the supervisor, which starts Agent Manager with the original CLI options and waits for a readiness message emitted only after the HTTP listener is active. An unexpected Manager exit is restarted indefinitely with capped exponential backoff. `stop` terminates the supervisor and Manager intentionally, while `restart` reuses a running daemon's stored options unless replacements are supplied. `daemon.json`, `daemon.lock`, and `logs/daemon.log` live beside the workspace database under `~/.code-factory/workspaces/<workspace-hash>/`. This is application-level process supervision, not operating-system service installation or boot-time activation.
 
@@ -153,7 +154,7 @@ New review activity is appended as a Reviewer message. PR status and CI failures
 
 Observation baselines and trigger-scoped receipts are persisted in SQLite. This prevents duplicate delivery across polling cycles and Agent Manager restarts. When an older PR is first adopted, existing comments and CI results form the baseline instead of being replayed, while a stale stored PR status is corrected immediately. `pullRequestReconcileIntervalSeconds` changes the interval dynamically; `0` disables polling. The compatible `--pr-reconcile-interval SECONDS` flag overrides the file for the launched process.
 
-GitHub and the PR reconciler exclusively advance PR lifecycle state. The RD Agent registers a PR after creating it and may refresh metadata when its own push or edit changes the head SHA, title, or branches, but the Agent API cannot change `draft/open/closed/merged` for an existing PR. Reconciler status messages explicitly say that the state is already persisted, so the RD Agent must not mirror the event.
+GitHub and the PR reconciler exclusively advance PR lifecycle state. The RD Agent uses `code-factory-cli pr register` after creating a PR and may run it again when its own push or edit changes the head SHA, title, or branches, but the underlying Agent API cannot change `draft/open/closed/merged` for an existing PR. Reconciler status messages explicitly say that the state is already persisted, so the RD Agent must not mirror the event.
 
 ## 6. State Machines
 
@@ -186,7 +187,7 @@ DRAFT → OPEN → MERGED
 - RD Sessions belonging to different Requirements may run concurrently.
 - Reviewer is an independent, behaviorally read-only, short-lived task and may run concurrently with RD.
 - One PR may have at most one active ReviewRequest.
-- All processes share the Agent Manager working directory by default. Concurrent RD Sessions can therefore conflict on files or Git state. The MVP exposes this risk instead of hiding it behind a global lock. Optional worktree isolation can be added later.
+- All processes start in the Agent Manager working directory. RD developer instructions require code-changing work to create or reuse a Requirement-specific Git worktree, but Agent Manager does not provision or enforce that isolation. Concurrent RD Sessions can still conflict on files or Git state if the instruction is not followed.
 
 ## 8. Persistence
 
@@ -219,4 +220,4 @@ Running `npx @code-factory/agent-manager start` serves the API, SSE stream, and 
 
 ## 10. Current Boundary
 
-The Reviewer is instructed to use the GitHub CLI/API to publish inline comments, but structured verification that every expected comment was posted is not implemented yet. The Agent Trigger extension API is code-level; dynamic trigger discovery/configuration and a Slack trigger are not implemented. Reconciliation currently uses local `gh` polling; GitHub webhook synchronization, stale-review indicators after head-SHA changes, access tokens, and optional worktree isolation remain future work. The daemon supervisor recovers an exited Agent Manager process, but it does not register itself with systemd, launchd, or Windows Service Control Manager and therefore does not provide machine-reboot recovery.
+The Reviewer is instructed to use the GitHub CLI/API to publish inline comments, but structured verification that every expected comment was posted is not implemented yet. The Agent Trigger extension API is code-level; dynamic trigger discovery/configuration and a Slack trigger are not implemented. Reconciliation currently uses local `gh` polling; GitHub webhook synchronization, stale-review indicators after head-SHA changes, access tokens, and Manager-enforced worktree isolation remain future work. The daemon supervisor recovers an exited Agent Manager process, but it does not register itself with systemd, launchd, or Windows Service Control Manager and therefore does not provide machine-reboot recovery.
