@@ -105,6 +105,7 @@ const timeRangeMilliseconds: Record<Exclude<TimeRange, 'all'>, number> = {
   '30d': 30 * 24 * 60 * 60 * 1_000,
   '90d': 90 * 24 * 60 * 60 * 1_000,
 };
+const filterClockIntervalMilliseconds = 60_000;
 
 const requirementColumns: Array<{
   status: RequirementStatus;
@@ -1202,6 +1203,7 @@ function Dashboard() {
   const [busyPullRequestId, setBusyPullRequestId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
+  const [filterReferenceTime, setFilterReferenceTime] = useState(0);
 
   const client = useMemo(() => new AgentManagerClient(apiUrl), [apiUrl]);
 
@@ -1224,7 +1226,9 @@ function Dashboard() {
       setReviewRequests(nextReviewRequests);
       setConnection('online');
       setError(null);
-      setLastSynced(new Date());
+      const syncedAt = new Date();
+      setLastSynced(syncedAt);
+      setFilterReferenceTime(syncedAt.getTime());
     } catch (caught) {
       setConnection('offline');
       setError(caught instanceof Error ? caught.message : t('Unable to connect to Agent Manager'));
@@ -1248,6 +1252,18 @@ function Dashboard() {
       }
     }, 0);
     return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    const advanceFilterClock = () => setFilterReferenceTime(Date.now());
+    const timer = window.setInterval(advanceFilterClock, filterClockIntervalMilliseconds);
+    window.addEventListener('focus', advanceFilterClock);
+    document.addEventListener('visibilitychange', advanceFilterClock);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', advanceFilterClock);
+      document.removeEventListener('visibilitychange', advanceFilterClock);
+    };
   }, []);
 
   useEffect(() => {
@@ -1285,7 +1301,6 @@ function Dashboard() {
   const selectedRequirement = requirements.find((item) => item.id === selectedId) ?? null;
   const selectedRuns = runs.filter((run) => run.requirementId === selectedId);
   const selectedPullRequests = pullRequests.filter((pullRequest) => pullRequest.requirementId === selectedId);
-  const filterReferenceTime = lastSynced?.getTime() ?? 0;
 
   const filteredRequirements = useMemo(() => {
     const needle = query.trim().toLowerCase();
