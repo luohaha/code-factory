@@ -65,6 +65,25 @@ node /path/to/code-factory/packages/agent-manager/dist/cli.js start \
 
 Listening on `0.0.0.0` makes the dashboard reachable from other machines. Only do this on a trusted network: headless agents run with the permissions of the user who started Agent Manager.
 
+### Run as a supervised daemon
+
+Add `--daemon` to detach Agent Manager from the terminal and keep it running under a lightweight supervisor:
+
+~~~bash
+cd /path/to/your-project
+node /path/to/code-factory/packages/agent-manager/dist/cli.js start --daemon --open
+~~~
+
+The start command returns only after the HTTP service is ready. If the Agent Manager process exits unexpectedly, the supervisor restarts it automatically with exponential backoff from 1 to 30 seconds. Use the same managed workspace for lifecycle commands:
+
+~~~bash
+node /path/to/code-factory/packages/agent-manager/dist/cli.js status
+node /path/to/code-factory/packages/agent-manager/dist/cli.js restart
+node /path/to/code-factory/packages/agent-manager/dist/cli.js stop
+~~~
+
+When the daemon is running, `restart` reuses its start options unless new options are supplied. `status` exits with code `0` while the supervisor is live and `3` otherwise. The equivalent `daemon start|status|restart|stop` command form is also supported. This supervisor provides background execution and process recovery; it does not install an operating-system service or start automatically after a machine reboot.
+
 ### Common examples
 
 ~~~bash
@@ -92,6 +111,7 @@ node /path/to/code-factory/packages/agent-manager/dist/cli.js start \
 | `--host HOST` | `127.0.0.1` | HTTP listen address. |
 | `--port PORT` | `4310` | Dashboard, HTTP API, and SSE port (`1`–`65535`). |
 | `--open` | Off | Open the dashboard in the default browser after startup. |
+| `--daemon` | Off | Run under the detached supervisor and restart after unexpected exits. |
 | `--db PATH` | Workspace data directory | SQLite database path. |
 | `--allow-origin ORIGIN` | `http://localhost:3000` | Allowed CORS origin. |
 | `--pr-reconcile-interval SECONDS` | `30` | GitHub polling interval; use `0` to disable it. |
@@ -157,14 +177,22 @@ Workspace data is stored outside the managed repository by default:
 ~/.code-factory/workspaces/<workspace-hash>/factory.sqlite
 ~/.code-factory/workspaces/<workspace-hash>/attachments/
 ~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log
+~/.code-factory/workspaces/<workspace-hash>/logs/daemon.log
+~/.code-factory/workspaces/<workspace-hash>/daemon.json
 ~~~
 
-The CLI prints a startup banner containing the workspace, database, log path, dashboard URL, API URL, and PR reconciliation interval. Operational logs are written as structured JSONL and omit prompts, conversation bodies, and raw Agent output.
+The foreground CLI prints a startup banner containing the workspace, database, log path, dashboard URL, API URL, and PR reconciliation interval. Daemon commands print supervisor and manager PIDs plus the daemon log path. Operational logs are written as structured JSONL and omit prompts, conversation bodies, and raw Agent output. Daemon state and log files use mode `0600`.
 
 Follow the active log with:
 
 ~~~bash
 tail -f ~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log
+~~~
+
+In daemon mode, follow supervisor exits and restart attempts with:
+
+~~~bash
+tail -f ~/.code-factory/workspaces/<workspace-hash>/logs/daemon.log
 ~~~
 
 Logging can also be configured with `CODE_FACTORY_LOG_LEVEL`, `CODE_FACTORY_LOG_FILE`, `CODE_FACTORY_LOG_MAX_SIZE`, and `CODE_FACTORY_LOG_MAX_FILES`. Command-line options take precedence over their environment-variable equivalents.
@@ -197,6 +225,6 @@ npm run build
 
 ## Current Boundaries
 
-The current implementation includes the Agent Manager core, SQLite Store, HTTP/SSE API, Codex and Claude Code adapters, conversation-driven RD continuation, PR tracking, manually triggered Reviewer runs, and the bundled Web dashboard.
+The current implementation includes the Agent Manager core, a supervised daemon mode with automatic process restart, SQLite Store, HTTP/SSE API, Codex and Claude Code adapters, conversation-driven RD continuation, PR tracking, manually triggered Reviewer runs, and the bundled Web dashboard.
 
 The `AgentTrigger` extension API is currently code-level; dynamic trigger discovery/configuration and a Slack implementation remain future work. Webhook-based synchronization, stale-review indicators after a head-SHA change, local access tokens, detailed tool-execution logs, and Manager-enforced worktree isolation also remain future work. RD Agents are instructed to create or reuse a Requirement-specific Git worktree before changing code, but Agent Manager does not provision or enforce that isolation; every child process still starts in the shared Manager workspace.

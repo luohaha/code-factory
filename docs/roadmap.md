@@ -48,6 +48,7 @@
 
 ## M4: reliability and extensible storage
 
+- [x] workspace-scoped daemon supervisor with background start and automatic Manager restart;
 - PostgreSQL Store implementation and migration tooling;
 - process leases, crash recovery, and stronger event idempotency;
 - metrics, tracing, retention policies, and audit logs;
