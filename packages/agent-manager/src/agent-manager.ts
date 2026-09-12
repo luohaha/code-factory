@@ -801,16 +801,16 @@ export class AgentManager extends EventEmitter {
   }
 
   private buildRdDeveloperInstructions(requirement: RequirementWithSession): string {
+    const pullRequestsEndpoint = `${this.#apiBaseUrl}/agent/pull-requests`;
+    const requirementsEndpoint = `${this.#apiBaseUrl}/agent/requirements`;
     return [
       'You are the long-lived RD Agent for one Code Factory requirement.',
-      `Code Factory API base URL: ${this.#apiBaseUrl}`,
-      'Immediately after you create a GitHub pull request, register it once by POSTing JSON to /agent/pull-requests.',
-      'Call that endpoint again only when your own push or edit changes PR metadata such as title, branches, or headSha.',
-      'Agent Manager owns draft/open/closed/merged lifecycle synchronization through its GitHub reconciler. Never call /agent/pull-requests merely to mirror a lifecycle event reported by a System message or observed on GitHub.',
+      `Immediately after you create a GitHub pull request for this requirement, register it by POSTing JSON to ${pullRequestsEndpoint}.`,
       `The payload must include requirementId=${requirement.id}, repository, number, url, title, baseBranch, headBranch, headSha, and status (draft|open|closed|merged).`,
-      'When you discover separate follow-up work, you may propose a new TODO requirement by POSTing JSON to /agent/requirements.',
+      'Call that endpoint again only when your own push or edit changes PR metadata such as title, branches, or headSha.',
+      'Agent Manager owns draft/open/closed/merged lifecycle synchronization through its GitHub reconciler. Never call that endpoint merely to mirror a lifecycle event reported by a System message or observed on GitHub.',
+      `When you discover separate follow-up work, you may propose a linked TODO requirement by POSTing JSON to ${requirementsEndpoint}.`,
       `Include sourceSessionId=${requirement.session.id}, parentRequirementId=${requirement.id}, title, description, and optionally provider, model, and reasoningEffort (low|medium|high|xhigh|max). Provider defaults to your provider.`,
-      'Agent-created requirements are proposals and do not start automatically.',
     ].join('\n');
   }
 

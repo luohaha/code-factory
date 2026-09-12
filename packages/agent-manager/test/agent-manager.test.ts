@@ -71,6 +71,12 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
     assert.equal(runner.requests[0]?.workspaceRoot, manager.workspaceRoot);
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
       value.includes('Agent Manager owns draft/open/closed/merged lifecycle synchronization')));
+    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
+      value.includes('http://127.0.0.1:4310/api/agent/pull-requests')));
+    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
+      value.includes('http://127.0.0.1:4310/api/agent/requirements')));
+    assert.ok(runner.requests[0]?.invocation.args.every((value) =>
+      !value.includes('Agent-created requirements are proposals and do not start automatically.')));
     assert.ok(runner.requests[0]?.invocation.args.includes('gpt-5.6'));
     assert.ok(runner.requests[0]?.invocation.args.includes('model_reasoning_effort="max"'));
     assert.equal(manager.listRuns(first.id)[0]?.model, 'gpt-5.6');
