@@ -30,6 +30,7 @@ Agent Manager is not a scheduler. There is no agent pool and no “waiting for s
 flowchart LR
   H[Human] -->|Create requirement / Send message / Request review| M[Agent Manager]
   W[Web dashboard] <-->|HTTP + SSE| M
+  S[Optional daemon supervisor] -->|Start / restart| M
   M <--> DB[(SQLite)]
   M -->|Same cwd, long-lived resume| RD[Codex / Claude Code RD]
   M -->|Short-lived, no persistent session| RV[Codex / Claude Code Reviewer]
@@ -52,6 +53,8 @@ npx @code-factory/agent-manager start
 ~~~
 
 All agents launched by that process use `~/starrocks` as their working directory.
+
+Agent Manager may run in the foreground or beneath its workspace-scoped daemon supervisor. `start --daemon` detaches the supervisor, which starts Agent Manager with the original CLI options and waits for a readiness message emitted only after the HTTP listener is active. An unexpected Manager exit is restarted indefinitely with capped exponential backoff. `stop` terminates the supervisor and Manager intentionally, while `restart` reuses a running daemon's stored options unless replacements are supplied. `daemon.json`, `daemon.lock`, and `logs/daemon.log` live beside the workspace database under `~/.code-factory/workspaces/<workspace-hash>/`. This is application-level process supervision, not operating-system service installation or boot-time activation.
 
 Every headless RD and Reviewer invocation skips interactive approval and CLI sandbox checks. It therefore inherits the launching user's full filesystem, network, and command-execution permissions. Agent Manager must only be started in a trusted workspace. Reviewers remain behaviorally read-only through their task instructions; this is not an operating-system security boundary.
 
@@ -205,4 +208,4 @@ Running `npx @code-factory/agent-manager start` serves the API, SSE stream, and 
 
 ## 10. Current Boundary
 
-The Reviewer is instructed to use the GitHub CLI/API to publish inline comments, but structured verification that every expected comment was posted is not implemented yet. Reconciliation currently uses local `gh` polling; GitHub webhook synchronization, stale-review indicators after head-SHA changes, access tokens, and optional worktree isolation remain future work.
+The Reviewer is instructed to use the GitHub CLI/API to publish inline comments, but structured verification that every expected comment was posted is not implemented yet. Reconciliation currently uses local `gh` polling; GitHub webhook synchronization, stale-review indicators after head-SHA changes, access tokens, and optional worktree isolation remain future work. The daemon supervisor recovers an exited Agent Manager process, but it does not register itself with systemd, launchd, or Windows Service Control Manager and therefore does not provide machine-reboot recovery.
