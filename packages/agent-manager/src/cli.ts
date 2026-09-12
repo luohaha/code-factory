@@ -1,8 +1,15 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { AgentManager } from './agent-manager.js';
+import {
+  defaultConfigurationPath,
+  loadAgentManagerConfiguration,
+  validateAgentManagerConfiguration,
+} from './configuration.js';
 import {
   inspectDaemon,
   runDaemonSupervisor,
@@ -40,66 +47,97 @@ try {
 }
 
 async function runForeground(args: readonly string[]): Promise<void> {
-  const portValue = option(args, '--port');
-  const port = portValue === undefined ? 4310 : Number(portValue);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) usage();
-  const reconcileIntervalValue = option(args, '--pr-reconcile-interval');
-  const reconcileIntervalSeconds = reconcileIntervalValue === undefined ? 30 : Number(reconcileIntervalValue);
-  if (!Number.isInteger(reconcileIntervalSeconds) || reconcileIntervalSeconds < 0) usage();
+  for (const name of [
+    '--config',
+    '--host',
+    '--port',
+    '--db',
+    '--allow-origin',
+    '--pr-reconcile-interval',
+    '--log-level',
+    '--log-file',
+    '--log-max-size',
+    '--log-max-files',
+  ]) {
+    if (args.includes(name) && option(args, name) === undefined) usage();
+  }
 
-  const databasePath = option(args, '--db');
-  const allowedOrigin = option(args, '--allow-origin') ?? 'http://localhost:3000';
-  const logLevelOption = option(args, '--log-level');
-  if (args.includes('--log-level') && logLevelOption === undefined) usage();
-  const logLevel = logLevelOption ?? process.env.CODE_FACTORY_LOG_LEVEL ?? 'info';
+  const workspaceRoot = realpathSync(process.cwd());
+  const configurationFilePath = resolve(option(args, '--config') ?? defaultConfigurationPath(workspaceRoot));
+  const fileConfiguration = loadAgentManagerConfiguration(configurationFilePath);
+  const logLevel = option(args, '--log-level') ?? process.env.CODE_FACTORY_LOG_LEVEL ?? fileConfiguration.logLevel;
   if (!isLogLevel(logLevel)) usage();
-  const logFilePathOption = option(args, '--log-file');
-  if (args.includes('--log-file') && logFilePathOption === undefined) usage();
-  const logFilePath = logFilePathOption ?? process.env.CODE_FACTORY_LOG_FILE;
-  const logMaxSizeOption = option(args, '--log-max-size');
-  if (args.includes('--log-max-size') && logMaxSizeOption === undefined) usage();
-  const logMaxSize = logMaxSizeOption ?? process.env.CODE_FACTORY_LOG_MAX_SIZE;
-  const logMaxFilesOption = option(args, '--log-max-files');
-  if (args.includes('--log-max-files') && logMaxFilesOption === undefined) usage();
-  const logMaxFiles = logMaxFilesOption ?? process.env.CODE_FACTORY_LOG_MAX_FILES;
+  const configuredLogFilePath = option(args, '--log-file')
+    ?? process.env.CODE_FACTORY_LOG_FILE
+    ?? fileConfiguration.logFilePath;
+  const logMaxSize = option(args, '--log-max-size')
+    ?? process.env.CODE_FACTORY_LOG_MAX_SIZE
+    ?? fileConfiguration.logMaxSize;
+  const logMaxFiles = option(args, '--log-max-files')
+    ?? process.env.CODE_FACTORY_LOG_MAX_FILES
+    ?? fileConfiguration.logMaxFiles;
+  const port = option(args, '--port') === undefined ? fileConfiguration.port : Number(option(args, '--port'));
+  const reconcileIntervalSeconds = option(args, '--pr-reconcile-interval') === undefined
+    ? fileConfiguration.pullRequestReconcileIntervalSeconds
+    : Number(option(args, '--pr-reconcile-interval'));
+  const databasePathValue = option(args, '--db') ?? fileConfiguration.databasePath;
+  const logFilePath = configuredLogFilePath ? resolve(workspaceRoot, configuredLogFilePath) : undefined;
+  const databasePath = databasePathValue ? resolve(workspaceRoot, databasePathValue) : undefined;
+  const configuration = validateAgentManagerConfiguration({
+    ...fileConfiguration,
+    host: option(args, '--host') ?? fileConfiguration.host,
+    port,
+    allowedOrigin: option(args, '--allow-origin') ?? fileConfiguration.allowedOrigin,
+    openDashboard: args.includes('--open') || fileConfiguration.openDashboard,
+    databasePath: databasePath ?? null,
+    pullRequestReconcileIntervalSeconds: reconcileIntervalSeconds,
+    logLevel,
+    logFilePath: logFilePath ?? null,
+    logMaxSize,
+    logMaxFiles,
+  });
   const sourceExecution = import.meta.url.endsWith('.ts');
   const agentCliEntrypoint = fileURLToPath(new URL(
     sourceExecution ? './code-factory-cli-main.ts' : './code-factory-cli-main.js',
     import.meta.url,
   ));
   const manager = new AgentManager({
+    workspaceRoot,
+    configuration: fileConfiguration,
+    effectiveConfiguration: configuration,
+    configurationFilePath,
     ...(databasePath ? { databasePath } : {}),
     logLevel,
     ...(logFilePath ? { logFilePath } : {}),
-    ...(logMaxSize ? { logMaxSize } : {}),
-    ...(logMaxFiles ? { logMaxFiles } : {}),
+    logMaxSize,
+    logMaxFiles,
     agentCliInvocation: {
       command: process.execPath,
       args: [...(sourceExecution ? process.execArgv : []), agentCliEntrypoint],
     },
   });
   const logger = manager.logger;
-  const host = option(args, '--host') ?? '127.0.0.1';
   const server = createAgentManagerServer(manager, {
-    host,
-    port,
-    allowedOrigin,
+    host: configuration.host,
+    port: configuration.port,
+    ...(configuration.allowedOrigin ? { allowedOrigin: configuration.allowedOrigin } : {}),
     logger,
   });
   let address;
   try {
-    address = await listen(server, { host, port });
+    address = await listen(server, { host: configuration.host, port: configuration.port });
   } catch (error) {
     await manager.close();
     throw error;
   }
-  if (reconcileIntervalSeconds > 0) manager.startPullRequestReconciler(reconcileIntervalSeconds * 1_000);
+  manager.startConfiguredServices();
   const displayHost = address.host === '0.0.0.0' || address.host === '::' ? '127.0.0.1' : address.host;
   const dashboardUrl = `http://${displayHost}:${address.port}/`;
   const apiUrl = `${dashboardUrl}api`;
 
   process.stdout.write(`${formatStartupBanner({
     workspaceRoot: manager.workspaceRoot,
+    configurationFilePath,
     databasePath: manager.databasePath,
     logFilePath: manager.logFilePath,
     dashboardUrl,
@@ -109,6 +147,7 @@ async function runForeground(args: readonly string[]): Promise<void> {
 
   logger.info('Code Factory Agent Manager started', {
     workspaceRoot: manager.workspaceRoot,
+    configurationFilePath,
     databasePath: manager.databasePath,
     dashboardUrl,
     apiUrl,
@@ -121,7 +160,9 @@ async function runForeground(args: readonly string[]): Promise<void> {
     process.send({ type: 'code-factory-agent-manager-ready', dashboardUrl, apiUrl });
   }
 
-  if (args.includes('--open')) openDashboard(dashboardUrl, logger);
+  if (configuration.openDashboard && process.env.CODE_FACTORY_DAEMON_CHILD !== '1') {
+    openDashboard(dashboardUrl, logger);
+  }
 
   let shuttingDown = false;
   const shutdown = () => {
@@ -138,7 +179,7 @@ async function runForeground(args: readonly string[]): Promise<void> {
 }
 
 async function runDaemonStart(args: readonly string[]): Promise<void> {
-  const open = args.includes('--open');
+  const open = args.includes('--open') || configuredOpenDashboard(args);
   const managerArgs = args.filter((arg) => arg !== '--open');
   const result = await startDaemon(managerArgs);
   process.stdout.write(formatDaemonState(
@@ -172,9 +213,9 @@ function runDaemonStatus(): void {
 
 async function runDaemonRestart(args: readonly string[]): Promise<void> {
   const inspection = inspectDaemon();
-  const open = args.includes('--open');
   const explicitArgs = args.filter((arg) => arg !== '--open' && arg !== '--daemon');
   const managerArgs = explicitArgs.length > 0 ? explicitArgs : inspection.state?.managerArgs ?? [];
+  const open = args.includes('--open') || configuredOpenDashboard(managerArgs);
   await stopDaemon();
   const result = await startDaemon(managerArgs);
   process.stdout.write(formatDaemonState('Code Factory Agent Manager daemon restarted', result.state, result.paths.logFile));
@@ -207,6 +248,12 @@ function option(args: readonly string[], name: string): string | undefined {
   return index >= 0 ? args[index + 1] : undefined;
 }
 
+function configuredOpenDashboard(args: readonly string[]): boolean {
+  const workspaceRoot = realpathSync(process.cwd());
+  const configurationFilePath = resolve(option(args, '--config') ?? defaultConfigurationPath(workspaceRoot));
+  return loadAgentManagerConfiguration(configurationFilePath).openDashboard;
+}
+
 function openDashboard(dashboardUrl: string, logger?: Logger): void {
   const browserCommand = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
   const browserArgs = process.platform === 'win32' ? ['/c', 'start', '', dashboardUrl] : [dashboardUrl];
@@ -227,8 +274,9 @@ function usage(): never {
     '  code-factory-agent-manager status',
     '  code-factory-agent-manager daemon <start|stop|restart|status> [OPTIONS]',
     '',
-    'Options: --host HOST --port PORT --db PATH --allow-origin ORIGIN --pr-reconcile-interval SECONDS',
-    '         --log-level LEVEL --log-file PATH --log-max-size SIZE --log-max-files COUNT_OR_DAYS --open',
+    'Options: --config PATH --host HOST --port PORT --db PATH --allow-origin ORIGIN',
+    '         --pr-reconcile-interval SECONDS --log-level LEVEL --log-file PATH',
+    '         --log-max-size SIZE --log-max-files COUNT_OR_DAYS --open',
     '',
   ].join('\n'));
   process.exit(1);

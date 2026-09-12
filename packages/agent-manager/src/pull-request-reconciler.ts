@@ -1,4 +1,5 @@
 import type { AgentTriggerContext } from './agent-trigger.js';
+import { MAX_PULL_REQUEST_RECONCILE_INTERVAL_SECONDS } from './configuration.js';
 import type { GitHubClient } from './github-client.js';
 import type { Logger } from './logger.js';
 import {
@@ -45,8 +46,9 @@ export class PullRequestReconciler {
   }
 
   setInterval(intervalMs: number): void {
-    if (!Number.isFinite(intervalMs) || intervalMs < 1_000) {
-      throw new RangeError('Pull request reconcile interval must be at least 1000ms');
+    if (!Number.isFinite(intervalMs) || intervalMs < 1_000
+      || intervalMs > MAX_PULL_REQUEST_RECONCILE_INTERVAL_SECONDS * 1_000) {
+      throw new RangeError(`Pull request reconcile interval must be from 1000ms to ${MAX_PULL_REQUEST_RECONCILE_INTERVAL_SECONDS * 1_000}ms`);
     }
     if (this.#timer) throw new Error('Cannot change the interval of a running pull request reconciler');
     this.#intervalMs = intervalMs;

@@ -9,6 +9,7 @@ See the [Agent Manager HTTP API Reference](agent-manager-api.md) for request fie
 ~~~text
 GET /api/health
 GET /api/workspace
+GET /api/configuration
 GET /api/requirements
 GET /api/sessions
 GET /api/runs?requirementId=<id>
@@ -22,6 +23,14 @@ GET /api/events?after=<event-id>
 `GET /api/events` is an SSE stream that can replay events after a known event ID.
 
 ## 2. Human endpoints
+
+Update workspace configuration:
+
+~~~text
+PATCH /api/configuration
+~~~
+
+PR reconciliation interval and log-level changes apply immediately; other settings are persisted for restart. See the API reference for validation and the restart-required response fields.
 
 Create a Requirement:
 

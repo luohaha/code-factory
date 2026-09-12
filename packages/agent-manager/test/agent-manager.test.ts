@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import type { AgentTrigger, AgentTriggerContext, AgentTriggerMessage } from '../src/agent-trigger.ts';
 import { AgentManager } from '../src/agent-manager.ts';
+import { DEFAULT_AGENT_MANAGER_CONFIGURATION } from '../src/configuration.ts';
 import {
   CODE_FACTORY_API_URL,
   CODE_FACTORY_REQUIREMENT_ID,
@@ -52,7 +53,10 @@ class InterruptibleRunner implements AgentProcessRunner {
 class SequenceGitHubClient implements GitHubClient {
   readonly #snapshots: GitHubPullRequestSnapshot[];
   #index = 0;
-  inspectionCount = 0;
+
+  get inspectionCount(): number {
+    return this.#index;
+  }
 
   constructor(snapshots: GitHubPullRequestSnapshot[]) {
     this.#snapshots = snapshots;
@@ -61,11 +65,77 @@ class SequenceGitHubClient implements GitHubClient {
   inspectPullRequest(): Promise<GitHubPullRequestSnapshot> {
     const snapshot = this.#snapshots[Math.min(this.#index, this.#snapshots.length - 1)];
     this.#index += 1;
-    this.inspectionCount += 1;
     if (!snapshot) throw new Error('No GitHub snapshot configured');
     return Promise.resolve(snapshot);
   }
 }
+
+test('runtime configuration starts and stops PR reconciliation without restarting the manager', async () => {
+  const snapshot: GitHubPullRequestSnapshot = {
+    status: 'open',
+    title: 'Dynamic configuration',
+    url: 'https://github.com/acme/repo/pull/4',
+    baseBranch: 'main',
+    headBranch: 'configuration',
+    headSha: 'abc123',
+    updatedAt: '2099-01-01T00:00:00.000Z',
+    reviewActivity: [],
+    checks: [],
+  };
+  const githubClient = new SequenceGitHubClient([snapshot]);
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    githubClient,
+    logger: silentLogger,
+    configuration: {
+      ...DEFAULT_AGENT_MANAGER_CONFIGURATION,
+      pullRequestReconcileIntervalSeconds: 0,
+      logLevel: 'silent',
+    },
+  });
+  try {
+    const requirement = manager.createRequirement({ title: 'Configuration', description: 'Enable polling', provider: 'codex' });
+    manager.trackPullRequest({
+      requirementId: requirement.id,
+      repository: 'acme/repo',
+      number: 4,
+      url: snapshot.url,
+      title: snapshot.title,
+      baseBranch: snapshot.baseBranch,
+      headBranch: snapshot.headBranch,
+      headSha: snapshot.headSha,
+      status: snapshot.status,
+    });
+    manager.startConfiguredServices();
+    assert.equal(githubClient.inspectionCount, 0);
+
+    const enabled = manager.updateConfiguration({ pullRequestReconcileIntervalSeconds: 1 });
+    assert.equal(enabled.restartRequired, false);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(githubClient.inspectionCount, 1);
+
+    manager.updateConfiguration({ pullRequestReconcileIntervalSeconds: 0 });
+    assert.equal(manager.getConfiguration().values.pullRequestReconcileIntervalSeconds, 0);
+    for (const triggerId of [
+      PULL_REQUEST_STATUS_TRIGGER_ID,
+      PULL_REQUEST_COMMENT_TRIGGER_ID,
+      PULL_REQUEST_CI_FAILURE_TRIGGER_ID,
+      PULL_REQUEST_CONFLICT_TRIGGER_ID,
+    ]) {
+      const probe: AgentTrigger = {
+        id: triggerId,
+        source: 'test',
+        start: () => undefined,
+        stop: () => undefined,
+      };
+      manager.startAgentTrigger(probe);
+      manager.stopAgentTrigger(triggerId);
+    }
+  } finally {
+    await manager.close();
+  }
+});
 
 class TestAgentTrigger implements AgentTrigger {
   readonly id = 'slack.thread';

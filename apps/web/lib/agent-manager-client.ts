@@ -61,6 +61,27 @@ export interface AgentRunDto {
 export interface WorkspaceDto {
   root: string;
   databasePath: string;
+  logFilePath: string | null;
+}
+
+export interface AgentManagerConfiguration {
+  host: string;
+  port: number;
+  allowedOrigin: string | null;
+  openDashboard: boolean;
+  databasePath: string | null;
+  pullRequestReconcileIntervalSeconds: number;
+  logLevel: 'debug' | 'info' | 'warn' | 'error' | 'silent';
+  logFilePath: string | null;
+  logMaxSize: string | number;
+  logMaxFiles: string | number;
+}
+
+export interface AgentManagerConfigurationSnapshot {
+  path: string | null;
+  values: AgentManagerConfiguration;
+  restartRequired: boolean;
+  restartRequiredFields: Array<keyof AgentManagerConfiguration>;
 }
 
 export interface ManagerEventDto {
@@ -155,6 +176,14 @@ export class AgentManagerClient {
 
   getWorkspace(): Promise<WorkspaceDto> {
     return this.request('/api/workspace');
+  }
+
+  getConfiguration(): Promise<AgentManagerConfigurationSnapshot> {
+    return this.request('/api/configuration');
+  }
+
+  updateConfiguration(values: Partial<AgentManagerConfiguration>): Promise<AgentManagerConfigurationSnapshot> {
+    return this.request('/api/configuration', { method: 'PATCH', body: JSON.stringify(values) });
   }
 
   async listRequirements(): Promise<RequirementDto[]> {
@@ -260,6 +289,7 @@ export class AgentManagerClient {
       'pull_request.updated',
       'review_request.started',
       'manager.reconciled',
+      'manager.configuration.updated',
     ];
     const listener = (raw: Event) => {
       try {

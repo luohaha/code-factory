@@ -45,6 +45,8 @@ flowchart LR
 
 At startup, Agent Manager fixes the workspace to `realpath(process.cwd())`. Every RD and Reviewer child process uses that directory. Codex and Claude Code discover AGENTS.md, CLAUDE.md, Skills, and configuration according to their native directory rules.
 
+Agent Manager's own settings are workspace-scoped in `~/.code-factory/workspaces/<workspace-hash>/config.json` by default. The CLI loads this file before constructing storage, logging, HTTP, and trigger services. Existing command-line flags remain process-local overrides, and `--config PATH` selects another file. File-backed desired values and effective startup values are kept separate so a later API update cannot persist unrelated CLI arguments, environment values, or resolved paths. The API and dashboard can atomically update the file. PR reconciliation intervals and log levels are reconfigured in the running process; HTTP binding, CORS, storage paths, startup browser behavior, and log rotation are marked as requiring a restart.
+
 Agent Manager adds only Code Factory behavioral instructions that identify the relevant `code-factory-cli` commands. It places a private CLI launcher on the RD process's `PATH` and injects `CODE_FACTORY_API_URL`, `CODE_FACTORY_REQUIREMENT_ID`, and `CODE_FACTORY_SESSION_ID`; HTTP paths and payload schemas remain in CLI help instead of the model prompt. It does not copy or replace the project’s own instructions or Skills.
 
 For example:
@@ -151,7 +153,7 @@ Agent Manager polls each tracked Draft/Open PR through the authenticated local `
 
 New review activity is appended as a Reviewer message. PR status changes, CI failures, and merge conflicts are appended as System messages. All are marked for RD delivery while the Requirement is active: an idle RD session resumes immediately, while a running session consumes them in order after its current Run. DONE or CANCELLED Requirements retain the messages for visibility without being reopened.
 
-Observation baselines and trigger-scoped receipts are persisted in SQLite. This prevents duplicate delivery across polling cycles and Agent Manager restarts. Legacy receipts from the former combined `github.pull-request` trigger are copied into the matching split trigger scope during migration. When an older PR is first adopted, existing comments and CI results form the baseline instead of being replayed, while a stale stored PR status is corrected immediately. A conflict is keyed by head SHA, so an unchanged conflict does not repeat while a newly pushed conflicting revision can wake RD again. `--pr-reconcile-interval SECONDS` changes the interval; `0` disables polling.
+Observation baselines and trigger-scoped receipts are persisted in SQLite. This prevents duplicate delivery across polling cycles and Agent Manager restarts. Legacy receipts from the former combined `github.pull-request` trigger are copied into the matching split trigger scope during migration. When an older PR is first adopted, existing comments and CI results form the baseline instead of being replayed, while a stale stored PR status is corrected immediately. A conflict is keyed by head SHA, so an unchanged conflict does not repeat while a newly pushed conflicting revision can wake RD again. `pullRequestReconcileIntervalSeconds` changes the interval dynamically; `0` disables polling. The compatible `--pr-reconcile-interval SECONDS` option overrides the file for the launched process only.
 
 GitHub and the PR reconciler exclusively advance PR lifecycle state. The RD Agent uses `code-factory-cli pr register` after creating a PR and may run it again when its own push or edit changes the head SHA, title, or branches, but the underlying Agent API cannot change `draft/open/closed/merged` for an existing PR. Reconciler status messages explicitly say that the state is already persisted, so the RD Agent must not mirror the event.
 
@@ -193,6 +195,7 @@ DRAFT → OPEN → MERGED
 The first implementation uses Node.js `node:sqlite`:
 
 ~~~text
+~/.code-factory/workspaces/<sha256(workspaceRoot)[0:16]>/config.json
 ~/.code-factory/workspaces/<sha256(workspaceRoot)[0:16]>/factory.sqlite
 ~~~
 
@@ -200,6 +203,7 @@ The first implementation uses Node.js `node:sqlite`:
 - Requirement and AgentSession are created atomically.
 - One-to-one relationships, message ordering, and active-Run constraints are enforced by SQLite.
 - The application depends on the business-level `AgentManagerStore` interface, allowing a later PostgreSQL implementation without changing domain workflows.
+- Configuration is validated before use and replaced atomically with file mode `0600`; it is operational state rather than a domain entity stored in SQLite.
 
 ## 9. Web Dashboard
 
@@ -211,7 +215,7 @@ The Web application contains three boards:
 
 Requirement details form a Jira-like work surface containing the description, linked PRs, Run information, and a unified Human/RD/Reviewer/System conversation. The input remains available while RD is running, and pending external-message counts appear on Requirement and Session cards.
 
-The dashboard supports English and Simplified Chinese. The header language switcher applies the locale immediately and persists the choice in browser storage; a visitor without a saved preference defaults to the browser language.
+The dashboard supports English and Simplified Chinese. The header language switcher applies the locale immediately and persists the choice in browser storage; a visitor without a saved preference defaults to the browser language. The configuration dialog updates the workspace configuration and distinguishes immediately applied settings from restart-required settings.
 
 Running `npx @code-factory/agent-manager start` serves the API, SSE stream, and bundled Web dashboard from the same port and writes the local URL to the log file in the workspace data directory. No separate Web deployment is required.
 
