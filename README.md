@@ -13,7 +13,7 @@ Code Factory sits between an issue tracker, an agent session manager, and a pull
 - **Requirement-driven:** work starts from a concrete requirement instead of an ad-hoc prompt.
 - **Persistent:** every requirement owns a long-lived RD session that can be resumed across multiple runs.
 - **Human-controlled:** people can add context, queue corrections, interrupt a run, and decide when work is done.
-- **PR-aware:** GitHub status, reviews, comments, and CI failures flow back into the same development loop.
+- **Trigger-aware:** external signals flow into the same development loop; the built-in GitHub PR Trigger handles status, reviews, comments, and CI failures.
 - **Local-first:** agents run in your existing repository with your installed CLI tools, project instructions, and credentials.
 
 Code Factory is not a hosted IDE or a generic agent pool. It coordinates the delivery workflow around coding agents while leaving code execution, Git, and GitHub access in the developer's own environment.
@@ -120,15 +120,16 @@ flowchart LR
   RD -->|Create or update PR| GH[GitHub]
   RD -->|Register PR or propose TODO| M
   RV -->|Review comments| GH
-  GH -->|PR state, comments,<br/>reviews, and CI| M
+  GH -->|PR state, comments,<br/>reviews, and CI| T[PR Agent Trigger]
+  T -->|Deduplicated messages| M
 ~~~
 
 1. A human creates a Requirement and chooses Codex or Claude Code, optionally pinning a model and reasoning effort. Code Factory creates a dedicated, persistent RD session for it.
 2. Agent Manager starts or resumes that agent in the managed workspace. Messages sent during a run are queued; the human may explicitly interrupt when an immediate correction is needed.
-3. The RD agent edits and tests the repository, then registers any pull request it creates. Agent Manager continuously brings GitHub state and feedback into the Requirement conversation.
+3. The RD agent edits and tests the repository, then registers any pull request it creates. The built-in PR Agent Trigger continuously brings GitHub state and feedback into the Requirement conversation.
 4. A human can request a short-lived AI review for an open PR with its own provider, model, and reasoning effort. Review results return to the same conversation and wake the original RD session to continue the loop.
 
-Different Requirements can run concurrently, while each Requirement has at most one active RD run. Requirement state, conversations, runs, sessions, PR metadata, and reconciliation receipts are persisted in SQLite.
+Different Requirements can run concurrently, while each Requirement has at most one active RD run. Requirement state, conversations, runs, sessions, PR metadata, and Agent Trigger receipts are persisted in SQLite.
 
 For the complete domain model, state machines, concurrency rules, and delivery semantics, see [Final architecture and domain model](docs/architecture.en.md).
 
@@ -196,4 +197,4 @@ npm run build
 
 The current implementation includes the Agent Manager core, SQLite Store, HTTP/SSE API, Codex and Claude Code adapters, conversation-driven RD continuation, PR tracking, manually triggered Reviewer runs, and the bundled Web dashboard.
 
-Webhook-based synchronization, stale-review indicators after a head-SHA change, local access tokens, detailed tool-execution logs, and Manager-enforced worktree isolation remain future work. RD Agents are instructed to create or reuse a Requirement-specific Git worktree before changing code, but Agent Manager does not provision or enforce that isolation; every child process still starts in the shared Manager workspace.
+The `AgentTrigger` extension API is currently code-level; dynamic trigger discovery/configuration and a Slack implementation remain future work. Webhook-based synchronization, stale-review indicators after a head-SHA change, local access tokens, detailed tool-execution logs, and Manager-enforced worktree isolation also remain future work. RD Agents are instructed to create or reuse a Requirement-specific Git worktree before changing code, but Agent Manager does not provision or enforce that isolation; every child process still starts in the shared Manager workspace.

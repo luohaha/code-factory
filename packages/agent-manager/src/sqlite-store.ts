@@ -5,6 +5,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { schemaStatements } from './schema.js';
 import {
   type AgentManagerStore,
+  type AppendAgentTriggerMessageRecord,
   type AppendExternalMessageRecord,
   type AppendMessageRecord,
   type AppendEventRecord,
@@ -307,15 +308,17 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     return messageFrom(row, this.listMessageAttachments(input.id));
   }
 
-  appendExternalMessage(input: AppendExternalMessageRecord): RequirementMessage | null {
+  appendAgentTriggerMessage(input: AppendAgentTriggerMessageRecord): RequirementMessage | null {
     const body = input.body.trim();
     if (!body) throw new TypeError('Message body cannot be empty');
+    if (!input.triggerId.trim()) throw new TypeError('triggerId is required');
+    if (!input.idempotencyKey.trim()) throw new TypeError('idempotencyKey is required');
     this.#db.exec('BEGIN IMMEDIATE');
     try {
-      const receipt = this.#db.prepare(`INSERT INTO external_event_receipts
-        (source_key, pull_request_id, created_at) VALUES (?, ?, ?)
-        ON CONFLICT(source_key) DO NOTHING`)
-        .run(input.sourceKey, input.pullRequestId, input.now);
+      const receipt = this.#db.prepare(`INSERT INTO agent_trigger_receipts
+        (trigger_id, idempotency_key, requirement_id, created_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(trigger_id, idempotency_key) DO NOTHING`)
+        .run(input.triggerId, input.idempotencyKey, input.requirementId, input.now);
       if (receipt.changes === 0) {
         this.#db.exec('COMMIT');
         return null;
@@ -334,6 +337,14 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     }
     const row = this.#db.prepare('SELECT * FROM requirement_messages WHERE id = ?').get(input.id) as Row;
     return messageFrom(row);
+  }
+
+  appendExternalMessage(input: AppendExternalMessageRecord): RequirementMessage | null {
+    return this.appendAgentTriggerMessage({
+      ...input,
+      triggerId: 'github.pull-request',
+      idempotencyKey: input.sourceKey,
+    });
   }
 
   listMessages(requirementId: string): RequirementMessage[] {
@@ -681,6 +692,16 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     ensureColumn('requirement_messages', 'deliver_to_rd', 'INTEGER NOT NULL DEFAULT 0 CHECK (deliver_to_rd IN (0, 1))');
     ensureColumn('review_requests', 'model', 'TEXT');
     ensureColumn('review_requests', 'reasoning_effort', "TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max'))");
+    const legacyReceiptTable = this.#db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'external_event_receipts'",
+    ).get();
+    if (legacyReceiptTable) {
+      this.#db.exec(`INSERT OR IGNORE INTO agent_trigger_receipts
+        (trigger_id, idempotency_key, requirement_id, created_at)
+        SELECT 'github.pull-request', receipt.source_key, pull_request.requirement_id, receipt.created_at
+        FROM external_event_receipts receipt
+        JOIN pull_requests pull_request ON pull_request.id = receipt.pull_request_id`);
+    }
     const attachmentTable = this.#db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'message_attachments'").get() as Row | undefined;
     const attachmentSql = attachmentTable?.sql === null || attachmentTable?.sql === undefined ? '' : String(attachmentTable.sql);
     if (!attachmentSql.includes("kind TEXT NOT NULL CHECK (kind IN ('image', 'file'))") || attachmentSql.includes('media_type IN')) {

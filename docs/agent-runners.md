@@ -94,14 +94,20 @@ Adapters map each CLI's JSONL output into:
 
 Agent Manager depends only on normalized fields. Raw events may be exposed as a diagnostic stream. Human messages and normalized Agent or Reviewer messages are persisted in the Requirement conversation and broadcast through `message.created`. Raw JSONL and tool noise are not stored in the database.
 
-## 5. PR Reconciler
+## 5. Agent Triggers
+
+`AgentTrigger` is the extension boundary for external systems that should continue an RD session. A trigger owns source-specific polling or listening and emits an `AgentTriggerMessage` containing a target Requirement, an idempotency key, an author, a body, and optional event metadata. Register it with `AgentManager.startAgentTrigger()` and release it with `stopAgentTrigger()`.
+
+Agent Manager deliberately owns the rest of the delivery path: it scopes durable receipts by trigger ID, appends each accepted message to the Requirement conversation, publishes `message.created`, and starts or queues the target RD session. A stopped trigger's delivery context no longer accepts messages. This keeps future integrations such as a Slack-thread listener out of session and persistence internals.
+
+### Built-in PR Trigger
 
 By default, Agent Manager polls Draft and Open PRs every 30 seconds through the authenticated local `gh` CLI. Each poll reads PR state, head SHA, general comments, reviews, inline review comments, and CI checks:
 
 - PR state changes and CI failures become System messages;
 - PR and review comments become Reviewer messages and are explicitly marked as untrusted external feedback;
 - messages for active Requirements use `deliverToRd=true`, reusing the existing conversation cursor to trigger or queue the next RD Run;
-- SQLite observation state tracks previous CI state, while external-event receipts deduplicate comments, state changes, and CI events across restarts;
+- SQLite observation state tracks previous CI state, while Agent Trigger receipts deduplicate comments, state changes, and CI events across restarts;
 - the first observation of an existing PR establishes a baseline without replaying old comments or CI results, while still correcting stale PR state.
 
 Use `--pr-reconcile-interval SECONDS` to change the interval or `0` to disable polling. Reconciliation requires the launching user to be authenticated with `gh auth login`.
