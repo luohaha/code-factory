@@ -30,6 +30,12 @@ import {
 } from './code-factory-cli-launcher.js';
 import { GhCliGitHubClient, type GitHubClient } from './github-client.js';
 import { createFileLogger, type Logger, type LogLevel } from './logger.js';
+import {
+  ClaudeCodeModelDiscoverer,
+  CodexModelDiscoverer,
+  ModelCatalog,
+  type AgentModelCatalogService,
+} from './model-catalog.js';
 import { HeadlessProcessRunner, type AgentProcessRunner, type ProcessRunRequest } from './process-runner.js';
 import { PullRequestReconciler } from './pull-request-reconciler.js';
 import {
@@ -44,6 +50,7 @@ import type { AgentManagerStore } from './store.js';
 import { StoreConflictError, StoreNotFoundError } from './store.js';
 import type {
   AgentProvider,
+  AgentModelCatalogSnapshot,
   AgentReasoningEffort,
   CreateRequirementInput,
   ManagerEvent,
@@ -76,6 +83,7 @@ export interface AgentManagerOptions {
   effectiveConfiguration?: AgentManagerConfiguration;
   configurationFilePath?: string;
   agentCliInvocation?: CodeFactoryCliInvocation;
+  modelCatalog?: AgentModelCatalogService;
 }
 
 export function defaultDatabasePath(workspaceRoot: string): string {
@@ -112,6 +120,7 @@ export class AgentManager extends EventEmitter {
   readonly #timeoutMs: number;
   readonly #maxOutputBytes: number;
   readonly #agentCliBinDirectory: string | null;
+  readonly #modelCatalog: AgentModelCatalogService;
   readonly #activeRdRuns = new Map<string, { runId: string; controller: AbortController }>();
   readonly #agentTriggers = new Map<string, AgentTrigger>();
   readonly #pullRequestReconciler: PullRequestReconciler;
@@ -166,6 +175,26 @@ export class AgentManager extends EventEmitter {
     this.#agentCliBinDirectory = options.agentCliInvocation && this.databasePath !== ':memory:'
       ? installCodeFactoryCliLauncher(dirname(this.databasePath), options.agentCliInvocation)
       : null;
+    this.#modelCatalog = options.modelCatalog ?? new ModelCatalog({
+      discoverers: [
+        new CodexModelDiscoverer({ workspaceRoot: this.workspaceRoot }),
+        new ClaudeCodeModelDiscoverer(),
+      ],
+      logger: this.logger,
+      onUpdated: (snapshot) => {
+        if (this.#closed) return;
+        this.publish({
+          type: 'agent_models.updated',
+          payload: {
+            providers: snapshot.providers.map((provider) => ({
+              provider: provider.provider,
+              refreshedAt: provider.refreshedAt,
+              stale: provider.stale,
+            })),
+          },
+        });
+      },
+    });
     this.#pullRequestReconciler = new PullRequestReconciler({
       store: this.#store,
       githubClient: options.githubClient ?? new GhCliGitHubClient(this.workspaceRoot),
@@ -256,12 +285,18 @@ export class AgentManager extends EventEmitter {
 
   startConfiguredServices(): void {
     this.configurePullRequestReconciler(this.#initialPullRequestReconcileIntervalSeconds);
+    this.#modelCatalog.start();
+  }
+
+  listAgentModels(): Promise<AgentModelCatalogSnapshot> {
+    return this.#modelCatalog.getModels();
   }
 
   close(): Promise<void> {
     if (this.#closePromise) return this.#closePromise;
     if (this.#closed) return Promise.resolve();
     this.#closed = true;
+    this.#modelCatalog.stop();
     this.#pullRequestReconciler.stop();
     for (const trigger of this.#agentTriggers.values()) {
       try {

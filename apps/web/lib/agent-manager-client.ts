@@ -5,6 +5,24 @@ export interface AgentConfiguration {
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
 }
+
+export interface AgentModelDto {
+  id: string;
+  displayName: string;
+  description: string | null;
+}
+
+export interface AgentModelProviderCatalogDto {
+  provider: AgentProvider;
+  models: AgentModelDto[];
+  refreshedAt: string | null;
+  stale: boolean;
+}
+
+export interface AgentModelCatalogDto {
+  refreshIntervalSeconds: number;
+  providers: AgentModelProviderCatalogDto[];
+}
 export type RequirementStatus = 'todo' | 'doing' | 'waiting_confirmation' | 'done' | 'cancelled';
 export type SessionState = 'idle' | 'running' | 'waiting_human' | 'failed' | 'completed';
 export type RunStatus = 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
@@ -182,6 +200,10 @@ export class AgentManagerClient {
     return this.request('/api/configuration');
   }
 
+  listAgentModels(): Promise<AgentModelCatalogDto> {
+    return this.request('/api/agent-models');
+  }
+
   updateConfiguration(values: Partial<AgentManagerConfiguration>): Promise<AgentManagerConfigurationSnapshot> {
     return this.request('/api/configuration', { method: 'PATCH', body: JSON.stringify(values) });
   }
@@ -290,6 +312,7 @@ export class AgentManagerClient {
       'review_request.started',
       'manager.reconciled',
       'manager.configuration.updated',
+      'agent_models.updated',
     ];
     const listener = (raw: Event) => {
       try {

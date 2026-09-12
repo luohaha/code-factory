@@ -185,7 +185,7 @@ The bundled dashboard provides three views:
 - Pull Request board: `DRAFT / OPEN / CLOSED / MERGED`
 - RD Session board: `Idle / Running / Waiting for human / Failed / Completed`
 
-Opening a Requirement shows its description, linked PRs, run information, and unified Human/RD/Reviewer conversation. Messages support images and file attachments. New input can be queued while RD is running, or the current run can be interrupted so the same session handles the correction immediately.
+Opening a Requirement shows its description, linked PRs, run information, and unified Human/RD/Reviewer conversation. Messages support images and file attachments. New input can be queued while RD is running, or the current run can be interrupted so the same session handles the correction immediately. Requirement and Reviewer forms provide provider-specific model dropdowns populated by an Agent Manager catalog that refreshes every 24 hours.
 
 The dashboard supports English and Simplified Chinese, remembers the selected locale, and initially follows the browser language. Its Agent Manager settings dialog persists workspace configuration and identifies changes that require a restart.
 

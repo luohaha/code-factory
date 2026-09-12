@@ -8,6 +8,7 @@ export * from './code-factory-cli.js';
 export * from './code-factory-cli-launcher.js';
 export * from './dashboard-server.js';
 export * from './logger.js';
+export * from './model-catalog.js';
 export * from './process-runner.js';
 export * from './pull-request-reconciler.js';
 export * from './pull-request-triggers.js';

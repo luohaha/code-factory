@@ -22,6 +22,24 @@ export type RequirementCreator = 'human' | 'rd_agent';
 export type PullRequestStatus = 'draft' | 'open' | 'closed' | 'merged';
 export type ReviewRequestStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
 
+export interface AgentModel {
+  id: string;
+  displayName: string;
+  description: string | null;
+}
+
+export interface AgentModelProviderCatalog {
+  provider: AgentProvider;
+  models: AgentModel[];
+  refreshedAt: string | null;
+  stale: boolean;
+}
+
+export interface AgentModelCatalogSnapshot {
+  refreshIntervalSeconds: number;
+  providers: AgentModelProviderCatalog[];
+}
+
 export interface Requirement {
   id: string;
   title: string;

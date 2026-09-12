@@ -18,6 +18,12 @@ Agent Manager supports the local `codex` and `claude` CLIs. Every invocation fol
 - Before changing code, RD Agents are instructed to create or reuse a Git worktree dedicated to the Requirement and leave pre-existing shared-workspace changes untouched. This is a behavioral instruction: every child process still starts in the Agent Manager workspace, and Agent Manager does not provision or enforce the worktree.
 - each invocation may include an explicit model and reasoning effort (`low | medium | high | xhigh | max`); omitted values continue to use the CLI configuration.
 
+### Model discovery
+
+Agent Manager maintains a provider-specific model catalog for the dashboard. It refreshes once at startup and every 24 hours thereafter. Codex models come from the authenticated local CLI's app-server `model/list` method, so the list reflects the launching user's available picker models. Claude models come from `GET /v1/models?limit=1000` when `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or gateway discovery is configured. Claude Code's rolling `best`, `sonnet`, `opus`, and `haiku` families, extended-context variants, `opusplan`, and environment-configured model IDs are used as safe fallbacks.
+
+Discovery results are cached in memory. Provider failures retain the previous list and mark it stale instead of affecting Agent execution. The HTTP catalog continues to include the CLI-default choice separately, and the execution API remains compatible with explicit custom model strings supplied by non-dashboard clients.
+
 ### RD control-plane CLI
 
 RD Agents use two self-describing commands instead of constructing Agent API requests in their prompts:

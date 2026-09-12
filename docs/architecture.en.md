@@ -47,6 +47,8 @@ At startup, Agent Manager fixes the workspace to `realpath(process.cwd())`. Ever
 
 Agent Manager's own settings are workspace-scoped in `~/.code-factory/workspaces/<workspace-hash>/config.json` by default. The CLI loads this file before constructing storage, logging, HTTP, and trigger services. Existing command-line flags remain process-local overrides, and `--config PATH` selects another file. File-backed desired values and effective startup values are kept separate so a later API update cannot persist unrelated CLI arguments, environment values, or resolved paths. The API and dashboard can atomically update the file. PR reconciliation intervals and log levels are reconfigured in the running process; HTTP binding, CORS, storage paths, startup browser behavior, and log rotation are marked as requiring a restart.
 
+Agent Manager also owns an in-memory provider model catalog. It refreshes at startup and every 24 hours, using Codex's local app-server `model/list` method and Claude's `/v1/models` endpoint when API or gateway credentials are available. Claude Code rolling aliases and environment-configured model overrides remain available when remote discovery cannot run. A failed refresh retains the last successful provider list and marks it stale; model discovery never prevents the Manager from starting or running existing Sessions.
+
 Agent Manager adds only Code Factory behavioral instructions that identify the relevant `code-factory-cli` commands. It places a private CLI launcher on the RD process's `PATH` and injects `CODE_FACTORY_API_URL`, `CODE_FACTORY_REQUIREMENT_ID`, and `CODE_FACTORY_SESSION_ID`; HTTP paths and payload schemas remain in CLI help instead of the model prompt. It does not copy or replace the project’s own instructions or Skills.
 
 For example:
@@ -215,7 +217,7 @@ The Web application contains three boards:
 
 Requirement details form a Jira-like work surface containing the description, linked PRs, Run information, and a unified Human/RD/Reviewer/System conversation. The input remains available while RD is running, and pending external-message counts appear on Requirement and Session cards.
 
-The dashboard supports English and Simplified Chinese. The header language switcher applies the locale immediately and persists the choice in browser storage; a visitor without a saved preference defaults to the browser language. The configuration dialog updates the workspace configuration and distinguishes immediately applied settings from restart-required settings.
+The dashboard supports English and Simplified Chinese. The header language switcher applies the locale immediately and persists the choice in browser storage; a visitor without a saved preference defaults to the browser language. Requirement and Reviewer forms select models from the current provider catalog and retain the CLI-default option. The configuration dialog updates the workspace configuration and distinguishes immediately applied settings from restart-required settings.
 
 Requirement, Pull Request, and RD Session boards share a creation-time filter. It defaults to the last 7 days and also offers the last 24 hours, 30 days, 90 days, and all time.
 
