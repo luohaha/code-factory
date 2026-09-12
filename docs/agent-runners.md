@@ -119,6 +119,7 @@ Set `pullRequestReconcileIntervalSeconds` in the workspace configuration or dash
 - A human-interrupted Run leaves the Requirement in `doing` and returns the Session to `waiting_human`. If corrective messages arrived after the Run started, Agent Manager immediately resumes the same Session.
 - A human retry or reply continues the same AgentSession. Agent Manager resumes an existing native session ID or creates a new native session if none exists.
 - On restart, Agent Manager never treats an old PID as a live process. Startup reconciliation marks orphaned RD Runs as failed and separately cleans up orphaned ReviewRequests without changing RD Session state.
+- With `start --daemon`, a detached workspace-scoped supervisor restarts an unexpectedly exited Agent Manager. Repeated early failures use exponential backoff from 1 to 30 seconds to avoid a busy crash loop. `stop` is intentional and does not trigger another restart.
 
 ## 7. Security boundary
 
@@ -128,7 +129,9 @@ HTTP listens on `127.0.0.1` by default and permits the local dashboard origin `h
 
 ## 8. Runtime logs
 
-Agent Manager appends JSONL lifecycle logs for the manager, Requirements, Runs, PR reconciliation, and HTTP requests to `~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log`. The CLI always prints one startup banner containing the Workspace, configuration, Database, log path, Dashboard URL, API URL, and Reconciler interval; it otherwise emits no runtime logs to stdout or stderr. The default level is `info`. Configure it in `config.json`, with `CODE_FACTORY_LOG_LEVEL`, or with `--log-level`; later sources in that list take precedence. Log-level updates through the API apply immediately. Log destination and rotation changes apply after restart. Log files use mode `0600`.
+Agent Manager appends JSONL lifecycle logs for the manager, Requirements, Runs, PR reconciliation, and HTTP requests to `~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log`. In foreground mode, the CLI prints one startup banner containing the Workspace, configuration, Database, log path, Dashboard URL, API URL, and Reconciler interval; it otherwise emits no runtime logs to stdout or stderr. The default level is `info`. Configure it in `config.json`, with the logging environment variables, or with CLI flags; later sources in that list take precedence. Log-level updates through the API apply immediately. Log destination and rotation changes apply after restart. Log files use mode `0600`.
+
+Daemon mode redirects the Manager startup banner and process-level errors to `logs/daemon.log`, alongside supervisor start, exit, and restart events. `daemon.json` contains the current supervisor/Manager PIDs, readiness state, restart count, and start options used by `restart`; both files use mode `0600`. Run `status` from the same workspace to inspect the live state.
 
 Logging uses `winston` and `winston-daily-rotate-file`. Files rotate by local date and after reaching 20 MB, with 14 days retained by default. `agent-manager.log` is a stable symlink to the current file. Set `logMaxSize` and `logMaxFiles` in the workspace configuration; the existing environment variables and CLI flags remain launch-time overrides.
 
