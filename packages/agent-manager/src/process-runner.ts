@@ -7,6 +7,7 @@ export interface ProcessRunRequest {
   invocation: AgentInvocation;
   adapter: AgentAdapter;
   workspaceRoot: string;
+  environment?: Readonly<Record<string, string>>;
   timeoutMs: number;
   maxOutputBytes: number;
   signal?: AbortSignal;
@@ -61,7 +62,7 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         detached: process.platform !== 'win32',
         shell: false,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: process.env,
+        env: { ...process.env, ...request.environment },
       });
 
       let stdoutBuffer = '';

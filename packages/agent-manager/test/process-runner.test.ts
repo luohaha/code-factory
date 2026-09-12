@@ -41,6 +41,26 @@ test('HeadlessProcessRunner terminates an aborted child as a cancelled Run', asy
   assert.match(outcome.error ?? '', /interrupted by human/);
 });
 
+test('HeadlessProcessRunner merges per-Run environment into the child environment', async () => {
+  let output = '';
+  const outcome = await new HeadlessProcessRunner().run({
+    invocation: {
+      command: process.execPath,
+      args: ['-e', 'process.stdout.write(`${process.env.CODE_FACTORY_REQUIREMENT_ID}\\n`)'],
+      input: '',
+    },
+    adapter: noOutputAdapter,
+    workspaceRoot: process.cwd(),
+    environment: { CODE_FACTORY_REQUIREMENT_ID: 'req_environment' },
+    timeoutMs: 30_000,
+    maxOutputBytes: 1024,
+    onOutput: (line) => { output = line; },
+  });
+
+  assert.equal(outcome.status, 'succeeded');
+  assert.equal(output, 'req_environment');
+});
+
 test('HeadlessProcessRunner kills descendant tool processes before completing a cancelled Run', async () => {
   const grandchildScript = [
     "process.on('SIGTERM', () => undefined);",

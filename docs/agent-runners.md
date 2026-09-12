@@ -14,8 +14,22 @@ Agent Manager supports the local `codex` and `claude` CLIs. Every invocation fol
 - on POSIX systems, a human interrupt sends `SIGTERM` to the isolated process group and follows with `SIGKILL` after two seconds if descendants remain; Windows uses `taskkill /T /F`. The Run becomes `cancelled` only after the process tree exits;
 - one RD AgentSession may have only one active Run, while Sessions for different Requirements may run concurrently;
 - Human or Reviewer messages received during an RD Run are appended to the Requirement conversation without interrupting it. Only an explicit human interrupt stops the current Run, after which queued messages continue in the same native Session;
-- Agent Manager injects the local Agent API contract into RD Agents; project instructions and Skills are still loaded natively from the working directory.
+- Agent Manager puts a private `code-factory-cli` launcher on the RD process's `PATH` and injects its connection context through the environment; project instructions and Skills are still loaded natively from the working directory.
+- Before changing code, RD Agents are instructed to create or reuse a Git worktree dedicated to the Requirement and leave pre-existing shared-workspace changes untouched. This is a behavioral instruction: every child process still starts in the Agent Manager workspace, and Agent Manager does not provision or enforce the worktree.
 - each invocation may include an explicit model and reasoning effort (`low | medium | high | xhigh | max`); omitted values continue to use the CLI configuration.
+
+### RD control-plane CLI
+
+RD Agents use two self-describing commands instead of constructing Agent API requests in their prompts:
+
+```bash
+code-factory-cli pr register --help
+code-factory-cli requirement propose --help
+```
+
+`pr register` registers a newly created PR or refreshes metadata changed by the RD Agent. `requirement propose` records separate follow-up work as a linked TODO Requirement. Both commands print the Agent API JSON response and return nonzero exit codes for invalid input, missing context, network failures, or HTTP errors.
+
+Agent Manager injects `CODE_FACTORY_API_URL`, `CODE_FACTORY_REQUIREMENT_ID`, and `CODE_FACTORY_SESSION_ID` for each RD Run. The CLI supplies those context fields to the HTTP API, so the model does not copy IDs or endpoint paths from its prompt. A workspace-private launcher is created next to the workspace database and prepended to `PATH`, which also supports the documented `node .../dist/cli.js start` development workflow.
 
 ## 2. Codex
 
@@ -24,7 +38,7 @@ Start a native RD session:
 ```bash
 codex exec --json --color never --dangerously-bypass-approvals-and-sandbox \
   --model <model> -c 'model_reasoning_effort="high"' \
-  -c 'developer_instructions="...Code Factory API contract..."' -
+  -c 'developer_instructions="...code-factory-cli behavior..."' -
 ```
 
 Resume a native RD session:
@@ -56,7 +70,7 @@ Start a native RD session:
 claude --print --output-format stream-json --verbose \
   --dangerously-skip-permissions --session-id <uuid> \
   --model <model> --effort high \
-  --append-system-prompt "...Code Factory API contract..."
+  --append-system-prompt "...code-factory-cli behavior..."
 ```
 
 Resume a native RD session:

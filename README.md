@@ -138,7 +138,7 @@ flowchart LR
   M -->|Request review| RV[Short-lived Reviewer<br/>Codex or Claude Code]
   RD -->|Edit and test| WS[Local workspace]
   RD -->|Create or update PR| GH[GitHub]
-  RD -->|Register PR or propose TODO| M
+  RD -->|code-factory-cli| M
   RV -->|Review comments| GH
   GH -->|PR state, comments,<br/>reviews, and CI| T[PR Agent Trigger]
   T -->|Deduplicated messages| M
@@ -146,10 +146,12 @@ flowchart LR
 
 1. A human creates a Requirement and chooses Codex or Claude Code, optionally pinning a model and reasoning effort. Code Factory creates a dedicated, persistent RD session for it.
 2. Agent Manager starts or resumes that agent in the managed workspace. Messages sent during a run are queued; the human may explicitly interrupt when an immediate correction is needed.
-3. The RD agent edits and tests the repository, then registers any pull request it creates. The built-in PR Agent Trigger continuously brings GitHub state and feedback into the Requirement conversation.
+3. The RD agent edits and tests the repository, then uses the bundled `code-factory-cli` to register any pull request it creates or propose separate follow-up work. The built-in PR Agent Trigger continuously brings GitHub state and feedback into the Requirement conversation.
 4. A human can request a short-lived AI review for an open PR with its own provider, model, and reasoning effort. Review results return to the same conversation and wake the original RD session to continue the loop.
 
 Different Requirements can run concurrently, while each Requirement has at most one active RD run. Requirement state, conversations, runs, sessions, PR metadata, and Agent Trigger receipts are persisted in SQLite.
+
+Agent Manager places `code-factory-cli` on every RD process's `PATH` and injects its API URL, Requirement ID, and Session ID through the environment. The RD prompt names the relevant commands and leaves their arguments to `code-factory-cli --help`; raw HTTP details remain an internal transport contract.
 
 For the complete domain model, state machines, concurrency rules, and delivery semantics, see [Final architecture and domain model](docs/architecture.en.md).
 
@@ -225,4 +227,4 @@ npm run build
 
 The current implementation includes the Agent Manager core, a supervised daemon mode with automatic process restart, SQLite Store, HTTP/SSE API, Codex and Claude Code adapters, conversation-driven RD continuation, PR tracking, manually triggered Reviewer runs, and the bundled Web dashboard.
 
-The `AgentTrigger` extension API is currently code-level; dynamic trigger discovery/configuration and a Slack implementation remain future work. Webhook-based synchronization, stale-review indicators after a head-SHA change, local access tokens, detailed tool-execution logs, and optional worktree isolation also remain future work. Concurrent RD sessions currently share one working directory and can conflict on files or Git state.
+The `AgentTrigger` extension API is currently code-level; dynamic trigger discovery/configuration and a Slack implementation remain future work. Webhook-based synchronization, stale-review indicators after a head-SHA change, local access tokens, detailed tool-execution logs, and Manager-enforced worktree isolation also remain future work. RD Agents are instructed to create or reuse a Requirement-specific Git worktree before changing code, but Agent Manager does not provision or enforce that isolation; every child process still starts in the shared Manager workspace.
