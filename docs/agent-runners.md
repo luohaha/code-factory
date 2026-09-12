@@ -113,14 +113,16 @@ Agent Manager depends only on normalized fields. Raw events may be exposed as a 
 
 Agent Manager deliberately owns the rest of the delivery path: it scopes durable receipts by trigger ID, appends each accepted message to the Requirement conversation, publishes `message.created`, and starts or queues the target RD session. A stopped trigger's delivery context no longer accepts messages. This keeps future integrations such as a Slack-thread listener out of session and persistence internals.
 
-### Built-in PR Trigger
+### Built-in PR Triggers
 
-By default, Agent Manager polls Draft and Open PRs every 30 seconds through the authenticated local `gh` CLI. Each poll reads PR state, head SHA, general comments, reviews, inline review comments, and CI checks:
+By default, Agent Manager polls Draft and Open PRs every 30 seconds through the authenticated local `gh` CLI. One fetched snapshot is shared by four independently registered triggers, so the split does not multiply GitHub requests:
 
-- PR state changes and CI failures become System messages;
-- PR and review comments become Reviewer messages and are explicitly marked as untrusted external feedback;
+- `github.pull-request.status` turns PR lifecycle changes into System messages;
+- `github.pull-request.comment` turns general comments, reviews, and inline review comments into Reviewer messages that explicitly mark their bodies as untrusted external feedback;
+- `github.pull-request.ci-failure` turns checks that newly enter a failed conclusion into System messages;
+- `github.pull-request.conflict` turns a `CONFLICTING` GitHub mergeability result into a System message for each new head revision;
 - messages for active Requirements use `deliverToRd=true`, reusing the existing conversation cursor to trigger or queue the next RD Run;
-- SQLite observation state tracks previous CI state, while Agent Trigger receipts deduplicate comments, state changes, and CI events across restarts;
+- SQLite observation state tracks previous CI state, while trigger-scoped receipts deduplicate comments, state changes, CI failures, and conflicts across restarts;
 - the first observation of an existing PR establishes a baseline without replaying old comments or CI results, while still correcting stale PR state.
 
 Set `pullRequestReconcileIntervalSeconds` in the workspace configuration or dashboard to change the interval dynamically; `0` disables polling. The compatible `--pr-reconcile-interval SECONDS` launch override is also available. Reconciliation requires the launching user to be authenticated with `gh auth login`.

@@ -13,7 +13,7 @@ Code Factory sits between an issue tracker, an agent session manager, and a pull
 - **Requirement-driven:** work starts from a concrete requirement instead of an ad-hoc prompt.
 - **Persistent:** every requirement owns a long-lived RD session that can be resumed across multiple runs.
 - **Human-controlled:** people can add context, queue corrections, interrupt a run, and decide when work is done.
-- **Trigger-aware:** external signals flow into the same development loop; the built-in GitHub PR Trigger handles status, reviews, comments, and CI failures.
+- **Trigger-aware:** external signals flow into the same development loop; independent built-in GitHub PR Triggers handle status, reviews/comments, CI failures, and merge conflicts.
 - **Local-first:** agents run in your existing repository with your installed CLI tools, project instructions, and credentials.
 
 Code Factory is not a hosted IDE or a generic agent pool. It coordinates the delivery workflow around coding agents while leaving code execution, Git, and GitHub access in the developer's own environment.
@@ -162,13 +162,13 @@ flowchart LR
   RD -->|Create or update PR| GH[GitHub]
   RD -->|code-factory-cli| M
   RV -->|Review comments| GH
-  GH -->|PR state, comments,<br/>reviews, and CI| T[PR Agent Trigger]
+  GH -->|PR state, comments,<br/>reviews, CI, and conflicts| T[PR Agent Triggers]
   T -->|Deduplicated messages| M
 ~~~
 
 1. A human creates a Requirement and chooses Codex or Claude Code, optionally pinning a model and reasoning effort. Code Factory creates a dedicated, persistent RD session for it.
 2. Agent Manager starts or resumes that agent in the managed workspace. Messages sent during a run are queued; the human may explicitly interrupt when an immediate correction is needed.
-3. The RD agent edits and tests the repository, then uses the bundled `code-factory-cli` to register any pull request it creates or propose separate follow-up work. The built-in PR Agent Trigger continuously brings GitHub state and feedback into the Requirement conversation.
+3. The RD agent edits and tests the repository, then uses the bundled `code-factory-cli` to register any pull request it creates or propose separate follow-up work. The built-in PR Agent Triggers continuously bring GitHub state, feedback, CI failures, and merge conflicts into the Requirement conversation.
 4. A human can request a short-lived AI review for an open PR with its own provider, model, and reasoning effort. Review results return to the same conversation and wake the original RD session to continue the loop.
 
 Different Requirements can run concurrently, while each Requirement has at most one active RD run. Requirement state, conversations, runs, sessions, PR metadata, and Agent Trigger receipts are persisted in SQLite.

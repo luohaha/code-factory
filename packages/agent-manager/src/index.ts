@@ -10,6 +10,7 @@ export * from './dashboard-server.js';
 export * from './logger.js';
 export * from './process-runner.js';
 export * from './pull-request-reconciler.js';
+export * from './pull-request-triggers.js';
 export * from './server.js';
 export * from './sqlite-store.js';
 export * from './store.js';

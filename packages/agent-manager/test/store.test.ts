@@ -414,7 +414,7 @@ test('Agent Trigger messages are source-neutral and idempotent within each trigg
   }
 });
 
-test('legacy GitHub event receipts migrate without replaying delivered messages', () => {
+test('legacy GitHub event receipts migrate to split triggers without replaying delivered messages', () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-trigger-receipts-'));
   const databasePath = join(directory, 'factory.sqlite');
   const initial = new SqliteAgentManagerStore(databasePath);
@@ -457,7 +457,7 @@ test('legacy GitHub event receipts migrate without replaying delivered messages'
   try {
     assert.equal(migrated.appendAgentTriggerMessage({
       id: 'msg-1',
-      triggerId: 'github.pull-request',
+      triggerId: 'github.pull-request.comment',
       idempotencyKey: 'github:pr-1:comment:1',
       requirementId: 'req-1',
       sessionId: 'ses-1',

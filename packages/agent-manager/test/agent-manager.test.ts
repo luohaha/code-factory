@@ -12,6 +12,12 @@ import {
 import type { GitHubClient, GitHubPullRequestSnapshot } from '../src/github-client.ts';
 import { silentLogger } from '../src/logger.ts';
 import type { AgentProcessRunner, ProcessRunRequest } from '../src/process-runner.ts';
+import {
+  PULL_REQUEST_CI_FAILURE_TRIGGER_ID,
+  PULL_REQUEST_COMMENT_TRIGGER_ID,
+  PULL_REQUEST_CONFLICT_TRIGGER_ID,
+  PULL_REQUEST_STATUS_TRIGGER_ID,
+} from '../src/pull-request-triggers.ts';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
 import type { RunOutcome } from '../src/types.ts';
 
@@ -417,7 +423,7 @@ test('a human-requested PR review writes to the requirement conversation and wak
   }
 });
 
-test('PR reconciliation delivers new review activity, CI failures, and status changes to the RD session once', async () => {
+test('independent PR triggers deliver review activity, CI failures, and status changes once from one snapshot', async () => {
   const pendingCheck = {
     key: 'CheckRun:CI:test:https://github.com/acme/repo/actions/runs/1',
     name: 'test',
@@ -440,6 +446,7 @@ test('PR reconciliation delivers new review activity, CI failures, and status ch
     baseBranch: 'main',
     headBranch: 'feature',
     headSha: 'abc123def456',
+    mergeable: 'MERGEABLE',
     updatedAt: '2099-01-01T00:00:00.000Z',
     reviewActivity: [{
       kind: 'review_comment',
@@ -476,11 +483,12 @@ test('PR reconciliation delivers new review activity, CI failures, and status ch
     updatedAt: '2099-01-01T00:03:00.000Z',
   };
   const runner = new DeferredRunner();
+  const githubClient = new SequenceGitHubClient([openSnapshot, activitySnapshot, activitySnapshot, mergedSnapshot]);
   const manager = new AgentManager({
     workspaceRoot: process.cwd(),
     store: new SqliteAgentManagerStore(':memory:'),
     runner,
-    githubClient: new SequenceGitHubClient([openSnapshot, activitySnapshot, activitySnapshot, mergedSnapshot]),
+    githubClient,
     logger: silentLogger,
   });
   try {
@@ -502,9 +510,15 @@ test('PR reconciliation delivers new review activity, CI failures, and status ch
 
     await manager.reconcilePullRequests();
     await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(githubClient.inspectionCount, 2);
     assert.equal(runner.requests.length, 1);
     assert.match(runner.requests[0]?.invocation.input ?? '', /Please cover the retry path/);
     assert.match(runner.requests[0]?.invocation.input ?? '', /GitHub CI failed/);
+    const feedbackEvents = manager.listEvents().filter((item) => item.type === 'message.created');
+    assert.deepEqual(feedbackEvents.map((event) => event.payload.triggerId), [
+      PULL_REQUEST_COMMENT_TRIGGER_ID,
+      PULL_REQUEST_CI_FAILURE_TRIGGER_ID,
+    ]);
 
     await manager.reconcilePullRequests();
     assert.equal(manager.listMessages(requirement.id).length, 2);
@@ -513,6 +527,8 @@ test('PR reconciliation delivers new review activity, CI failures, and status ch
     assert.equal(manager.listPullRequests().find((item) => item.id === pullRequest.id)?.status, 'merged');
     assert.equal(manager.listMessages(requirement.id).length, 3);
     assert.equal(runner.requests.length, 1);
+    assert.equal(manager.listEvents().filter((item) => item.type === 'message.created').at(-1)?.payload.triggerId,
+      PULL_REQUEST_STATUS_TRIGGER_ID);
 
     runner.resolvers[0]?.({
       status: 'succeeded', exitCode: 0, nativeSessionId: 'rd-session', finalMessage: 'fixed', error: null,
@@ -534,6 +550,157 @@ test('PR reconciliation delivers new review activity, CI failures, and status ch
       'system',
     ]);
     assert.ok(manager.listMessages(requirement.id).slice(0, 3).every((message) => message.deliverToRd));
+  } finally {
+    manager.close();
+  }
+});
+
+test('PR conflict trigger delivers each conflicting head revision once', async () => {
+  const conflictSnapshot: GitHubPullRequestSnapshot = {
+    status: 'open',
+    title: 'Feature',
+    url: 'https://github.com/acme/repo/pull/9',
+    baseBranch: 'main',
+    headBranch: 'feature',
+    headSha: 'head123',
+    mergeable: 'CONFLICTING',
+    updatedAt: '2099-01-01T00:00:00.000Z',
+    reviewActivity: [],
+    checks: [],
+  };
+  const runner = new DeferredRunner();
+  const nextHeadSnapshot = { ...conflictSnapshot, headSha: 'head456', updatedAt: '2099-01-01T00:01:00.000Z' };
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    githubClient: new SequenceGitHubClient([conflictSnapshot, conflictSnapshot, nextHeadSnapshot]),
+    logger: silentLogger,
+  });
+  try {
+    const requirement = manager.createRequirement({ title: 'Conflicted feature', description: 'Open a PR', provider: 'codex' });
+    manager.trackPullRequest({
+      requirementId: requirement.id,
+      repository: 'acme/repo',
+      number: 9,
+      url: conflictSnapshot.url,
+      title: conflictSnapshot.title,
+      baseBranch: conflictSnapshot.baseBranch,
+      headBranch: conflictSnapshot.headBranch,
+      headSha: conflictSnapshot.headSha,
+      status: 'open',
+    });
+
+    await manager.reconcilePullRequests();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await manager.reconcilePullRequests();
+    await manager.reconcilePullRequests();
+
+    assert.equal(manager.listMessages(requirement.id).length, 2);
+    assert.match(runner.requests[0]?.invocation.input ?? '', /has merge conflicts/);
+    assert.match(runner.requests[0]?.invocation.input ?? '', /Base: main/);
+    const events = manager.listEvents().filter((item) => item.type === 'message.created');
+    assert.deepEqual(events.map((event) => event.payload.triggerId), [
+      PULL_REQUEST_CONFLICT_TRIGGER_ID,
+      PULL_REQUEST_CONFLICT_TRIGGER_ID,
+    ]);
+
+    runner.resolvers[0]?.({
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'rd-session', finalMessage: 'rebased', error: null,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.match(runner.requests[1]?.invocation.input ?? '', /Head: feature at head456/);
+    runner.resolvers[1]?.({
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'rd-session', finalMessage: 'rebased again', error: null,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  } finally {
+    manager.close();
+  }
+});
+
+test('scheduled PR triggers can be stopped independently while sharing one poller', async () => {
+  const pendingCheck = {
+    key: 'CheckRun:CI:test:https://github.com/acme/repo/actions/runs/2',
+    name: 'test',
+    workflow: 'CI',
+    status: 'IN_PROGRESS',
+    conclusion: null,
+    url: 'https://github.com/acme/repo/actions/runs/2',
+    completedAt: null,
+  };
+  const baseline: GitHubPullRequestSnapshot = {
+    status: 'open',
+    title: 'Feature',
+    url: 'https://github.com/acme/repo/pull/10',
+    baseBranch: 'main',
+    headBranch: 'feature',
+    headSha: 'head123',
+    mergeable: 'MERGEABLE',
+    updatedAt: '2099-01-01T00:00:00.000Z',
+    reviewActivity: [],
+    checks: [pendingCheck],
+  };
+  const failed: GitHubPullRequestSnapshot = {
+    ...baseline,
+    updatedAt: '2099-01-01T00:02:00.000Z',
+    reviewActivity: [{
+      kind: 'comment',
+      id: 'comment-after-stop',
+      author: 'reviewer',
+      body: 'This comment trigger is stopped.',
+      url: 'https://github.com/acme/repo/pull/10#issuecomment-1',
+      createdAt: '2099-01-01T00:01:00.000Z',
+      state: null,
+      path: null,
+      line: null,
+    }],
+    checks: [{
+      ...pendingCheck,
+      status: 'COMPLETED',
+      conclusion: 'FAILURE',
+      completedAt: '2099-01-01T00:02:00.000Z',
+    }],
+  };
+  const runner = new DeferredRunner();
+  const githubClient = new SequenceGitHubClient([baseline, failed]);
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    githubClient,
+    logger: silentLogger,
+  });
+  try {
+    const requirement = manager.createRequirement({ title: 'Independent triggers', description: 'Open a PR', provider: 'codex' });
+    manager.trackPullRequest({
+      requirementId: requirement.id,
+      repository: 'acme/repo',
+      number: 10,
+      url: baseline.url,
+      title: baseline.title,
+      baseBranch: baseline.baseBranch,
+      headBranch: baseline.headBranch,
+      headSha: baseline.headSha,
+      status: baseline.status,
+    });
+
+    manager.startPullRequestReconciler(60_000);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(githubClient.inspectionCount, 1);
+    manager.stopAgentTrigger(PULL_REQUEST_COMMENT_TRIGGER_ID);
+    await manager.reconcilePullRequests();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(githubClient.inspectionCount, 2);
+    assert.equal(manager.listMessages(requirement.id).length, 1);
+    assert.equal(manager.listEvents().find((item) => item.type === 'message.created')?.payload.triggerId,
+      PULL_REQUEST_CI_FAILURE_TRIGGER_ID);
+
+    runner.resolvers[0]?.({
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'rd-session', finalMessage: 'fixed', error: null,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
   } finally {
     manager.close();
   }
