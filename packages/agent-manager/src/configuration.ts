@@ -27,6 +27,8 @@ export interface AgentManagerConfigurationSnapshot {
   restartRequiredFields: Array<keyof AgentManagerConfiguration>;
 }
 
+export const MAX_PULL_REQUEST_RECONCILE_INTERVAL_SECONDS = Math.floor(2_147_483_647 / 1_000);
+
 export const DEFAULT_AGENT_MANAGER_CONFIGURATION: Readonly<AgentManagerConfiguration> = {
   host: '127.0.0.1',
   port: 4310,
@@ -121,7 +123,7 @@ export function validateAgentManagerConfigurationPatch(value: unknown): AgentMan
       input.pullRequestReconcileIntervalSeconds,
       'pullRequestReconcileIntervalSeconds',
       0,
-      Number.MAX_SAFE_INTEGER,
+      MAX_PULL_REQUEST_RECONCILE_INTERVAL_SECONDS,
     );
   }
   if (input.logLevel !== undefined) {

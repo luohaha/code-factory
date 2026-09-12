@@ -103,7 +103,8 @@ async function runForeground(args: readonly string[]): Promise<void> {
   ));
   const manager = new AgentManager({
     workspaceRoot,
-    configuration,
+    configuration: fileConfiguration,
+    effectiveConfiguration: configuration,
     configurationFilePath,
     ...(databasePath ? { databasePath } : {}),
     logLevel,

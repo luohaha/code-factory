@@ -123,7 +123,7 @@ node /path/to/code-factory/packages/agent-manager/dist/cli.js start \
 | `--log-max-size SIZE` | `20m` | Rotate the active log after it reaches this size. |
 | `--log-max-files COUNT_OR_DAYS` | `14d` | Number of rotated logs or retention period. |
 
-Configuration file values are used by default. Command-line options remain available as one-process overrides for compatibility; logging environment variables take precedence over the file, and command-line options take precedence over both. Relative database and log paths are resolved from the managed workspace.
+Configuration file values are used by default. Command-line options remain available as one-process overrides for compatibility; logging environment variables take precedence over the file, and command-line options take precedence over both. These launch-only overrides are never copied into the writable file by later dashboard changes. Relative database and log paths are resolved from the managed workspace.
 
 ~~~json
 {
@@ -140,7 +140,7 @@ Configuration file values are used by default. Command-line options remain avail
 }
 ~~~
 
-`databasePath` and `logFilePath` use the workspace defaults when set to `null`; `allowedOrigin: null` disables CORS headers. Set `pullRequestReconcileIntervalSeconds` to `0` to disable GitHub polling.
+`databasePath` and `logFilePath` use the workspace defaults when set to `null`; `allowedOrigin: null` disables CORS headers. Set `pullRequestReconcileIntervalSeconds` to `0` to disable GitHub polling. Its largest accepted value is `2147483` seconds, matching Node.js timer limits.
 
 When the npm package is published, the equivalent command will be:
 

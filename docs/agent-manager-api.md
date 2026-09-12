@@ -241,7 +241,7 @@ logFilePath is a stable symlink to the active log; physical files rotate by date
 
 ### GET /api/configuration
 
-Returns the configuration file path, desired values, and any fields saved for the next restart.
+Returns the configuration file path, file-backed desired values, and any fields saved for the next restart. Process-local CLI and environment overrides are effective for the current launch but do not replace these values.
 
 ~~~json
 {
@@ -265,7 +265,7 @@ Returns the configuration file path, desired values, and any fields saved for th
 
 ### PATCH /api/configuration
 
-Accepts any subset of `values`. The complete validated document is atomically written to the configuration file. `pullRequestReconcileIntervalSeconds` and `logLevel` apply immediately. All other fields are persisted, returned in `restartRequiredFields`, and apply on restart.
+Accepts any subset of `values`. The patch is merged into the file-backed desired values and the complete validated document is atomically written; unrelated launch-only overrides are never persisted. `pullRequestReconcileIntervalSeconds` and `logLevel` apply immediately. All other fields are persisted, returned in `restartRequiredFields`, and apply on restart.
 
 ~~~bash
 curl -X PATCH http://127.0.0.1:4310/api/configuration \
@@ -273,7 +273,7 @@ curl -X PATCH http://127.0.0.1:4310/api/configuration \
   -d '{"pullRequestReconcileIntervalSeconds":10,"logLevel":"debug"}'
 ~~~
 
-`port` must be an integer from 1 to 65535. The reconcile interval must be a non-negative integer. `logLevel` accepts `debug`, `info`, `warn`, `error`, or `silent`. Paths and origins accept a non-empty string or `null`; a null database or log path selects its workspace default, while a null origin disables CORS. Unknown fields return 400 Bad Request.
+`port` must be an integer from 1 to 65535. The reconcile interval must be an integer from 0 to 2147483 seconds, the largest whole-second delay supported by Node.js timers. `logLevel` accepts `debug`, `info`, `warn`, `error`, or `silent`. Paths and origins accept a non-empty string or `null`; a null database or log path selects its workspace default, while a null origin disables CORS. Unknown fields return 400 Bad Request.
 
 ### GET /api/requirements
 
@@ -625,7 +625,7 @@ Current event types and primary payloads:
 | run.timed_out | same as run.succeeded |
 | run.cancelled | same as run.succeeded |
 | manager.reconciled | runIds and requirementIds repaired at startup |
-| manager.configuration.updated | changedFields, restartRequired, restartRequiredFields |
+| manager.configuration.updated | changedFields, appliedFields, restartRequired, restartRequiredFields |
 
 Clients should store the last successfully processed event ID and pass it as after when reconnecting. A missing or non-finite after value starts replay at 0. Each connection replays at most 200 existing events before continuing with live events.
 

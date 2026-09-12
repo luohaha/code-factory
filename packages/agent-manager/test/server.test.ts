@@ -6,7 +6,10 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { AgentManager } from '../src/agent-manager.ts';
-import { DEFAULT_AGENT_MANAGER_CONFIGURATION } from '../src/configuration.ts';
+import {
+  DEFAULT_AGENT_MANAGER_CONFIGURATION,
+  MAX_PULL_REQUEST_RECONCILE_INTERVAL_SECONDS,
+} from '../src/configuration.ts';
 import { createLogger } from '../src/logger.ts';
 import type { AgentProcessRunner, ProcessRunRequest } from '../src/process-runner.ts';
 import { createAgentManagerServer } from '../src/server.ts';
@@ -42,11 +45,20 @@ class InterruptibleWaitingRunner implements AgentProcessRunner {
 test('HTTP API reads, validates, persists, and applies Agent Manager configuration', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-config-api-'));
   const configurationFilePath = join(directory, 'config.json');
+  const fileConfiguration = { ...DEFAULT_AGENT_MANAGER_CONFIGURATION, pullRequestReconcileIntervalSeconds: 0 };
   const manager = new AgentManager({
     workspaceRoot: process.cwd(),
     store: new SqliteAgentManagerStore(':memory:'),
-    logger: createLogger({ level: 'info', stdout: { write: () => undefined }, stderr: { write: () => undefined } }),
-    configuration: { ...DEFAULT_AGENT_MANAGER_CONFIGURATION, pullRequestReconcileIntervalSeconds: 0 },
+    logger: createLogger({ level: 'debug', stdout: { write: () => undefined }, stderr: { write: () => undefined } }),
+    configuration: fileConfiguration,
+    effectiveConfiguration: {
+      ...fileConfiguration,
+      host: '0.0.0.0',
+      port: 9_999,
+      openDashboard: true,
+      databasePath: '/launch-only/factory.sqlite',
+      logLevel: 'debug',
+    },
     configurationFilePath,
   });
   const server = createAgentManagerServer(manager);
@@ -60,33 +72,54 @@ test('HTTP API reads, validates, persists, and applies Agent Manager configurati
   try {
     const initialResponse = await fetch(`${baseUrl}/api/configuration`);
     assert.equal(initialResponse.status, 200);
-    const initial = await initialResponse.json() as { path: string; values: { port: number }; restartRequired: boolean };
+    const initial = await initialResponse.json() as {
+      path: string;
+      values: { host: string; port: number; openDashboard: boolean; databasePath: string | null };
+      restartRequired: boolean;
+    };
     assert.equal(initial.path, configurationFilePath);
+    assert.equal(initial.values.host, '127.0.0.1');
     assert.equal(initial.values.port, 4310);
+    assert.equal(initial.values.openDashboard, false);
+    assert.equal(initial.values.databasePath, null);
     assert.equal(initial.restartRequired, false);
 
     const updateResponse = await fetch(`${baseUrl}/api/configuration`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ port: 8080, logLevel: 'debug' }),
+      body: JSON.stringify({ logLevel: 'warn' }),
     });
     assert.equal(updateResponse.status, 200);
     const updated = await updateResponse.json() as {
-      values: { port: number; logLevel: string };
+      values: { host: string; port: number; openDashboard: boolean; databasePath: string | null; logLevel: string };
       restartRequired: boolean;
       restartRequiredFields: string[];
     };
-    assert.equal(updated.values.port, 8080);
-    assert.equal(updated.values.logLevel, 'debug');
-    assert.equal(updated.restartRequired, true);
-    assert.deepEqual(updated.restartRequiredFields, ['port']);
-    assert.equal(manager.logger.level, 'debug');
+    assert.equal(updated.values.host, '127.0.0.1');
+    assert.equal(updated.values.port, 4310);
+    assert.equal(updated.values.openDashboard, false);
+    assert.equal(updated.values.databasePath, null);
+    assert.equal(updated.values.logLevel, 'warn');
+    assert.equal(updated.restartRequired, false);
+    assert.deepEqual(updated.restartRequiredFields, []);
+    assert.equal(manager.logger.level, 'warn');
     assert.deepEqual(JSON.parse(readFileSync(configurationFilePath, 'utf8')), updated.values);
+
+    const restartResponse = await fetch(`${baseUrl}/api/configuration`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ port: 8080 }),
+    });
+    const restart = await restartResponse.json() as { restartRequired: boolean; restartRequiredFields: string[] };
+    assert.equal(restart.restartRequired, true);
+    assert.deepEqual(restart.restartRequiredFields, ['port']);
 
     const invalidResponse = await fetch(`${baseUrl}/api/configuration`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ pullRequestReconcileIntervalSeconds: -1 }),
+      body: JSON.stringify({
+        pullRequestReconcileIntervalSeconds: MAX_PULL_REQUEST_RECONCILE_INTERVAL_SECONDS + 1,
+      }),
     });
     assert.equal(invalidResponse.status, 400);
     assert.equal(manager.getConfiguration().values.pullRequestReconcileIntervalSeconds, 0);

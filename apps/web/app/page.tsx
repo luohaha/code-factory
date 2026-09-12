@@ -666,7 +666,7 @@ function ManagerConfigurationDialog({
 }: {
   configuration: AgentManagerConfigurationSnapshot | null;
   disabled: boolean;
-  onSave: (values: AgentManagerConfiguration) => Promise<void>;
+  onSave: (values: Partial<AgentManagerConfiguration>) => Promise<void>;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -680,11 +680,16 @@ function ManagerConfigurationDialog({
 
   async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
     event.preventDefault();
-    if (!values) return;
+    if (!values || !configuration) return;
+    const patch = Object.fromEntries(
+      (Object.keys(values) as Array<keyof AgentManagerConfiguration>)
+        .filter((field) => values[field] !== configuration.values[field])
+        .map((field) => [field, values[field]]),
+    ) as Partial<AgentManagerConfiguration>;
     setSubmitting(true);
     setError(null);
     try {
-      await onSave(values);
+      if (Object.keys(patch).length > 0) await onSave(patch);
       setOpen(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t('Failed to save configuration'));
@@ -727,7 +732,7 @@ function ManagerConfigurationDialog({
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field>
                     <FieldLabel htmlFor="configuration-reconcile-interval">{t('PR reconcile interval (seconds)')}</FieldLabel>
-                    <Input id="configuration-reconcile-interval" type="number" min="0" step="1" value={values.pullRequestReconcileIntervalSeconds} onChange={(event) => update('pullRequestReconcileIntervalSeconds', Number(event.target.value))} required />
+                    <Input id="configuration-reconcile-interval" type="number" min="0" max="2147483" step="1" value={values.pullRequestReconcileIntervalSeconds} onChange={(event) => update('pullRequestReconcileIntervalSeconds', Number(event.target.value))} required />
                     <p className="text-[10px] text-muted-foreground">{t('Use 0 to disable GitHub polling.')}</p>
                   </Field>
                   <Field>
@@ -1325,7 +1330,7 @@ function Dashboard() {
     }
   }
 
-  async function saveConfiguration(values: AgentManagerConfiguration): Promise<void> {
+  async function saveConfiguration(values: Partial<AgentManagerConfiguration>): Promise<void> {
     setError(null);
     try {
       const next = await client.updateConfiguration(values);
