@@ -117,6 +117,21 @@ test('runtime configuration starts and stops PR reconciliation without restartin
 
     manager.updateConfiguration({ pullRequestReconcileIntervalSeconds: 0 });
     assert.equal(manager.getConfiguration().values.pullRequestReconcileIntervalSeconds, 0);
+    for (const triggerId of [
+      PULL_REQUEST_STATUS_TRIGGER_ID,
+      PULL_REQUEST_COMMENT_TRIGGER_ID,
+      PULL_REQUEST_CI_FAILURE_TRIGGER_ID,
+      PULL_REQUEST_CONFLICT_TRIGGER_ID,
+    ]) {
+      const probe: AgentTrigger = {
+        id: triggerId,
+        source: 'test',
+        start: () => undefined,
+        stop: () => undefined,
+      };
+      manager.startAgentTrigger(probe);
+      manager.stopAgentTrigger(triggerId);
+    }
   } finally {
     await manager.close();
   }
