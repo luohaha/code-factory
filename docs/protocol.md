@@ -135,7 +135,7 @@ Current event types include:
 - `run.started` / `run.succeeded` / `run.failed` / `run.timed_out` / `run.cancelled`;
 - `manager.reconciled`.
 
-The PR Reconciler publishes GitHub state and head-SHA changes through `pull_request.updated`. New PR comments, reviews, inline review comments, and CI failures are first stored in the Requirement conversation and then published through `message.created`. Their payload includes `source: "github"` and `pullRequestId`. SQLite receipts deduplicate external events across Agent Manager restarts.
+The PR Reconciler publishes GitHub state and head-SHA changes through `pull_request.updated`. New PR comments, reviews, inline review comments, and CI failures are first stored in the Requirement conversation and then published through `message.created`. Their payload includes `source: "github"`, `triggerId: "github.pull-request"`, and `pullRequestId`. SQLite Agent Trigger receipts deduplicate external events across Agent Manager restarts.
 
 ## 6. Error semantics
 
