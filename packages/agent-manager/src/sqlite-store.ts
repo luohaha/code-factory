@@ -702,6 +702,21 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
         FROM external_event_receipts receipt
         JOIN pull_requests pull_request ON pull_request.id = receipt.pull_request_id`);
     }
+    this.#db.exec(`INSERT OR IGNORE INTO agent_trigger_receipts
+      (trigger_id, idempotency_key, requirement_id, created_at)
+      SELECT CASE
+          WHEN idempotency_key LIKE 'github:%:status:%' THEN 'github.pull-request.status'
+          WHEN idempotency_key LIKE 'github:%:ci-failure:%' THEN 'github.pull-request.ci-failure'
+          ELSE 'github.pull-request.comment'
+        END,
+        idempotency_key, requirement_id, created_at
+      FROM agent_trigger_receipts
+      WHERE trigger_id = 'github.pull-request'
+        AND (idempotency_key LIKE 'github:%:status:%'
+          OR idempotency_key LIKE 'github:%:ci-failure:%'
+          OR idempotency_key LIKE 'github:%:comment:%'
+          OR idempotency_key LIKE 'github:%:review:%'
+          OR idempotency_key LIKE 'github:%:review_comment:%')`);
     const attachmentTable = this.#db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'message_attachments'").get() as Row | undefined;
     const attachmentSql = attachmentTable?.sql === null || attachmentTable?.sql === undefined ? '' : String(attachmentTable.sql);
     if (!attachmentSql.includes("kind TEXT NOT NULL CHECK (kind IN ('image', 'file'))") || attachmentSql.includes('media_type IN')) {

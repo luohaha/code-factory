@@ -38,7 +38,7 @@ flowchart LR
   CLI --> API[Agent API]
   API --> M
   RV -->|GitHub inline comments| GH[GitHub PR]
-  GH -->|Poll status, comments, reviews, CI| T[PR Agent Trigger]
+  GH -->|Poll status, comments, reviews, CI, conflicts| T[PR Agent Triggers]
   T -->|Normalized messages| M
   RV -->|Reviewer message| M
 ~~~
@@ -140,17 +140,18 @@ If the PR head SHA changes, previous reviews remain historical results for the o
 
 Trigger lifecycle is explicit through `startAgentTrigger()` and `stopAgentTrigger()`. Once stopped, a trigger's delivery context is invalidated. Receipts refer to Requirements rather than Pull Requests, so a future trigger such as a Slack-thread listener does not need GitHub-shaped persistence.
 
-### PR Reconciliation Trigger
+### PR Reconciliation Triggers
 
-Agent Manager polls each tracked Draft/Open PR through the authenticated local `gh` CLI every 30 seconds by default. It observes:
+Agent Manager polls each tracked Draft/Open PR through the authenticated local `gh` CLI every 30 seconds by default. The reconciler fetches one snapshot per PR and shares it with four independently registered triggers:
 
-- Draft/Open/Closed/Merged status and head-SHA changes;
-- general PR comments, submitted reviews, and inline review comments;
-- CI checks that newly enter a failed, errored, cancelled, timed-out, or action-required conclusion.
+- `github.pull-request.status` observes Draft/Open/Closed/Merged lifecycle changes;
+- `github.pull-request.comment` observes general PR comments, submitted reviews, and inline review comments;
+- `github.pull-request.ci-failure` observes CI checks that newly enter a failed, errored, cancelled, timed-out, or action-required conclusion;
+- `github.pull-request.conflict` observes GitHub mergeability and reports each conflicting head revision once.
 
-New review activity is appended as a Reviewer message. PR status and CI failures are appended as System messages. All are marked for RD delivery while the Requirement is active: an idle RD session resumes immediately, while a running session consumes them in order after its current Run. DONE or CANCELLED Requirements retain the messages for visibility without being reopened.
+New review activity is appended as a Reviewer message. PR status changes, CI failures, and merge conflicts are appended as System messages. All are marked for RD delivery while the Requirement is active: an idle RD session resumes immediately, while a running session consumes them in order after its current Run. DONE or CANCELLED Requirements retain the messages for visibility without being reopened.
 
-Observation baselines and trigger-scoped receipts are persisted in SQLite. This prevents duplicate delivery across polling cycles and Agent Manager restarts. When an older PR is first adopted, existing comments and CI results form the baseline instead of being replayed, while a stale stored PR status is corrected immediately. `--pr-reconcile-interval SECONDS` changes the interval; `0` disables polling.
+Observation baselines and trigger-scoped receipts are persisted in SQLite. This prevents duplicate delivery across polling cycles and Agent Manager restarts. Legacy receipts from the former combined `github.pull-request` trigger are copied into the matching split trigger scope during migration. When an older PR is first adopted, existing comments and CI results form the baseline instead of being replayed, while a stale stored PR status is corrected immediately. A conflict is keyed by head SHA, so an unchanged conflict does not repeat while a newly pushed conflicting revision can wake RD again. `--pr-reconcile-interval SECONDS` changes the interval; `0` disables polling.
 
 GitHub and the PR reconciler exclusively advance PR lifecycle state. The RD Agent uses `code-factory-cli pr register` after creating a PR and may run it again when its own push or edit changes the head SHA, title, or branches, but the underlying Agent API cannot change `draft/open/closed/merged` for an existing PR. Reconciler status messages explicitly say that the state is already persisted, so the RD Agent must not mirror the event.
 

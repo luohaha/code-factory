@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import type { PullRequest, PullRequestStatus } from './types.js';
 
 export type GitHubReviewActivityKind = 'comment' | 'review' | 'review_comment';
+export type GitHubPullRequestMergeability = 'CONFLICTING' | 'MERGEABLE' | 'UNKNOWN';
 
 export interface GitHubReviewActivity {
   kind: GitHubReviewActivityKind;
@@ -33,6 +34,7 @@ export interface GitHubPullRequestSnapshot {
   baseBranch: string;
   headBranch: string;
   headSha: string;
+  mergeable: GitHubPullRequestMergeability;
   updatedAt: string;
   reviewActivity: GitHubReviewActivity[];
   checks: GitHubCheck[];
@@ -76,6 +78,11 @@ function pullRequestStatus(state: unknown, isDraft: unknown): PullRequestStatus 
   if (state === 'CLOSED') return 'closed';
   if (state === 'OPEN') return isDraft === true ? 'draft' : 'open';
   throw new TypeError(`Unsupported GitHub pull request state: ${String(state)}`);
+}
+
+function pullRequestMergeability(value: unknown): GitHubPullRequestMergeability {
+  if (value === 'CONFLICTING' || value === 'MERGEABLE' || value === 'UNKNOWN') return value;
+  throw new TypeError(`Unsupported GitHub pull request mergeability: ${String(value)}`);
 }
 
 function reviewActivity(value: JsonObject, kind: GitHubReviewActivityKind): GitHubReviewActivity | null {
@@ -150,7 +157,7 @@ export class GhCliGitHubClient implements GitHubClient {
         '--repo',
         pullRequest.repository,
         '--json',
-        'state,isDraft,title,url,baseRefName,headRefName,headRefOid,updatedAt,comments,reviews,statusCheckRollup',
+        'state,isDraft,title,url,baseRefName,headRefName,headRefOid,mergeable,updatedAt,comments,reviews,statusCheckRollup',
       ]),
       this.runJson([
         'api',
@@ -175,6 +182,7 @@ export class GhCliGitHubClient implements GitHubClient {
       baseBranch: requiredString(details.baseRefName, 'baseRefName'),
       headBranch: requiredString(details.headRefName, 'headRefName'),
       headSha: requiredString(details.headRefOid, 'headRefOid'),
+      mergeable: pullRequestMergeability(details.mergeable),
       updatedAt: requiredString(details.updatedAt, 'updatedAt'),
       reviewActivity: activities,
       checks: objectArray(details.statusCheckRollup)
