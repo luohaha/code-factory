@@ -405,6 +405,7 @@ function ReviewAgentDialog({ activeReview, busy, onReview }: {
   const fieldId = useId();
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const disabled = busy || submitting || Boolean(activeReview);
 
   async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
@@ -413,6 +414,7 @@ function ReviewAgentDialog({ activeReview, busy, onReview }: {
     const form = new FormData(formElement);
     const model = form.get('model');
     const reasoningEffort = form.get('reasoningEffort');
+    setSubmitError(null);
     setSubmitting(true);
     try {
       await onReview({
@@ -424,15 +426,21 @@ function ReviewAgentDialog({ activeReview, busy, onReview }: {
       });
       formElement.reset();
       setOpen(false);
-    } catch {
-      // The parent surfaces the API error while the dialog keeps the selected configuration.
+    } catch (caught) {
+      setSubmitError(caught instanceof Error ? caught.message : t('Failed to request a review'));
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) setSubmitError(null);
+      }}
+    >
       <DialogTrigger render={<Button size="xs" disabled={disabled} />}>
         {disabled ? <LoaderCircle className="animate-spin" /> : <ScanSearch data-icon="inline-start" />}
         {activeReview ? t('Reviewing') : t('Request review')}
@@ -443,6 +451,13 @@ function ReviewAgentDialog({ activeReview, busy, onReview }: {
             <DialogTitle>{t('Request a PR review')}</DialogTitle>
             <DialogDescription>{t('Choose an Agent type, model, and reasoning effort for this one-off review.')}</DialogDescription>
           </DialogHeader>
+          {submitError ? (
+            <Alert variant="destructive" className="mt-5">
+              <TriangleAlert />
+              <AlertTitle>{t('Failed to request a review')}</AlertTitle>
+              <AlertDescription>{submitError}</AlertDescription>
+            </Alert>
+          ) : null}
           <FieldGroup className="my-5 gap-4">
             <Field>
               <FieldLabel htmlFor={`${fieldId}-provider`}>{t('Reviewer Agent')}</FieldLabel>
