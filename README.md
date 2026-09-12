@@ -186,6 +186,12 @@ Follow the active log with:
 tail -f ~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log
 ~~~
 
+In daemon mode, follow supervisor exits and restart attempts with:
+
+~~~bash
+tail -f ~/.code-factory/workspaces/<workspace-hash>/logs/daemon.log
+~~~
+
 Logging can also be configured with `CODE_FACTORY_LOG_LEVEL`, `CODE_FACTORY_LOG_FILE`, `CODE_FACTORY_LOG_MAX_SIZE`, and `CODE_FACTORY_LOG_MAX_FILES`. Command-line options take precedence over their environment-variable equivalents.
 
 ## Security Model
