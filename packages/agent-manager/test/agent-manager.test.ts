@@ -542,3 +542,90 @@ test('PR conflict trigger delivers each conflicting head revision once', async (
     manager.close();
   }
 });
+
+test('scheduled PR triggers can be stopped independently while sharing one poller', async () => {
+  const pendingCheck = {
+    key: 'CheckRun:CI:test:https://github.com/acme/repo/actions/runs/2',
+    name: 'test',
+    workflow: 'CI',
+    status: 'IN_PROGRESS',
+    conclusion: null,
+    url: 'https://github.com/acme/repo/actions/runs/2',
+    completedAt: null,
+  };
+  const baseline: GitHubPullRequestSnapshot = {
+    status: 'open',
+    title: 'Feature',
+    url: 'https://github.com/acme/repo/pull/10',
+    baseBranch: 'main',
+    headBranch: 'feature',
+    headSha: 'head123',
+    mergeable: 'MERGEABLE',
+    updatedAt: '2099-01-01T00:00:00.000Z',
+    reviewActivity: [],
+    checks: [pendingCheck],
+  };
+  const failed: GitHubPullRequestSnapshot = {
+    ...baseline,
+    updatedAt: '2099-01-01T00:02:00.000Z',
+    reviewActivity: [{
+      kind: 'comment',
+      id: 'comment-after-stop',
+      author: 'reviewer',
+      body: 'This comment trigger is stopped.',
+      url: 'https://github.com/acme/repo/pull/10#issuecomment-1',
+      createdAt: '2099-01-01T00:01:00.000Z',
+      state: null,
+      path: null,
+      line: null,
+    }],
+    checks: [{
+      ...pendingCheck,
+      status: 'COMPLETED',
+      conclusion: 'FAILURE',
+      completedAt: '2099-01-01T00:02:00.000Z',
+    }],
+  };
+  const runner = new DeferredRunner();
+  const githubClient = new SequenceGitHubClient([baseline, failed]);
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    githubClient,
+    logger: silentLogger,
+  });
+  try {
+    const requirement = manager.createRequirement({ title: 'Independent triggers', description: 'Open a PR', provider: 'codex' });
+    manager.trackPullRequest({
+      requirementId: requirement.id,
+      repository: 'acme/repo',
+      number: 10,
+      url: baseline.url,
+      title: baseline.title,
+      baseBranch: baseline.baseBranch,
+      headBranch: baseline.headBranch,
+      headSha: baseline.headSha,
+      status: baseline.status,
+    });
+
+    manager.startPullRequestReconciler(60_000);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(githubClient.inspectionCount, 1);
+    manager.stopAgentTrigger(PULL_REQUEST_COMMENT_TRIGGER_ID);
+    await manager.reconcilePullRequests();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(githubClient.inspectionCount, 2);
+    assert.equal(manager.listMessages(requirement.id).length, 1);
+    assert.equal(manager.listEvents().find((item) => item.type === 'message.created')?.payload.triggerId,
+      PULL_REQUEST_CI_FAILURE_TRIGGER_ID);
+
+    runner.resolvers[0]?.({
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'rd-session', finalMessage: 'fixed', error: null,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  } finally {
+    manager.close();
+  }
+});

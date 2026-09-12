@@ -136,7 +136,7 @@ export class PullRequestConflictTrigger extends PullRequestAgentTrigger {
     pullRequest: PullRequest,
     snapshot: GitHubPullRequestSnapshot,
   ): void {
-    if (snapshot.mergeable !== 'CONFLICTING') return;
+    if ((snapshot.status !== 'draft' && snapshot.status !== 'open') || snapshot.mergeable !== 'CONFLICTING') return;
     context.deliver({
       requirementId: pullRequest.requirementId,
       idempotencyKey: `github:${pullRequest.id}:conflict:${snapshot.headSha}`,

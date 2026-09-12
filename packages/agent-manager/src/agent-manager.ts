@@ -202,6 +202,10 @@ export class AgentManager extends EventEmitter {
   }
 
   async reconcilePullRequests(): Promise<void> {
+    if (this.#pullRequestReconciler.isRunning) {
+      await this.#pullRequestReconciler.reconcile();
+      return;
+    }
     await this.#pullRequestReconciler.reconcile(this.#pullRequestTriggers.map((trigger) => ({
       trigger,
       context: this.triggerContext(trigger),
