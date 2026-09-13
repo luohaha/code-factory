@@ -19,7 +19,7 @@ npx --package @luoyixin/code-factory code-factory-agent-manager start --daemon
 
 The startup directory becomes the managed workspace and the initial working directory for every RD and Reviewer agent. The dashboard listens on [http://127.0.0.1:4310](http://127.0.0.1:4310) by default.
 
-Code Factory allows only one Agent Manager process for the same canonical workspace. A second foreground or daemon start fails with an `already running for workspace` error even if it uses a different port, configuration file, or database path. The workspace lock is released automatically when the owning process exits, including after a crash.
+Code Factory allows only one Agent Manager process for the same canonical workspace. A second foreground start, or a foreground/daemon mixed start, fails with an `already running for workspace` error even if it uses a different port, configuration file, or database path. Repeating `start --daemon` is idempotent: it reports the existing daemon instead of launching another one. The workspace lock is released automatically when the owning process exits, including after a crash.
 
 On first start, Agent Manager creates a workspace-scoped configuration file at `~/.code-factory/workspaces/<workspace-hash>/config.json`. The dashboard settings dialog can edit it. PR reconciliation intervals and log levels are applied immediately; network, storage, browser, and log-rotation changes are saved for the next restart.
 
