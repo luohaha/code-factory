@@ -1,6 +1,14 @@
-# Code Factory
+<p align="center">
+  <img src="docs/assets/brand/code-factory-logo.png" alt="Code Factory logo" width="180" />
+</p>
 
-> From requirement to reviewed pull request, keep every coding-agent loop visible and under human control.
+<h1 align="center">Code Factory</h1>
+
+<p align="center"><strong>From requirement to reviewed pull request, keep every coding-agent loop visible and under human control.</strong></p>
+
+<p align="center">
+  <img src="docs/assets/brand/code-factory-overview.png" alt="Code Factory connects requirements, persistent RD agents, a local workspace, pull requests, AI review, human control, and extensible Agent Triggers that route external events into the delivery loop." />
+</p>
 
 Code Factory is a **local control plane for agent-driven software delivery**. It turns each requirement into a persistent development loop that connects a human, an RD coding agent, GitHub pull requests, and on-demand AI reviewers in one Web dashboard.
 
