@@ -89,6 +89,23 @@ import { I18nProvider, useI18n } from '@/lib/i18n';
 import type { TranslationKey } from '@/locales/zh-CN';
 
 type ConnectionState = 'connecting' | 'online' | 'reconnecting' | 'offline';
+type TimeRange = '1d' | '7d' | '30d' | '90d' | 'all';
+
+const timeRangeOptions: Array<{ value: TimeRange; label: TranslationKey }> = [
+  { value: '1d', label: 'Last 24 hours' },
+  { value: '7d', label: 'Last 7 days' },
+  { value: '30d', label: 'Last 30 days' },
+  { value: '90d', label: 'Last 90 days' },
+  { value: 'all', label: 'All time' },
+];
+
+const timeRangeMilliseconds: Record<Exclude<TimeRange, 'all'>, number> = {
+  '1d': 24 * 60 * 60 * 1_000,
+  '7d': 7 * 24 * 60 * 60 * 1_000,
+  '30d': 30 * 24 * 60 * 60 * 1_000,
+  '90d': 90 * 24 * 60 * 60 * 1_000,
+};
+const filterClockIntervalMilliseconds = 60_000;
 
 const requirementColumns: Array<{
   status: RequirementStatus;
@@ -196,6 +213,12 @@ function formatTime(value: string, locale: 'en' | 'zh-CN'): string {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value));
+}
+
+function isWithinTimeRange(value: string, timeRange: TimeRange, now: number): boolean {
+  if (timeRange === 'all') return true;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) && timestamp >= now - timeRangeMilliseconds[timeRange];
 }
 
 function MessageBody({ body, inverted = false }: { body: string; inverted?: boolean }) {
@@ -1176,11 +1199,13 @@ function Dashboard() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [provider, setProvider] = useState<'all' | AgentProvider>('all');
+  const [timeRange, setTimeRange] = useState<TimeRange>('7d');
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [busyPullRequestId, setBusyPullRequestId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
+  const [filterReferenceTime, setFilterReferenceTime] = useState(0);
 
   const client = useMemo(() => new AgentManagerClient(apiUrl), [apiUrl]);
 
@@ -1203,7 +1228,9 @@ function Dashboard() {
       setReviewRequests(nextReviewRequests);
       setConnection('online');
       setError(null);
-      setLastSynced(new Date());
+      const syncedAt = new Date();
+      setLastSynced(syncedAt);
+      setFilterReferenceTime(syncedAt.getTime());
     } catch (caught) {
       setConnection('offline');
       setError(caught instanceof Error ? caught.message : t('Unable to connect to Agent Manager'));
@@ -1227,6 +1254,18 @@ function Dashboard() {
       }
     }, 0);
     return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    const advanceFilterClock = () => setFilterReferenceTime(Date.now());
+    const timer = window.setInterval(advanceFilterClock, filterClockIntervalMilliseconds);
+    window.addEventListener('focus', advanceFilterClock);
+    document.addEventListener('visibilitychange', advanceFilterClock);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', advanceFilterClock);
+      document.removeEventListener('visibilitychange', advanceFilterClock);
+    };
   }, []);
 
   useEffect(() => {
@@ -1265,24 +1304,40 @@ function Dashboard() {
   const selectedRuns = runs.filter((run) => run.requirementId === selectedId);
   const selectedPullRequests = pullRequests.filter((pullRequest) => pullRequest.requirementId === selectedId);
 
-  const filtered = useMemo(() => {
+  const filteredRequirements = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return requirements.filter((requirement) => {
       const matchesQuery = !needle || [requirement.id, requirement.title, requirement.description, requirement.session.id]
         .some((value) => value.toLowerCase().includes(needle));
-      return matchesQuery && (provider === 'all' || requirement.provider === provider);
+      return matchesQuery
+        && (provider === 'all' || requirement.provider === provider)
+        && isWithinTimeRange(requirement.createdAt, timeRange, filterReferenceTime);
     });
-  }, [provider, query, requirements]);
+  }, [filterReferenceTime, provider, query, requirements, timeRange]);
+
+  const filteredSessions = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return requirements.filter((requirement) => {
+      const matchesQuery = !needle || [requirement.id, requirement.title, requirement.description, requirement.session.id]
+        .some((value) => value.toLowerCase().includes(needle));
+      return matchesQuery
+        && (provider === 'all' || requirement.provider === provider)
+        && isWithinTimeRange(requirement.session.createdAt, timeRange, filterReferenceTime);
+    });
+  }, [filterReferenceTime, provider, query, requirements, timeRange]);
 
   const filteredPullRequests = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return pullRequests.filter((pullRequest) => !needle || [
-      pullRequest.repository,
-      String(pullRequest.number),
-      pullRequest.title,
-      pullRequest.headBranch,
-    ].some((value) => value.toLowerCase().includes(needle)));
-  }, [pullRequests, query]);
+    return pullRequests.filter((pullRequest) => {
+      const matchesQuery = !needle || [
+        pullRequest.repository,
+        String(pullRequest.number),
+        pullRequest.title,
+        pullRequest.headBranch,
+      ].some((value) => value.toLowerCase().includes(needle));
+      return matchesQuery && isWithinTimeRange(pullRequest.createdAt, timeRange, filterReferenceTime);
+    });
+  }, [filterReferenceTime, pullRequests, query, timeRange]);
 
   async function runAction(requirementId: string, action: () => Promise<unknown>): Promise<void> {
     setBusyId(requirementId);
@@ -1429,9 +1484,23 @@ function Dashboard() {
         </div>
       ) : null}
 
-      <div className="flex items-center gap-2 border-b border-border/70 px-4 py-2.5 lg:px-6">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border/70 px-4 py-2.5 lg:px-6">
         <Button variant="secondary" size="xs" title={workspace?.root}><FolderGit2 data-icon="inline-start" />{workspaceLabel}</Button>
         <Button variant={provider === 'all' ? 'ghost' : 'secondary'} size="xs" className={provider === 'all' ? 'text-muted-foreground' : ''} onClick={cycleProvider}>{provider === 'all' ? t('All Agents') : providerLabel(provider)}</Button>
+        <div className="flex items-center gap-1.5 text-muted-foreground">
+          <Clock3 className="size-3.5" aria-hidden="true" />
+          <NativeSelect
+            size="sm"
+            value={timeRange}
+            onChange={(event) => setTimeRange(event.target.value as TimeRange)}
+            aria-label={t('Created within')}
+            className="[&_select]:text-[10px]"
+          >
+            {timeRangeOptions.map((option) => (
+              <NativeSelectOption key={option.value} value={option.value}>{t(option.label)}</NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </div>
         <span className="ml-auto text-[10px] text-muted-foreground">{lastSynced ? t('Last synced {time}', { time: lastSynced.toLocaleTimeString(locale === 'zh-CN' ? 'zh-CN' : 'en-US') }) : apiUrl}</span>
       </div>
 
@@ -1439,7 +1508,7 @@ function Dashboard() {
         {view === 'requirements' ? (
           <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-4 gap-4 p-4 lg:p-5">
             {requirementColumns.map((column) => {
-              const items = filtered.filter((item) => item.status === column.status);
+              const items = filteredRequirements.filter((item) => item.status === column.status);
               return (
                 <section key={column.status} className="w-[300px]" aria-labelledby={`requirement-${column.status}`}>
                   <header className="mb-3 h-11 px-1">
@@ -1502,7 +1571,7 @@ function Dashboard() {
         ) : (
           <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-5 gap-3 p-4 lg:p-5">
             {sessionColumns.map((column) => {
-              const items = filtered.filter((item) => item.session.state === column.state);
+              const items = filteredSessions.filter((item) => item.session.state === column.state);
               return (
                 <section key={column.state} className="w-[266px]" aria-labelledby={`session-${column.state}`}>
                   <header className="mb-3 h-11 px-1">

@@ -217,6 +217,8 @@ Requirement details form a Jira-like work surface containing the description, li
 
 The dashboard supports English and Simplified Chinese. The header language switcher applies the locale immediately and persists the choice in browser storage; a visitor without a saved preference defaults to the browser language. The configuration dialog updates the workspace configuration and distinguishes immediately applied settings from restart-required settings.
 
+Requirement, Pull Request, and RD Session boards share a creation-time filter. It defaults to the last 7 days and also offers the last 24 hours, 30 days, 90 days, and all time.
+
 Running `npx @code-factory/agent-manager start` serves the API, SSE stream, and bundled Web dashboard from the same port and writes the local URL to the log file in the workspace data directory. No separate Web deployment is required.
 
 ## 10. Current Boundary
