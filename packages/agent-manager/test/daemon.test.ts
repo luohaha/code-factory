@@ -100,6 +100,14 @@ test('daemon starts in the background, restarts a crashed manager, and stops cle
     assert.match(duplicate.stdout, /already running/);
     assert.equal(readDaemonState(paths.stateFile)?.supervisorPid, supervisorPid);
 
+    const foregroundDuplicate = runCli(
+      ['start', '--port', String(await reservePort()), '--pr-reconcile-interval', '0', '--log-level', 'silent'],
+      workspace,
+      env,
+    );
+    assert.equal(foregroundDuplicate.status, 1);
+    assert.match(foregroundDuplicate.stderr, /already running for workspace/);
+
     const status = runCli(['status'], workspace, env);
     assert.equal(status.status, 0, status.stderr);
     assert.match(status.stdout, new RegExp(`Manager PID:\\s+${managerPid}`));
