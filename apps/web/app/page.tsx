@@ -1,6 +1,6 @@
 'use client';
 
-import { type SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type SyntheticEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -419,66 +419,102 @@ function SessionCard({ requirement, run, busy, onOpen, onRetry }: {
   );
 }
 
-function ReviewAgentControls({ activeReview, busy, onReview }: {
+function ReviewAgentDialog({ activeReview, busy, onReview }: {
   activeReview?: ReviewRequestDto;
   busy: boolean;
   onReview: (configuration: AgentConfiguration) => Promise<void>;
 }) {
   const { t } = useI18n();
-  const [provider, setProvider] = useState<AgentProvider>(activeReview?.provider ?? 'codex');
-  const [model, setModel] = useState(activeReview?.model ?? '');
-  const [reasoningEffort, setReasoningEffort] = useState<'' | AgentReasoningEffort>(activeReview?.reasoningEffort ?? '');
-  const disabled = busy || Boolean(activeReview);
+  const fieldId = useId();
+  const [open, setOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const disabled = busy || submitting || Boolean(activeReview);
+
+  async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const model = form.get('model');
+    const reasoningEffort = form.get('reasoningEffort');
+    setSubmitError(null);
+    setSubmitting(true);
+    try {
+      await onReview({
+        provider: form.get('provider') === 'claude-code' ? 'claude-code' : 'codex',
+        ...(typeof model === 'string' && model.trim() ? { model: model.trim() } : {}),
+        ...(typeof reasoningEffort === 'string' && reasoningEffort
+          ? { reasoningEffort: reasoningEffort as AgentReasoningEffort }
+          : {}),
+      });
+      formElement.reset();
+      setOpen(false);
+    } catch (caught) {
+      setSubmitError(caught instanceof Error ? caught.message : t('Failed to request a review'));
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
-    <div className="grid grid-cols-2 gap-2">
-      <NativeSelect
-        size="sm"
-        value={activeReview?.provider ?? provider}
-        disabled={disabled}
-        onChange={(event) => setProvider(event.target.value as AgentProvider)}
-        className="w-full"
-        aria-label={t('Select Reviewer Agent')}
-      >
-        <NativeSelectOption value="codex">Codex Reviewer</NativeSelectOption>
-        <NativeSelectOption value="claude-code">Claude Reviewer</NativeSelectOption>
-      </NativeSelect>
-      <Input
-        value={activeReview ? activeReview.model ?? '' : model}
-        disabled={disabled}
-        onChange={(event) => setModel(event.target.value)}
-        placeholder={t('Use CLI default model')}
-        aria-label={t('Reviewer model')}
-        className="h-7 text-xs"
-      />
-      <NativeSelect
-        size="sm"
-        value={activeReview ? activeReview.reasoningEffort ?? '' : reasoningEffort}
-        disabled={disabled}
-        onChange={(event) => setReasoningEffort(event.target.value as '' | AgentReasoningEffort)}
-        className="w-full"
-        aria-label={t('Reviewer reasoning effort')}
-      >
-        <NativeSelectOption value="">{t('Default reasoning')}</NativeSelectOption>
-        <NativeSelectOption value="low">Low</NativeSelectOption>
-        <NativeSelectOption value="medium">Medium</NativeSelectOption>
-        <NativeSelectOption value="high">High</NativeSelectOption>
-        <NativeSelectOption value="xhigh">XHigh</NativeSelectOption>
-        <NativeSelectOption value="max">Max</NativeSelectOption>
-      </NativeSelect>
-      <Button
-        size="xs"
-        disabled={disabled}
-        onClick={() => void onReview({
-          provider,
-          ...(model.trim() ? { model: model.trim() } : {}),
-          ...(reasoningEffort ? { reasoningEffort } : {}),
-        }).catch(() => undefined)}
-      >
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) setSubmitError(null);
+      }}
+    >
+      <DialogTrigger render={<Button size="xs" disabled={disabled} />}>
         {disabled ? <LoaderCircle className="animate-spin" /> : <ScanSearch data-icon="inline-start" />}
         {activeReview ? t('Reviewing') : t('Request review')}
-      </Button>
-    </div>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-lg">
+        <form onSubmit={submit}>
+          <DialogHeader>
+            <DialogTitle>{t('Request a PR review')}</DialogTitle>
+            <DialogDescription>{t('Choose an Agent type, model, and reasoning effort for this one-off review.')}</DialogDescription>
+          </DialogHeader>
+          {submitError ? (
+            <Alert variant="destructive" className="mt-5">
+              <TriangleAlert />
+              <AlertTitle>{t('Failed to request a review')}</AlertTitle>
+              <AlertDescription>{submitError}</AlertDescription>
+            </Alert>
+          ) : null}
+          <FieldGroup className="my-5 gap-4">
+            <Field>
+              <FieldLabel htmlFor={`${fieldId}-provider`}>{t('Reviewer Agent')}</FieldLabel>
+              <NativeSelect id={`${fieldId}-provider`} name="provider" className="w-full" defaultValue="codex">
+                <NativeSelectOption value="codex">{t('Codex Reviewer')}</NativeSelectOption>
+                <NativeSelectOption value="claude-code">{t('Claude Reviewer')}</NativeSelectOption>
+              </NativeSelect>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`${fieldId}-model`}>{t('Model')}</FieldLabel>
+              <Input id={`${fieldId}-model`} name="model" placeholder={t('Use CLI default model')} />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`${fieldId}-reasoning-effort`}>{t('Reasoning effort')}</FieldLabel>
+              <NativeSelect id={`${fieldId}-reasoning-effort`} name="reasoningEffort" className="w-full" defaultValue="">
+                <NativeSelectOption value="">{t('Default reasoning')}</NativeSelectOption>
+                <NativeSelectOption value="low">Low</NativeSelectOption>
+                <NativeSelectOption value="medium">Medium</NativeSelectOption>
+                <NativeSelectOption value="high">High</NativeSelectOption>
+                <NativeSelectOption value="xhigh">XHigh</NativeSelectOption>
+                <NativeSelectOption value="max">Max</NativeSelectOption>
+              </NativeSelect>
+            </Field>
+          </FieldGroup>
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="outline" />}>{t('Cancel')}</DialogClose>
+            <Button type="submit" disabled={submitting}>
+              {submitting ? <LoaderCircle className="animate-spin" /> : <ScanSearch data-icon="inline-start" />}
+              {t('Request review')}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -504,7 +540,7 @@ function PullRequestCard({ pullRequest, requirement, activeReview, busy, onRevie
       ) : null}
       {pullRequest.status === 'open' ? (
         <div className="mt-3 border-t border-border/70 pt-3">
-          <ReviewAgentControls activeReview={activeReview} busy={busy} onReview={onReview} />
+          <ReviewAgentDialog activeReview={activeReview} busy={busy} onReview={onReview} />
         </div>
       ) : null}
     </article>
@@ -542,8 +578,8 @@ function RequirementPullRequestCard({ pullRequest, activeReview, busy, onReview 
         </div>
 
         {pullRequest.status === 'open' ? (
-          <div className="w-full shrink-0 border-t border-border/70 pt-3 sm:w-96 sm:border-t-0 sm:pt-0">
-            <ReviewAgentControls activeReview={activeReview} busy={busy} onReview={onReview} />
+          <div className="w-full shrink-0 border-t border-border/70 pt-3 sm:w-auto sm:border-t-0 sm:pt-0">
+            <ReviewAgentDialog activeReview={activeReview} busy={busy} onReview={onReview} />
           </div>
         ) : null}
       </div>
