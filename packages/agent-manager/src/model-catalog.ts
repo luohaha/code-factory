@@ -311,15 +311,21 @@ export class ClaudeCodeModelDiscoverer implements AgentModelDiscoverer {
   }
 
   async discover(signal?: AbortSignal): Promise<readonly AgentModel[]> {
-    const apiKey = this.#environment.ANTHROPIC_API_KEY;
-    const oauthToken = this.#environment.CLAUDE_CODE_OAUTH_TOKEN;
+    const apiKey = this.#environment.ANTHROPIC_API_KEY?.trim();
+    const authToken = this.#environment.ANTHROPIC_AUTH_TOKEN?.trim();
     const discoverGateway = this.#environment.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY === '1';
-    if (!apiKey && !oauthToken && !discoverGateway) return this.fallbackModels;
+    const configuredBaseUrl = this.#environment.ANTHROPIC_BASE_URL?.trim();
+    const baseUrl = (configuredBaseUrl || 'https://api.anthropic.com').replace(/\/$/, '');
+    const gatewayDiscoveryEnabled = discoverGateway
+      && Boolean(configuredBaseUrl)
+      && !isAnthropicApiUrl(baseUrl);
+    const directApiDiscoveryEnabled = Boolean(apiKey)
+      && (!configuredBaseUrl || isAnthropicApiUrl(baseUrl));
+    if (!gatewayDiscoveryEnabled && !directApiDiscoveryEnabled) return this.fallbackModels;
 
-    const baseUrl = (this.#environment.ANTHROPIC_BASE_URL ?? 'https://api.anthropic.com').replace(/\/$/, '');
-    const headers: Record<string, string> = { 'anthropic-version': '2023-06-01' };
-    if (apiKey) headers['x-api-key'] = apiKey;
-    else if (oauthToken) headers.authorization = `Bearer ${oauthToken}`;
+    const headers = claudeDiscoveryHeaders(this.#environment);
+    if (authToken) headers.set('authorization', `Bearer ${authToken}`);
+    else if (apiKey) headers.set('x-api-key', apiKey);
     const timeoutSignal = AbortSignal.timeout(this.#timeoutMs);
     const response = await this.#fetch(`${baseUrl}/v1/models?limit=1000`, {
       headers,
@@ -334,12 +340,39 @@ export class ClaudeCodeModelDiscoverer implements AgentModelDiscoverer {
       ...this.fallbackModels,
       ...body.data.flatMap((value) => {
         if (!isRecord(value) || typeof value.id !== 'string' || !value.id.trim()) return [];
+        const id = value.id.trim();
+        if (!id.startsWith('claude') && !id.startsWith('anthropic')) return [];
         const displayName = typeof value.display_name === 'string' && value.display_name.trim()
           ? value.display_name.trim()
-          : value.id.trim();
-        return [{ id: value.id.trim(), displayName, description: null }];
+          : id;
+        return [{ id, displayName, description: null }];
       }),
     ]);
+  }
+}
+
+function claudeDiscoveryHeaders(environment: Readonly<NodeJS.ProcessEnv>): Headers {
+  const headers = new Headers({ 'anthropic-version': '2023-06-01' });
+  for (const line of environment.ANTHROPIC_CUSTOM_HEADERS?.split(/\r?\n/) ?? []) {
+    const separator = line.indexOf(':');
+    if (separator < 1) continue;
+    const name = line.slice(0, separator).trim();
+    const value = line.slice(separator + 1).trim();
+    if (!name) continue;
+    try {
+      headers.set(name, value);
+    } catch {
+      // Match the CLI's tolerant environment parsing by ignoring malformed header names.
+    }
+  }
+  return headers;
+}
+
+function isAnthropicApiUrl(value: string): boolean {
+  try {
+    return new URL(value).hostname.toLowerCase() === 'api.anthropic.com';
+  } catch {
+    return false;
   }
 }
 

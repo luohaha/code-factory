@@ -69,6 +69,7 @@ test('Claude Code model discovery combines rolling aliases, configured models, a
       return new Response(JSON.stringify({
         data: [
           { id: 'claude-api-model', display_name: 'Claude API Model' },
+          { id: 'unrelated-api-model', display_name: 'Not a Claude model' },
           { id: '' },
         ],
       }), { status: 200 });
@@ -81,6 +82,55 @@ test('Claude Code model discovery combines rolling aliases, configured models, a
   assert.ok(models.some((model) => model.id === 'opus'));
   assert.ok(models.some((model) => model.id === 'company-opus'));
   assert.ok(models.some((model) => model.id === 'claude-api-model' && model.displayName === 'Claude API Model'));
+  assert.ok(!models.some((model) => model.id === 'unrelated-api-model'));
+});
+
+test('Claude gateway discovery prefers bearer auth and forwards custom headers', async () => {
+  let requestedUrl = '';
+  let requestHeaders = new Headers();
+  const discoverer = new ClaudeCodeModelDiscoverer({
+    environment: {
+      ANTHROPIC_BASE_URL: 'https://gateway.example.test/',
+      ANTHROPIC_AUTH_TOKEN: 'gateway-token',
+      ANTHROPIC_API_KEY: 'fallback-api-key',
+      ANTHROPIC_CUSTOM_HEADERS: 'X-Tenant: tenant-a\nX-Model-Route: production',
+      CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
+    },
+    fetch: async (input, init) => {
+      requestedUrl = String(input);
+      requestHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify({
+        data: [{ id: 'claude-gateway-model', display_name: 'Gateway Claude' }],
+      }), { status: 200 });
+    },
+  });
+
+  const models = await discoverer.discover();
+  assert.equal(requestedUrl, 'https://gateway.example.test/v1/models?limit=1000');
+  assert.equal(requestHeaders.get('authorization'), 'Bearer gateway-token');
+  assert.equal(requestHeaders.get('x-api-key'), null);
+  assert.equal(requestHeaders.get('x-tenant'), 'tenant-a');
+  assert.equal(requestHeaders.get('x-model-route'), 'production');
+  assert.ok(models.some((model) => model.id === 'claude-gateway-model'));
+});
+
+test('Claude gateway discovery falls back to API-key authentication', async () => {
+  let requestHeaders = new Headers();
+  const discoverer = new ClaudeCodeModelDiscoverer({
+    environment: {
+      ANTHROPIC_BASE_URL: 'https://gateway.example.test',
+      ANTHROPIC_API_KEY: 'gateway-api-key',
+      CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
+    },
+    fetch: async (_input, init) => {
+      requestHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    },
+  });
+
+  await discoverer.discover();
+  assert.equal(requestHeaders.get('authorization'), null);
+  assert.equal(requestHeaders.get('x-api-key'), 'gateway-api-key');
 });
 
 test('model catalog refreshes once per day and retains the last successful provider result', async () => {
