@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { type SyntheticEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -35,7 +36,6 @@ import {
   UserRound,
   WifiOff,
   X,
-  Zap,
 } from 'lucide-react';
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -1537,7 +1537,7 @@ function Dashboard() {
       <header className="sticky top-0 z-30 border-b border-border/80 bg-background/92 backdrop-blur-xl">
         <div className="flex h-14 items-center gap-3 px-4 lg:px-6">
           <div className="flex items-center gap-2.5">
-            <span className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground"><Zap className="size-4" fill="currentColor" /></span>
+            <Image src="/favicon.svg" alt="" aria-hidden="true" width={32} height={32} className="size-8 shrink-0" />
             <div className="hidden sm:block">
               <p className="text-sm leading-4 font-semibold tracking-[-0.02em]">Code Factory</p>
               <p className="text-[9px] font-medium tracking-[0.14em] text-muted-foreground uppercase">Agent Manager</p>

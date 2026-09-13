@@ -1,6 +1,26 @@
-<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M22 19.2727C22 20.779 20.779 22 19.2727 22H14.7273C13.221 22 12 20.779 12 19.2727V12H19.2727C20.779 12 22 13.221 22 14.7273V19.2727Z" fill="#68C4FF"/>
-<path d="M20 2C21.1046 2 22 2.89543 22 4V7C22 8.10457 21.1046 9 20 9H17C15.8954 9 15 8.10457 15 7V4C15 2.89543 15.8954 2 17 2H20Z" fill="#0C79D8"/>
-<path d="M7 15C8.10457 15 9 15.8954 9 17V20C9 21.1046 8.10457 22 7 22H4C2.89543 22 2 21.1046 2 20V17C2 15.8954 2.89543 15 4 15H7Z" fill="#0C79D8"/>
-<path d="M12 12H4.72727C3.22104 12 2 10.779 2 9.27273V4.72727C2 3.22104 3.22104 2 4.72727 2H9.27273C10.779 2 12 3.22104 12 4.72727V12Z" fill="#2E9EFF"/>
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="frame" x1="18" y1="8" x2="47" y2="51" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#123D70"/>
+      <stop offset="1" stop-color="#071E38"/>
+    </linearGradient>
+    <linearGradient id="center" x1="25" y1="27" x2="41" y2="50" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#087CFF"/>
+      <stop offset="1" stop-color="#0756EB"/>
+    </linearGradient>
+    <linearGradient id="right" x1="43" y1="28" x2="58" y2="50" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#20D5BD"/>
+      <stop offset="1" stop-color="#0FBCA9"/>
+    </linearGradient>
+    <linearGradient id="indicator" x1="28" y1="6" x2="36" y2="14" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFC54A"/>
+      <stop offset="1" stop-color="#FF9D1A"/>
+    </linearGradient>
+  </defs>
+  <path d="M18 49V22C18 14.268 24.268 8 32 8C39.732 8 46 14.268 46 22V49" stroke="url(#frame)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="6" y="28" width="17" height="22" rx="6" fill="#0B376D"/>
+  <rect x="24" y="27" width="17" height="23" rx="6" fill="url(#center)"/>
+  <rect x="42" y="28" width="16" height="22" rx="6" fill="url(#right)"/>
+  <rect x="3" y="48" width="58" height="10" rx="5" fill="url(#frame)"/>
+  <circle cx="32" cy="9" r="4" fill="url(#indicator)"/>
 </svg>
