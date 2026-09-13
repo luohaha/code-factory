@@ -1,5 +1,5 @@
 {
-  "name": "@code-factory/agent-manager",
+  "name": "@luoyixin/code-factory",
   "version": "0.1.0",
   "description": "Workspace-scoped manager for long-running Codex and Claude Code development sessions.",
   "license": "Apache-2.0",
