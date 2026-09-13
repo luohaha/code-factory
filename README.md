@@ -31,8 +31,8 @@ The current implementation supports headless **Codex** and **Claude Code** agent
 ## Quick Start
 
 ~~~bash
-cd /path/to/your-project
-npx --yes --package @luoyixin/code-factory code-factory-agent-manager start --open
+cd /path/to/the/repository/to-manage
+npx --package @luoyixin/code-factory code-factory-agent-manager start --daemon
 ~~~
 
 The startup directory becomes the managed workspace. The dashboard is available at [http://127.0.0.1:4310](http://127.0.0.1:4310) by default.
