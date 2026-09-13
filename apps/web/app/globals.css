@@ -49,10 +49,13 @@
 }
 
 body {
+  background-color: var(--background);
+  color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
 }
 
 :root {
+  color-scheme: light;
   --background: oklch(0.977 0.006 235);
   --foreground: oklch(0.245 0.024 250);
   --card: oklch(0.995 0.003 230);
@@ -88,6 +91,7 @@ body {
 }
 
 .dark {
+  color-scheme: dark;
   --background: oklch(0.19 0.024 251);
   --foreground: oklch(0.94 0.012 232);
   --card: oklch(0.235 0.026 250);

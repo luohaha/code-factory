@@ -83,7 +83,7 @@ The bundled dashboard provides three views:
 
 Opening a Requirement shows its description, linked PRs, run information, and unified Human/RD/Reviewer conversation. Messages support images and file attachments. New input can be queued while RD is running, or the current run can be interrupted so the same session handles the correction immediately. Requirement and Reviewer forms provide provider-specific model dropdowns populated by an Agent Manager catalog that refreshes every 24 hours.
 
-The dashboard supports English and Simplified Chinese, remembers the selected locale, and initially follows the browser language. Its Agent Manager settings dialog persists workspace configuration and identifies changes that require a restart.
+The dashboard supports light and dark modes from the top-right theme control, remembers the selected theme, and follows the operating-system preference until one is selected. It also supports English and Simplified Chinese, remembers the selected locale, and initially follows the browser language. Its Agent Manager settings dialog persists workspace configuration and identifies changes that require a restart.
 
 All three boards share a creation-time filter with options for the last 24 hours, 7 days, 30 days, 90 days, or all time. The default view shows items created in the last 7 days.
 
