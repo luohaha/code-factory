@@ -15,3 +15,7 @@ breaking changes while the major version is `0`.
 - Supervised daemon mode, structured rotating logs, attachments, and explicit run interruption.
 - Semantic version synchronization, runtime version reporting, and tag-driven npm/GitHub release automation for `@luoyixin/code-factory`.
 - Apache License 2.0 coverage for the repository and published npm package.
+
+### Changed
+
+- Updated the dashboard framework and Cloudflare toolchain to versions without known npm audit findings, and classified the Shadcn CLI as a development-only dependency.
