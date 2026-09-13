@@ -157,6 +157,34 @@ class TestAgentTrigger implements AgentTrigger {
   }
 }
 
+test('Agent Manager removes a TODO requirement from active lists and publishes a durable event', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store,
+    logger: silentLogger,
+  });
+  try {
+    const requirement = manager.createRequirement({
+      title: 'Discard draft',
+      description: 'This work is no longer needed',
+      provider: 'codex',
+    });
+    manager.deleteRequirement(requirement.id);
+
+    assert.equal(manager.getRequirement(requirement.id)?.status, 'cancelled');
+    assert.equal(manager.getRequirement(requirement.id)?.session.state, 'completed');
+    assert.equal(manager.listRequirements().some((item) => item.id === requirement.id), false);
+    const event = manager.listEvents().at(-1);
+    assert.equal(event?.type, 'requirement.deleted');
+    assert.equal(event?.requirementId, requirement.id);
+    assert.equal(event?.sessionId, requirement.session.id);
+    assert.deepEqual(event?.payload, {});
+  } finally {
+    await manager.close();
+  }
+});
+
 test('Agent Manager queues conversation messages during a Run and resumes without replaying RD output', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new DeferredRunner();

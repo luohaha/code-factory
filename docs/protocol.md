@@ -45,9 +45,10 @@ Content-Type: application/json
 }
 ~~~
 
-Drive a Requirement:
+Delete a Requirement that has not started, or drive a Requirement:
 
 ~~~text
+DELETE /api/requirements/:id
 POST /api/requirements/:id/start
 POST /api/requirements/:id/reply
 POST /api/requirements/:id/interrupt
@@ -137,7 +138,7 @@ data: {"id":42,"type":"review_request.started",...}
 
 Current event types include:
 
-- `requirement.created` / `requirement.completed`;
+- `requirement.created` / `requirement.deleted` / `requirement.completed`;
 - `message.created`;
 - `pull_request.created` / `pull_request.updated`;
 - `review_request.started`;

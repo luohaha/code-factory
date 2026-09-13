@@ -35,6 +35,68 @@ test('a requirement is created atomically with exactly one RD session', () => {
   }
 });
 
+test('cancelling a TODO requirement hides it, archives its session, and preserves its records', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-delete',
+      sessionId: 'ses-delete',
+      title: 'Discard draft',
+      description: 'This work is no longer needed',
+      provider: 'codex',
+      createdBy: 'human',
+      now,
+    });
+    store.createMessageAttachment({
+      id: 'att-delete',
+      requirementId: 'req-delete',
+      fileName: 'notes.txt',
+      kind: 'file',
+      mediaType: 'text/plain',
+      byteSize: 5,
+      localPath: '/tmp/att-delete-notes.txt',
+      now,
+    });
+
+    const cancelled = store.transitionRequirement('req-delete', ['todo'], 'cancelled', now);
+
+    assert.equal(cancelled.status, 'cancelled');
+    assert.equal(cancelled.session.state, 'completed');
+    assert.equal(store.listRequirements().length, 0);
+    assert.equal(store.getMessageAttachment('att-delete')?.requirementId, 'req-delete');
+    assert.throws(
+      () => store.transitionRequirement('req-delete', ['todo'], 'cancelled', now),
+      StoreConflictError,
+    );
+
+    store.createRequirement({
+      requirementId: 'req-started',
+      sessionId: 'ses-started',
+      title: 'Keep started work',
+      description: 'Execution already began',
+      provider: 'codex',
+      createdBy: 'human',
+      now,
+    });
+    store.beginRun({
+      runId: 'run-started',
+      requirementId: 'req-started',
+      role: 'rd',
+      provider: 'codex',
+      taskSummary: 'start',
+      now,
+    });
+
+    assert.throws(
+      () => store.transitionRequirement('req-started', ['todo'], 'cancelled', now),
+      StoreConflictError,
+    );
+    assert.equal(store.getRequirement('req-started')?.status, 'doing');
+  } finally {
+    store.close();
+  }
+});
+
 test('different requirement sessions may run concurrently without scheduling', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {

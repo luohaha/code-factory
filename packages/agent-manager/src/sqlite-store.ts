@@ -577,7 +577,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
         if (!this.getRequirement(requirementId)) throw new StoreNotFoundError(`Requirement ${requirementId} not found`);
         throw new StoreConflictError(`Requirement ${requirementId} cannot transition to ${next}`);
       }
-      if (next === 'done') {
+      if (next === 'done' || next === 'cancelled') {
         this.#db.prepare("UPDATE agent_sessions SET state = 'completed', last_error = NULL, updated_at = ? WHERE requirement_id = ?")
           .run(now, requirementId);
       }

@@ -42,6 +42,7 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/agent-models | Read cached Codex and Claude Code model options |
 | GET | /api/requirements | List Requirements with their RD Sessions |
 | POST | /api/requirements | Create a Requirement and RD Session |
+| DELETE | /api/requirements/:id | Remove a TODO Requirement |
 | POST | /api/requirements/:id/start | Start or retry a Requirement |
 | POST | /api/requirements/:id/reply | Send a human conversation message |
 | POST | /api/requirements/:id/interrupt | Interrupt the current RD Run |
@@ -398,6 +399,12 @@ curl -X POST http://127.0.0.1:4310/api/requirements \
 
 Success: 201 Created with the new Requirement. Its initial status is todo and its Session state is idle.
 
+### DELETE /api/requirements/:id
+
+Removes a Requirement that is still in `todo` from active lists by marking it `cancelled` and archiving its Session. The underlying record is retained for auditability. A Requirement cannot be deleted after execution starts.
+
+Success: `204 No Content`. Returns `404 Not Found` for an unknown Requirement and `409 Conflict` unless the Requirement is still `todo`.
+
 ### POST /api/requirements/:id/start
 
 Starts a Requirement that has not run, or retries a failed RD Session. Optional message and attachmentIds values are appended to the conversation before delivery in this or the next Run.
@@ -642,6 +649,7 @@ Current event types and primary payloads:
 | Event | Payload |
 | --- | --- |
 | requirement.created | provider, createdBy |
+| requirement.deleted | empty object |
 | requirement.completed | empty object |
 | message.created | message |
 | pull_request.created | pullRequest |

@@ -118,7 +118,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
     if (allowedOrigin) {
       response.setHeader('access-control-allow-origin', allowedOrigin);
       response.setHeader('access-control-allow-headers', 'content-type, x-file-name');
-      response.setHeader('access-control-allow-methods', 'GET, POST, PATCH, OPTIONS');
+      response.setHeader('access-control-allow-methods', 'GET, POST, PATCH, DELETE, OPTIONS');
     }
     if (request.method === 'OPTIONS') {
       response.writeHead(204).end();
@@ -238,6 +238,13 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           ...(reasoningEffort ? { reasoningEffort } : {}),
         });
         sendJson(response, 201, item);
+        return;
+      }
+
+      const requirement = url.pathname.match(/^\/api\/requirements\/([^/]+)$/);
+      if (request.method === 'DELETE' && requirement) {
+        manager.deleteRequirement(decodeURIComponent(requirement[1]!));
+        response.writeHead(204).end();
         return;
       }
 
