@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22.13
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: |
+            apps/web/package-lock.json
+            packages/agent-manager/package-lock.json
+
+      - name: Install dashboard dependencies
+        run: npm ci
+        working-directory: apps/web
+
+      - name: Install Agent Manager dependencies
+        run: npm ci
+        working-directory: packages/agent-manager
+
+      - name: Verify tag and synchronized versions
+        run: node scripts/check-version.mjs "${GITHUB_REF_NAME#v}"
+
+      - name: Audit production dependencies
+        run: npm run release:audit
+        working-directory: packages/agent-manager
+
+      - name: Publish Agent Manager
+        run: npm publish --access public --provenance
+        working-directory: packages/agent-manager
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub release
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "Code Factory $GITHUB_REF_NAME"
+        env:
+          GH_TOKEN: ${{ github.token }}

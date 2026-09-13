@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "description": "Workspace-scoped manager for long-running Codex and Claude Code development sessions.",
   "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "bin": {
     "code-factory-agent-manager": "dist/cli.js",
     "code-factory-cli": "dist/code-factory-cli-main.js"
@@ -11,13 +19,36 @@
     "dist",
     "dashboard"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/luohaha/code-factory.git",
+    "directory": "packages/agent-manager"
+  },
+  "homepage": "https://github.com/luohaha/code-factory#readme",
+  "bugs": {
+    "url": "https://github.com/luohaha/code-factory/issues"
+  },
+  "keywords": [
+    "agent",
+    "codex",
+    "claude-code",
+    "developer-tools"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=22.13.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && npm run build:dashboard",
     "build:dashboard": "npm --prefix ../../apps/web run build && node scripts/sync-dashboard.mjs",
+    "check:version": "node ../../scripts/check-version.mjs",
     "dev": "tsx src/cli.ts start",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run check:version && npm test && npm run typecheck",
+    "release:audit": "npm audit --omit=dev --audit-level=high && npm --prefix ../../apps/web audit --omit=dev --audit-level=high",
+    "release:check": "npm run check:version && npm test && npm run typecheck && npm pack --dry-run",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

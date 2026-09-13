@@ -1,5 +1,7 @@
 import { parseArgs } from 'node:util';
 
+import { CODE_FACTORY_VERSION } from './version.js';
+
 export const CODE_FACTORY_API_URL = 'CODE_FACTORY_API_URL';
 export const CODE_FACTORY_REQUIREMENT_ID = 'CODE_FACTORY_REQUIREMENT_ID';
 export const CODE_FACTORY_SESSION_ID = 'CODE_FACTORY_SESSION_ID';
@@ -11,6 +13,9 @@ Code Factory control-plane commands for RD Agents.
 Commands:
   pr register             Register or refresh a pull request
   requirement propose     Propose a separately tracked TODO requirement
+
+Options:
+  -v, --version           Print the installed Code Factory version
 
 Run code-factory-cli <command> --help for command options.
 
@@ -218,6 +223,10 @@ export async function runCodeFactoryCli(
   overrides: Partial<CodeFactoryCliRuntime> = {},
 ): Promise<number> {
   const runtime = { ...defaultRuntime(), ...overrides };
+  if (args.length === 1 && (args[0] === '--version' || args[0] === '-v')) {
+    runtime.writeOut(`${CODE_FACTORY_VERSION}\n`);
+    return 0;
+  }
   if (args.length === 0 || writesHelp(args) && args.length === 1) {
     runtime.writeOut(`${HELP}\n`);
     return 0;

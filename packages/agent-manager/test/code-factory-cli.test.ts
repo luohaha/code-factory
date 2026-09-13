@@ -13,6 +13,7 @@ import {
   runCodeFactoryCli,
 } from '../src/code-factory-cli.ts';
 import { installCodeFactoryCliLauncher } from '../src/code-factory-cli-launcher.ts';
+import { CODE_FACTORY_VERSION } from '../src/version.ts';
 
 interface CapturedRequest {
   url: string;
@@ -53,6 +54,18 @@ test('code-factory-cli help discovers the supported RD commands', async () => {
   assert.match(output.join(''), /pr register/);
   assert.match(output.join(''), /requirement propose/);
   assert.match(output.join(''), /CODE_FACTORY_REQUIREMENT_ID/);
+});
+
+test('code-factory-cli reports the package version without requiring Agent context', async () => {
+  const output: string[] = [];
+  const exitCode = await runCodeFactoryCli(['--version'], {
+    environment: {},
+    writeOut: (value) => output.push(value),
+    writeError: () => undefined,
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(output.join(''), `${CODE_FACTORY_VERSION}\n`);
 });
 
 test('code-factory-cli registers a PR using injected Requirement context', async () => {

@@ -7,6 +7,7 @@ import { DashboardServer } from './dashboard-server.js';
 import type { Logger } from './logger.js';
 import { StoreConflictError, StoreNotFoundError } from './store.js';
 import type { AgentProvider, AgentReasoningEffort, ManagerEvent, PullRequestStatus } from './types.js';
+import { CODE_FACTORY_VERSION } from './version.js';
 
 export interface AgentManagerServerOptions {
   host?: string;
@@ -127,7 +128,11 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
     const url = new URL(request.url ?? '/', 'http://agent-manager.local');
     try {
       if (request.method === 'GET' && url.pathname === '/api/health') {
-        sendJson(response, 200, { ok: true, workspaceRoot: manager.workspaceRoot });
+        sendJson(response, 200, {
+          ok: true,
+          version: CODE_FACTORY_VERSION,
+          workspaceRoot: manager.workspaceRoot,
+        });
         return;
       }
       if (request.method === 'GET' && url.pathname === '/api/workspace') {

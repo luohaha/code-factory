@@ -122,6 +122,7 @@ node /path/to/code-factory/packages/agent-manager/dist/cli.js start \
 | `--log-file PATH` | Workspace log directory | Structured JSONL log destination. |
 | `--log-max-size SIZE` | `20m` | Rotate the active log after it reaches this size. |
 | `--log-max-files COUNT_OR_DAYS` | `14d` | Number of rotated logs or retention period. |
+| `-v`, `--version` | — | Print the installed Code Factory version and exit. |
 
 Configuration file values are used by default. Command-line options remain available as one-process overrides for compatibility; logging environment variables take precedence over the file, and command-line options take precedence over both. These launch-only overrides are never copied into the writable file by later dashboard changes. Relative database and log paths are resolved from the managed workspace.
 
@@ -146,7 +147,7 @@ When the npm package is published, the equivalent command will be:
 
 ~~~bash
 cd /path/to/your-project
-npx @code-factory/agent-manager start --port 8080 --open
+npx --package @code-factory/agent-manager code-factory-agent-manager start --port 8080 --open
 ~~~
 
 ## How It Works
@@ -238,6 +239,22 @@ npx tsc --noEmit
 npm run build
 ~~~
 
+## Versioning and releases
+
+Code Factory uses Semantic Versioning. The first release is prepared as `0.1.0` but remains unreleased until a `v0.1.0` tag successfully completes the release workflow. The Agent Manager package manifest is the canonical version source; the dashboard manifest and both lockfiles are kept in sync so the bundled product has one version.
+
+~~~bash
+# From the repository root, update every version field.
+node scripts/set-version.mjs 0.1.0
+
+# Audit production dependencies, then verify versions, tests, types, build, and package contents.
+cd packages/agent-manager
+npm run release:audit
+npm run release:check
+~~~
+
+The installed version is available through `code-factory-agent-manager --version`, `code-factory-cli --version`, the startup banner, and `GET /api/health`. See the [release guide](docs/releasing.md) for the release checklist, required npm/GitHub setup, tag workflow, smoke test, and recovery rules.
+
 ## Design Documentation
 
 - [Final architecture and domain model](docs/architecture.en.md)
@@ -245,6 +262,7 @@ npm run build
 - [Agent Manager HTTP API Reference](docs/agent-manager-api.md)
 - [HTTP and event protocol](docs/protocol.md)
 - [Development roadmap](docs/roadmap.md)
+- [Release guide](docs/releasing.md)
 
 ## Current Boundaries
 

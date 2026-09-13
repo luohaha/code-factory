@@ -5,6 +5,7 @@ import { formatStartupBanner } from '../src/startup-banner.ts';
 
 test('startup banner always exposes workspace paths and service URLs', () => {
   assert.equal(formatStartupBanner({
+    version: '0.1.0',
     workspaceRoot: '/workspace/starrocks',
     configurationFilePath: '/data/config.json',
     databasePath: '/data/factory.sqlite',
@@ -13,7 +14,7 @@ test('startup banner always exposes workspace paths and service URLs', () => {
     apiUrl: 'http://127.0.0.1:4310/api',
     pullRequestReconcileIntervalSeconds: 30,
   }), [
-    'Code Factory Agent Manager started',
+    'Code Factory Agent Manager 0.1.0 started',
     'Workspace: /workspace/starrocks',
     'Config:    /data/config.json',
     'Database:  /data/factory.sqlite',
@@ -27,6 +28,7 @@ test('startup banner always exposes workspace paths and service URLs', () => {
 
 test('startup banner reports disabled reconciliation and an injected logger', () => {
   const banner = formatStartupBanner({
+    version: '0.1.0',
     workspaceRoot: '/workspace/repo',
     configurationFilePath: '/data/config.json',
     databasePath: ':memory:',
@@ -36,7 +38,7 @@ test('startup banner reports disabled reconciliation and an injected logger', ()
     pullRequestReconcileIntervalSeconds: 0,
   });
 
-  assert.match(banner, /^Code Factory Agent Manager started/m);
+  assert.match(banner, /^Code Factory Agent Manager 0\.1\.0 started/m);
   assert.match(banner, /^Logs: {6}custom logger$/m);
   assert.match(banner, /^PR reconciler: disabled$/m);
 });
