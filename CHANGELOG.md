@@ -13,5 +13,5 @@ breaking changes while the major version is `0`.
 - GitHub pull-request reconciliation and independent status, comment, CI-failure, and conflict triggers.
 - Bundled bilingual Web dashboard for requirements, pull requests, sessions, configuration, and conversations.
 - Supervised daemon mode, structured rotating logs, attachments, and explicit run interruption.
-- Semantic version synchronization, runtime version reporting, and tag-driven npm/GitHub release automation.
+- Semantic version synchronization, runtime version reporting, and tag-driven npm/GitHub release automation for `@luoyixin/code-factory`.
 - Apache License 2.0 coverage for the repository and published npm package.

@@ -55,7 +55,7 @@ For example:
 
 ~~~bash
 cd ~/starrocks
-npx @code-factory/agent-manager start
+npx --package @luoyixin/code-factory code-factory-agent-manager start
 ~~~
 
 All agents launched by that process initially use `~/starrocks` as their working directory. Before changing code, an RD Agent is instructed to create or reuse a Git worktree dedicated to its Requirement and perform the work there. Agent Manager does not currently provision or enforce that isolation.
@@ -221,7 +221,7 @@ The dashboard supports English and Simplified Chinese. The header language switc
 
 Requirement, Pull Request, and RD Session boards share a creation-time filter. It defaults to the last 7 days and also offers the last 24 hours, 30 days, 90 days, and all time.
 
-Running `npx @code-factory/agent-manager start` serves the API, SSE stream, and bundled Web dashboard from the same port and writes the local URL to the log file in the workspace data directory. No separate Web deployment is required.
+Running `npx --package @luoyixin/code-factory code-factory-agent-manager start` serves the API, SSE stream, and bundled Web dashboard from the same port and writes the local URL to the log file in the workspace data directory. No separate Web deployment is required.
 
 ## 10. Current Boundary
 

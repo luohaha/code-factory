@@ -155,7 +155,7 @@ When the npm package is published, the equivalent command will be:
 
 ~~~bash
 cd /path/to/your-project
-npx --package @code-factory/agent-manager code-factory-agent-manager start --port 8080 --open
+npx --package @luoyixin/code-factory code-factory-agent-manager start --port 8080 --open
 ~~~
 
 ## How It Works

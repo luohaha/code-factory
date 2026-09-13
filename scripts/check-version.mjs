@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = fileURLToPath(new URL('../', import.meta.url));
+const publishedPackageName = '@luoyixin/code-factory';
 const semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 async function readJson(path) {
@@ -29,6 +30,15 @@ const versions = [
 ];
 
 const errors = [];
+if (agentManagerPackage.name !== publishedPackageName) {
+  errors.push(`packages/agent-manager/package.json name is ${String(agentManagerPackage.name)}; expected ${publishedPackageName}`);
+}
+if (agentManagerLock.name !== publishedPackageName) {
+  errors.push(`packages/agent-manager/package-lock.json name is ${String(agentManagerLock.name)}; expected ${publishedPackageName}`);
+}
+if (agentManagerLock.packages?.['']?.name !== publishedPackageName) {
+  errors.push(`packages/agent-manager/package-lock.json root package name is ${String(agentManagerLock.packages?.['']?.name)}; expected ${publishedPackageName}`);
+}
 if (typeof version !== 'string' || !semverPattern.test(version)) {
   errors.push(`packages/agent-manager/package.json has invalid SemVer: ${String(version)}`);
 }
