@@ -235,13 +235,14 @@ interface AgentModelCatalog {
 
 ### GET /api/health
 
-Returns service status and the workspace bound at Agent Manager startup.
+Returns service status, the installed Code Factory version, and the workspace bound at Agent Manager startup.
 
 Success: 200 OK
 
 ~~~json
 {
   "ok": true,
+  "version": "0.1.0",
   "workspaceRoot": "/path/to/workspace"
 }
 ~~~

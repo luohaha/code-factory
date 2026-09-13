@@ -1,4 +1,5 @@
 export interface StartupBannerOptions {
+  version: string;
   workspaceRoot: string;
   configurationFilePath: string;
   databasePath: string;
@@ -10,7 +11,7 @@ export interface StartupBannerOptions {
 
 export function formatStartupBanner(options: StartupBannerOptions): string {
   return [
-    'Code Factory Agent Manager started',
+    `Code Factory Agent Manager ${options.version} started`,
     `Workspace: ${options.workspaceRoot}`,
     `Config:    ${options.configurationFilePath}`,
     `Database:  ${options.databasePath}`,

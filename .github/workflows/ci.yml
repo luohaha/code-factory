@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Use minimum supported Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+          cache-dependency-path: |
+            apps/web/package-lock.json
+            packages/agent-manager/package-lock.json
+
+      - name: Install dashboard dependencies
+        run: npm ci
+        working-directory: apps/web
+
+      - name: Install Agent Manager dependencies
+        run: npm ci
+        working-directory: packages/agent-manager
+
+      - name: Lint and type-check dashboard
+        run: npm run lint && npx tsc --noEmit
+        working-directory: apps/web
+
+      - name: Verify release build and package
+        run: npm run release:check
+        working-directory: packages/agent-manager

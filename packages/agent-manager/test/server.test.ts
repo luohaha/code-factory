@@ -16,6 +16,7 @@ import type { AgentProcessRunner, ProcessRunRequest } from '../src/process-runne
 import { createAgentManagerServer } from '../src/server.ts';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
 import type { RunOutcome } from '../src/types.ts';
+import { CODE_FACTORY_VERSION } from '../src/version.ts';
 
 class WaitingRunner implements AgentProcessRunner {
   request: ProcessRunRequest | null = null;
@@ -93,7 +94,7 @@ test('HTTP API exposes the cached provider model catalog', async () => {
   assert.equal(stopped, true);
 });
 
-test('HTTP API reads, validates, persists, and applies Agent Manager configuration', async () => {
+test('HTTP API reports its version and reads, validates, persists, and applies configuration', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-config-api-'));
   const configurationFilePath = join(directory, 'config.json');
   const fileConfiguration = { ...DEFAULT_AGENT_MANAGER_CONFIGURATION, pullRequestReconcileIntervalSeconds: 0 };
@@ -121,6 +122,14 @@ test('HTTP API reads, validates, persists, and applies Agent Manager configurati
   const baseUrl = `http://127.0.0.1:${port}`;
 
   try {
+    const healthResponse = await fetch(`${baseUrl}/api/health`);
+    assert.equal(healthResponse.status, 200);
+    assert.deepEqual(await healthResponse.json(), {
+      ok: true,
+      version: CODE_FACTORY_VERSION,
+      workspaceRoot: process.cwd(),
+    });
+
     const initialResponse = await fetch(`${baseUrl}/api/configuration`);
     assert.equal(initialResponse.status, 200);
     const initial = await initialResponse.json() as {
