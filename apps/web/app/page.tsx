@@ -1563,7 +1563,6 @@ function Dashboard() {
               variant="outline"
               size="icon"
               aria-label={theme === 'dark' ? t('Switch to light mode') : t('Switch to dark mode')}
-              aria-pressed={theme === 'dark'}
               title={theme === 'dark' ? t('Switch to light mode') : t('Switch to dark mode')}
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
             >
