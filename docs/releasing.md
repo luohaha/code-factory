@@ -1,6 +1,6 @@
 # Releasing Code Factory
 
-Code Factory follows [Semantic Versioning](https://semver.org/). Until `1.0.0`, a minor release may include breaking changes. Stable release tags use the exact form `vMAJOR.MINOR.PATCH`; the first planned release is `v0.1.0`.
+Code Factory follows [Semantic Versioning](https://semver.org/). Until `1.0.0`, a minor release may include breaking changes. Stable release tags use the exact form `vMAJOR.MINOR.PATCH`; the first release is `v0.1.0`.
 
 ## Version sources
 
@@ -22,13 +22,13 @@ node scripts/check-version.mjs 0.1.0
 
 Then update `CHANGELOG.md`. Do not create a release tag while its entry is still marked `Unreleased`.
 
-## One-time setup before the first public release
+## Publishing setup and policy
 
-The repository is code-ready for a tag-driven release, but a maintainer must finish these ownership and policy decisions:
+Review these settings before each release and whenever repository or npm ownership changes:
 
 1. Confirm that the `luoyixin` npm account remains controlled by the project. The intended public package name is `@luoyixin/code-factory`.
 2. Keep the GitHub repository public. npm provenance is not available for a package built from a private repository, and the supplied workflow intentionally publishes with `--provenance`.
-3. Create a granular npm token with direct publish permission for `@luoyixin/code-factory` or the `@luoyixin` scope and save it as the GitHub Actions repository secret `NPM_TOKEN`. After the first package version exists, prefer configuring npm trusted publishing for `luohaha/code-factory` and the exact workflow filename `release.yml`, then remove the long-lived publish token from the workflow and repository secrets.
+3. The current workflow reads a granular npm publish token from the GitHub Actions repository secret `NPM_TOKEN`. Prefer configuring npm trusted publishing for `luohaha/code-factory` and the exact workflow filename `release.yml`; after the workflow is updated and a release succeeds with trusted publishing, remove the long-lived token from the workflow and repository secrets.
 4. Protect the GitHub repository and the npm account appropriately: require review and the `CI / verify` check on `main`, enable npm two-factor authentication, and limit who can create release tags or change Actions secrets.
 5. Review the security model and public documentation. Remove private data from Git history and package contents before making the repository or package public. The repository and npm package are licensed under Apache-2.0; review bundled third-party attribution and `NOTICE` obligations before distribution.
 6. Resolve all high-severity production dependency findings. The release workflow runs `npm audit --omit=dev --audit-level=high` for both packages and will block publication while such findings remain.

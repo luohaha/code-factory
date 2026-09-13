@@ -30,133 +30,14 @@ The current implementation supports headless **Codex** and **Claude Code** agent
 
 ## Quick Start
 
-### Prerequisites
-
-- Node.js 22.13 or newer
-- At least one installed and authenticated Agent CLI: `codex` or `claude`
-- GitHub CLI (`gh`) installed and authenticated for PR reconciliation and review workflows
-
-### Build and start from this repository
-
-Build Agent Manager once:
-
 ~~~bash
-cd /path/to/code-factory/packages/agent-manager
-npm install
-npm run build
+cd /path/to/the/repository/to-manage
+npx --package @luoyixin/code-factory code-factory-agent-manager start --daemon
 ~~~
 
-Then start it **from the repository you want the agents to work in**:
+The startup directory becomes the managed workspace. The dashboard is available at [http://127.0.0.1:4310](http://127.0.0.1:4310) by default.
 
-~~~bash
-cd /path/to/your-project
-node /path/to/code-factory/packages/agent-manager/dist/cli.js start --open
-~~~
-
-The startup directory becomes the managed workspace and the working directory for every RD and Reviewer agent. By default, the dashboard is available at [http://127.0.0.1:4310](http://127.0.0.1:4310).
-
-On first start, Agent Manager creates a workspace-scoped configuration file at `~/.code-factory/workspaces/<workspace-hash>/config.json`. The dashboard settings dialog can edit it. PR reconciliation intervals and log levels are applied immediately; network, storage, browser, and log-rotation changes are saved for the next restart.
-
-### Choose a port
-
-Use `--port` followed by an integer from `1` to `65535`:
-
-~~~bash
-node /path/to/code-factory/packages/agent-manager/dist/cli.js start --port 8080
-~~~
-
-To listen on all network interfaces, specify the host as well:
-
-~~~bash
-node /path/to/code-factory/packages/agent-manager/dist/cli.js start \
-  --host 0.0.0.0 \
-  --port 8080
-~~~
-
-Listening on `0.0.0.0` makes the dashboard reachable from other machines. Only do this on a trusted network: headless agents run with the permissions of the user who started Agent Manager.
-
-### Run as a supervised daemon
-
-Add `--daemon` to detach Agent Manager from the terminal and keep it running under a lightweight supervisor:
-
-~~~bash
-cd /path/to/your-project
-node /path/to/code-factory/packages/agent-manager/dist/cli.js start --daemon --open
-~~~
-
-The start command returns only after the HTTP service is ready. If the Agent Manager process exits unexpectedly, the supervisor restarts it automatically with exponential backoff from 1 to 30 seconds. Use the same managed workspace for lifecycle commands:
-
-~~~bash
-node /path/to/code-factory/packages/agent-manager/dist/cli.js status
-node /path/to/code-factory/packages/agent-manager/dist/cli.js restart
-node /path/to/code-factory/packages/agent-manager/dist/cli.js stop
-~~~
-
-When the daemon is running, `restart` reuses its start options unless new options are supplied. `status` exits with code `0` while the supervisor is live and `3` otherwise. The equivalent `daemon start|status|restart|stop` command form is also supported. This supervisor provides background execution and process recovery; it does not install an operating-system service or start automatically after a machine reboot.
-
-### Common examples
-
-~~~bash
-# Open the dashboard after startup
-node /path/to/code-factory/packages/agent-manager/dist/cli.js start --open
-
-# Reconcile tracked pull requests every 10 seconds
-node /path/to/code-factory/packages/agent-manager/dist/cli.js start \
-  --pr-reconcile-interval 10
-
-# Disable pull-request polling
-node /path/to/code-factory/packages/agent-manager/dist/cli.js start \
-  --pr-reconcile-interval 0
-
-# Use a custom database and debug logging
-node /path/to/code-factory/packages/agent-manager/dist/cli.js start \
-  --db /path/to/factory.sqlite \
-  --log-level debug
-~~~
-
-### CLI options
-
-| Option | Default | Description |
-| --- | --- | --- |
-| `--config PATH` | Workspace data directory | JSON configuration file path. |
-| `--host HOST` | `127.0.0.1` | HTTP listen address. |
-| `--port PORT` | `4310` | Dashboard, HTTP API, and SSE port (`1`–`65535`). |
-| `--open` | Off | Open the dashboard in the default browser after startup. |
-| `--daemon` | Off | Run under the detached supervisor and restart after unexpected exits. |
-| `--db PATH` | Workspace data directory | SQLite database path. |
-| `--allow-origin ORIGIN` | `http://localhost:3000` | Allowed CORS origin. |
-| `--pr-reconcile-interval SECONDS` | `30` | GitHub polling interval; use `0` to disable it. |
-| `--log-level LEVEL` | `info` | `debug`, `info`, `warn`, `error`, or `silent`. |
-| `--log-file PATH` | Workspace log directory | Structured JSONL log destination. |
-| `--log-max-size SIZE` | `20m` | Rotate the active log after it reaches this size. |
-| `--log-max-files COUNT_OR_DAYS` | `14d` | Number of rotated logs or retention period. |
-| `-v`, `--version` | — | Print the installed Code Factory version and exit. |
-
-Configuration file values are used by default. Command-line options remain available as one-process overrides for compatibility; logging environment variables take precedence over the file, and command-line options take precedence over both. These launch-only overrides are never copied into the writable file by later dashboard changes. Relative database and log paths are resolved from the managed workspace.
-
-~~~json
-{
-  "host": "127.0.0.1",
-  "port": 4310,
-  "allowedOrigin": "http://localhost:3000",
-  "openDashboard": false,
-  "databasePath": null,
-  "pullRequestReconcileIntervalSeconds": 30,
-  "logLevel": "info",
-  "logFilePath": null,
-  "logMaxSize": "20m",
-  "logMaxFiles": "14d"
-}
-~~~
-
-`databasePath` and `logFilePath` use the workspace defaults when set to `null`; `allowedOrigin: null` disables CORS headers. Set `pullRequestReconcileIntervalSeconds` to `0` to disable GitHub polling. Its largest accepted value is `2147483` seconds, matching Node.js timer limits.
-
-When the npm package is published, the equivalent command will be:
-
-~~~bash
-cd /path/to/your-project
-npx --package @luoyixin/code-factory code-factory-agent-manager start --port 8080 --open
-~~~
+Prerequisites, daemon operation, configuration, CLI options, and log locations are documented in [Running Code Factory](docs/running-code-factory.md). To install dependencies or run a source checkout manually, see the [Development guide](docs/development.md).
 
 ## How It Works
 
@@ -208,68 +89,13 @@ All three boards share a creation-time filter with options for the last 24 hours
 
 The Web dashboard, HTTP API, and SSE event stream run in the same process and use the same port. No separate Web deployment is required.
 
-## Data and Logs
-
-Workspace data is stored outside the managed repository by default:
-
-~~~text
-~/.code-factory/workspaces/<workspace-hash>/config.json
-~/.code-factory/workspaces/<workspace-hash>/factory.sqlite
-~/.code-factory/workspaces/<workspace-hash>/attachments/
-~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log
-~/.code-factory/workspaces/<workspace-hash>/logs/daemon.log
-~/.code-factory/workspaces/<workspace-hash>/daemon.json
-~~~
-
-The foreground CLI prints a startup banner containing the workspace, configuration, database, log path, dashboard URL, API URL, and PR reconciliation interval. Daemon commands print supervisor and manager PIDs plus the daemon log path. Operational logs are written as structured JSONL and omit prompts, conversation bodies, and raw Agent output. Daemon state and log files use mode `0600`.
-
-Follow the active log with:
-
-~~~bash
-tail -f ~/.code-factory/workspaces/<workspace-hash>/logs/agent-manager.log
-~~~
-
-In daemon mode, follow supervisor exits and restart attempts with:
-
-~~~bash
-tail -f ~/.code-factory/workspaces/<workspace-hash>/logs/daemon.log
-~~~
-
-Logging can also be configured with `CODE_FACTORY_LOG_LEVEL`, `CODE_FACTORY_LOG_FILE`, `CODE_FACTORY_LOG_MAX_SIZE`, and `CODE_FACTORY_LOG_MAX_FILES`. Command-line options take precedence over their environment-variable equivalents, which take precedence over configuration-file values.
-
 ## Security Model
 
 Every headless RD and Reviewer invocation skips interactive CLI approval and sandbox checks. Agents therefore inherit the launching user's filesystem, network, and command-execution permissions. Start Agent Manager only inside a trusted workspace and expose its HTTP port only to trusted users and networks.
 
-## Verification
-
-~~~bash
-cd packages/agent-manager
-npm test
-npm run typecheck
-npm run build
-
-cd ../../apps/web
-npm run lint
-npx tsc --noEmit
-npm run build
-~~~
-
 ## Versioning and releases
 
-Code Factory uses Semantic Versioning. The first release is prepared as `0.1.0` but remains unreleased until a `v0.1.0` tag successfully completes the release workflow. The Agent Manager package manifest is the canonical version source; the dashboard manifest and both lockfiles are kept in sync so the bundled product has one version.
-
-~~~bash
-# From the repository root, update every version field.
-node scripts/set-version.mjs 0.1.0
-
-# Audit production dependencies, then verify versions, tests, types, build, and package contents.
-cd packages/agent-manager
-npm run release:audit
-npm run release:check
-~~~
-
-The installed version is available through `code-factory-agent-manager --version`, `code-factory-cli --version`, the startup banner, and `GET /api/health`. See the [release guide](docs/releasing.md) for the release checklist, required npm/GitHub setup, tag workflow, smoke test, and recovery rules.
+Code Factory uses Semantic Versioning and is published as [`@luoyixin/code-factory`](https://www.npmjs.com/package/@luoyixin/code-factory). The installed version is available through `code-factory-agent-manager --version`, `code-factory-cli --version`, the startup banner, and `GET /api/health`. See the [release guide](docs/releasing.md) for version preparation, the tag workflow, verification, and recovery rules.
 
 ## License
 
@@ -277,6 +103,8 @@ Code Factory is licensed under the [Apache License 2.0](LICENSE).
 
 ## Design Documentation
 
+- [Running Code Factory](docs/running-code-factory.md)
+- [Development guide](docs/development.md)
 - [Final architecture and domain model](docs/architecture.en.md)
 - [Headless Agent Runner](docs/agent-runners.md)
 - [Agent Manager HTTP API Reference](docs/agent-manager-api.md)

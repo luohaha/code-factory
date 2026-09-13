@@ -4,6 +4,12 @@ All notable changes to Code Factory are documented here. The project follows
 [Semantic Versioning](https://semver.org/), with minor releases allowed to contain
 breaking changes while the major version is `0`.
 
+## [Unreleased]
+
+### Changed
+
+- Simplified the README quick start to the npm-based launch command and moved operation and local-development details into dedicated guides.
+
 ## [0.1.0] - 2026-09-13
 
 ### Added
