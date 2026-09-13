@@ -147,6 +147,10 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         sendJson(response, 200, manager.getConfiguration());
         return;
       }
+      if (request.method === 'GET' && url.pathname === '/api/agent-models') {
+        sendJson(response, 200, await manager.listAgentModels());
+        return;
+      }
       if (request.method === 'PATCH' && url.pathname === '/api/configuration') {
         const patch = validateAgentManagerConfigurationPatch(await readJson(request));
         sendJson(response, 200, manager.updateConfiguration(patch));

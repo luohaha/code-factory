@@ -39,6 +39,7 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/workspace | Read the bound workspace and data paths |
 | GET | /api/configuration | Read desired Agent Manager configuration and restart status |
 | PATCH | /api/configuration | Validate, persist, and apply configuration changes |
+| GET | /api/agent-models | Read cached Codex and Claude Code model options |
 | GET | /api/requirements | List Requirements with their RD Sessions |
 | POST | /api/requirements | Create a Requirement and RD Session |
 | POST | /api/requirements/:id/start | Start or retry a Requirement |
@@ -210,6 +211,26 @@ interface ReviewRequest {
 
 Agent Manager captures targetHeadSha when a review starts, so the ReviewRequest records the revision it represents. A timed-out Reviewer has AgentRun.status=timed_out and normalized ReviewRequest.status=failed.
 
+### 3.7 Agent model catalog
+
+~~~ts
+interface AgentModelCatalog {
+  refreshIntervalSeconds: number;    // 86400
+  providers: Array<{
+    provider: 'codex' | 'claude-code';
+    models: Array<{
+      id: string;                    // value passed to --model
+      displayName: string;
+      description: string | null;
+    }>;
+    refreshedAt: string | null;
+    stale: boolean;
+  }>;
+}
+~~~
+
+`stale=true` means the latest provider refresh failed or has not completed. Previously discovered values, or provider-safe fallbacks, remain in `models`.
+
 ## 4. Query endpoints
 
 ### GET /api/health
@@ -275,6 +296,12 @@ curl -X PATCH http://127.0.0.1:4310/api/configuration \
 ~~~
 
 `port` must be an integer from 1 to 65535. The reconcile interval must be an integer from 0 to 2147483 seconds, the largest whole-second delay supported by Node.js timers. `logLevel` accepts `debug`, `info`, `warn`, `error`, or `silent`. Paths and origins accept a non-empty string or `null`; a null database or log path selects its workspace default, while a null origin disables CORS. Unknown fields return 400 Bad Request.
+
+### GET /api/agent-models
+
+Returns the in-memory provider model catalog. Agent Manager refreshes it at startup and every 24 hours. Codex discovery uses the authenticated local CLI. Claude discovery uses the configured API or gateway when possible and otherwise returns Claude Code rolling aliases and environment-configured model IDs. Refresh failures do not fail this endpoint; the affected provider is returned with `stale=true` and its last usable models.
+
+Success: 200 OK with `AgentModelCatalog`.
 
 ### GET /api/requirements
 
@@ -627,6 +654,7 @@ Current event types and primary payloads:
 | run.cancelled | same as run.succeeded |
 | manager.reconciled | runIds and requirementIds repaired at startup |
 | manager.configuration.updated | changedFields, appliedFields, restartRequired, restartRequiredFields |
+| agent_models.updated | provider refresh timestamps and stale flags |
 
 Clients should store the last successfully processed event ID and pass it as after when reconnecting. A missing or non-finite after value starts replay at 0. Each connection replays at most 200 existing events before continuing with live events.
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { type SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type SyntheticEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -71,6 +71,7 @@ import {
   type AgentConfiguration,
   type AgentManagerConfiguration,
   type AgentManagerConfigurationSnapshot,
+  type AgentModelCatalogDto,
   type AgentProvider,
   type AgentReasoningEffort,
   type AgentRunDto,
@@ -89,6 +90,23 @@ import { I18nProvider, useI18n } from '@/lib/i18n';
 import type { TranslationKey } from '@/locales/zh-CN';
 
 type ConnectionState = 'connecting' | 'online' | 'reconnecting' | 'offline';
+type TimeRange = '1d' | '7d' | '30d' | '90d' | 'all';
+
+const timeRangeOptions: Array<{ value: TimeRange; label: TranslationKey }> = [
+  { value: '1d', label: 'Last 24 hours' },
+  { value: '7d', label: 'Last 7 days' },
+  { value: '30d', label: 'Last 30 days' },
+  { value: '90d', label: 'Last 90 days' },
+  { value: 'all', label: 'All time' },
+];
+
+const timeRangeMilliseconds: Record<Exclude<TimeRange, 'all'>, number> = {
+  '1d': 24 * 60 * 60 * 1_000,
+  '7d': 7 * 24 * 60 * 60 * 1_000,
+  '30d': 30 * 24 * 60 * 60 * 1_000,
+  '90d': 90 * 24 * 60 * 60 * 1_000,
+};
+const filterClockIntervalMilliseconds = 60_000;
 
 const requirementColumns: Array<{
   status: RequirementStatus;
@@ -165,6 +183,42 @@ function providerLabel(provider: AgentProvider): string {
   return provider === 'codex' ? 'Codex' : 'Claude Code';
 }
 
+function AgentModelSelect({ catalog, provider, value, onChange, id, name, disabled, size, ariaLabel }: {
+  catalog: AgentModelCatalogDto | null;
+  provider: AgentProvider;
+  value: string;
+  onChange: (value: string) => void;
+  id?: string;
+  name?: string;
+  disabled?: boolean;
+  size?: 'sm' | 'default';
+  ariaLabel?: string;
+}) {
+  const { t } = useI18n();
+  const models = catalog?.providers.find((entry) => entry.provider === provider)?.models ?? [];
+  const selectedMissing = value && !models.some((model) => model.id === value);
+  return (
+    <NativeSelect
+      id={id}
+      name={name}
+      value={value}
+      disabled={disabled}
+      size={size}
+      onChange={(event) => onChange(event.target.value)}
+      className="w-full"
+      aria-label={ariaLabel}
+    >
+      <NativeSelectOption value="">{t('Use CLI default model')}</NativeSelectOption>
+      {selectedMissing ? <NativeSelectOption value={value}>{value}</NativeSelectOption> : null}
+      {models.map((model) => (
+        <NativeSelectOption key={model.id} value={model.id} title={model.description ?? model.id}>
+          {model.displayName === model.id ? model.id : `${model.displayName} · ${model.id}`}
+        </NativeSelectOption>
+      ))}
+    </NativeSelect>
+  );
+}
+
 function agentConfigurationLabel(configuration: {
   provider: AgentProvider;
   model: string | null;
@@ -196,6 +250,12 @@ function formatTime(value: string, locale: 'en' | 'zh-CN'): string {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value));
+}
+
+function isWithinTimeRange(value: string, timeRange: TimeRange, now: number): boolean {
+  if (timeRange === 'all') return true;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) && timestamp >= now - timeRangeMilliseconds[timeRange];
 }
 
 function MessageBody({ body, inverted = false }: { body: string; inverted?: boolean }) {
@@ -396,74 +456,131 @@ function SessionCard({ requirement, run, busy, onOpen, onRetry }: {
   );
 }
 
-function ReviewAgentControls({ activeReview, busy, onReview }: {
+function ReviewAgentDialog({ activeReview, busy, modelCatalog, onReview }: {
   activeReview?: ReviewRequestDto;
   busy: boolean;
+  modelCatalog: AgentModelCatalogDto | null;
   onReview: (configuration: AgentConfiguration) => Promise<void>;
 }) {
   const { t } = useI18n();
-  const [provider, setProvider] = useState<AgentProvider>(activeReview?.provider ?? 'codex');
-  const [model, setModel] = useState(activeReview?.model ?? '');
-  const [reasoningEffort, setReasoningEffort] = useState<'' | AgentReasoningEffort>(activeReview?.reasoningEffort ?? '');
-  const disabled = busy || Boolean(activeReview);
+  const fieldId = useId();
+  const [open, setOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [provider, setProvider] = useState<AgentProvider>('codex');
+  const [model, setModel] = useState('');
+  const disabled = busy || submitting || Boolean(activeReview);
+
+  async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const reasoningEffort = form.get('reasoningEffort');
+    setSubmitError(null);
+    setSubmitting(true);
+    try {
+      await onReview({
+        provider,
+        ...(model.trim() ? { model: model.trim() } : {}),
+        ...(typeof reasoningEffort === 'string' && reasoningEffort
+          ? { reasoningEffort: reasoningEffort as AgentReasoningEffort }
+          : {}),
+      });
+      formElement.reset();
+      setProvider('codex');
+      setModel('');
+      setOpen(false);
+    } catch (caught) {
+      setSubmitError(caught instanceof Error ? caught.message : t('Failed to request a review'));
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
-    <div className="grid grid-cols-2 gap-2">
-      <NativeSelect
-        size="sm"
-        value={activeReview?.provider ?? provider}
-        disabled={disabled}
-        onChange={(event) => setProvider(event.target.value as AgentProvider)}
-        className="w-full"
-        aria-label={t('Select Reviewer Agent')}
-      >
-        <NativeSelectOption value="codex">Codex Reviewer</NativeSelectOption>
-        <NativeSelectOption value="claude-code">Claude Reviewer</NativeSelectOption>
-      </NativeSelect>
-      <Input
-        value={activeReview ? activeReview.model ?? '' : model}
-        disabled={disabled}
-        onChange={(event) => setModel(event.target.value)}
-        placeholder={t('Use CLI default model')}
-        aria-label={t('Reviewer model')}
-        className="h-7 text-xs"
-      />
-      <NativeSelect
-        size="sm"
-        value={activeReview ? activeReview.reasoningEffort ?? '' : reasoningEffort}
-        disabled={disabled}
-        onChange={(event) => setReasoningEffort(event.target.value as '' | AgentReasoningEffort)}
-        className="w-full"
-        aria-label={t('Reviewer reasoning effort')}
-      >
-        <NativeSelectOption value="">{t('Default reasoning')}</NativeSelectOption>
-        <NativeSelectOption value="low">Low</NativeSelectOption>
-        <NativeSelectOption value="medium">Medium</NativeSelectOption>
-        <NativeSelectOption value="high">High</NativeSelectOption>
-        <NativeSelectOption value="xhigh">XHigh</NativeSelectOption>
-        <NativeSelectOption value="max">Max</NativeSelectOption>
-      </NativeSelect>
-      <Button
-        size="xs"
-        disabled={disabled}
-        onClick={() => void onReview({
-          provider,
-          ...(model.trim() ? { model: model.trim() } : {}),
-          ...(reasoningEffort ? { reasoningEffort } : {}),
-        }).catch(() => undefined)}
-      >
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) setSubmitError(null);
+      }}
+    >
+      <DialogTrigger render={<Button size="xs" disabled={disabled} />}>
         {disabled ? <LoaderCircle className="animate-spin" /> : <ScanSearch data-icon="inline-start" />}
         {activeReview ? t('Reviewing') : t('Request review')}
-      </Button>
-    </div>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-lg">
+        <form onSubmit={submit}>
+          <DialogHeader>
+            <DialogTitle>{t('Request a PR review')}</DialogTitle>
+            <DialogDescription>{t('Choose an Agent type, model, and reasoning effort for this one-off review.')}</DialogDescription>
+          </DialogHeader>
+          {submitError ? (
+            <Alert variant="destructive" className="mt-5">
+              <TriangleAlert />
+              <AlertTitle>{t('Failed to request a review')}</AlertTitle>
+              <AlertDescription>{submitError}</AlertDescription>
+            </Alert>
+          ) : null}
+          <FieldGroup className="my-5 gap-4">
+            <Field>
+              <FieldLabel htmlFor={`${fieldId}-provider`}>{t('Reviewer Agent')}</FieldLabel>
+              <NativeSelect
+                id={`${fieldId}-provider`}
+                name="provider"
+                className="w-full"
+                value={provider}
+                onChange={(event) => {
+                  setProvider(event.target.value as AgentProvider);
+                  setModel('');
+                }}
+              >
+                <NativeSelectOption value="codex">{t('Codex Reviewer')}</NativeSelectOption>
+                <NativeSelectOption value="claude-code">{t('Claude Reviewer')}</NativeSelectOption>
+              </NativeSelect>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`${fieldId}-model`}>{t('Model')}</FieldLabel>
+              <AgentModelSelect
+                id={`${fieldId}-model`}
+                name="model"
+                catalog={modelCatalog}
+                provider={provider}
+                value={model}
+                onChange={setModel}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`${fieldId}-reasoning-effort`}>{t('Reasoning effort')}</FieldLabel>
+              <NativeSelect id={`${fieldId}-reasoning-effort`} name="reasoningEffort" className="w-full" defaultValue="">
+                <NativeSelectOption value="">{t('Default reasoning')}</NativeSelectOption>
+                <NativeSelectOption value="low">Low</NativeSelectOption>
+                <NativeSelectOption value="medium">Medium</NativeSelectOption>
+                <NativeSelectOption value="high">High</NativeSelectOption>
+                <NativeSelectOption value="xhigh">XHigh</NativeSelectOption>
+                <NativeSelectOption value="max">Max</NativeSelectOption>
+              </NativeSelect>
+            </Field>
+          </FieldGroup>
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="outline" />}>{t('Cancel')}</DialogClose>
+            <Button type="submit" disabled={submitting}>
+              {submitting ? <LoaderCircle className="animate-spin" /> : <ScanSearch data-icon="inline-start" />}
+              {t('Request review')}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
-function PullRequestCard({ pullRequest, requirement, activeReview, busy, onReview }: {
+function PullRequestCard({ pullRequest, requirement, activeReview, busy, modelCatalog, onReview }: {
   pullRequest: PullRequestDto;
   requirement?: RequirementDto;
   activeReview?: ReviewRequestDto;
   busy: boolean;
+  modelCatalog: AgentModelCatalogDto | null;
   onReview: (configuration: AgentConfiguration) => Promise<void>;
 }) {
   return (
@@ -481,17 +598,18 @@ function PullRequestCard({ pullRequest, requirement, activeReview, busy, onRevie
       ) : null}
       {pullRequest.status === 'open' ? (
         <div className="mt-3 border-t border-border/70 pt-3">
-          <ReviewAgentControls activeReview={activeReview} busy={busy} onReview={onReview} />
+          <ReviewAgentDialog activeReview={activeReview} busy={busy} modelCatalog={modelCatalog} onReview={onReview} />
         </div>
       ) : null}
     </article>
   );
 }
 
-function RequirementPullRequestCard({ pullRequest, activeReview, busy, onReview }: {
+function RequirementPullRequestCard({ pullRequest, activeReview, busy, modelCatalog, onReview }: {
   pullRequest: PullRequestDto;
   activeReview?: ReviewRequestDto;
   busy: boolean;
+  modelCatalog: AgentModelCatalogDto | null;
   onReview: (configuration: AgentConfiguration) => Promise<void>;
 }) {
   const { t } = useI18n();
@@ -519,8 +637,8 @@ function RequirementPullRequestCard({ pullRequest, activeReview, busy, onReview 
         </div>
 
         {pullRequest.status === 'open' ? (
-          <div className="w-full shrink-0 border-t border-border/70 pt-3 sm:w-96 sm:border-t-0 sm:pt-0">
-            <ReviewAgentControls activeReview={activeReview} busy={busy} onReview={onReview} />
+          <div className="w-full shrink-0 border-t border-border/70 pt-3 sm:w-auto sm:border-t-0 sm:pt-0">
+            <ReviewAgentDialog activeReview={activeReview} busy={busy} modelCatalog={modelCatalog} onReview={onReview} />
           </div>
         ) : null}
       </div>
@@ -528,13 +646,16 @@ function RequirementPullRequestCard({ pullRequest, activeReview, busy, onReview 
   );
 }
 
-function NewRequirementDialog({ disabled, onCreate }: {
+function NewRequirementDialog({ disabled, modelCatalog, onCreate }: {
   disabled: boolean;
+  modelCatalog: AgentModelCatalogDto | null;
   onCreate: (input: { title: string; description: string } & AgentConfiguration) => Promise<void>;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [provider, setProvider] = useState<AgentProvider>('codex');
+  const [model, setModel] = useState('');
 
   async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
     event.preventDefault();
@@ -542,7 +663,6 @@ function NewRequirementDialog({ disabled, onCreate }: {
     const form = new FormData(formElement);
     const title = form.get('title');
     const description = form.get('description');
-    const model = form.get('model');
     const reasoningEffort = form.get('reasoningEffort');
     if (typeof title !== 'string' || typeof description !== 'string') return;
     setSubmitting(true);
@@ -550,13 +670,15 @@ function NewRequirementDialog({ disabled, onCreate }: {
       await onCreate({
         title: title.trim(),
         description: description.trim(),
-        provider: form.get('provider') === 'claude-code' ? 'claude-code' : 'codex',
-        ...(typeof model === 'string' && model.trim() ? { model: model.trim() } : {}),
+        provider,
+        ...(model ? { model } : {}),
         ...(typeof reasoningEffort === 'string' && reasoningEffort
           ? { reasoningEffort: reasoningEffort as AgentReasoningEffort }
           : {}),
       });
       formElement.reset();
+      setProvider('codex');
+      setModel('');
       setOpen(false);
     } catch {
       // The parent surfaces the API error while the dialog keeps the entered values.
@@ -585,14 +707,30 @@ function NewRequirementDialog({ disabled, onCreate }: {
             </Field>
             <Field>
               <FieldLabel htmlFor="requirement-provider">{t('RD Agent')}</FieldLabel>
-              <NativeSelect id="requirement-provider" name="provider" className="w-full" defaultValue="codex">
+              <NativeSelect
+                id="requirement-provider"
+                name="provider"
+                className="w-full"
+                value={provider}
+                onChange={(event) => {
+                  setProvider(event.target.value as AgentProvider);
+                  setModel('');
+                }}
+              >
                 <NativeSelectOption value="codex">Codex headless</NativeSelectOption>
                 <NativeSelectOption value="claude-code">Claude Code headless</NativeSelectOption>
               </NativeSelect>
             </Field>
             <Field>
               <FieldLabel htmlFor="requirement-model">{t('Model')}</FieldLabel>
-              <Input id="requirement-model" name="model" placeholder={t('Use CLI default model')} />
+              <AgentModelSelect
+                id="requirement-model"
+                name="model"
+                catalog={modelCatalog}
+                provider={provider}
+                value={model}
+                onChange={setModel}
+              />
             </Field>
             <Field>
               <FieldLabel htmlFor="requirement-reasoning-effort">{t('Reasoning effort')}</FieldLabel>
@@ -806,6 +944,7 @@ function RequirementDetail({
   messages,
   pullRequests,
   reviewRequests,
+  modelCatalog,
   messageLoading,
   busy,
   busyPullRequestId,
@@ -822,6 +961,7 @@ function RequirementDetail({
   messages: RequirementMessageDto[];
   pullRequests: PullRequestDto[];
   reviewRequests: ReviewRequestDto[];
+  modelCatalog: AgentModelCatalogDto | null;
   messageLoading: boolean;
   busy: boolean;
   busyPullRequestId: string | null;
@@ -959,6 +1099,7 @@ function RequirementDetail({
                       pullRequest={pullRequest}
                       activeReview={reviewRequests.find((review) => review.pullRequestId === pullRequest.id && review.status === 'running')}
                       busy={busyPullRequestId === pullRequest.id}
+                      modelCatalog={modelCatalog}
                       onReview={(provider) => onReview(pullRequest.id, provider)}
                     />
                   ))}
@@ -1166,6 +1307,7 @@ function Dashboard() {
   const [connection, setConnection] = useState<ConnectionState>('connecting');
   const [workspace, setWorkspace] = useState<WorkspaceDto | null>(null);
   const [configuration, setConfiguration] = useState<AgentManagerConfigurationSnapshot | null>(null);
+  const [modelCatalog, setModelCatalog] = useState<AgentModelCatalogDto | null>(null);
   const [requirements, setRequirements] = useState<RequirementDto[]>([]);
   const [runs, setRuns] = useState<AgentRunDto[]>([]);
   const [pullRequests, setPullRequests] = useState<PullRequestDto[]>([]);
@@ -1176,20 +1318,23 @@ function Dashboard() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [provider, setProvider] = useState<'all' | AgentProvider>('all');
+  const [timeRange, setTimeRange] = useState<TimeRange>('7d');
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [busyPullRequestId, setBusyPullRequestId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
+  const [filterReferenceTime, setFilterReferenceTime] = useState(0);
 
   const client = useMemo(() => new AgentManagerClient(apiUrl), [apiUrl]);
 
   const reload = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
     try {
-      const [nextWorkspace, nextConfiguration, nextRequirements, nextRuns, nextPullRequests, nextReviewRequests] = await Promise.all([
+      const [nextWorkspace, nextConfiguration, nextModelCatalog, nextRequirements, nextRuns, nextPullRequests, nextReviewRequests] = await Promise.all([
         client.getWorkspace(),
         client.getConfiguration(),
+        client.listAgentModels(),
         client.listRequirements(),
         client.listRuns(),
         client.listPullRequests(),
@@ -1197,13 +1342,16 @@ function Dashboard() {
       ]);
       setWorkspace(nextWorkspace);
       setConfiguration(nextConfiguration);
+      setModelCatalog(nextModelCatalog);
       setRequirements(nextRequirements);
       setRuns(nextRuns);
       setPullRequests(nextPullRequests);
       setReviewRequests(nextReviewRequests);
       setConnection('online');
       setError(null);
-      setLastSynced(new Date());
+      const syncedAt = new Date();
+      setLastSynced(syncedAt);
+      setFilterReferenceTime(syncedAt.getTime());
     } catch (caught) {
       setConnection('offline');
       setError(caught instanceof Error ? caught.message : t('Unable to connect to Agent Manager'));
@@ -1227,6 +1375,18 @@ function Dashboard() {
       }
     }, 0);
     return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    const advanceFilterClock = () => setFilterReferenceTime(Date.now());
+    const timer = window.setInterval(advanceFilterClock, filterClockIntervalMilliseconds);
+    window.addEventListener('focus', advanceFilterClock);
+    document.addEventListener('visibilitychange', advanceFilterClock);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', advanceFilterClock);
+      document.removeEventListener('visibilitychange', advanceFilterClock);
+    };
   }, []);
 
   useEffect(() => {
@@ -1265,24 +1425,40 @@ function Dashboard() {
   const selectedRuns = runs.filter((run) => run.requirementId === selectedId);
   const selectedPullRequests = pullRequests.filter((pullRequest) => pullRequest.requirementId === selectedId);
 
-  const filtered = useMemo(() => {
+  const filteredRequirements = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return requirements.filter((requirement) => {
       const matchesQuery = !needle || [requirement.id, requirement.title, requirement.description, requirement.session.id]
         .some((value) => value.toLowerCase().includes(needle));
-      return matchesQuery && (provider === 'all' || requirement.provider === provider);
+      return matchesQuery
+        && (provider === 'all' || requirement.provider === provider)
+        && isWithinTimeRange(requirement.createdAt, timeRange, filterReferenceTime);
     });
-  }, [provider, query, requirements]);
+  }, [filterReferenceTime, provider, query, requirements, timeRange]);
+
+  const filteredSessions = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return requirements.filter((requirement) => {
+      const matchesQuery = !needle || [requirement.id, requirement.title, requirement.description, requirement.session.id]
+        .some((value) => value.toLowerCase().includes(needle));
+      return matchesQuery
+        && (provider === 'all' || requirement.provider === provider)
+        && isWithinTimeRange(requirement.session.createdAt, timeRange, filterReferenceTime);
+    });
+  }, [filterReferenceTime, provider, query, requirements, timeRange]);
 
   const filteredPullRequests = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return pullRequests.filter((pullRequest) => !needle || [
-      pullRequest.repository,
-      String(pullRequest.number),
-      pullRequest.title,
-      pullRequest.headBranch,
-    ].some((value) => value.toLowerCase().includes(needle)));
-  }, [pullRequests, query]);
+    return pullRequests.filter((pullRequest) => {
+      const matchesQuery = !needle || [
+        pullRequest.repository,
+        String(pullRequest.number),
+        pullRequest.title,
+        pullRequest.headBranch,
+      ].some((value) => value.toLowerCase().includes(needle));
+      return matchesQuery && isWithinTimeRange(pullRequest.createdAt, timeRange, filterReferenceTime);
+    });
+  }, [filterReferenceTime, pullRequests, query, timeRange]);
 
   async function runAction(requirementId: string, action: () => Promise<unknown>): Promise<void> {
     setBusyId(requirementId);
@@ -1383,7 +1559,7 @@ function Dashboard() {
             <Button variant="outline" size="icon" aria-label={t('Refresh')} disabled={loading} onClick={() => void reload(true)}><RefreshCw className={loading ? 'animate-spin' : ''} /></Button>
             <ManagerConfigurationDialog configuration={configuration} disabled={connection !== 'online'} onSave={saveConfiguration} workspace={workspace} />
             <ConnectionDialog apiUrl={apiUrl} onConnect={connect} />
-            <NewRequirementDialog disabled={connection !== 'online'} onCreate={createRequirement} />
+            <NewRequirementDialog disabled={connection !== 'online'} modelCatalog={modelCatalog} onCreate={createRequirement} />
           </div>
         </div>
       </header>
@@ -1429,9 +1605,23 @@ function Dashboard() {
         </div>
       ) : null}
 
-      <div className="flex items-center gap-2 border-b border-border/70 px-4 py-2.5 lg:px-6">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border/70 px-4 py-2.5 lg:px-6">
         <Button variant="secondary" size="xs" title={workspace?.root}><FolderGit2 data-icon="inline-start" />{workspaceLabel}</Button>
         <Button variant={provider === 'all' ? 'ghost' : 'secondary'} size="xs" className={provider === 'all' ? 'text-muted-foreground' : ''} onClick={cycleProvider}>{provider === 'all' ? t('All Agents') : providerLabel(provider)}</Button>
+        <div className="flex items-center gap-1.5 text-muted-foreground">
+          <Clock3 className="size-3.5" aria-hidden="true" />
+          <NativeSelect
+            size="sm"
+            value={timeRange}
+            onChange={(event) => setTimeRange(event.target.value as TimeRange)}
+            aria-label={t('Created within')}
+            className="[&_select]:text-[10px]"
+          >
+            {timeRangeOptions.map((option) => (
+              <NativeSelectOption key={option.value} value={option.value}>{t(option.label)}</NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </div>
         <span className="ml-auto text-[10px] text-muted-foreground">{lastSynced ? t('Last synced {time}', { time: lastSynced.toLocaleTimeString(locale === 'zh-CN' ? 'zh-CN' : 'en-US') }) : apiUrl}</span>
       </div>
 
@@ -1439,7 +1629,7 @@ function Dashboard() {
         {view === 'requirements' ? (
           <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-4 gap-4 p-4 lg:p-5">
             {requirementColumns.map((column) => {
-              const items = filtered.filter((item) => item.status === column.status);
+              const items = filteredRequirements.filter((item) => item.status === column.status);
               return (
                 <section key={column.status} className="w-[300px]" aria-labelledby={`requirement-${column.status}`}>
                   <header className="mb-3 h-11 px-1">
@@ -1486,6 +1676,7 @@ function Dashboard() {
                         requirement={requirements.find((requirement) => requirement.id === pullRequest.requirementId)}
                         activeReview={reviewRequests.find((review) => review.pullRequestId === pullRequest.id && review.status === 'running')}
                         busy={busyPullRequestId === pullRequest.id}
+                        modelCatalog={modelCatalog}
                         onReview={(reviewer) => requestReview(pullRequest.id, reviewer)}
                       />
                     ))}
@@ -1502,7 +1693,7 @@ function Dashboard() {
         ) : (
           <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-5 gap-3 p-4 lg:p-5">
             {sessionColumns.map((column) => {
-              const items = filtered.filter((item) => item.session.state === column.state);
+              const items = filteredSessions.filter((item) => item.session.state === column.state);
               return (
                 <section key={column.state} className="w-[266px]" aria-labelledby={`session-${column.state}`}>
                   <header className="mb-3 h-11 px-1">
@@ -1536,6 +1727,7 @@ function Dashboard() {
         messages={messages}
         pullRequests={selectedPullRequests}
         reviewRequests={reviewRequests}
+        modelCatalog={modelCatalog}
         messageLoading={messageLoading}
         busy={selectedRequirement ? busyId === selectedRequirement.id : false}
         busyPullRequestId={busyPullRequestId}

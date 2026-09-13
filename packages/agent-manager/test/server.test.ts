@@ -11,6 +11,7 @@ import {
   MAX_PULL_REQUEST_RECONCILE_INTERVAL_SECONDS,
 } from '../src/configuration.ts';
 import { createLogger } from '../src/logger.ts';
+import type { AgentModelCatalogService } from '../src/model-catalog.ts';
 import type { AgentProcessRunner, ProcessRunRequest } from '../src/process-runner.ts';
 import { createAgentManagerServer } from '../src/server.ts';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
@@ -42,6 +43,56 @@ class InterruptibleWaitingRunner implements AgentProcessRunner {
     });
   }
 }
+
+test('HTTP API exposes the cached provider model catalog', async () => {
+  let stopped = false;
+  const modelCatalog: AgentModelCatalogService = {
+    start() {},
+    stop() { stopped = true; },
+    async refresh() {},
+    async getModels() {
+      return {
+        refreshIntervalSeconds: 86_400,
+        providers: [{
+          provider: 'codex',
+          models: [{ id: 'gpt-test', displayName: 'GPT Test', description: 'Test model' }],
+          refreshedAt: '2026-09-12T00:00:00.000Z',
+          stale: false,
+        }],
+      };
+    },
+  };
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    logger: createLogger({ level: 'silent' }),
+    modelCatalog,
+  });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/agent-models`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      refreshIntervalSeconds: 86_400,
+      providers: [{
+        provider: 'codex',
+        models: [{ id: 'gpt-test', displayName: 'GPT Test', description: 'Test model' }],
+        refreshedAt: '2026-09-12T00:00:00.000Z',
+        stale: false,
+      }],
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+  assert.equal(stopped, true);
+});
 
 test('HTTP API reports its version and reads, validates, persists, and applies configuration', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-config-api-'));
