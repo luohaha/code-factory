@@ -71,6 +71,7 @@ import {
   type AgentConfiguration,
   type AgentManagerConfiguration,
   type AgentManagerConfigurationSnapshot,
+  type AgentModelCatalogDto,
   type AgentProvider,
   type AgentReasoningEffort,
   type AgentRunDto,
@@ -180,6 +181,42 @@ const authorLabel: Record<RequirementMessageDto['author'], TranslationKey> = {
 
 function providerLabel(provider: AgentProvider): string {
   return provider === 'codex' ? 'Codex' : 'Claude Code';
+}
+
+function AgentModelSelect({ catalog, provider, value, onChange, id, name, disabled, size, ariaLabel }: {
+  catalog: AgentModelCatalogDto | null;
+  provider: AgentProvider;
+  value: string;
+  onChange: (value: string) => void;
+  id?: string;
+  name?: string;
+  disabled?: boolean;
+  size?: 'sm' | 'default';
+  ariaLabel?: string;
+}) {
+  const { t } = useI18n();
+  const models = catalog?.providers.find((entry) => entry.provider === provider)?.models ?? [];
+  const selectedMissing = value && !models.some((model) => model.id === value);
+  return (
+    <NativeSelect
+      id={id}
+      name={name}
+      value={value}
+      disabled={disabled}
+      size={size}
+      onChange={(event) => onChange(event.target.value)}
+      className="w-full"
+      aria-label={ariaLabel}
+    >
+      <NativeSelectOption value="">{t('Use CLI default model')}</NativeSelectOption>
+      {selectedMissing ? <NativeSelectOption value={value}>{value}</NativeSelectOption> : null}
+      {models.map((model) => (
+        <NativeSelectOption key={model.id} value={model.id} title={model.description ?? model.id}>
+          {model.displayName === model.id ? model.id : `${model.displayName} · ${model.id}`}
+        </NativeSelectOption>
+      ))}
+    </NativeSelect>
+  );
 }
 
 function agentConfigurationLabel(configuration: {
@@ -419,9 +456,10 @@ function SessionCard({ requirement, run, busy, onOpen, onRetry }: {
   );
 }
 
-function ReviewAgentDialog({ activeReview, busy, onReview }: {
+function ReviewAgentDialog({ activeReview, busy, modelCatalog, onReview }: {
   activeReview?: ReviewRequestDto;
   busy: boolean;
+  modelCatalog: AgentModelCatalogDto | null;
   onReview: (configuration: AgentConfiguration) => Promise<void>;
 }) {
   const { t } = useI18n();
@@ -429,25 +467,28 @@ function ReviewAgentDialog({ activeReview, busy, onReview }: {
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [provider, setProvider] = useState<AgentProvider>('codex');
+  const [model, setModel] = useState('');
   const disabled = busy || submitting || Boolean(activeReview);
 
   async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
     event.preventDefault();
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
-    const model = form.get('model');
     const reasoningEffort = form.get('reasoningEffort');
     setSubmitError(null);
     setSubmitting(true);
     try {
       await onReview({
-        provider: form.get('provider') === 'claude-code' ? 'claude-code' : 'codex',
-        ...(typeof model === 'string' && model.trim() ? { model: model.trim() } : {}),
+        provider,
+        ...(model.trim() ? { model: model.trim() } : {}),
         ...(typeof reasoningEffort === 'string' && reasoningEffort
           ? { reasoningEffort: reasoningEffort as AgentReasoningEffort }
           : {}),
       });
       formElement.reset();
+      setProvider('codex');
+      setModel('');
       setOpen(false);
     } catch (caught) {
       setSubmitError(caught instanceof Error ? caught.message : t('Failed to request a review'));
@@ -484,14 +525,30 @@ function ReviewAgentDialog({ activeReview, busy, onReview }: {
           <FieldGroup className="my-5 gap-4">
             <Field>
               <FieldLabel htmlFor={`${fieldId}-provider`}>{t('Reviewer Agent')}</FieldLabel>
-              <NativeSelect id={`${fieldId}-provider`} name="provider" className="w-full" defaultValue="codex">
+              <NativeSelect
+                id={`${fieldId}-provider`}
+                name="provider"
+                className="w-full"
+                value={provider}
+                onChange={(event) => {
+                  setProvider(event.target.value as AgentProvider);
+                  setModel('');
+                }}
+              >
                 <NativeSelectOption value="codex">{t('Codex Reviewer')}</NativeSelectOption>
                 <NativeSelectOption value="claude-code">{t('Claude Reviewer')}</NativeSelectOption>
               </NativeSelect>
             </Field>
             <Field>
               <FieldLabel htmlFor={`${fieldId}-model`}>{t('Model')}</FieldLabel>
-              <Input id={`${fieldId}-model`} name="model" placeholder={t('Use CLI default model')} />
+              <AgentModelSelect
+                id={`${fieldId}-model`}
+                name="model"
+                catalog={modelCatalog}
+                provider={provider}
+                value={model}
+                onChange={setModel}
+              />
             </Field>
             <Field>
               <FieldLabel htmlFor={`${fieldId}-reasoning-effort`}>{t('Reasoning effort')}</FieldLabel>
@@ -518,11 +575,12 @@ function ReviewAgentDialog({ activeReview, busy, onReview }: {
   );
 }
 
-function PullRequestCard({ pullRequest, requirement, activeReview, busy, onReview }: {
+function PullRequestCard({ pullRequest, requirement, activeReview, busy, modelCatalog, onReview }: {
   pullRequest: PullRequestDto;
   requirement?: RequirementDto;
   activeReview?: ReviewRequestDto;
   busy: boolean;
+  modelCatalog: AgentModelCatalogDto | null;
   onReview: (configuration: AgentConfiguration) => Promise<void>;
 }) {
   return (
@@ -540,17 +598,18 @@ function PullRequestCard({ pullRequest, requirement, activeReview, busy, onRevie
       ) : null}
       {pullRequest.status === 'open' ? (
         <div className="mt-3 border-t border-border/70 pt-3">
-          <ReviewAgentDialog activeReview={activeReview} busy={busy} onReview={onReview} />
+          <ReviewAgentDialog activeReview={activeReview} busy={busy} modelCatalog={modelCatalog} onReview={onReview} />
         </div>
       ) : null}
     </article>
   );
 }
 
-function RequirementPullRequestCard({ pullRequest, activeReview, busy, onReview }: {
+function RequirementPullRequestCard({ pullRequest, activeReview, busy, modelCatalog, onReview }: {
   pullRequest: PullRequestDto;
   activeReview?: ReviewRequestDto;
   busy: boolean;
+  modelCatalog: AgentModelCatalogDto | null;
   onReview: (configuration: AgentConfiguration) => Promise<void>;
 }) {
   const { t } = useI18n();
@@ -579,7 +638,7 @@ function RequirementPullRequestCard({ pullRequest, activeReview, busy, onReview 
 
         {pullRequest.status === 'open' ? (
           <div className="w-full shrink-0 border-t border-border/70 pt-3 sm:w-auto sm:border-t-0 sm:pt-0">
-            <ReviewAgentDialog activeReview={activeReview} busy={busy} onReview={onReview} />
+            <ReviewAgentDialog activeReview={activeReview} busy={busy} modelCatalog={modelCatalog} onReview={onReview} />
           </div>
         ) : null}
       </div>
@@ -587,13 +646,16 @@ function RequirementPullRequestCard({ pullRequest, activeReview, busy, onReview 
   );
 }
 
-function NewRequirementDialog({ disabled, onCreate }: {
+function NewRequirementDialog({ disabled, modelCatalog, onCreate }: {
   disabled: boolean;
+  modelCatalog: AgentModelCatalogDto | null;
   onCreate: (input: { title: string; description: string } & AgentConfiguration) => Promise<void>;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [provider, setProvider] = useState<AgentProvider>('codex');
+  const [model, setModel] = useState('');
 
   async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
     event.preventDefault();
@@ -601,7 +663,6 @@ function NewRequirementDialog({ disabled, onCreate }: {
     const form = new FormData(formElement);
     const title = form.get('title');
     const description = form.get('description');
-    const model = form.get('model');
     const reasoningEffort = form.get('reasoningEffort');
     if (typeof title !== 'string' || typeof description !== 'string') return;
     setSubmitting(true);
@@ -609,13 +670,15 @@ function NewRequirementDialog({ disabled, onCreate }: {
       await onCreate({
         title: title.trim(),
         description: description.trim(),
-        provider: form.get('provider') === 'claude-code' ? 'claude-code' : 'codex',
-        ...(typeof model === 'string' && model.trim() ? { model: model.trim() } : {}),
+        provider,
+        ...(model ? { model } : {}),
         ...(typeof reasoningEffort === 'string' && reasoningEffort
           ? { reasoningEffort: reasoningEffort as AgentReasoningEffort }
           : {}),
       });
       formElement.reset();
+      setProvider('codex');
+      setModel('');
       setOpen(false);
     } catch {
       // The parent surfaces the API error while the dialog keeps the entered values.
@@ -644,14 +707,30 @@ function NewRequirementDialog({ disabled, onCreate }: {
             </Field>
             <Field>
               <FieldLabel htmlFor="requirement-provider">{t('RD Agent')}</FieldLabel>
-              <NativeSelect id="requirement-provider" name="provider" className="w-full" defaultValue="codex">
+              <NativeSelect
+                id="requirement-provider"
+                name="provider"
+                className="w-full"
+                value={provider}
+                onChange={(event) => {
+                  setProvider(event.target.value as AgentProvider);
+                  setModel('');
+                }}
+              >
                 <NativeSelectOption value="codex">Codex headless</NativeSelectOption>
                 <NativeSelectOption value="claude-code">Claude Code headless</NativeSelectOption>
               </NativeSelect>
             </Field>
             <Field>
               <FieldLabel htmlFor="requirement-model">{t('Model')}</FieldLabel>
-              <Input id="requirement-model" name="model" placeholder={t('Use CLI default model')} />
+              <AgentModelSelect
+                id="requirement-model"
+                name="model"
+                catalog={modelCatalog}
+                provider={provider}
+                value={model}
+                onChange={setModel}
+              />
             </Field>
             <Field>
               <FieldLabel htmlFor="requirement-reasoning-effort">{t('Reasoning effort')}</FieldLabel>
@@ -865,6 +944,7 @@ function RequirementDetail({
   messages,
   pullRequests,
   reviewRequests,
+  modelCatalog,
   messageLoading,
   busy,
   busyPullRequestId,
@@ -881,6 +961,7 @@ function RequirementDetail({
   messages: RequirementMessageDto[];
   pullRequests: PullRequestDto[];
   reviewRequests: ReviewRequestDto[];
+  modelCatalog: AgentModelCatalogDto | null;
   messageLoading: boolean;
   busy: boolean;
   busyPullRequestId: string | null;
@@ -1018,6 +1099,7 @@ function RequirementDetail({
                       pullRequest={pullRequest}
                       activeReview={reviewRequests.find((review) => review.pullRequestId === pullRequest.id && review.status === 'running')}
                       busy={busyPullRequestId === pullRequest.id}
+                      modelCatalog={modelCatalog}
                       onReview={(provider) => onReview(pullRequest.id, provider)}
                     />
                   ))}
@@ -1225,6 +1307,7 @@ function Dashboard() {
   const [connection, setConnection] = useState<ConnectionState>('connecting');
   const [workspace, setWorkspace] = useState<WorkspaceDto | null>(null);
   const [configuration, setConfiguration] = useState<AgentManagerConfigurationSnapshot | null>(null);
+  const [modelCatalog, setModelCatalog] = useState<AgentModelCatalogDto | null>(null);
   const [requirements, setRequirements] = useState<RequirementDto[]>([]);
   const [runs, setRuns] = useState<AgentRunDto[]>([]);
   const [pullRequests, setPullRequests] = useState<PullRequestDto[]>([]);
@@ -1248,9 +1331,10 @@ function Dashboard() {
   const reload = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
     try {
-      const [nextWorkspace, nextConfiguration, nextRequirements, nextRuns, nextPullRequests, nextReviewRequests] = await Promise.all([
+      const [nextWorkspace, nextConfiguration, nextModelCatalog, nextRequirements, nextRuns, nextPullRequests, nextReviewRequests] = await Promise.all([
         client.getWorkspace(),
         client.getConfiguration(),
+        client.listAgentModels(),
         client.listRequirements(),
         client.listRuns(),
         client.listPullRequests(),
@@ -1258,6 +1342,7 @@ function Dashboard() {
       ]);
       setWorkspace(nextWorkspace);
       setConfiguration(nextConfiguration);
+      setModelCatalog(nextModelCatalog);
       setRequirements(nextRequirements);
       setRuns(nextRuns);
       setPullRequests(nextPullRequests);
@@ -1474,7 +1559,7 @@ function Dashboard() {
             <Button variant="outline" size="icon" aria-label={t('Refresh')} disabled={loading} onClick={() => void reload(true)}><RefreshCw className={loading ? 'animate-spin' : ''} /></Button>
             <ManagerConfigurationDialog configuration={configuration} disabled={connection !== 'online'} onSave={saveConfiguration} workspace={workspace} />
             <ConnectionDialog apiUrl={apiUrl} onConnect={connect} />
-            <NewRequirementDialog disabled={connection !== 'online'} onCreate={createRequirement} />
+            <NewRequirementDialog disabled={connection !== 'online'} modelCatalog={modelCatalog} onCreate={createRequirement} />
           </div>
         </div>
       </header>
@@ -1591,6 +1676,7 @@ function Dashboard() {
                         requirement={requirements.find((requirement) => requirement.id === pullRequest.requirementId)}
                         activeReview={reviewRequests.find((review) => review.pullRequestId === pullRequest.id && review.status === 'running')}
                         busy={busyPullRequestId === pullRequest.id}
+                        modelCatalog={modelCatalog}
                         onReview={(reviewer) => requestReview(pullRequest.id, reviewer)}
                       />
                     ))}
@@ -1641,6 +1727,7 @@ function Dashboard() {
         messages={messages}
         pullRequests={selectedPullRequests}
         reviewRequests={reviewRequests}
+        modelCatalog={modelCatalog}
         messageLoading={messageLoading}
         busy={selectedRequirement ? busyId === selectedRequirement.id : false}
         busyPullRequestId={busyPullRequestId}
