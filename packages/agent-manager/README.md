@@ -22,4 +22,8 @@ npx --package @code-factory/agent-manager code-factory-agent-manager stop
 
 Headless agents inherit the filesystem, network, and command permissions of the user who starts Agent Manager. Run it only in a trusted workspace and expose its port only to trusted users and networks.
 
+## License
+
+Licensed under the Apache License 2.0. See the `LICENSE` file included with this package.
+
 See the [project README](https://github.com/luohaha/code-factory#readme) for configuration, architecture, development, and security details.

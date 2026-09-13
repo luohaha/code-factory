@@ -26,13 +26,12 @@ Then update `CHANGELOG.md`. Do not create a release tag while its entry is still
 
 The repository is code-ready for a tag-driven release, but a maintainer must finish these ownership and policy decisions:
 
-1. Choose a project license, add a root `LICENSE` file, and add the matching SPDX `license` value to `packages/agent-manager/package.json`. No license has been assumed by the release preparation change.
-2. Confirm that the `@code-factory` npm scope is controlled by the project and that `@code-factory/agent-manager` is the intended public package name. Rename the package and README command examples before tagging if the scope cannot be used.
-3. Decide whether to make the GitHub repository public before release. npm provenance is not available for a package built from a private repository. The supplied workflow intentionally uses `--provenance`; if the repository remains private, remove that flag and document that the package has no public source attestation.
-4. Create a granular npm token with direct publish permission for that package or scope and save it as the GitHub Actions repository secret `NPM_TOKEN`. After the first package version exists, prefer configuring npm trusted publishing for `luohaha/code-factory` and the exact workflow filename `release.yml`, then remove the long-lived publish token from the workflow and repository secrets.
-5. Protect the GitHub repository and the npm account appropriately: require review and the `CI / verify` check on `main`, enable npm two-factor authentication, and limit who can create release tags or change Actions secrets.
-6. Review the security model and public documentation. Remove private data from Git history and package contents before making the repository or package public.
-7. Resolve all high-severity production dependency findings. The release workflow runs `npm audit --omit=dev --audit-level=high` for both packages and will block publication while such findings remain.
+1. Confirm that the `@code-factory` npm scope is controlled by the project and that `@code-factory/agent-manager` is the intended public package name. Rename the package and README command examples before tagging if the scope cannot be used.
+2. Decide whether to make the GitHub repository public before release. npm provenance is not available for a package built from a private repository. The supplied workflow intentionally uses `--provenance`; if the repository remains private, remove that flag and document that the package has no public source attestation.
+3. Create a granular npm token with direct publish permission for that package or scope and save it as the GitHub Actions repository secret `NPM_TOKEN`. After the first package version exists, prefer configuring npm trusted publishing for `luohaha/code-factory` and the exact workflow filename `release.yml`, then remove the long-lived publish token from the workflow and repository secrets.
+4. Protect the GitHub repository and the npm account appropriately: require review and the `CI / verify` check on `main`, enable npm two-factor authentication, and limit who can create release tags or change Actions secrets.
+5. Review the security model and public documentation. Remove private data from Git history and package contents before making the repository or package public. The repository and npm package are licensed under Apache-2.0; review bundled third-party attribution and `NOTICE` obligations before distribution.
+6. Resolve all high-severity production dependency findings. The release workflow runs `npm audit --omit=dev --audit-level=high` for both packages and will block publication while such findings remain.
 
 ## Release checklist
 
@@ -47,7 +46,7 @@ The repository is code-ready for a tag-driven release, but a maintainer must fin
    npm --prefix packages/agent-manager run release:check
    ```
 
-   `release:audit` blocks high-severity production dependency findings. `release:check` verifies synchronized versions, runs backend tests and type checking, builds the dashboard and Agent Manager, and runs `npm pack --dry-run` so the publishable file list can be inspected. `prepublishOnly` and `prepack` enforce the same core build and test checks when publishing; the tag workflow also enforces the audit.
+   `release:audit` blocks high-severity production dependency findings. `release:check` verifies synchronized versions and Apache-2.0 license files, runs backend tests and type checking, builds the dashboard and Agent Manager, and runs `npm pack --dry-run` so the publishable file list can be inspected. `prepublishOnly` and `prepack` enforce the same core build and test checks when publishing; the tag workflow also enforces the audit.
 
 4. Merge the release preparation pull request. From the resulting `main` commit, create and push the signed or annotated tag:
 

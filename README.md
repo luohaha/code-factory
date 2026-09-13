@@ -271,6 +271,10 @@ npm run release:check
 
 The installed version is available through `code-factory-agent-manager --version`, `code-factory-cli --version`, the startup banner, and `GET /api/health`. See the [release guide](docs/releasing.md) for the release checklist, required npm/GitHub setup, tag workflow, smoke test, and recovery rules.
 
+## License
+
+Code Factory is licensed under the [Apache License 2.0](LICENSE).
+
 ## Design Documentation
 
 - [Final architecture and domain model](docs/architecture.en.md)
