@@ -177,6 +177,8 @@ export const zhCN = {
   'Reconnecting': '正在重连',
   'Agent Manager offline': 'Agent Manager 离线',
   'Switch language': '切换语言',
+  'Switch to dark mode': '切换到夜间模式',
+  'Switch to light mode': '切换到日间模式',
   'Chinese': '中文',
   'English': '英文',
 } as const;

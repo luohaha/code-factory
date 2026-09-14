@@ -20,6 +20,7 @@ import {
   LoaderCircle,
   MessagesSquare,
   MessageSquareReply,
+  Moon,
   Paperclip,
   Play,
   Plus,
@@ -31,6 +32,7 @@ import {
   Settings2,
   SlidersHorizontal,
   Square,
+  Sun,
   Terminal,
   Trash2,
   TriangleAlert,
@@ -99,6 +101,7 @@ import {
   type WorkspaceDto,
 } from '@/lib/agent-manager-client';
 import { I18nProvider, useI18n } from '@/lib/i18n';
+import { useTheme } from '@/lib/theme';
 import type { TranslationKey } from '@/locales/zh-CN';
 
 type ConnectionState = 'connecting' | 'online' | 'reconnecting' | 'offline';
@@ -1344,6 +1347,7 @@ function RequirementDetail({
 
 function Dashboard() {
   const { locale, setLocale, t } = useI18n();
+  const { theme, setTheme } = useTheme();
   const [view, setView] = useState<'requirements' | 'pull_requests' | 'sessions'>('requirements');
   const [apiUrl, setApiUrl] = useState(DEFAULT_AGENT_MANAGER_URL);
   const [connection, setConnection] = useState<ConnectionState>('connecting');
@@ -1597,6 +1601,15 @@ function Dashboard() {
               <CircleDot className={`size-3 shrink-0 ${connection === 'online' ? 'text-emerald-500' : connection === 'reconnecting' ? 'text-amber-500' : 'text-rose-500'}`} />
               <span className="truncate font-mono">{workspaceLabel}</span>
             </div>
+            <Button
+              variant="outline"
+              size="icon"
+              aria-label={theme === 'dark' ? t('Switch to light mode') : t('Switch to dark mode')}
+              title={theme === 'dark' ? t('Switch to light mode') : t('Switch to dark mode')}
+              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            >
+              {theme === 'dark' ? <Sun /> : <Moon />}
+            </Button>
             <Button variant="outline" size="sm" aria-label={t('Switch language')} onClick={() => setLocale(locale === 'en' ? 'zh-CN' : 'en')}><Languages data-icon="inline-start" />{locale === 'en' ? t('Chinese') : t('English')}</Button>
             <Button variant="outline" size="icon" aria-label={t('Refresh')} disabled={loading} onClick={() => void reload(true)}><RefreshCw className={loading ? 'animate-spin' : ''} /></Button>
             <ManagerConfigurationDialog configuration={configuration} disabled={connection !== 'online'} onSave={saveConfiguration} workspace={workspace} />
