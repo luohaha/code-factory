@@ -32,6 +32,7 @@ import {
   SlidersHorizontal,
   Square,
   Terminal,
+  Trash2,
   TriangleAlert,
   UserRound,
   WifiOff,
@@ -39,6 +40,17 @@ import {
 } from 'lucide-react';
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -357,6 +369,7 @@ function RequirementCard({
   busy,
   onOpen,
   onStart,
+  onDelete,
   onConfirm,
 }: {
   requirement: RequirementDto;
@@ -364,9 +377,11 @@ function RequirementCard({
   busy: boolean;
   onOpen: () => void;
   onStart: () => void;
+  onDelete: () => void;
   onConfirm: () => void;
 }) {
   const { t } = useI18n();
+  const [deleteOpen, setDeleteOpen] = useState(false);
   return (
     <article className="rounded-xl border border-border/80 bg-card p-3.5 shadow-[0_1px_2px_oklch(0.18_0.02_255/0.05)] transition hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-[0_8px_24px_oklch(0.18_0.02_255/0.08)]">
       <div className="flex items-start justify-between gap-3">
@@ -405,9 +420,36 @@ function RequirementCard({
       </div>
 
       {requirement.status === 'todo' ? (
-        <Button size="xs" className="mt-3 w-full" disabled={busy} onClick={onStart}>
-          {busy ? <LoaderCircle className="animate-spin" /> : <Play data-icon="inline-start" />}{t('Start')}
-        </Button>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <Button size="xs" disabled={busy} onClick={onStart}>
+            {busy ? <LoaderCircle className="animate-spin" /> : <Play data-icon="inline-start" />}{t('Start')}
+          </Button>
+          <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+            <AlertDialogTrigger render={<Button size="xs" variant="destructive" disabled={busy} />}>
+              <Trash2 data-icon="inline-start" />{t('Delete')}
+            </AlertDialogTrigger>
+            <AlertDialogContent size="sm">
+              <AlertDialogHeader>
+                <AlertDialogTitle>{t('Delete requirement?')}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {t('Delete “{title}”? This only works before execution and cannot be undone.', { title: requirement.title })}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
+                <AlertDialogAction
+                  variant="destructive"
+                  onClick={() => {
+                    setDeleteOpen(false);
+                    onDelete();
+                  }}
+                >
+                  <Trash2 data-icon="inline-start" />{t('Delete')}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
       ) : null}
       {requirement.status === 'waiting_confirmation' ? (
         <div className="mt-3 grid grid-cols-2 gap-2">
@@ -1645,6 +1687,9 @@ function Dashboard() {
                         busy={busyId === item.id}
                         onOpen={() => setSelectedId(item.id)}
                         onStart={() => void runAction(item.id, () => client.startRequirement(item.id)).catch(() => undefined)}
+                        onDelete={() => void runAction(item.id, () => client.deleteRequirement(item.id)).then(() => {
+                          if (selectedId === item.id) setSelectedId(null);
+                        }).catch(() => undefined)}
                         onConfirm={() => void runAction(item.id, () => client.confirmRequirement(item.id)).catch(() => undefined)}
                       />
                     ))}

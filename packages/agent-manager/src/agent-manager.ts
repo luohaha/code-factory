@@ -464,6 +464,25 @@ export class AgentManager extends EventEmitter {
     return this.#store.listRequirements();
   }
 
+  deleteRequirement(id: string): void {
+    const requirement = this.#store.transitionRequirement(
+      id,
+      ['todo'],
+      'cancelled',
+      new Date().toISOString(),
+    );
+    this.publish({
+      type: 'requirement.deleted',
+      requirementId: id,
+      sessionId: requirement.session.id,
+      payload: {},
+    });
+    this.logger.info('Requirement deleted', {
+      requirementId: id,
+      sessionId: requirement.session.id,
+    });
+  }
+
   listSessions() {
     return this.#store.listSessions();
   }

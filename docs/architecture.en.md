@@ -167,6 +167,7 @@ Requirement:
 
 ~~~text
 TODO → DOING → WAITING_CONFIRMATION → DONE
+  └─ Delete ─→ CANCELLED (hidden from active lists)
           ↑              │
           └─ New input ──┘
 ~~~
@@ -217,7 +218,7 @@ The Web application contains three boards:
 - Pull Request: `DRAFT / OPEN / CLOSED / MERGED`;
 - RD Session: `Idle / Running / Waiting for human / Failed / Completed`.
 
-Requirement details form a Jira-like work surface containing the description, linked PRs, Run information, and a unified Human/RD/Reviewer/System conversation. The input remains available while RD is running, and pending external-message counts appear on Requirement and Session cards.
+Requirement details form a Jira-like work surface containing the description, linked PRs, Run information, and a unified Human/RD/Reviewer/System conversation. TODO cards offer adjacent Start and Delete actions; deletion requires confirmation and is no longer available after execution starts. The input remains available while RD is running, and pending external-message counts appear on Requirement and Session cards.
 
 The dashboard supports English and Simplified Chinese. The header language switcher applies the locale immediately and persists the choice in browser storage; a visitor without a saved preference defaults to the browser language. Requirement and Reviewer forms select models from the current provider catalog and retain the CLI-default option. The configuration dialog updates the workspace configuration and distinguishes immediately applied settings from restart-required settings.
 

@@ -239,6 +239,10 @@ export class AgentManagerClient {
     return this.request('/api/requirements', { method: 'POST', body: JSON.stringify(input) });
   }
 
+  deleteRequirement(id: string): Promise<void> {
+    return this.request(`/api/requirements/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
   startRequirement(id: string, message?: string, attachmentIds: string[] = []): Promise<{ accepted: true }> {
     return this.action(id, 'start', {
       ...(message ? { message } : {}),
@@ -300,6 +304,7 @@ export class AgentManagerClient {
     const source = new EventSource(`${this.baseUrl}/api/events`);
     const types = [
       'requirement.created',
+      'requirement.deleted',
       'requirement.completed',
       'run.started',
       'run.succeeded',

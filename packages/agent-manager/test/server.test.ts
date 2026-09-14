@@ -222,6 +222,58 @@ test('HTTP API rejects unsupported reasoning effort values', async () => {
   }
 });
 
+test('HTTP API deletes only TODO requirements', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store,
+    logger: createLogger({ level: 'silent' }),
+  });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const createdResponse = await fetch(`${baseUrl}/api/requirements`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Discard draft',
+        description: 'This work is no longer needed',
+        provider: 'codex',
+      }),
+    });
+    const created = await createdResponse.json() as { id: string };
+
+    const deletedResponse = await fetch(`${baseUrl}/api/requirements/${created.id}`, { method: 'DELETE' });
+    assert.equal(deletedResponse.status, 204);
+    const listResponse = await fetch(`${baseUrl}/api/requirements`);
+    assert.deepEqual(await listResponse.json(), { items: [] });
+
+    const repeatedResponse = await fetch(`${baseUrl}/api/requirements/${created.id}`, { method: 'DELETE' });
+    assert.equal(repeatedResponse.status, 409);
+    const missingResponse = await fetch(`${baseUrl}/api/requirements/req_missing`, { method: 'DELETE' });
+    assert.equal(missingResponse.status, 404);
+
+    const started = manager.createRequirement({
+      title: 'Keep active work',
+      description: 'Execution already started',
+      provider: 'codex',
+    });
+    store.transitionRequirement(started.id, ['todo'], 'doing', new Date().toISOString());
+    const conflictResponse = await fetch(`${baseUrl}/api/requirements/${started.id}`, { method: 'DELETE' });
+    assert.equal(conflictResponse.status, 409);
+    assert.equal(manager.getRequirement(started.id)?.status, 'doing');
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
+
 test('HTTP reply queues by default and the interrupt action resumes the RD Agent with that message', async () => {
   const runner = new InterruptibleWaitingRunner();
   const manager = new AgentManager({
