@@ -53,7 +53,7 @@ export const zhCN = {
   'Delete requirement?': '删除需求？',
   'Delete “{title}”? This only works before execution and cannot be undone.': '删除“{title}”？仅未开始执行的需求可删除，删除后将从看板中移除且无法恢复。',
   'Reply': '回复',
-  'Confirm completion': '确认完成',
+  'Complete': '完成',
   'Open conversation': '打开对话',
   '{count} external messages pending': '{count} 条外部消息待处理',
   'Retry original Session': '重试原会话',
