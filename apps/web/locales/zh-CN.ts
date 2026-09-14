@@ -50,7 +50,7 @@ export const zhCN = {
   '{count} messages pending': '{count} 条消息待处理',
   'Start': '开始执行',
   'Reply': '回复',
-  'Confirm': '确认',
+  'Complete': '完成',
   'Open conversation': '打开对话',
   '{count} external messages pending': '{count} 条外部消息待处理',
   'Retry original Session': '重试原会话',

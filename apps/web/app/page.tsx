@@ -412,7 +412,7 @@ function RequirementCard({
       {requirement.status === 'waiting_confirmation' ? (
         <div className="mt-3 grid grid-cols-2 gap-2">
           <Button size="xs" variant="outline" disabled={busy} onClick={onOpen}><MessageSquareReply data-icon="inline-start" />{t('Reply')}</Button>
-          <Button size="xs" disabled={busy} onClick={onConfirm}><Check data-icon="inline-start" />{t('Confirm')}</Button>
+          <Button size="xs" disabled={busy} onClick={onConfirm}><Check data-icon="inline-start" />{t('Complete')}</Button>
         </div>
       ) : null}
       {requirement.status === 'doing' && requirement.session.state !== 'running' ? (
@@ -1194,7 +1194,7 @@ function RequirementDetail({
           {requirement.status === 'waiting_confirmation' ? (
             <div className="mb-2.5 flex items-center justify-between gap-3 rounded-xl border border-violet-500/15 bg-violet-500/7 px-3 py-2 text-[10px] text-violet-700 dark:text-violet-300">
               <span>{t('The Agent reported completion. You can still ask follow-up questions.')}</span>
-              <Button size="xs" className="shrink-0" disabled={busy} onClick={() => void onConfirm().catch(() => undefined)}><Check data-icon="inline-start" />{t('Confirm')}</Button>
+              <Button size="xs" className="shrink-0" disabled={busy} onClick={() => void onConfirm().catch(() => undefined)}><Check data-icon="inline-start" />{t('Complete')}</Button>
             </div>
           ) : null}
           <form
