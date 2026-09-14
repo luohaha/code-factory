@@ -142,6 +142,7 @@ Set `pullRequestReconcileIntervalSeconds` in the workspace configuration or dash
 - A human retry or reply continues the same AgentSession. Agent Manager resumes an existing native session ID or creates a new native session if none exists.
 - On restart, Agent Manager never treats an old PID as a live process. Startup reconciliation marks orphaned RD Runs as failed and separately cleans up orphaned ReviewRequests without changing RD Session state.
 - With `start --daemon`, a detached workspace-scoped supervisor restarts an unexpectedly exited Agent Manager. Repeated early failures use exponential backoff from 1 to 30 seconds to avoid a busy crash loop. `stop` is intentional and does not trigger another restart.
+- Every Agent Manager holds one exclusive lock for its canonical workspace. Foreground and daemon starts therefore reject a second Manager for that workspace regardless of its port, configuration file, or database path; process exit automatically releases the operating-system-backed lock.
 
 ## 7. Security boundary
 

@@ -20,6 +20,11 @@ import { isLogLevel, type Logger } from './logger.js';
 import { createAgentManagerServer, listen } from './server.js';
 import { formatStartupBanner } from './startup-banner.js';
 import { CODE_FACTORY_VERSION } from './version.js';
+import {
+  acquireWorkspaceLock,
+  defaultWorkspaceLockPath,
+  WorkspaceAlreadyRunningError,
+} from './workspace-lock.js';
 
 const command = process.argv[2];
 
@@ -42,7 +47,12 @@ try {
     usage();
   }
 } catch (error) {
-  process.stderr.write(`Agent Manager: ${error instanceof Error ? error.message : String(error)}\n`);
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof WorkspaceAlreadyRunningError
+    && isDaemonChildProcess()) {
+    process.send?.({ type: 'code-factory-agent-manager-startup-failed', message });
+  }
+  process.stderr.write(`Agent Manager: ${message}\n`);
   process.exitCode = 1;
 }
 
@@ -63,6 +73,10 @@ async function runForeground(args: readonly string[]): Promise<void> {
   }
 
   const workspaceRoot = realpathSync(process.cwd());
+  const daemonChild = isDaemonChildProcess();
+  if (!daemonChild && inspectDaemon(workspaceRoot).running) {
+    throw new WorkspaceAlreadyRunningError(workspaceRoot, defaultWorkspaceLockPath(workspaceRoot));
+  }
   const configurationFilePath = resolve(option(args, '--config') ?? defaultConfigurationPath(workspaceRoot));
   const fileConfiguration = loadAgentManagerConfiguration(configurationFilePath);
   const logLevel = option(args, '--log-level') ?? process.env.CODE_FACTORY_LOG_LEVEL ?? fileConfiguration.logLevel;
@@ -101,33 +115,45 @@ async function runForeground(args: readonly string[]): Promise<void> {
     sourceExecution ? './code-factory-cli-main.ts' : './code-factory-cli-main.js',
     import.meta.url,
   ));
-  const manager = new AgentManager({
-    workspaceRoot,
-    configuration: fileConfiguration,
-    effectiveConfiguration: configuration,
-    configurationFilePath,
-    ...(databasePath ? { databasePath } : {}),
-    logLevel,
-    ...(logFilePath ? { logFilePath } : {}),
-    logMaxSize,
-    logMaxFiles,
-    agentCliInvocation: {
-      command: process.execPath,
-      args: [...(sourceExecution ? process.execArgv : []), agentCliEntrypoint],
-    },
-  });
+  const workspaceLock = acquireWorkspaceLock(workspaceRoot);
+  let manager: AgentManager;
+  try {
+    manager = new AgentManager({
+      workspaceRoot,
+      configuration: fileConfiguration,
+      effectiveConfiguration: configuration,
+      configurationFilePath,
+      ...(databasePath ? { databasePath } : {}),
+      logLevel,
+      ...(logFilePath ? { logFilePath } : {}),
+      logMaxSize,
+      logMaxFiles,
+      agentCliInvocation: {
+        command: process.execPath,
+        args: [...(sourceExecution ? process.execArgv : []), agentCliEntrypoint],
+      },
+    });
+  } catch (error) {
+    workspaceLock.release();
+    throw error;
+  }
   const logger = manager.logger;
-  const server = createAgentManagerServer(manager, {
-    host: configuration.host,
-    port: configuration.port,
-    ...(configuration.allowedOrigin ? { allowedOrigin: configuration.allowedOrigin } : {}),
-    logger,
-  });
+  let server;
   let address;
   try {
+    server = createAgentManagerServer(manager, {
+      host: configuration.host,
+      port: configuration.port,
+      ...(configuration.allowedOrigin ? { allowedOrigin: configuration.allowedOrigin } : {}),
+      logger,
+    });
     address = await listen(server, { host: configuration.host, port: configuration.port });
   } catch (error) {
-    await manager.close();
+    try {
+      await manager.close();
+    } finally {
+      workspaceLock.release();
+    }
     throw error;
   }
   manager.startConfiguredServices();
@@ -158,11 +184,11 @@ async function runForeground(args: readonly string[]): Promise<void> {
   });
   logger.warn('Headless agents run with the current user\'s full filesystem and network permissions');
 
-  if (process.env.CODE_FACTORY_DAEMON_CHILD === '1' && typeof process.send === 'function') {
-    process.send({ type: 'code-factory-agent-manager-ready', dashboardUrl, apiUrl });
+  if (daemonChild) {
+    process.send?.({ type: 'code-factory-agent-manager-ready', dashboardUrl, apiUrl });
   }
 
-  if (configuration.openDashboard && process.env.CODE_FACTORY_DAEMON_CHILD !== '1') {
+  if (configuration.openDashboard && !daemonChild) {
     openDashboard(dashboardUrl, logger);
   }
 
@@ -172,8 +198,12 @@ async function runForeground(args: readonly string[]): Promise<void> {
     shuttingDown = true;
     logger.info('Agent Manager shutting down');
     server.close(async () => {
-      await manager.close();
-      process.exitCode = 0;
+      try {
+        await manager.close();
+        process.exitCode = 0;
+      } finally {
+        workspaceLock.release();
+      }
     });
   };
   process.once('SIGINT', shutdown);
@@ -254,6 +284,10 @@ function configuredOpenDashboard(args: readonly string[]): boolean {
   const workspaceRoot = realpathSync(process.cwd());
   const configurationFilePath = resolve(option(args, '--config') ?? defaultConfigurationPath(workspaceRoot));
   return loadAgentManagerConfiguration(configurationFilePath).openDashboard;
+}
+
+function isDaemonChildProcess(): boolean {
+  return process.env.CODE_FACTORY_DAEMON_CHILD === '1' && typeof process.send === 'function';
 }
 
 function openDashboard(dashboardUrl: string, logger?: Logger): void {

@@ -91,14 +91,24 @@ test('daemon starts in the background, restarts a crashed manager, and stops cle
     assert.equal(statSync(paths.logFile).mode & 0o777, 0o600);
     assert.equal((await fetch(`http://127.0.0.1:${port}/api/health`)).status, 200);
 
+    let duplicatePort = await reservePort();
+    while (duplicatePort === port) duplicatePort = await reservePort();
     const duplicate = runCli(
-      ['start', '--daemon', '--port', String(port), '--pr-reconcile-interval', '0', '--log-level', 'silent'],
+      ['start', '--daemon', '--port', String(duplicatePort), '--pr-reconcile-interval', '0', '--log-level', 'silent'],
       workspace,
       env,
     );
     assert.equal(duplicate.status, 0, duplicate.stderr);
     assert.match(duplicate.stdout, /already running/);
     assert.equal(readDaemonState(paths.stateFile)?.supervisorPid, supervisorPid);
+
+    const foregroundDuplicate = runCli(
+      ['start', '--port', String(await reservePort()), '--pr-reconcile-interval', '0', '--log-level', 'silent'],
+      workspace,
+      env,
+    );
+    assert.equal(foregroundDuplicate.status, 1);
+    assert.match(foregroundDuplicate.stderr, /already running for workspace/);
 
     const status = runCli(['status'], workspace, env);
     assert.equal(status.status, 0, status.stderr);

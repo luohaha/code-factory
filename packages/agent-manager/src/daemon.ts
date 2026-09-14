@@ -15,6 +15,8 @@ import {
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
+import { acquireWorkspaceLock } from './workspace-lock.js';
+
 export type DaemonStatus = 'starting' | 'running' | 'restarting' | 'stopping';
 
 export interface DaemonState {
@@ -62,6 +64,11 @@ interface DaemonReadyMessage {
   type: 'code-factory-agent-manager-ready';
   dashboardUrl: string;
   apiUrl: string;
+}
+
+interface DaemonStartupFailureMessage {
+  type: 'code-factory-agent-manager-startup-failed';
+  message: string;
 }
 
 const START_TIMEOUT_MS = 15_000;
@@ -160,6 +167,7 @@ export async function startDaemon(
   if (!initial.running) {
     removeFile(initial.paths.stateFile);
     removeStaleLock(initial.paths.lockFile);
+    assertWorkspaceAvailable(workspaceRoot);
     const cliPath = process.argv[1];
     if (!cliPath) throw new Error('Unable to resolve the Agent Manager CLI path');
     const canonicalCliPath = realpathSync(cliPath);
@@ -191,6 +199,7 @@ export async function startDaemon(
       };
     }
     if (expectedSupervisorPid !== null && !isProcessAlive(expectedSupervisorPid)) {
+      assertWorkspaceAvailable(workspaceRoot);
       throw new Error(`Daemon supervisor exited before Agent Manager became ready; inspect ${inspection.paths.logFile}`);
     }
     await delay(50);
@@ -286,6 +295,7 @@ export async function runDaemonSupervisor(managerArgs: readonly string[]): Promi
 
     while (!stopping) {
       const launchStartedAt = Date.now();
+      let startupFailure: string | null = null;
       child = spawn(
         process.execPath,
         [...process.execArgv, resolve(process.argv[1]!), 'start', ...managerArgs],
@@ -309,17 +319,21 @@ export async function runDaemonSupervisor(managerArgs: readonly string[]): Promi
       });
 
       launchedChild.on('message', (message: unknown) => {
-        if (stopping || child !== launchedChild || !isReadyMessage(message)) return;
-        updateState({
-          status: 'running',
-          dashboardUrl: message.dashboardUrl,
-          apiUrl: message.apiUrl,
-          nextRestartAt: null,
-        });
-        appendDaemonEvent(logFd, 'Agent Manager is ready', {
-          managerPid: launchedChild.pid ?? null,
-          dashboardUrl: message.dashboardUrl,
-        });
+        if (stopping || child !== launchedChild) return;
+        if (isReadyMessage(message)) {
+          updateState({
+            status: 'running',
+            dashboardUrl: message.dashboardUrl,
+            apiUrl: message.apiUrl,
+            nextRestartAt: null,
+          });
+          appendDaemonEvent(logFd, 'Agent Manager is ready', {
+            managerPid: launchedChild.pid ?? null,
+            dashboardUrl: message.dashboardUrl,
+          });
+        } else if (isStartupFailureMessage(message)) {
+          startupFailure = message.message;
+        }
       });
 
       const outcome = await childOutcome(launchedChild);
@@ -328,6 +342,7 @@ export async function runDaemonSupervisor(managerArgs: readonly string[]): Promi
       forceKillTimer = null;
       appendDaemonEvent(logFd, 'Agent Manager process exited', outcome);
       if (stopping) break;
+      if (startupFailure !== null) throw new Error(startupFailure);
 
       const runtimeMs = Date.now() - launchStartedAt;
       consecutiveFailures = runtimeMs >= STABLE_RUNTIME_MS ? 1 : consecutiveFailures + 1;
@@ -426,6 +441,17 @@ function isReadyMessage(value: unknown): value is DaemonReadyMessage {
     && value.type === 'code-factory-agent-manager-ready'
     && typeof value.dashboardUrl === 'string'
     && typeof value.apiUrl === 'string';
+}
+
+function isStartupFailureMessage(value: unknown): value is DaemonStartupFailureMessage {
+  return isRecord(value)
+    && value.type === 'code-factory-agent-manager-startup-failed'
+    && typeof value.message === 'string';
+}
+
+function assertWorkspaceAvailable(workspaceRoot: string): void {
+  const lock = acquireWorkspaceLock(workspaceRoot);
+  lock.release();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
