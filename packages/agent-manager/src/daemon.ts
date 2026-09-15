@@ -1,8 +1,9 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import {
   chmodSync,
   closeSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -164,41 +165,61 @@ export async function startDaemon(
   }
 
   let expectedSupervisorPid = initial.running ? initial.state?.supervisorPid ?? null : null;
+  let alreadyRunning = initial.running;
   if (!initial.running) {
     removeFile(initial.paths.stateFile);
-    removeStaleLock(initial.paths.lockFile);
-    assertWorkspaceAvailable(workspaceRoot);
-    const cliPath = process.argv[1];
-    if (!cliPath) throw new Error('Unable to resolve the Agent Manager CLI path');
-    const canonicalCliPath = realpathSync(cliPath);
-    const supervisor = spawn(
-      process.execPath,
-      [...process.execArgv, canonicalCliPath, '__daemon', ...managerArgs],
-      {
-        cwd: workspaceRoot,
-        detached: true,
-        env: process.env,
-        shell: false,
-        stdio: 'ignore',
-        windowsHide: true,
-      },
-    );
-    if (supervisor.pid === undefined) throw new Error('Unable to start the daemon supervisor');
-    expectedSupervisorPid = supervisor.pid;
-    supervisor.unref();
+    if (!removeStaleLock(initial.paths.lockFile)) {
+      expectedSupervisorPid = readLiveDaemonLockPid(initial.paths.lockFile);
+      alreadyRunning = expectedSupervisorPid !== null;
+    }
+    if (expectedSupervisorPid === null) {
+      const cliPath = process.argv[1];
+      if (!cliPath) throw new Error('Unable to resolve the Agent Manager CLI path');
+      const canonicalCliPath = realpathSync(cliPath);
+      const supervisor = spawn(
+        process.execPath,
+        [...process.execArgv, canonicalCliPath, '__daemon', ...managerArgs],
+        {
+          cwd: workspaceRoot,
+          detached: true,
+          env: process.env,
+          shell: false,
+          stdio: 'ignore',
+          windowsHide: true,
+        },
+      );
+      if (supervisor.pid === undefined) throw new Error('Unable to start the daemon supervisor');
+      expectedSupervisorPid = supervisor.pid;
+      supervisor.unref();
+    }
   }
 
   const deadline = Date.now() + (options.timeoutMs ?? START_TIMEOUT_MS);
   while (Date.now() < deadline) {
     const inspection = inspectDaemon(workspaceRoot);
+    const liveLockPid = readLiveDaemonLockPid(inspection.paths.lockFile);
+    const observedSupervisorPid = inspection.running
+      ? inspection.state?.supervisorPid ?? null
+      : liveLockPid;
+    if (observedSupervisorPid !== null && observedSupervisorPid !== expectedSupervisorPid) {
+      expectedSupervisorPid = observedSupervisorPid;
+      alreadyRunning = true;
+    }
     if (inspection.running && inspection.state?.status === 'running') {
       return {
         state: inspection.state,
         paths: inspection.paths,
-        alreadyRunning: initial.running,
+        alreadyRunning,
       };
     }
     if (expectedSupervisorPid !== null && !isProcessAlive(expectedSupervisorPid)) {
+      const replacementSupervisorPid = readLiveDaemonLockPid(inspection.paths.lockFile);
+      if (replacementSupervisorPid !== null && replacementSupervisorPid !== expectedSupervisorPid) {
+        expectedSupervisorPid = replacementSupervisorPid;
+        alreadyRunning = true;
+        await delay(50);
+        continue;
+      }
       assertWorkspaceAvailable(workspaceRoot);
       throw new Error(`Daemon supervisor exited before Agent Manager became ready; inspect ${inspection.paths.logFile}`);
     }
@@ -394,11 +415,21 @@ function writeDaemonState(stateFile: string, state: DaemonState): void {
 function acquireDaemonLock(lockFile: string): number {
   mkdirSync(dirname(lockFile), { recursive: true, mode: 0o700 });
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    const temporaryLockFile = `${lockFile}.${process.pid}.${randomUUID()}.tmp`;
+    let fd: number | null = null;
+    let claimed = false;
     try {
-      const fd = openSync(lockFile, 'wx', 0o600);
+      fd = openSync(temporaryLockFile, 'wx', 0o600);
       writeSync(fd, `${process.pid}\n`);
+      // Publish a complete PID atomically so another starter never observes and removes an empty lock.
+      linkSync(temporaryLockFile, lockFile);
+      claimed = true;
+      unlinkSync(temporaryLockFile);
       return fd;
     } catch (error) {
+      if (fd !== null) closeSync(fd);
+      removeFile(temporaryLockFile);
+      if (claimed) removeFile(lockFile);
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       if (!removeStaleLock(lockFile)) throw new Error('An Agent Manager daemon supervisor is already running');
     }
@@ -420,6 +451,15 @@ function removeStaleLock(lockFile: string): boolean {
     } catch {
       return false;
     }
+  }
+}
+
+function readLiveDaemonLockPid(lockFile: string): number | null {
+  try {
+    const pid = Number(readFileSync(lockFile, 'utf8').trim());
+    return isPositiveInteger(pid) && isProcessAlive(pid) ? pid : null;
+  } catch {
+    return null;
   }
 }
 

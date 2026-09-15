@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import test from 'node:test';
 
 import {
@@ -57,6 +57,53 @@ test('daemon restart delay uses capped exponential backoff', () => {
   assert.equal(daemonRestartDelayMs(100), 30_000);
 });
 
+test('concurrent daemon starts converge on one supervisor', { timeout: 35_000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-daemon-concurrent-start-'));
+  const workspace = join(directory, 'workspace');
+  const fakeHome = join(directory, 'home');
+  const port = await reservePort();
+  const env = {
+    ...process.env,
+    HOME: fakeHome,
+    USERPROFILE: fakeHome,
+  };
+  mkdirSync(workspace, { recursive: true });
+  const paths = defaultDaemonPaths(workspace, fakeHome);
+  let supervisorPid: number | null = null;
+  let managerPid: number | null = null;
+
+  try {
+    const args = ['start', '--daemon', '--port', String(port), '--pr-reconcile-interval', '0', '--log-level', 'silent'];
+    const results = await Promise.all([
+      runCliAsync(args, workspace, env),
+      runCliAsync(args, workspace, env),
+    ]);
+
+    for (const result of results) {
+      const daemonLog = existsSync(paths.logFile) ? readFileSync(paths.logFile, 'utf8') : '(daemon log missing)';
+      const daemonLock = existsSync(paths.lockFile) ? readFileSync(paths.lockFile, 'utf8') : '(daemon lock missing)';
+      assert.equal(result.status, 0, `${result.stderr}\ndaemon lock: ${daemonLock}\n${daemonLog}`);
+    }
+    assert.equal(results.filter((result) => /daemon started/.test(result.stdout)).length, 1);
+    assert.equal(results.filter((result) => /already running/.test(result.stdout)).length, 1);
+
+    const state = readDaemonState(paths.stateFile);
+    assert.equal(state?.status, 'running');
+    assert.ok(state.managerPid);
+    supervisorPid = state.supervisorPid;
+    managerPid = state.managerPid;
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/health`)).status, 200);
+  } finally {
+    if (existsSync(paths.stateFile)) runCli(['stop'], workspace, env, 20_000);
+    const remainingState = readDaemonState(paths.stateFile);
+    const remainingManagerPid = remainingState?.managerPid ?? managerPid;
+    const remainingSupervisorPid = remainingState?.supervisorPid ?? supervisorPid;
+    if (remainingManagerPid !== null && isProcessAlive(remainingManagerPid)) process.kill(remainingManagerPid, 'SIGKILL');
+    if (remainingSupervisorPid !== null && isProcessAlive(remainingSupervisorPid)) process.kill(remainingSupervisorPid, 'SIGKILL');
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('daemon starts in the background, restarts a crashed manager, and stops cleanly', { timeout: 35_000 }, async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-daemon-integration-'));
   const workspace = join(directory, 'workspace');
@@ -69,6 +116,8 @@ test('daemon starts in the background, restarts a crashed manager, and stops cle
   };
   mkdirSync(workspace, { recursive: true });
   const paths = defaultDaemonPaths(workspace, fakeHome);
+  mkdirSync(dirname(paths.logFile), { recursive: true });
+  writeFileSync(paths.logFile, 'previous daemon diagnostics\n');
   let supervisorPid: number | null = null;
   let managerPid: number | null = null;
 
@@ -89,6 +138,7 @@ test('daemon starts in the background, restarts a crashed manager, and stops cle
     managerPid = initial.managerPid;
     assert.equal(statSync(paths.stateFile).mode & 0o777, 0o600);
     assert.equal(statSync(paths.logFile).mode & 0o777, 0o600);
+    assert.match(readFileSync(paths.logFile, 'utf8'), /^previous daemon diagnostics\n/);
     assert.equal((await fetch(`http://127.0.0.1:${port}/api/health`)).status, 200);
 
     let duplicatePort = await reservePort();
@@ -159,6 +209,37 @@ test('daemon starts in the background, restarts a crashed manager, and stops cle
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+function runCliAsync(
+  args: readonly string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  timeout = 20_000,
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolveRun, reject) => {
+    const child = spawn(process.execPath, ['--import', tsxImport, cliPath, ...args], {
+      cwd,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error(`Timed out waiting for CLI: ${stderr}`));
+    }, timeout);
+    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('close', (status) => {
+      clearTimeout(timer);
+      resolveRun({ status, stdout, stderr });
+    });
+  });
+}
 
 function runCli(
   args: readonly string[],

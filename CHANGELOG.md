@@ -6,6 +6,10 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Made simultaneous daemon start commands converge on one supervisor instead of intermittently reporting an early-exit or workspace-conflict error.
+
 ## [0.1.1] - 2026-09-15
 
 ### Added
