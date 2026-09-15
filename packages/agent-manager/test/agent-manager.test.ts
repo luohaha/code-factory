@@ -185,6 +185,32 @@ test('Agent Manager removes a TODO requirement from active lists and publishes a
   }
 });
 
+test('Agent Manager includes a human start message in the initial RD Run', async () => {
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    logger: silentLogger,
+  });
+  try {
+    const requirement = manager.createRequirement({ title: 'First input', description: 'Initial task', provider: 'codex' });
+    const execution = manager.runRequirement(requirement.id, 'Start here.');
+
+    assert.match(runner.requests[0]?.invocation.input ?? '', /Start here\./);
+    assert.equal(manager.listRuns(requirement.id)[0]?.inputFromSequence, 1);
+    assert.equal(manager.listRuns(requirement.id)[0]?.inputToSequence, 1);
+
+    runner.resolvers[0]?.({
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'native-thread-1', finalMessage: 'ready', error: null,
+    });
+    await execution;
+    assert.equal(manager.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, 1);
+  } finally {
+    manager.close();
+  }
+});
+
 test('Agent Manager queues conversation messages during a Run and resumes without replaying RD output', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new DeferredRunner();
