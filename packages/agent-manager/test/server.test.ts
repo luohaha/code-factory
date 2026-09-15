@@ -343,6 +343,68 @@ test('HTTP reply queues by default and the interrupt action resumes the RD Agent
   }
 });
 
+test('HTTP reply reactivates a completed requirement', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new WaitingRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store,
+    runner,
+    logger: createLogger({ level: 'silent' }),
+  });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const requirement = manager.createRequirement({
+      title: 'Reactivate completed work',
+      description: 'A follow-up reply should resume the RD session',
+      provider: 'codex',
+    });
+    store.beginRun({
+      runId: 'run-completed',
+      requirementId: requirement.id,
+      role: 'rd',
+      provider: 'codex',
+      taskSummary: 'Complete the initial work',
+      now: '2026-09-15T00:00:00.000Z',
+    });
+    store.finishRdRun('run-completed', {
+      status: 'succeeded',
+      exitCode: 0,
+      nativeSessionId: 'native-thread-1',
+      finalMessage: 'ready',
+      error: null,
+    }, '2026-09-15T00:01:00.000Z');
+    manager.confirmRequirement(requirement.id);
+
+    const response = await fetch(`${baseUrl}/api/requirements/${requirement.id}/reply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'Reopen this and cover the edge case.' }),
+    });
+    assert.equal(response.status, 202);
+    const body = await response.json() as { queued: boolean; message: { body: string } };
+    assert.equal(body.queued, false);
+    assert.equal(body.message.body, 'Reopen this and cover the edge case.');
+
+    const reactivated = manager.getRequirement(requirement.id);
+    assert.equal(reactivated?.status, 'doing');
+    assert.equal(reactivated?.session.state, 'running');
+    assert.equal(reactivated?.completedAt, null);
+    assert.match(runner.request?.invocation.input ?? '', /Reopen this and cover the edge case\./);
+    assert.ok(runner.request?.invocation.args.includes('native-thread-1'));
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
+
 test('HTTP API exposes the persisted human and RD Agent conversation', async () => {
   const runner = new WaitingRunner();
   const logLines: string[] = [];

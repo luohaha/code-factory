@@ -632,7 +632,7 @@ export class AgentManager extends EventEmitter {
     attachmentIds: string[] = [],
   ): { message: RequirementMessage; queued: boolean } {
     const requirement = this.requireRequirement(requirementId);
-    if (requirement.status === 'done' || requirement.status === 'cancelled') {
+    if (requirement.status === 'cancelled') {
       throw new StoreConflictError(`Requirement ${requirementId} is already ${requirement.status}`);
     }
     const message = this.appendMessage({
@@ -643,7 +643,16 @@ export class AgentManager extends EventEmitter {
       attachmentIds,
       deliverToRd: true,
     });
-    const queued = requirement.session.state === 'running';
+    const current = requirement.status === 'done'
+      ? this.#store.transitionRequirement(requirementId, ['done'], 'doing', new Date().toISOString())
+      : requirement;
+    if (requirement.status === 'done') {
+      this.logger.info('Requirement reactivated by human reply', {
+        requirementId,
+        sessionId: requirement.session.id,
+      });
+    }
+    const queued = current.session.state === 'running';
     if (!queued) {
       void this.startRdRun(requirementId).catch((error: unknown) => {
         this.logger.error('RD run failed unexpectedly', { requirementId, error });

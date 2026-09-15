@@ -56,7 +56,7 @@ POST /api/requirements/:id/confirm
 POST /api/requirements/:id/attachments
 ~~~
 
-Upload a file as the raw binary request body to the `attachments` endpoint, then include the returned ID in `attachmentIds` on `start` or `reply`. A message supports up to six attachments of at most 20 MB each. PNG, JPEG, GIF, and WebP files are previewed as images; other files are downloaded as regular attachments. A reply body has the form `{"message":"...","attachmentIds":["att_..."]}` and may omit text when attachments are present. While RD is running, replies are appended and queued without interrupting the current Run. Only an explicit call to `interrupt`—the Web dashboard's Interrupt button—stops the current RD Run.
+Upload a file as the raw binary request body to the `attachments` endpoint, then include the returned ID in `attachmentIds` on `start` or `reply`. A message supports up to six attachments of at most 20 MB each. PNG, JPEG, GIF, and WebP files are previewed as images; other files are downloaded as regular attachments. A reply body has the form `{"message":"...","attachmentIds":["att_..."]}` and may omit text when attachments are present. While RD is running, replies are appended and queued without interrupting the current Run. Replying to a DONE Requirement reactivates it as DOING and starts a new Run in the original RD Session. Only an explicit call to `interrupt`—the Web dashboard's Interrupt button—stops the current RD Run.
 
 If RD is running, `reply` still returns `202`. `queued=true` means the message was appended to the Requirement conversation and will be handled after the current Run; an active Session is not a conflict.
 
@@ -154,7 +154,7 @@ The PR Reconciler publishes GitHub state and head-SHA changes through `pull_requ
 - `409`: illegal state transition, an active review already exists for the PR, or an explicit duplicate start for the same Session;
 - `500`: unclassified internal error.
 
-Sending a human message to a running RD Session is normal and is not a conflict.
+Sending a human message to a running RD Session, or replying to reactivate a DONE Requirement, is normal and is not a conflict.
 
 ## 7. Current security boundary
 
