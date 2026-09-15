@@ -106,3 +106,59 @@ test('HeadlessProcessRunner kills descendant tool processes before completing a 
     if (grandchildPid !== null && processExists(grandchildPid)) process.kill(grandchildPid, 'SIGKILL');
   }
 });
+
+test('HeadlessProcessRunner lets an active RD process outlive its inactivity timeout', async () => {
+  const outcome = await new HeadlessProcessRunner().run({
+    invocation: {
+      command: process.execPath,
+      args: ['-e', [
+        "const interval = setInterval(() => process.stdout.write('active\\n'), 50);",
+        'setTimeout(() => { clearInterval(interval); process.exit(0); }, 1_100);',
+      ].join('\n')],
+      input: '',
+    },
+    adapter: noOutputAdapter,
+    workspaceRoot: process.cwd(),
+    timeoutMs: 300,
+    timeoutMode: 'inactivity',
+    maxOutputBytes: 1024,
+  });
+
+  assert.equal(outcome.status, 'succeeded');
+});
+
+test('HeadlessProcessRunner reports a readable inactivity timeout', async () => {
+  const outcome = await new HeadlessProcessRunner().run({
+    invocation: {
+      command: process.execPath,
+      args: ['-e', 'setInterval(() => undefined, 1000)'],
+      input: '',
+    },
+    adapter: noOutputAdapter,
+    workspaceRoot: process.cwd(),
+    timeoutMs: 300,
+    timeoutMode: 'inactivity',
+    maxOutputBytes: 1024,
+  });
+
+  assert.equal(outcome.status, 'timed_out');
+  assert.equal(outcome.error, 'Agent produced no output for 300ms');
+});
+
+test('HeadlessProcessRunner keeps elapsed-time limits for Reviewers', async () => {
+  const outcome = await new HeadlessProcessRunner().run({
+    invocation: {
+      command: process.execPath,
+      args: ['-e', "setInterval(() => process.stdout.write('active\\n'), 50)"],
+      input: '',
+    },
+    adapter: noOutputAdapter,
+    workspaceRoot: process.cwd(),
+    timeoutMs: 300,
+    timeoutMode: 'elapsed',
+    maxOutputBytes: 1024,
+  });
+
+  assert.equal(outcome.status, 'timed_out');
+  assert.equal(outcome.error, 'Agent timed out after 300ms');
+});

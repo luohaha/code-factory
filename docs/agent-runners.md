@@ -10,7 +10,7 @@ Agent Manager supports the local `codex` and `claude` CLIs. Every invocation fol
 - the child inherits the current environment, and each CLI loads its own authentication, configuration, repository instructions, and Skills;
 - Agent Manager does not pass `--cd` or `--add-dir`; both CLIs run without interactive approval or CLI sandbox restrictions;
 - stdout is parsed as JSONL, while stderr is retained as an error summary;
-- RD Runs time out after 60 minutes by default and Reviewer Runs after at most 30 minutes; a timeout terminates the CLI and its complete tool-process tree;
+- RD Runs time out after 60 minutes without stdout or stderr activity by default, so an actively progressing Run may continue for longer than one hour. Reviewer Runs retain a total elapsed-time limit of at most 30 minutes. A timeout terminates the CLI and its complete tool-process tree;
 - on POSIX systems, a human interrupt sends `SIGTERM` to the isolated process group and follows with `SIGKILL` after two seconds if descendants remain; Windows uses `taskkill /T /F`. The Run becomes `cancelled` only after the process tree exits;
 - one RD AgentSession may have only one active Run, while Sessions for different Requirements may run concurrently;
 - Human or Reviewer messages received during an RD Run are appended to the Requirement conversation without interrupting it. Only an explicit human interrupt stops the current Run, after which queued messages continue in the same native Session;
@@ -137,7 +137,7 @@ Set `pullRequestReconcileIntervalSeconds` in the workspace configuration or dash
 
 - A native session ID is stored as soon as the CLI reports it.
 - After a successful Run, Agent Manager advances only the input message boundary captured by that Run. If external messages remain, it starts another Run; otherwise the Requirement enters `waiting_confirmation` and the Session enters `waiting_human`.
-- A failed or timed-out Run leaves the Requirement in `doing` and moves the Session to `failed`.
+- A failed Run, including an RD Run that produces no output for 60 minutes, leaves the Requirement in `doing` and moves the Session to `failed`.
 - A human-interrupted Run leaves the Requirement in `doing` and returns the Session to `waiting_human`. If corrective messages arrived after the Run started, Agent Manager immediately resumes the same Session.
 - A human retry or reply continues the same AgentSession. Agent Manager resumes an existing native session ID or creates a new native session if none exists.
 - On restart, Agent Manager never treats an old PID as a live process. Startup reconciliation marks orphaned RD Runs as failed and separately cleans up orphaned ReviewRequests without changing RD Session state.

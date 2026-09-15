@@ -9,6 +9,7 @@ export interface ProcessRunRequest {
   workspaceRoot: string;
   environment?: Readonly<Record<string, string>>;
   timeoutMs: number;
+  timeoutMode?: 'elapsed' | 'inactivity';
   maxOutputBytes: number;
   signal?: AbortSignal;
   onNativeSession?: (nativeSessionId: string) => void;
@@ -25,6 +26,18 @@ function appendCapped(current: string, chunk: string, limit: number): string {
   return Buffer.byteLength(combined) <= limit
     ? combined
     : Buffer.from(combined).subarray(-limit).toString('utf8');
+}
+
+function formatDuration(milliseconds: number): string {
+  if (milliseconds % 60_000 === 0) {
+    const minutes = milliseconds / 60_000;
+    return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+  }
+  if (milliseconds % 1_000 === 0) {
+    const seconds = milliseconds / 1_000;
+    return `${seconds} second${seconds === 1 ? '' : 's'}`;
+  }
+  return `${milliseconds}ms`;
 }
 
 function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
@@ -76,6 +89,10 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
       let rootClose: { code: number | null; signal: NodeJS.Signals | null } | null = null;
       let forceSent = false;
       let settled = false;
+      const timeoutMode = request.timeoutMode ?? 'elapsed';
+      const timeoutError = timeoutMode === 'inactivity'
+        ? `Agent produced no output for ${formatDuration(request.timeoutMs)}`
+        : `Agent timed out after ${formatDuration(request.timeoutMs)}`;
 
       const cleanup = () => {
         if (timeout) clearTimeout(timeout);
@@ -106,7 +123,7 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
           return;
         }
         if (termination === 'timed_out') {
-          resolve({ status: 'timed_out', exitCode: code, nativeSessionId, finalMessage, error: `Agent timed out after ${request.timeoutMs}ms` });
+          resolve({ status: 'timed_out', exitCode: code, nativeSessionId, finalMessage, error: timeoutError });
           return;
         }
         if (code === 0 && !protocolError) {
@@ -129,9 +146,19 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         }, 2_000);
       };
       const onAbort = () => terminate('cancelled');
+      const armTimeout = () => {
+        if (termination || settled) return;
+        if (timeout) clearTimeout(timeout);
+        timeout = setTimeout(() => terminate('timed_out'), request.timeoutMs);
+        timeout.unref();
+      };
+      const recordActivity = () => {
+        if (timeoutMode === 'inactivity') armTimeout();
+      };
 
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', (chunk: string) => {
+        recordActivity();
         stdoutBuffer = appendCapped(stdoutBuffer, chunk, request.maxOutputBytes);
         const lines = stdoutBuffer.split(/\r?\n/);
         stdoutBuffer = lines.pop() ?? '';
@@ -139,14 +166,14 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
       });
       child.stderr.setEncoding('utf8');
       child.stderr.on('data', (chunk: string) => {
+        recordActivity();
         stderr = appendCapped(stderr, chunk, request.maxOutputBytes);
       });
       child.stdin.on('error', () => {
         // The process-level error/close handlers produce the canonical outcome.
       });
 
-      timeout = setTimeout(() => terminate('timed_out'), request.timeoutMs);
-      timeout.unref();
+      armTimeout();
       request.signal?.addEventListener('abort', onAbort, { once: true });
       if (request.signal?.aborted) onAbort();
 
@@ -159,7 +186,7 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
           return;
         }
         if (termination === 'timed_out') {
-          resolve({ status: 'timed_out', exitCode: null, nativeSessionId, finalMessage, error: `Agent timed out after ${request.timeoutMs}ms` });
+          resolve({ status: 'timed_out', exitCode: null, nativeSessionId, finalMessage, error: timeoutError });
           return;
         }
         resolve({ status: 'failed', exitCode: null, nativeSessionId, finalMessage, error: error.message });
