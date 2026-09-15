@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,7 +57,7 @@ test('daemon restart delay uses capped exponential backoff', () => {
   assert.equal(daemonRestartDelayMs(100), 30_000);
 });
 
-test('concurrent daemon starts converge on one supervisor', { timeout: 35_000 }, async () => {
+test('concurrent daemon starts replace stale metadata and converge on one discoverable supervisor', { timeout: 35_000 }, async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-daemon-concurrent-start-'));
   const workspace = join(directory, 'workspace');
   const fakeHome = join(directory, 'home');
@@ -69,6 +69,26 @@ test('concurrent daemon starts converge on one supervisor', { timeout: 35_000 },
   };
   mkdirSync(workspace, { recursive: true });
   const paths = defaultDaemonPaths(workspace, fakeHome);
+  const staleSupervisorPid = 999_999_999;
+  assert.equal(isProcessAlive(staleSupervisorPid), false);
+  mkdirSync(paths.directory, { recursive: true });
+  writeFileSync(paths.lockFile, `${staleSupervisorPid}\n`);
+  writeFileSync(paths.stateFile, JSON.stringify({
+    version: 1,
+    workspaceRoot: realpathSync(workspace),
+    supervisorPid: staleSupervisorPid,
+    managerPid: null,
+    status: 'running',
+    managerArgs: [],
+    startedAt: '2026-09-12T00:00:00.000Z',
+    updatedAt: '2026-09-12T00:00:00.000Z',
+    restartCount: 0,
+    nextRestartAt: null,
+    dashboardUrl: null,
+    apiUrl: null,
+    lastExitCode: null,
+    lastExitSignal: null,
+  } satisfies DaemonState));
   let supervisorPid: number | null = null;
   let managerPid: number | null = null;
 
@@ -90,8 +110,13 @@ test('concurrent daemon starts converge on one supervisor', { timeout: 35_000 },
     const state = readDaemonState(paths.stateFile);
     assert.equal(state?.status, 'running');
     assert.ok(state.managerPid);
+    assert.equal(readFileSync(paths.lockFile, 'utf8'), `${state.supervisorPid}\n`);
+    assert.equal(statSync(paths.lockGuardFile).mode & 0o777, 0o600);
     supervisorPid = state.supervisorPid;
     managerPid = state.managerPid;
+    const status = runCli(['status'], workspace, env);
+    assert.equal(status.status, 0, status.stderr);
+    assert.match(status.stdout, new RegExp(`Supervisor PID:\\s+${supervisorPid}`));
     assert.equal((await fetch(`http://127.0.0.1:${port}/api/health`)).status, 200);
   } finally {
     if (existsSync(paths.stateFile)) runCli(['stop'], workspace, env, 20_000);

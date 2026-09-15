@@ -8,7 +8,7 @@ breaking changes while the major version is `0`.
 
 ### Fixed
 
-- Made simultaneous daemon start commands converge on one supervisor instead of intermittently reporting an early-exit or workspace-conflict error.
+- Made simultaneous daemon start commands safely replace stale supervisor metadata and converge on one owner instead of intermittently reporting an early-exit or workspace-conflict error.
 
 ## [0.1.1] - 2026-09-15
 

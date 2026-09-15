@@ -1,9 +1,8 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import {
   chmodSync,
   closeSync,
-  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -15,6 +14,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 import { acquireWorkspaceLock } from './workspace-lock.js';
 
@@ -41,6 +41,7 @@ export interface DaemonPaths {
   directory: string;
   stateFile: string;
   lockFile: string;
+  lockGuardFile: string;
   logFile: string;
 }
 
@@ -72,6 +73,10 @@ interface DaemonStartupFailureMessage {
   message: string;
 }
 
+interface DaemonLock {
+  release(): void;
+}
+
 const START_TIMEOUT_MS = 15_000;
 const STOP_TIMEOUT_MS = 12_000;
 const FORCE_KILL_DELAY_MS = 10_000;
@@ -85,6 +90,7 @@ export function defaultDaemonPaths(workspaceRoot: string, homeDirectory = homedi
     directory,
     stateFile: join(directory, 'daemon.json'),
     lockFile: join(directory, 'daemon.lock'),
+    lockGuardFile: join(directory, 'daemon.guard.sqlite'),
     logFile: join(directory, 'logs', 'daemon.log'),
   };
 }
@@ -167,40 +173,30 @@ export async function startDaemon(
   let expectedSupervisorPid = initial.running ? initial.state?.supervisorPid ?? null : null;
   let alreadyRunning = initial.running;
   if (!initial.running) {
-    removeFile(initial.paths.stateFile);
-    if (!removeStaleLock(initial.paths.lockFile)) {
-      expectedSupervisorPid = readLiveDaemonLockPid(initial.paths.lockFile);
-      alreadyRunning = expectedSupervisorPid !== null;
-    }
-    if (expectedSupervisorPid === null) {
-      const cliPath = process.argv[1];
-      if (!cliPath) throw new Error('Unable to resolve the Agent Manager CLI path');
-      const canonicalCliPath = realpathSync(cliPath);
-      const supervisor = spawn(
-        process.execPath,
-        [...process.execArgv, canonicalCliPath, '__daemon', ...managerArgs],
-        {
-          cwd: workspaceRoot,
-          detached: true,
-          env: process.env,
-          shell: false,
-          stdio: 'ignore',
-          windowsHide: true,
-        },
-      );
-      if (supervisor.pid === undefined) throw new Error('Unable to start the daemon supervisor');
-      expectedSupervisorPid = supervisor.pid;
-      supervisor.unref();
-    }
+    const cliPath = process.argv[1];
+    if (!cliPath) throw new Error('Unable to resolve the Agent Manager CLI path');
+    const canonicalCliPath = realpathSync(cliPath);
+    const supervisor = spawn(
+      process.execPath,
+      [...process.execArgv, canonicalCliPath, '__daemon', ...managerArgs],
+      {
+        cwd: workspaceRoot,
+        detached: true,
+        env: process.env,
+        shell: false,
+        stdio: 'ignore',
+        windowsHide: true,
+      },
+    );
+    if (supervisor.pid === undefined) throw new Error('Unable to start the daemon supervisor');
+    expectedSupervisorPid = supervisor.pid;
+    supervisor.unref();
   }
 
   const deadline = Date.now() + (options.timeoutMs ?? START_TIMEOUT_MS);
   while (Date.now() < deadline) {
     const inspection = inspectDaemon(workspaceRoot);
-    const liveLockPid = readLiveDaemonLockPid(inspection.paths.lockFile);
-    const observedSupervisorPid = inspection.running
-      ? inspection.state?.supervisorPid ?? null
-      : liveLockPid;
+    const observedSupervisorPid = inspection.running ? inspection.state?.supervisorPid ?? null : null;
     if (observedSupervisorPid !== null && observedSupervisorPid !== expectedSupervisorPid) {
       expectedSupervisorPid = observedSupervisorPid;
       alreadyRunning = true;
@@ -213,13 +209,6 @@ export async function startDaemon(
       };
     }
     if (expectedSupervisorPid !== null && !isProcessAlive(expectedSupervisorPid)) {
-      const replacementSupervisorPid = readLiveDaemonLockPid(inspection.paths.lockFile);
-      if (replacementSupervisorPid !== null && replacementSupervisorPid !== expectedSupervisorPid) {
-        expectedSupervisorPid = replacementSupervisorPid;
-        alreadyRunning = true;
-        await delay(50);
-        continue;
-      }
       assertWorkspaceAvailable(workspaceRoot);
       throw new Error(`Daemon supervisor exited before Agent Manager became ready; inspect ${inspection.paths.logFile}`);
     }
@@ -235,8 +224,6 @@ export async function stopDaemon(
 ): Promise<StopDaemonResult> {
   const inspection = inspectDaemon(workspaceRoot);
   if (!inspection.running || !inspection.state) {
-    removeFile(inspection.paths.stateFile);
-    removeStaleLock(inspection.paths.lockFile);
     return { stopped: false, paths: inspection.paths };
   }
 
@@ -253,8 +240,6 @@ export async function stopDaemon(
   }
   if (isProcessAlive(supervisorPid)) throw new Error(`Unable to stop daemon supervisor process ${supervisorPid}`);
 
-  removeFile(inspection.paths.stateFile);
-  removeStaleLock(inspection.paths.lockFile);
   return { stopped: true, paths: inspection.paths };
 }
 
@@ -265,7 +250,7 @@ export async function runDaemonSupervisor(managerArgs: readonly string[]): Promi
   const logFd = openSync(paths.logFile, 'a', 0o600);
   chmodSync(paths.logFile, 0o600);
 
-  let lockFd: number | null = null;
+  let lock: DaemonLock | null = null;
   let child: ChildProcess | null = null;
   let stopping = false;
   let stopResolver: (() => void) | null = null;
@@ -308,7 +293,11 @@ export async function runDaemonSupervisor(managerArgs: readonly string[]): Promi
   };
 
   try {
-    lockFd = acquireDaemonLock(paths.lockFile);
+    lock = await acquireDaemonLockOrJoin(paths, workspaceRoot);
+    if (lock === null) {
+      appendDaemonEvent(logFd, 'Daemon start joined existing supervisor', { supervisorPid: process.pid, workspaceRoot });
+      return;
+    }
     writeDaemonState(paths.stateFile, state);
     process.once('SIGINT', requestStop);
     process.once('SIGTERM', requestStop);
@@ -389,10 +378,13 @@ export async function runDaemonSupervisor(managerArgs: readonly string[]): Promi
     if (forceKillTimer) clearTimeout(forceKillTimer);
     process.removeListener('SIGINT', requestStop);
     process.removeListener('SIGTERM', requestStop);
-    if (lockFd !== null) {
-      removeFile(paths.stateFile);
-      closeSync(lockFd);
-      removeFile(paths.lockFile);
+    if (lock !== null) {
+      try {
+        removeFile(paths.stateFile);
+        removeFile(paths.lockFile);
+      } finally {
+        lock.release();
+      }
     }
     appendDaemonEvent(logFd, 'Daemon supervisor stopped', { supervisorPid: process.pid });
     closeSync(logFd);
@@ -412,55 +404,75 @@ function writeDaemonState(stateFile: string, state: DaemonState): void {
   chmodSync(stateFile, 0o600);
 }
 
-function acquireDaemonLock(lockFile: string): number {
-  mkdirSync(dirname(lockFile), { recursive: true, mode: 0o700 });
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const temporaryLockFile = `${lockFile}.${process.pid}.${randomUUID()}.tmp`;
-    let fd: number | null = null;
-    let claimed = false;
-    try {
-      fd = openSync(temporaryLockFile, 'wx', 0o600);
-      writeSync(fd, `${process.pid}\n`);
-      // Publish a complete PID atomically so another starter never observes and removes an empty lock.
-      linkSync(temporaryLockFile, lockFile);
-      claimed = true;
-      unlinkSync(temporaryLockFile);
-      return fd;
-    } catch (error) {
-      if (fd !== null) closeSync(fd);
-      removeFile(temporaryLockFile);
-      if (claimed) removeFile(lockFile);
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      if (!removeStaleLock(lockFile)) throw new Error('An Agent Manager daemon supervisor is already running');
+async function acquireDaemonLockOrJoin(paths: DaemonPaths, workspaceRoot: string): Promise<DaemonLock | null> {
+  const deadline = Date.now() + START_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const lock = tryAcquireDaemonLock(paths);
+    if (lock !== null) return lock;
+
+    const state = readDaemonState(paths.stateFile);
+    if (state?.workspaceRoot === workspaceRoot
+      && state.supervisorPid !== process.pid
+      && isProcessAlive(state.supervisorPid)) {
+      return null;
     }
+    await delay(50);
   }
-  throw new Error('Unable to acquire the Agent Manager daemon lock');
+  throw new Error('An Agent Manager daemon supervisor is already running but has not published its state');
 }
 
-function removeStaleLock(lockFile: string): boolean {
+function tryAcquireDaemonLock(paths: DaemonPaths): DaemonLock | null {
+  mkdirSync(paths.directory, { recursive: true, mode: 0o700 });
+  const database = new DatabaseSync(paths.lockGuardFile);
   try {
-    const pid = Number(readFileSync(lockFile, 'utf8').trim());
-    if (isPositiveInteger(pid) && isProcessAlive(pid)) return false;
-    unlinkSync(lockFile);
-    return true;
+    chmodSync(paths.lockGuardFile, 0o600);
+    database.exec('PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    database.close();
+    if (isSqliteBusy(error)) return null;
+    throw error;
+  }
+
+  try {
+    const temporaryFile = `${paths.lockFile}.${process.pid}.tmp`;
+    let published = false;
+    writeFileSync(temporaryFile, `${process.pid}\n`, { mode: 0o600 });
     try {
-      unlinkSync(lockFile);
-      return true;
-    } catch {
-      return false;
+      renameSync(temporaryFile, paths.lockFile);
+      published = true;
+      chmodSync(paths.lockFile, 0o600);
+    } catch (error) {
+      removeFile(temporaryFile);
+      if (published) removeFile(paths.lockFile);
+      throw error;
     }
+  } catch (error) {
+    releaseSqliteLock(database);
+    throw error;
+  }
+
+  let released = false;
+  return {
+    release() {
+      if (released) return;
+      released = true;
+      releaseSqliteLock(database);
+    },
+  };
+}
+
+function releaseSqliteLock(database: DatabaseSync): void {
+  try {
+    database.exec('ROLLBACK;');
+  } finally {
+    database.close();
   }
 }
 
-function readLiveDaemonLockPid(lockFile: string): number | null {
-  try {
-    const pid = Number(readFileSync(lockFile, 'utf8').trim());
-    return isPositiveInteger(pid) && isProcessAlive(pid) ? pid : null;
-  } catch {
-    return null;
-  }
+function isSqliteBusy(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const sqliteError = error as { errcode?: unknown; errstr?: unknown };
+  return sqliteError.errcode === 5 || sqliteError.errstr === 'database is locked';
 }
 
 function childOutcome(childProcess: ChildProcess): Promise<{ exitCode: number | null; signal: string | null }> {
