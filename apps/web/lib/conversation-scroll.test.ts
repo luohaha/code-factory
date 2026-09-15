@@ -1,0 +1,66 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  conversationBottomThreshold,
+  countAddedMessages,
+  isAwayFromConversationTop,
+  isNearConversationBottom,
+} from './conversation-scroll.ts';
+
+void test('treats a viewport within the bottom threshold as following the conversation', () => {
+  assert.equal(
+    isNearConversationBottom({
+      clientHeight: 500,
+      scrollHeight: 1_000,
+      scrollTop: 404,
+    }),
+    true,
+  );
+  assert.equal(
+    isNearConversationBottom({
+      clientHeight: 500,
+      scrollHeight: 1_000,
+      scrollTop: 403,
+    }),
+    false,
+  );
+  assert.equal(conversationBottomThreshold, 96);
+});
+
+void test('treats content that does not overflow as already at the bottom', () => {
+  assert.equal(
+    isNearConversationBottom({
+      clientHeight: 500,
+      scrollHeight: 400,
+      scrollTop: 0,
+    }),
+    true,
+  );
+});
+
+void test('shows the return-to-top control only after leaving the top threshold', () => {
+  assert.equal(isAwayFromConversationTop({ scrollTop: 96 }), false);
+  assert.equal(isAwayFromConversationTop({ scrollTop: 97 }), true);
+});
+
+void test('counts only message ids that were not present in the previous refresh', () => {
+  const previousMessageIds = new Set(['message-1', 'message-2']);
+
+  assert.equal(
+    countAddedMessages(previousMessageIds, [
+      { id: 'message-1' },
+      { id: 'message-2' },
+      { id: 'message-3' },
+      { id: 'message-4' },
+    ]),
+    2,
+  );
+  assert.equal(
+    countAddedMessages(previousMessageIds, [
+      { id: 'message-1' },
+      { id: 'message-2' },
+    ]),
+    0,
+  );
+});
