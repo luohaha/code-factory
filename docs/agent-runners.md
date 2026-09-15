@@ -7,7 +7,7 @@ Agent Manager supports the local `codex` and `claude` CLIs. Every invocation fol
 - `cwd` is always the directory where Agent Manager started;
 - `shell: false`; commands are never assembled through a shell;
 - RD and Reviewer task prompts are supplied through stdin so they do not appear in process arguments;
-- the child inherits the current environment, and each CLI loads its own authentication, configuration, repository instructions, and Skills;
+- the child inherits Agent Manager's environment, and each CLI loads its own authentication, configuration, repository instructions, Skills, plugins, and enabled local memory features according to its native rules;
 - Agent Manager does not pass `--cd` or `--add-dir`; both CLIs run without interactive approval or CLI sandbox restrictions;
 - stdout is parsed as JSONL, while stderr is retained as an error summary;
 - RD Runs time out after 60 minutes without stdout or stderr activity by default, so an actively progressing Run may continue for longer than one hour. Reviewer Runs retain a total elapsed-time limit of at most 30 minutes. A timeout terminates the CLI and its complete tool-process tree;
@@ -17,6 +17,16 @@ Agent Manager supports the local `codex` and `claude` CLIs. Every invocation fol
 - Agent Manager puts a private `code-factory-cli` launcher on the RD process's `PATH` and injects its connection context through the environment; project instructions and Skills are still loaded natively from the working directory.
 - Before changing code, RD Agents are instructed to create or reuse a Git worktree dedicated to the Requirement and leave pre-existing shared-workspace changes untouched. This is a behavioral instruction: every child process still starts in the Agent Manager workspace, and Agent Manager does not provision or enforce the worktree.
 - each invocation may include an explicit model and reasoning effort (`low | medium | high | xhigh | max`); omitted values continue to use the CLI configuration.
+
+### Context and memory boundaries
+
+“Memory” has three distinct meanings in this architecture:
+
+- **Requirement session context:** the first RD Run starts a new native Codex thread or Claude Code session. Agent Manager persists that native ID and resumes it for later Runs of the same Requirement, so the provider's conversation context carries forward.
+- **CLI-discovered context:** every child starts in the managed workspace with the inherited environment. Codex can therefore discover its `AGENTS.md` chain, configured Skills, and enabled local memories; Claude Code can discover its `CLAUDE.md` hierarchy, Skills/plugins, and auto-memory. Exact discovery and injection remain controlled by the installed CLI and its configuration. Code Factory only appends its own behavioral instructions.
+- **Launching-agent context:** a new RD session does not receive the live transcript, context window, or in-progress reasoning of an interactive agent that happened to start Agent Manager. Sessions belonging to other Requirements are also never merged into it. Provider-managed local memories may make selected information available when enabled, but that is not a copy of every previous conversation.
+
+Reviewers always start as independent, short-lived invocations. They use the same native configuration discovery but do not resume the Requirement's RD session.
 
 ### Model discovery
 
