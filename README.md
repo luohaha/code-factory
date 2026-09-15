@@ -35,7 +35,7 @@ cd /path/to/the/repository/to-manage
 npx --package @luoyixin/code-factory code-factory-agent-manager start --daemon
 ~~~
 
-The startup directory becomes the managed workspace. Only one Agent Manager may run for a canonical workspace at a time, even when another port or database path is supplied. The dashboard is available at [http://127.0.0.1:4310](http://127.0.0.1:4310) by default.
+The startup directory becomes the managed workspace. Only one Agent Manager may run for a canonical workspace at a time, even when another port or database path is supplied. The dashboard is available at [http://127.0.0.1:4310](http://127.0.0.1:4310) by default. Daemon startup failures, including an occupied port, are reported directly to the starting command.
 
 Prerequisites, daemon operation, configuration, CLI options, and log locations are documented in [Running Code Factory](docs/running-code-factory.md). To install dependencies or run a source checkout manually, see the [Development guide](docs/development.md).
 
