@@ -6,9 +6,25 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-15
+
+### Added
+
+- Allowed human replies to reactivate completed requirements in their original RD sessions.
+
+### Changed
+
+- Treated RD run timeouts as inactivity windows that renew while the agent produces output.
+- Renamed the running RD action from Interrupt to Steering in the English and Simplified Chinese dashboard.
+- Clarified how headless agents inherit their working directory, environment, instructions, skills, plugins, and provider-managed context.
+
 ### Fixed
 
 - Made simultaneous daemon start commands safely replace stale supervisor metadata and converge on one owner instead of intermittently reporting an early-exit or workspace-conflict error.
+- Reported daemon startup failures immediately instead of retrying deterministic failures until the startup command timed out.
+- Collected optional instructions and attachments before starting a requirement's initial RD run.
+- Preserved the reader's conversation position when new messages arrive, with shortcuts to new messages and requirement details.
+- Limited GitHub reconciliation polling to registered pull requests whose persisted status is Open.
 
 ## [0.1.1] - 2026-09-15
 
