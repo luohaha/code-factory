@@ -150,11 +150,11 @@ Trigger lifecycle is explicit through `startAgentTrigger()` and `stopAgentTrigge
 
 ### PR Reconciliation Triggers
 
-Agent Manager polls through the authenticated local `gh` CLI every 30 seconds by default. Poll eligibility comes from Code Factory's last persisted PR state: registered Draft and Open PRs are polled, while already-Closed and already-Merged PRs are skipped. A snapshot of an eligible PR can report its transition to Closed or Merged; the reconciler persists and delivers that terminal transition, then excludes the PR from subsequent polls. It does not observe comments, reviews, or check changes that arrive after a PR is already terminal.
+Agent Manager polls through the authenticated local `gh` CLI every 30 seconds by default. Poll eligibility comes from Code Factory's last persisted PR state: only registered Open PRs are polled; Draft, Closed, and Merged PRs are skipped. A snapshot of an eligible PR can report its transition to Draft, Closed, or Merged; the reconciler persists and delivers that transition, then excludes the PR from subsequent polls. It does not observe later state, comment, review, or check changes while a PR remains outside the Open state. In particular, a PR registered as Draft is not polled to discover that it later became Open; a PR must initially be registered as Open to enter the polling set.
 
 For each eligible PR, the GitHub client runs `gh pr view` for lifecycle, metadata, comments, reviews, checks, and mergeability, plus a paginated `gh api` request for inline review comments. The reconciler combines those results into one snapshot and shares it with four independently registered triggers:
 
-- `github.pull-request.status` observes Draft/Open/Closed/Merged lifecycle changes;
+- `github.pull-request.status` observes an Open PR's transition to Draft, Closed, or Merged;
 - `github.pull-request.comment` observes general PR comments, submitted reviews, and inline review comments;
 - `github.pull-request.ci-failure` observes CI checks that newly enter a failed, errored, cancelled, timed-out, or action-required conclusion;
 - `github.pull-request.conflict` observes GitHub mergeability and reports each conflicting head revision once.

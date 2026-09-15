@@ -19,7 +19,7 @@ import {
   PULL_REQUEST_STATUS_TRIGGER_ID,
 } from '../src/pull-request-triggers.ts';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
-import type { RunOutcome } from '../src/types.ts';
+import type { PullRequest, RunOutcome } from '../src/types.ts';
 
 class DeferredRunner implements AgentProcessRunner {
   requests: ProcessRunRequest[] = [];
@@ -52,6 +52,7 @@ class InterruptibleRunner implements AgentProcessRunner {
 
 class SequenceGitHubClient implements GitHubClient {
   readonly #snapshots: GitHubPullRequestSnapshot[];
+  readonly inspections: PullRequest[] = [];
   #index = 0;
 
   get inspectionCount(): number {
@@ -62,7 +63,8 @@ class SequenceGitHubClient implements GitHubClient {
     this.#snapshots = snapshots;
   }
 
-  inspectPullRequest(): Promise<GitHubPullRequestSnapshot> {
+  inspectPullRequest(pullRequest: PullRequest): Promise<GitHubPullRequestSnapshot> {
+    this.inspections.push(pullRequest);
     const snapshot = this.#snapshots[Math.min(this.#index, this.#snapshots.length - 1)];
     this.#index += 1;
     if (!snapshot) throw new Error('No GitHub snapshot configured');
@@ -70,9 +72,9 @@ class SequenceGitHubClient implements GitHubClient {
   }
 }
 
-test('runtime configuration starts and stops PR reconciliation, including Draft PRs', async () => {
+test('runtime configuration starts and stops PR reconciliation without restarting the manager', async () => {
   const snapshot: GitHubPullRequestSnapshot = {
-    status: 'draft',
+    status: 'open',
     title: 'Dynamic configuration',
     url: 'https://github.com/acme/repo/pull/4',
     baseBranch: 'main',
@@ -133,6 +135,54 @@ test('runtime configuration starts and stops PR reconciliation, including Draft 
       manager.startAgentTrigger(probe);
       manager.stopAgentTrigger(triggerId);
     }
+  } finally {
+    await manager.close();
+  }
+});
+
+test('PR reconciliation polls only PRs whose persisted status is Open', async () => {
+  const openSnapshot: GitHubPullRequestSnapshot = {
+    status: 'open',
+    title: 'open',
+    url: 'https://github.com/acme/repo/pull/2',
+    baseBranch: 'main',
+    headBranch: 'open',
+    headSha: 'open-sha',
+    mergeable: 'MERGEABLE',
+    updatedAt: '2099-01-01T00:00:00.000Z',
+    reviewActivity: [],
+    checks: [],
+  };
+  const githubClient = new SequenceGitHubClient([openSnapshot]);
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    githubClient,
+    logger: silentLogger,
+  });
+  try {
+    const requirement = manager.createRequirement({ title: 'Polling scope', description: 'Track PRs', provider: 'codex' });
+    for (const [index, status] of (['draft', 'open', 'closed', 'merged'] as const).entries()) {
+      const number = index + 1;
+      manager.trackPullRequest({
+        requirementId: requirement.id,
+        repository: 'acme/repo',
+        number,
+        url: `https://github.com/acme/repo/pull/${number}`,
+        title: status,
+        baseBranch: 'main',
+        headBranch: status,
+        headSha: `${status}-sha`,
+        status,
+      });
+    }
+
+    await manager.reconcilePullRequests();
+
+    assert.deepEqual(githubClient.inspections.map((pullRequest) => ({
+      number: pullRequest.number,
+      status: pullRequest.status,
+    })), [{ number: 2, status: 'open' }]);
   } finally {
     await manager.close();
   }
