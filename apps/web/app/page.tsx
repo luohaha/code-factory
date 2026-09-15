@@ -135,7 +135,7 @@ const requirementColumns: Array<{
   { status: 'todo', title: 'TODO', description: 'Session assigned, not started', tone: 'bg-sky-500' },
   { status: 'doing', title: 'DOING', description: 'Working or awaiting PR events', tone: 'bg-amber-500' },
   { status: 'waiting_confirmation', title: 'AWAITING CONFIRMATION', description: 'Reply to continue or confirm completion', tone: 'bg-violet-500' },
-  { status: 'done', title: 'DONE', description: 'Completion confirmed by a human', tone: 'bg-emerald-600' },
+  { status: 'done', title: 'DONE', description: 'Completed; reply to reactivate', tone: 'bg-emerald-600' },
 ];
 
 const pullRequestColumns: Array<{ status: PullRequestStatus; title: TranslationKey; description: TranslationKey; tone: string }> = [
@@ -155,7 +155,7 @@ const sessionColumns: Array<{
   { state: 'running', title: 'RUNNING', description: 'Headless CLI is running', tone: 'bg-emerald-500' },
   { state: 'waiting_human', title: 'WAITING FOR HUMAN', description: 'Awaiting a reply or completion confirmation', tone: 'bg-violet-500' },
   { state: 'failed', title: 'FAILED', description: 'Can continue in the original Session', tone: 'bg-rose-500' },
-  { state: 'completed', title: 'COMPLETED', description: 'Requirement complete; Session archived', tone: 'bg-teal-600' },
+  { state: 'completed', title: 'COMPLETED', description: 'Requirement complete; reply to reactivate', tone: 'bg-teal-600' },
 ];
 
 const stateLabel: Record<SessionState, TranslationKey> = {
@@ -465,6 +465,9 @@ function RequirementCard({
       ) : null}
       {requirement.status === 'doing' && requirement.session.state !== 'running' ? (
         <Button size="xs" variant="outline" className="mt-3 w-full" onClick={onOpen}><MessageSquareReply data-icon="inline-start" />{t('Open conversation')}</Button>
+      ) : null}
+      {requirement.status === 'done' ? (
+        <Button size="xs" variant="outline" className="mt-3 w-full" onClick={onOpen}><MessageSquareReply data-icon="inline-start" />{t('Reply')}</Button>
       ) : null}
     </article>
   );
@@ -1116,7 +1119,7 @@ function RequirementDetail({
   }, []);
 
   if (!requirement) return <Sheet open={false} onOpenChange={onOpenChange} />;
-  const canWrite = requirement.status !== 'done' && requirement.status !== 'cancelled';
+  const canWrite = requirement.status !== 'cancelled';
 
   async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
     event.preventDefault();
@@ -1417,7 +1420,15 @@ function RequirementDetail({
               }}
               disabled={!canWrite || busy}
               className="max-h-[min(9rem,20dvh)] min-h-14 resize-none border-0 bg-transparent px-2 py-1.5 text-xs shadow-none focus-visible:border-transparent focus-visible:ring-0 disabled:bg-transparent"
-              placeholder={requirement.status === 'todo' ? t('Add instructions and start; paste or drop attachments…') : requirement.session.state === 'running' ? t('Send a message or attachment; it will wait for the next Run by default…') : canWrite ? t('Reply to the RD Agent; paste or drop attachments…') : t('Replies are unavailable in the current state')}
+              placeholder={requirement.status === 'todo'
+                ? t('Add instructions and start; paste or drop attachments…')
+                : requirement.status === 'done'
+                  ? t('Reply to reactivate this completed requirement; paste or drop attachments…')
+                  : requirement.session.state === 'running'
+                    ? t('Send a message or attachment; it will wait for the next Run by default…')
+                    : canWrite
+                      ? t('Reply to the RD Agent; paste or drop attachments…')
+                      : t('Replies are unavailable in the current state')}
             />
             <div className="mt-1 flex items-center justify-between gap-3 px-1">
               <div className="flex min-w-0 items-center gap-2">

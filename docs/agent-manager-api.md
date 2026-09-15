@@ -434,7 +434,7 @@ Returns 404 for an unknown Requirement and 409 Conflict for a done or cancelled 
 
 ### POST /api/requirements/:id/reply
 
-Appends a human message to the Requirement conversation. An idle Session automatically starts an RD Run. A running Session always queues the message without interruption. Call the interrupt endpoint separately to stop the current Run.
+Appends a human message to the Requirement conversation. An idle Session automatically starts an RD Run. A running Session always queues the message without interruption. Replying to a done Requirement changes it back to doing, clears completedAt, and starts a new Run in the original RD Session. Call the interrupt endpoint separately to stop the current Run.
 
 Request body:
 
@@ -467,7 +467,7 @@ Success: 202 Accepted
 }
 ~~~
 
-message may be empty when attachmentIds is non-empty. queued reports whether the RD Session was running when the message arrived. The reply endpoint never interrupts a Run. Empty text and attachments return 400. An unknown Requirement returns 404. A done or cancelled Requirement returns 409.
+message may be empty when attachmentIds is non-empty. queued reports whether the RD Session was running when the message arrived. A reply that reactivates a done Requirement reports queued=false because it starts a new Run immediately. The reply endpoint never interrupts a Run. Empty text and attachments return 400. An unknown Requirement returns 404. A cancelled Requirement returns 409.
 
 ### POST /api/requirements/:id/interrupt
 

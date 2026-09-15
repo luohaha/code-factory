@@ -122,6 +122,7 @@ Each message has a monotonically increasing `sequence` and a `deliverToRd` flag.
 4. Multiple messages are delivered together in order during the next Run.
 5. A failed or interrupted Run does not advance the cursor, so retrying or corrective resumption cannot lose messages. Only messages arriving after the interrupted Run started trigger its automatic replacement.
 6. RD output is never delivered back to the RD Agent as normal next-turn input.
+7. A human reply to a DONE Requirement reactivates it as DOING, clears its completion timestamp, and starts a new Run in the same long-lived RD Session. CANCELLED Requirements remain terminal.
 
 Only when the native session is lost and must be recovered may Agent Manager rebuild context from a compact conversation summary. Normal execution never replays all previous RD output.
 
@@ -170,10 +171,9 @@ GitHub and the PR reconciler exclusively advance PR lifecycle state. The RD Agen
 Requirement:
 
 ~~~text
-TODO → DOING → WAITING_CONFIRMATION → DONE
-  └─ Delete ─→ CANCELLED (hidden from active lists)
-          ↑              │
-          └─ New input ──┘
+TODO ─Start→ DOING ─success→ WAITING_CONFIRMATION ─confirm→ DONE
+TODO ─Delete→ CANCELLED (hidden from active lists)
+DONE ─Human reply→ DOING
 ~~~
 
 RD AgentSession:
@@ -182,6 +182,7 @@ RD AgentSession:
 IDLE → RUNNING → WAITING_HUMAN → RUNNING
           └────────→ FAILED → RUNNING
 WAITING_HUMAN → COMPLETED
+COMPLETED ─Human reply→ RUNNING
 ~~~
 
 Pull Request:

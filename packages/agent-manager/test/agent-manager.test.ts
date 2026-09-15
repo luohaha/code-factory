@@ -347,6 +347,63 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
   }
 });
 
+test('a human reply reactivates a completed requirement in its original RD session', async () => {
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    logger: silentLogger,
+  });
+  try {
+    const requirement = manager.createRequirement({
+      title: 'Completed work needs a follow-up',
+      description: 'Resume the same context when a human replies',
+      provider: 'codex',
+    });
+    const firstExecution = manager.runRequirement(requirement.id, 'Implement the first version.');
+    runner.resolvers[0]?.({
+      status: 'succeeded',
+      exitCode: 0,
+      nativeSessionId: 'native-thread-1',
+      finalMessage: 'ready',
+      error: null,
+    });
+    await firstExecution;
+
+    const completed = manager.confirmRequirement(requirement.id);
+    assert.equal(completed.status, 'done');
+    assert.equal(completed.session.state, 'completed');
+    assert.ok(completed.completedAt);
+
+    const reply = manager.postHumanMessage(requirement.id, 'Please add one more regression test.');
+    assert.equal(reply.queued, false);
+    assert.equal(reply.message.deliverToRd, true);
+    assert.equal(runner.requests.length, 2);
+    assert.ok(runner.requests[1]?.invocation.args.includes('resume'));
+    assert.ok(runner.requests[1]?.invocation.args.includes('native-thread-1'));
+    assert.match(runner.requests[1]?.invocation.input ?? '', /Please add one more regression test\./);
+
+    const reactivated = manager.getRequirement(requirement.id);
+    assert.equal(reactivated?.status, 'doing');
+    assert.equal(reactivated?.session.state, 'running');
+    assert.equal(reactivated?.session.id, requirement.session.id);
+    assert.equal(reactivated?.completedAt, null);
+
+    runner.resolvers[1]?.({
+      status: 'succeeded',
+      exitCode: 0,
+      nativeSessionId: 'native-thread-1',
+      finalMessage: 'updated',
+      error: null,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(manager.getRequirement(requirement.id)?.status, 'waiting_confirmation');
+  } finally {
+    manager.close();
+  }
+});
+
 test('a pluggable Agent Trigger delivers, deduplicates, and wakes the target RD session', async () => {
   const runner = new DeferredRunner();
   const manager = new AgentManager({
