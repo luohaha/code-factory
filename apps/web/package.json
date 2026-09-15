@@ -9,6 +9,7 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "wrangler dev --config dist/server/wrangler.json",
+    "test": "node --test --experimental-strip-types lib/*.test.ts",
     "lint": "oxlint app lib",
     "format": "oxfmt"
   },

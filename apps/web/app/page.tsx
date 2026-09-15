@@ -6,6 +6,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   Activity,
+  ArrowDown,
+  ArrowUp,
   Bot,
   Check,
   CircleDot,
@@ -100,6 +102,7 @@ import {
   type SessionState,
   type WorkspaceDto,
 } from '@/lib/agent-manager-client';
+import { countAddedMessages, isAwayFromConversationTop, isNearConversationBottom } from '@/lib/conversation-scroll';
 import { I18nProvider, useI18n } from '@/lib/i18n';
 import { useTheme } from '@/lib/theme';
 import type { TranslationKey } from '@/locales/zh-CN';
@@ -1030,20 +1033,77 @@ function RequirementDetail({
   const [message, setMessage] = useState('');
   const [draftAttachments, setDraftAttachments] = useState<DraftAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
-  const conversationEndRef = useRef<HTMLDivElement>(null);
+  const [newMessages, setNewMessages] = useState<{ requirementId: string; count: number } | null>(null);
+  const [scrollToTopRequirementId, setScrollToTopRequirementId] = useState<string | null>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const draftAttachmentsRef = useRef<DraftAttachment[]>([]);
+  const scrollViewportRef = useRef<HTMLDivElement>(null);
+  const followsLatestRef = useRef(true);
+  const initializedRequirementIdRef = useRef<string | undefined>(undefined);
+  const loadedRequirementIdRef = useRef<string | undefined>(undefined);
+  const previousMessageIdsRef = useRef<Set<string>>(new Set());
   const open = requirement !== null;
   const requirementId = requirement?.id;
+  const newMessageCount = newMessages && newMessages.requirementId === requirementId
+    ? newMessages.count
+    : 0;
+  const showScrollToTop = scrollToTopRequirementId === requirementId;
+
+  const scrollToLatest = useCallback(() => {
+    followsLatestRef.current = true;
+    setNewMessages(null);
+    const viewport = scrollViewportRef.current;
+    if (viewport) viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'auto' });
+  }, []);
+
+  const scrollToTop = useCallback(() => {
+    followsLatestRef.current = false;
+    setScrollToTopRequirementId(null);
+    scrollViewportRef.current?.scrollTo({ top: 0, behavior: 'auto' });
+  }, []);
 
   useEffect(() => {
-    if (!requirementId || messageLoading) return;
-    const frame = window.requestAnimationFrame(() => {
-      conversationEndRef.current?.scrollIntoView({ block: 'end' });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [messageLoading, messages.length, requirementId]);
+    if (!requirementId) {
+      followsLatestRef.current = true;
+      initializedRequirementIdRef.current = undefined;
+      loadedRequirementIdRef.current = undefined;
+      previousMessageIdsRef.current = new Set();
+      return;
+    }
+    if (messageLoading) {
+      loadedRequirementIdRef.current = requirementId;
+      return;
+    }
+    if (
+      loadedRequirementIdRef.current !== requirementId
+      || messages.some((item) => item.requirementId !== requirementId)
+    ) return;
+
+    const nextMessageIds = new Set(messages.map((item) => item.id));
+    const isInitialLoad = initializedRequirementIdRef.current !== requirementId;
+    const addedMessageCount = isInitialLoad
+      ? 0
+      : countAddedMessages(previousMessageIdsRef.current, messages);
+    initializedRequirementIdRef.current = requirementId;
+    previousMessageIdsRef.current = nextMessageIds;
+
+    if (isInitialLoad || (addedMessageCount > 0 && followsLatestRef.current)) {
+      const frame = window.requestAnimationFrame(scrollToLatest);
+      return () => window.cancelAnimationFrame(frame);
+    }
+    if (addedMessageCount > 0) {
+      const frame = window.requestAnimationFrame(() => {
+        setNewMessages((current) => followsLatestRef.current
+          ? null
+          : {
+              requirementId,
+              count: (current?.requirementId === requirementId ? current.count : 0) + addedMessageCount,
+            });
+      });
+      return () => window.cancelAnimationFrame(frame);
+    }
+  }, [messageLoading, messages, requirementId, scrollToLatest]);
 
   useEffect(() => {
     draftAttachmentsRef.current = draftAttachments;
@@ -1066,6 +1126,7 @@ function RequirementDetail({
     try {
       if (requirement!.status === 'todo') await onStart(body || undefined, attachmentFiles);
       else await onReply(body, attachmentFiles);
+      scrollToLatest();
       setMessage('');
       for (const attachment of draftAttachments) {
         if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
@@ -1131,7 +1192,50 @@ function RequirementDetail({
           </SheetDescription>
         </SheetHeader>
 
-        <ScrollArea className="min-h-0 flex-1 bg-muted/15">
+        <ScrollArea
+          className="min-h-0 flex-1 bg-muted/15"
+          viewportRef={scrollViewportRef}
+          onViewportScroll={(event) => {
+            const followsLatest = isNearConversationBottom(event.currentTarget);
+            followsLatestRef.current = followsLatest;
+            if (followsLatest && newMessageCount > 0) setNewMessages(null);
+            setScrollToTopRequirementId(
+              requirementId && isAwayFromConversationTop(event.currentTarget)
+                ? requirementId
+                : null,
+            );
+          }}
+          overlay={(
+            <>
+              {showScrollToTop ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="absolute top-4 right-4 z-10 rounded-full border border-border bg-background shadow-lg hover:bg-muted"
+                  onClick={scrollToTop}
+                >
+                  <ArrowUp data-icon="inline-start" />
+                  {t('Back to top')}
+                </Button>
+              ) : null}
+              {newMessageCount > 0 ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full border border-border bg-background shadow-lg hover:bg-muted"
+                  onClick={scrollToLatest}
+                >
+                  {newMessageCount === 1
+                    ? t('New message')
+                    : t('{count} new messages', { count: newMessageCount })}
+                  <ArrowDown data-icon="inline-end" />
+                </Button>
+              ) : null}
+            </>
+          )}
+        >
           <div className="px-5 py-5 sm:px-6">
             <section className="rounded-xl border border-border/80 bg-card px-4 py-3.5">
               <p className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Requirement description')}</p>
@@ -1243,7 +1347,6 @@ function RequirementDetail({
                 })}
               </div>
             ) : null}
-              <div ref={conversationEndRef} aria-hidden="true" />
             </section>
           </div>
         </ScrollArea>
