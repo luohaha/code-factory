@@ -50,7 +50,7 @@ cd /path/to/your-project
 npx --yes --package @luoyixin/code-factory code-factory-agent-manager start --daemon --open
 ~~~
 
-The start command returns only after the HTTP service is ready. If the Agent Manager process exits unexpectedly, the supervisor restarts it automatically with exponential backoff from 1 to 30 seconds. Run lifecycle commands from the same managed workspace:
+The start command returns only after the HTTP service is ready. Errors encountered before readiness, such as an occupied port or invalid configuration, are returned directly to the starting command and do not enter a restart loop. If a running Agent Manager process exits unexpectedly, the supervisor restarts it automatically with exponential backoff from 1 to 30 seconds. Run lifecycle commands from the same managed workspace:
 
 ~~~bash
 npx --yes --package @luoyixin/code-factory code-factory-agent-manager status

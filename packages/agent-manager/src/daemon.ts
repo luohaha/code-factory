@@ -18,7 +18,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { acquireWorkspaceLock } from './workspace-lock.js';
 
-export type DaemonStatus = 'starting' | 'running' | 'restarting' | 'stopping';
+export type DaemonStatus = 'starting' | 'running' | 'restarting' | 'stopping' | 'failed';
 
 export interface DaemonState {
   version: 1;
@@ -33,6 +33,7 @@ export interface DaemonState {
   nextRestartAt: string | null;
   dashboardUrl: string | null;
   apiUrl: string | null;
+  startupError: string | null;
   lastExitCode: number | null;
   lastExitSignal: string | null;
 }
@@ -113,6 +114,9 @@ export function readDaemonState(stateFile: string): DaemonState | null {
       || !(parsed.nextRestartAt === null || typeof parsed.nextRestartAt === 'string')
       || !(parsed.dashboardUrl === null || typeof parsed.dashboardUrl === 'string')
       || !(parsed.apiUrl === null || typeof parsed.apiUrl === 'string')
+      || !(parsed.startupError === undefined
+        || parsed.startupError === null
+        || typeof parsed.startupError === 'string')
       || !(parsed.lastExitCode === null
         || (typeof parsed.lastExitCode === 'number' && Number.isInteger(parsed.lastExitCode)))
       || !(parsed.lastExitSignal === null || typeof parsed.lastExitSignal === 'string')) {
@@ -131,6 +135,7 @@ export function readDaemonState(stateFile: string): DaemonState | null {
       nextRestartAt: parsed.nextRestartAt,
       dashboardUrl: parsed.dashboardUrl,
       apiUrl: parsed.apiUrl,
+      startupError: typeof parsed.startupError === 'string' ? parsed.startupError : null,
       lastExitCode: parsed.lastExitCode,
       lastExitSignal: parsed.lastExitSignal,
     };
@@ -208,7 +213,22 @@ export async function startDaemon(
         alreadyRunning,
       };
     }
+    if (inspection.state?.supervisorPid === expectedSupervisorPid
+      && inspection.state.status === 'failed'
+      && inspection.state.startupError !== null) {
+      if (expectedSupervisorPid !== null && isProcessAlive(expectedSupervisorPid)) {
+        await delay(50);
+        continue;
+      }
+      throw new Error(inspection.state.startupError);
+    }
     if (expectedSupervisorPid !== null && !isProcessAlive(expectedSupervisorPid)) {
+      const finalState = readDaemonState(inspection.paths.stateFile);
+      if (finalState?.supervisorPid === expectedSupervisorPid
+        && finalState.status === 'failed'
+        && finalState.startupError !== null) {
+        throw new Error(finalState.startupError);
+      }
       assertWorkspaceAvailable(workspaceRoot);
       throw new Error(`Daemon supervisor exited before Agent Manager became ready; inspect ${inspection.paths.logFile}`);
     }
@@ -272,6 +292,7 @@ export async function runDaemonSupervisor(managerArgs: readonly string[]): Promi
     nextRestartAt: null,
     dashboardUrl: null,
     apiUrl: null,
+    startupError: null,
     lastExitCode: null,
     lastExitSignal: null,
   };
@@ -335,6 +356,7 @@ export async function runDaemonSupervisor(managerArgs: readonly string[]): Promi
             status: 'running',
             dashboardUrl: message.dashboardUrl,
             apiUrl: message.apiUrl,
+            startupError: null,
             nextRestartAt: null,
           });
           appendDaemonEvent(logFd, 'Agent Manager is ready', {
@@ -352,7 +374,14 @@ export async function runDaemonSupervisor(managerArgs: readonly string[]): Promi
       forceKillTimer = null;
       appendDaemonEvent(logFd, 'Agent Manager process exited', outcome);
       if (stopping) break;
-      if (startupFailure !== null) throw new Error(startupFailure);
+      if (startupFailure !== null) {
+        updateState({
+          managerPid: null,
+          lastExitCode: outcome.exitCode,
+          lastExitSignal: outcome.signal,
+        });
+        throw new Error(startupFailure);
+      }
 
       const runtimeMs = Date.now() - launchStartedAt;
       consecutiveFailures = runtimeMs >= STABLE_RUNTIME_MS ? 1 : consecutiveFailures + 1;
@@ -365,6 +394,7 @@ export async function runDaemonSupervisor(managerArgs: readonly string[]): Promi
         nextRestartAt: new Date(Date.now() + restartDelayMs).toISOString(),
         dashboardUrl: null,
         apiUrl: null,
+        startupError: null,
         lastExitCode: outcome.exitCode,
         lastExitSignal: outcome.signal,
       });
@@ -372,7 +402,18 @@ export async function runDaemonSupervisor(managerArgs: readonly string[]): Promi
       await waitForDelayOrStop(restartDelayMs, stopRequested);
     }
   } catch (error) {
-    appendDaemonEvent(logFd, 'Daemon supervisor failed', { error: errorMessage(error) });
+    const message = errorMessage(error);
+    if (lock !== null && !stopping) {
+      updateState({
+        managerPid: null,
+        status: 'failed',
+        nextRestartAt: null,
+        dashboardUrl: null,
+        apiUrl: null,
+        startupError: message,
+      });
+    }
+    appendDaemonEvent(logFd, 'Daemon supervisor failed', { error: message });
     throw error;
   } finally {
     if (forceKillTimer) clearTimeout(forceKillTimer);
@@ -380,7 +421,7 @@ export async function runDaemonSupervisor(managerArgs: readonly string[]): Promi
     process.removeListener('SIGTERM', requestStop);
     if (lock !== null) {
       try {
-        removeFile(paths.stateFile);
+        if (state.status !== 'failed') removeFile(paths.stateFile);
         removeFile(paths.lockFile);
       } finally {
         lock.release();
@@ -515,7 +556,11 @@ function isPositiveInteger(value: unknown): value is number {
 }
 
 function isDaemonStatus(value: unknown): value is DaemonStatus {
-  return value === 'starting' || value === 'running' || value === 'restarting' || value === 'stopping';
+  return value === 'starting'
+    || value === 'running'
+    || value === 'restarting'
+    || value === 'stopping'
+    || value === 'failed';
 }
 
 function signalPid(pid: number, signal: NodeJS.Signals): void {
