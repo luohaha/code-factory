@@ -129,6 +129,7 @@ export interface BeginReviewRequestRecord {
 export interface PurgeExpiredRequirementsRecord {
   cancelledBefore: string;
   doneBefore: string;
+  now: string;
 }
 
 export interface PurgeExpiredRequirementsResult {
@@ -136,7 +137,6 @@ export interface PurgeExpiredRequirementsResult {
     id: string;
     status: Extract<RequirementStatus, 'cancelled' | 'done'>;
   }>;
-  attachmentPaths: string[];
 }
 
 /** Business-level persistence contract; PostgreSQL can implement this without leaking SQL upward. */
@@ -175,6 +175,8 @@ export interface AgentManagerStore {
     now: string,
   ): RequirementWithSession;
   purgeExpiredRequirements(input: PurgeExpiredRequirementsRecord): PurgeExpiredRequirementsResult;
+  listPendingAttachmentDeletions(): string[];
+  completePendingAttachmentDeletion(localPath: string): void;
   appendEvent(input: AppendEventRecord): ManagerEvent;
   listEvents(afterId: number, limit?: number): ManagerEvent[];
   reconcileInterruptedRuns(now: string): { runIds: string[]; requirementIds: string[] };

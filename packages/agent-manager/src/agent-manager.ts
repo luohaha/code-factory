@@ -402,34 +402,48 @@ export class AgentManager extends EventEmitter {
         doneBefore: new Date(
           now - this.#configuration.doneRequirementRetentionDays * DAY_MILLISECONDS,
         ).toISOString(),
+        now: new Date(now).toISOString(),
       });
-      if (result.requirements.length === 0) return;
 
-      let attachmentDeleteFailureCount = 0;
-      for (const path of result.attachmentPaths) {
+      const pendingAttachmentPaths = this.#store.listPendingAttachmentDeletions();
+      let attachmentCleanupFailureCount = 0;
+      for (const path of pendingAttachmentPaths) {
+        let removed = false;
         try {
           unlinkSync(path);
+          removed = true;
         } catch (error) {
-          if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'ENOENT') {
-            attachmentDeleteFailureCount += 1;
-          }
+          removed = Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT');
+        }
+        if (!removed) {
+          attachmentCleanupFailureCount += 1;
+          continue;
+        }
+        try {
+          this.#store.completePendingAttachmentDeletion(path);
+        } catch {
+          attachmentCleanupFailureCount += 1;
         }
       }
+      if (result.requirements.length === 0 && pendingAttachmentPaths.length === 0) return;
+
       const cancelledCount = result.requirements.filter((requirement) => requirement.status === 'cancelled').length;
       const doneCount = result.requirements.length - cancelledCount;
-      this.publish({
-        type: 'requirements.purged',
-        payload: { cancelledCount, doneCount },
-      });
-      this.logger.info('Expired requirements purged', {
-        cancelledCount,
-        doneCount,
-        attachmentCount: result.attachmentPaths.length,
-        attachmentDeleteFailureCount,
-      });
-      if (attachmentDeleteFailureCount > 0) {
+      if (result.requirements.length > 0) {
+        this.publish({
+          type: 'requirements.purged',
+          payload: { cancelledCount, doneCount },
+        });
+        this.logger.info('Expired requirements purged', {
+          cancelledCount,
+          doneCount,
+          pendingAttachmentCount: pendingAttachmentPaths.length,
+          attachmentCleanupFailureCount,
+        });
+      }
+      if (attachmentCleanupFailureCount > 0) {
         this.logger.warn('Some expired requirement attachments could not be deleted', {
-          attachmentDeleteFailureCount,
+          attachmentCleanupFailureCount,
         });
       }
     } catch (error) {

@@ -67,7 +67,7 @@ flowchart LR
 
 The Agent Trigger boundary is intentionally source-neutral, but its current message contract targets an existing Requirement. Dynamic trigger discovery and configuration, Slack and Jira sources, and triggers that create new Requirements are future extensions rather than implemented behavior.
 
-Different Requirements can run concurrently, while each Requirement has at most one active RD run. Requirement state, conversations, runs, sessions, PR metadata, and Agent Trigger receipts are persisted in SQLite. Cancelled Requirements are retained for 7 days and completed Requirements for 365 days by default; both periods are runtime-configurable, and expiry atomically removes the Requirement and all of its related SQLite records.
+Different Requirements can run concurrently, while each Requirement has at most one active RD run. Requirement state, conversations, runs, sessions, PR metadata, and Agent Trigger receipts are persisted in SQLite. Cancelled Requirements are retained for 7 days and completed Requirements for 365 days by default; both periods are runtime-configurable, and expiry atomically removes the Requirement and its related domain records while retaining retryable tombstones until attachment files are deleted.
 
 Agent Manager places `code-factory-cli` on every RD process's `PATH` and injects its API URL, Requirement ID, and Session ID through the environment. The RD prompt names the relevant commands and leaves their arguments to `code-factory-cli --help`; raw HTTP details remain an internal transport contract.
 

@@ -97,7 +97,7 @@ test('cancelling a TODO requirement hides it, archives its session, and preserve
   }
 });
 
-test('expired cancelled and done requirements are purged with all related SQLite records in one transaction', () => {
+test('expired cancelled and done requirements purge their related domain records in one transaction', () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-retention-'));
   const databasePath = join(directory, 'factory.sqlite');
   const store = new SqliteAgentManagerStore(databasePath);
@@ -277,13 +277,14 @@ test('expired cancelled and done requirements are purged with all related SQLite
     const purged = store.purgeExpiredRequirements({
       cancelledBefore: '2026-09-03T00:00:00.000Z',
       doneBefore: '2025-09-10T00:00:00.000Z',
+      now: '2026-09-10T00:00:00.000Z',
     });
 
     assert.deepEqual(purged.requirements, [
       { id: 'req-done-expired', status: 'done' },
       { id: 'req-cancelled-expired', status: 'cancelled' },
     ]);
-    assert.deepEqual(purged.attachmentPaths, [join(directory, 'expired.txt')]);
+    assert.deepEqual(store.listPendingAttachmentDeletions(), [join(directory, 'expired.txt')]);
     assert.equal(store.getRequirement('req-cancelled-expired'), null);
     assert.equal(store.getRequirement('req-done-expired'), null);
     assert.equal(store.getPullRequest('pr-cancelled-expired'), null);
@@ -304,6 +305,11 @@ test('expired cancelled and done requirements are purged with all related SQLite
 
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
+    assert.deepEqual(
+      (database.prepare('SELECT local_path FROM pending_attachment_deletions').all() as Array<{ local_path: string }>)
+        .map((row) => row.local_path),
+      [join(directory, 'expired.txt')],
+    );
     for (const table of [
       'agent_sessions',
       'agent_runs',
@@ -330,6 +336,79 @@ test('expired cancelled and done requirements are purged with all related SQLite
   } finally {
     database.close();
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('an expired requirement with a running reviewer is retained until the run finishes', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-review-running',
+      sessionId: 'ses-review-running',
+      title: 'Completed work under review',
+      description: 'Do not delete the reviewer state while its process is active',
+      provider: 'codex',
+      createdBy: 'human',
+      now: '2024-01-01T00:00:00.000Z',
+    });
+    store.transitionRequirement(
+      'req-review-running',
+      ['todo'],
+      'done',
+      '2024-01-01T00:01:00.000Z',
+    );
+    const pullRequest = store.upsertPullRequest({
+      id: 'pr-review-running',
+      requirementId: 'req-review-running',
+      repository: 'acme/repo',
+      number: 12,
+      url: 'https://github.com/acme/repo/pull/12',
+      title: 'Still reviewing',
+      baseBranch: 'main',
+      headBranch: 'review-running',
+      headSha: 'review-running-sha',
+      status: 'open',
+      now: '2026-09-10T00:00:00.000Z',
+    });
+    store.beginReviewRequest({
+      id: 'review-running',
+      runId: 'review-run-running',
+      pullRequestId: pullRequest.id,
+      requirementId: 'req-review-running',
+      provider: 'codex',
+      targetHeadSha: pullRequest.headSha,
+      taskSummary: 'Review before retention cleanup',
+      now: '2026-09-10T00:01:00.000Z',
+    });
+
+    const deferred = store.purgeExpiredRequirements({
+      cancelledBefore: '2026-09-10T00:02:00.000Z',
+      doneBefore: '2026-09-10T00:02:00.000Z',
+      now: '2026-09-10T00:02:00.000Z',
+    });
+
+    assert.deepEqual(deferred.requirements, []);
+    assert.equal(store.getRequirement('req-review-running')?.status, 'done');
+    assert.equal(store.listReviewRequests()[0]?.status, 'running');
+    store.finishReviewRequest('review-running', {
+      status: 'succeeded',
+      exitCode: 0,
+      nativeSessionId: null,
+      finalMessage: 'reviewed',
+      error: null,
+    }, '2026-09-10T00:03:00.000Z');
+
+    const purged = store.purgeExpiredRequirements({
+      cancelledBefore: '2026-09-10T00:04:00.000Z',
+      doneBefore: '2026-09-10T00:04:00.000Z',
+      now: '2026-09-10T00:04:00.000Z',
+    });
+
+    assert.deepEqual(purged.requirements, [{ id: 'req-review-running', status: 'done' }]);
+    assert.equal(store.getRequirement('req-review-running'), null);
+    assert.deepEqual(store.listReviewRequests(), []);
+  } finally {
+    store.close();
   }
 });
 

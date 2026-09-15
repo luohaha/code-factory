@@ -593,45 +593,60 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
 
   purgeExpiredRequirements(input: PurgeExpiredRequirementsRecord): PurgeExpiredRequirementsResult {
     const expiredPredicate = `
-      (status = 'cancelled' AND updated_at <= ?)
-      OR (status = 'done' AND updated_at <= ?)`;
+      ((requirement.status = 'cancelled' AND requirement.updated_at <= ?)
+        OR (requirement.status = 'done' AND requirement.updated_at <= ?))
+      AND NOT EXISTS (
+        SELECT 1 FROM agent_runs active_run
+        WHERE active_run.requirement_id = requirement.id AND active_run.status = 'running'
+      )`;
     this.#db.exec('BEGIN IMMEDIATE');
     try {
-      const rows = this.#db.prepare(`SELECT id, status FROM requirements WHERE ${expiredPredicate}
-        ORDER BY updated_at ASC, id ASC`).all(input.cancelledBefore, input.doneBefore) as Row[];
+      const rows = this.#db.prepare(`SELECT requirement.id, requirement.status
+        FROM requirements requirement WHERE ${expiredPredicate}
+        ORDER BY requirement.updated_at ASC, requirement.id ASC`)
+        .all(input.cancelledBefore, input.doneBefore) as Row[];
       const requirements = rows.map((row) => ({
         id: String(row.id),
         status: String(row.status) as Extract<RequirementStatus, 'cancelled' | 'done'>,
       }));
       if (requirements.length === 0) {
         this.#db.exec('COMMIT');
-        return { requirements, attachmentPaths: [] };
+        return { requirements };
       }
 
-      const attachmentPaths = (this.#db.prepare(`SELECT attachment.local_path
+      this.#db.prepare(`INSERT OR IGNORE INTO pending_attachment_deletions (local_path, created_at)
+        SELECT attachment.local_path, ?
         FROM message_attachments attachment
         JOIN requirements requirement ON requirement.id = attachment.requirement_id
-        WHERE (requirement.status = 'cancelled' AND requirement.updated_at <= ?)
-          OR (requirement.status = 'done' AND requirement.updated_at <= ?)
-        ORDER BY attachment.local_path ASC`).all(input.cancelledBefore, input.doneBefore) as Row[])
-        .map((row) => String(row.local_path));
+        WHERE ${expiredPredicate}`)
+        .run(input.now, input.cancelledBefore, input.doneBefore);
 
       this.#db.prepare(`UPDATE requirements SET source_session_id = NULL
         WHERE source_session_id IN (
           SELECT session.id
           FROM agent_sessions session
           JOIN requirements requirement ON requirement.id = session.requirement_id
-          WHERE (requirement.status = 'cancelled' AND requirement.updated_at <= ?)
-            OR (requirement.status = 'done' AND requirement.updated_at <= ?)
+          WHERE ${expiredPredicate}
         )`).run(input.cancelledBefore, input.doneBefore);
-      this.#db.prepare(`DELETE FROM requirements WHERE ${expiredPredicate}`)
+      this.#db.prepare(`DELETE FROM requirements WHERE id IN (
+        SELECT requirement.id FROM requirements requirement WHERE ${expiredPredicate}
+      )`)
         .run(input.cancelledBefore, input.doneBefore);
       this.#db.exec('COMMIT');
-      return { requirements, attachmentPaths };
+      return { requirements };
     } catch (error) {
       this.#db.exec('ROLLBACK');
       throw error;
     }
+  }
+
+  listPendingAttachmentDeletions(): string[] {
+    return (this.#db.prepare(`SELECT local_path FROM pending_attachment_deletions
+      ORDER BY created_at ASC, local_path ASC`).all() as Row[]).map((row) => String(row.local_path));
+  }
+
+  completePendingAttachmentDeletion(localPath: string): void {
+    this.#db.prepare('DELETE FROM pending_attachment_deletions WHERE local_path = ?').run(localPath);
   }
 
   appendEvent(input: AppendEventRecord): ManagerEvent {

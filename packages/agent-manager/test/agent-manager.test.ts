@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -146,7 +146,9 @@ test('runtime configuration starts and stops PR reconciliation without restartin
 test('runtime retention configuration immediately purges expired requirements and attachment files', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-manager-retention-'));
   const attachmentPath = join(directory, 'expired.txt');
+  const retryAttachmentPath = join(directory, 'retry-expired');
   writeFileSync(attachmentPath, 'expired');
+  mkdirSync(retryAttachmentPath);
   const store = new SqliteAgentManagerStore(':memory:');
   store.createRequirement({
     requirementId: 'req-cancelled-expired',
@@ -165,6 +167,16 @@ test('runtime retention configuration immediately purges expired requirements an
     mediaType: 'text/plain',
     byteSize: 7,
     localPath: attachmentPath,
+    now: '2020-01-01T00:00:00.000Z',
+  });
+  store.createMessageAttachment({
+    id: 'att-cancelled-retry',
+    requirementId: 'req-cancelled-expired',
+    fileName: 'retry-expired',
+    kind: 'file',
+    mediaType: 'application/octet-stream',
+    byteSize: 1,
+    localPath: retryAttachmentPath,
     now: '2020-01-01T00:00:00.000Z',
   });
   store.transitionRequirement(
@@ -236,8 +248,14 @@ test('runtime retention configuration immediately purges expired requirements an
     assert.equal(manager.getRequirement('req-cancelled-expired'), null);
     assert.equal(manager.getRequirement('req-done-expired'), null);
     assert.equal(existsSync(attachmentPath), false);
+    assert.equal(existsSync(retryAttachmentPath), true);
+    assert.deepEqual(store.listPendingAttachmentDeletions(), [retryAttachmentPath]);
     const purgeEvent = manager.listEvents().filter((event) => event.type === 'requirements.purged').at(-1);
     assert.deepEqual(purgeEvent?.payload, { cancelledCount: 1, doneCount: 1 });
+
+    rmSync(retryAttachmentPath, { recursive: true, force: true });
+    manager.updateConfiguration({ cancelledRequirementRetentionDays: 7 });
+    assert.deepEqual(store.listPendingAttachmentDeletions(), []);
   } finally {
     await manager.close();
     rmSync(directory, { recursive: true, force: true });
