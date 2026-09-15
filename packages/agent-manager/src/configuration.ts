@@ -12,6 +12,8 @@ export interface AgentManagerConfiguration {
   openDashboard: boolean;
   databasePath: string | null;
   pullRequestReconcileIntervalSeconds: number;
+  cancelledRequirementRetentionDays: number;
+  doneRequirementRetentionDays: number;
   logLevel: LogLevel;
   logFilePath: string | null;
   logMaxSize: string | number;
@@ -28,6 +30,7 @@ export interface AgentManagerConfigurationSnapshot {
 }
 
 export const MAX_PULL_REQUEST_RECONCILE_INTERVAL_SECONDS = Math.floor(2_147_483_647 / 1_000);
+export const MAX_REQUIREMENT_RETENTION_DAYS = 36_500;
 
 export const DEFAULT_AGENT_MANAGER_CONFIGURATION: Readonly<AgentManagerConfiguration> = {
   host: '127.0.0.1',
@@ -36,6 +39,8 @@ export const DEFAULT_AGENT_MANAGER_CONFIGURATION: Readonly<AgentManagerConfigura
   openDashboard: false,
   databasePath: null,
   pullRequestReconcileIntervalSeconds: 30,
+  cancelledRequirementRetentionDays: 7,
+  doneRequirementRetentionDays: 365,
   logLevel: 'info',
   logFilePath: null,
   logMaxSize: '20m',
@@ -44,6 +49,8 @@ export const DEFAULT_AGENT_MANAGER_CONFIGURATION: Readonly<AgentManagerConfigura
 
 export const DYNAMIC_CONFIGURATION_FIELDS: ReadonlySet<keyof AgentManagerConfiguration> = new Set([
   'pullRequestReconcileIntervalSeconds',
+  'cancelledRequirementRetentionDays',
+  'doneRequirementRetentionDays',
   'logLevel',
 ]);
 
@@ -124,6 +131,22 @@ export function validateAgentManagerConfigurationPatch(value: unknown): AgentMan
       'pullRequestReconcileIntervalSeconds',
       0,
       MAX_PULL_REQUEST_RECONCILE_INTERVAL_SECONDS,
+    );
+  }
+  if (input.cancelledRequirementRetentionDays !== undefined) {
+    output.cancelledRequirementRetentionDays = integerInRange(
+      input.cancelledRequirementRetentionDays,
+      'cancelledRequirementRetentionDays',
+      0,
+      MAX_REQUIREMENT_RETENTION_DAYS,
+    );
+  }
+  if (input.doneRequirementRetentionDays !== undefined) {
+    output.doneRequirementRetentionDays = integerInRange(
+      input.doneRequirementRetentionDays,
+      'doneRequirementRetentionDays',
+      0,
+      MAX_REQUIREMENT_RETENTION_DAYS,
     );
   }
   if (input.logLevel !== undefined) {

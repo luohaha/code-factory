@@ -99,6 +99,9 @@ export function defaultLogFilePath(databasePath: string): string {
 export const MAX_MESSAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 export const MAX_MESSAGE_ATTACHMENTS = 6;
 
+const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
+const REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS = 60 * 60 * 1_000;
+
 const REVIEWER_DEVELOPER_INSTRUCTIONS = [
   'You are a short-lived GitHub pull request reviewer. Review only; do not edit code.',
   'The user message identifies the GitHub PR to review.',
@@ -131,6 +134,7 @@ export class AgentManager extends EventEmitter {
   #configuration: AgentManagerConfiguration;
   readonly #initialPullRequestReconcileIntervalSeconds: number;
   #pullRequestReconcileIntervalSeconds: number | null = null;
+  #requirementRetentionTimer: NodeJS.Timeout | null = null;
   #apiBaseUrl = 'http://127.0.0.1:4310/api';
   #closed = false;
   #closePromise: Promise<void> | null = null;
@@ -265,6 +269,10 @@ export class AgentManager extends EventEmitter {
     if (appliedFields.includes('logLevel') && next.logLevel !== this.logger.level) {
       this.logger.setLevel?.(next.logLevel);
     }
+    if (appliedFields.includes('cancelledRequirementRetentionDays')
+      || appliedFields.includes('doneRequirementRetentionDays')) {
+      this.runRequirementRetentionSweep();
+    }
     const snapshot = this.getConfiguration();
     this.publish({
       type: 'manager.configuration.updated',
@@ -286,6 +294,7 @@ export class AgentManager extends EventEmitter {
 
   startConfiguredServices(): void {
     this.configurePullRequestReconciler(this.#initialPullRequestReconcileIntervalSeconds);
+    this.startRequirementRetentionSweep();
     this.#modelCatalog.start();
   }
 
@@ -299,6 +308,8 @@ export class AgentManager extends EventEmitter {
     this.#closed = true;
     this.#modelCatalog.stop();
     this.#pullRequestReconciler.stop();
+    if (this.#requirementRetentionTimer) clearInterval(this.#requirementRetentionTimer);
+    this.#requirementRetentionTimer = null;
     for (const trigger of this.#agentTriggers.values()) {
       try {
         trigger.stop();
@@ -363,6 +374,67 @@ export class AgentManager extends EventEmitter {
     this.#pullRequestReconciler.stop();
     this.#pullRequestReconcileIntervalSeconds = intervalSeconds;
     if (intervalSeconds > 0) this.startPullRequestReconciler(intervalSeconds * 1_000);
+  }
+
+  private startRequirementRetentionSweep(): void {
+    if (this.#requirementRetentionTimer) return;
+    this.runRequirementRetentionSweep();
+    this.#requirementRetentionTimer = setInterval(
+      () => this.runRequirementRetentionSweep(),
+      REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS,
+    );
+    this.#requirementRetentionTimer.unref();
+    this.logger.info('Requirement retention sweep started', {
+      intervalMs: REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS,
+      cancelledRetentionDays: this.#configuration.cancelledRequirementRetentionDays,
+      doneRetentionDays: this.#configuration.doneRequirementRetentionDays,
+    });
+  }
+
+  private runRequirementRetentionSweep(): void {
+    if (this.#closed) return;
+    try {
+      const now = Date.now();
+      const result = this.#store.purgeExpiredRequirements({
+        cancelledBefore: new Date(
+          now - this.#configuration.cancelledRequirementRetentionDays * DAY_MILLISECONDS,
+        ).toISOString(),
+        doneBefore: new Date(
+          now - this.#configuration.doneRequirementRetentionDays * DAY_MILLISECONDS,
+        ).toISOString(),
+      });
+      if (result.requirements.length === 0) return;
+
+      let attachmentDeleteFailureCount = 0;
+      for (const path of result.attachmentPaths) {
+        try {
+          unlinkSync(path);
+        } catch (error) {
+          if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'ENOENT') {
+            attachmentDeleteFailureCount += 1;
+          }
+        }
+      }
+      const cancelledCount = result.requirements.filter((requirement) => requirement.status === 'cancelled').length;
+      const doneCount = result.requirements.length - cancelledCount;
+      this.publish({
+        type: 'requirements.purged',
+        payload: { cancelledCount, doneCount },
+      });
+      this.logger.info('Expired requirements purged', {
+        cancelledCount,
+        doneCount,
+        attachmentCount: result.attachmentPaths.length,
+        attachmentDeleteFailureCount,
+      });
+      if (attachmentDeleteFailureCount > 0) {
+        this.logger.warn('Some expired requirement attachments could not be deleted', {
+          attachmentDeleteFailureCount,
+        });
+      }
+    } catch (error) {
+      this.logger.error('Requirement retention sweep failed', { error });
+    }
   }
 
   async reconcilePullRequests(): Promise<void> {
