@@ -75,6 +75,7 @@ export interface AgentManagerOptions {
   logFilePath?: string;
   logMaxSize?: string | number;
   logMaxFiles?: string | number;
+  /** Maximum RD inactivity. Reviewer Runs use this as an elapsed-time limit capped at 30 minutes. */
   timeoutMs?: number;
   maxOutputBytes?: number;
   /** Values loaded from the writable configuration file. */
@@ -733,6 +734,7 @@ export class AgentManager extends EventEmitter {
       adapter,
       workspaceRoot: this.workspaceRoot,
       timeoutMs: Math.min(this.#timeoutMs, 30 * 60 * 1_000),
+      timeoutMode: 'elapsed',
       maxOutputBytes: this.#maxOutputBytes,
       onOutput: (line) => this.emit('output', { runId, line }),
       onEvent: (event) => {
@@ -849,6 +851,7 @@ export class AgentManager extends EventEmitter {
       workspaceRoot: this.workspaceRoot,
       environment: this.buildRdEnvironment(requirement),
       timeoutMs: this.#timeoutMs,
+      timeoutMode: 'inactivity',
       maxOutputBytes: this.#maxOutputBytes,
       signal: controller.signal,
       onNativeSession: (nativeSessionId) => {

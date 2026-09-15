@@ -218,6 +218,7 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
     assert.equal(runner.requests[0]?.environment?.[CODE_FACTORY_API_URL], 'http://127.0.0.1:4310/api');
     assert.equal(runner.requests[0]?.environment?.[CODE_FACTORY_REQUIREMENT_ID], first.id);
     assert.equal(runner.requests[0]?.environment?.[CODE_FACTORY_SESSION_ID], first.session.id);
+    assert.equal(runner.requests[0]?.timeoutMode, 'inactivity');
     assert.ok(runner.requests[0]?.invocation.args.includes('gpt-5.6'));
     assert.ok(runner.requests[0]?.invocation.args.includes('model_reasoning_effort="max"'));
     assert.equal(manager.listRuns(first.id)[0]?.model, 'gpt-5.6');
@@ -440,6 +441,7 @@ test('a human-requested PR review writes to the requirement conversation and wak
     assert.ok(runner.requests[0]?.invocation.args.includes('claude-opus-4-6'));
     const modelArgument = runner.requests[0]?.invocation.args.indexOf('--model') ?? -1;
     assert.deepEqual(runner.requests[0]?.invocation.args.slice(modelArgument, modelArgument + 4), ['--model', 'claude-opus-4-6', '--effort', 'high']);
+    assert.equal(runner.requests[0]?.timeoutMode, 'elapsed');
     const reviewRequest = manager.listReviewRequests(pullRequest.id)[0];
     assert.equal(reviewRequest?.targetHeadSha, 'abc123def456');
     assert.equal(reviewRequest?.model, 'claude-opus-4-6');
