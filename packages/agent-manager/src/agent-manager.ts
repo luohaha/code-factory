@@ -100,7 +100,7 @@ export const MAX_MESSAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 export const MAX_MESSAGE_ATTACHMENTS = 6;
 
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
-const REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS = 60 * 60 * 1_000;
+const REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS = DAY_MILLISECONDS;
 
 const REVIEWER_DEVELOPER_INSTRUCTIONS = [
   'You are a short-lived GitHub pull request reviewer. Review only; do not edit code.',

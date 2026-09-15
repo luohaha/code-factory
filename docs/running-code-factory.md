@@ -114,7 +114,7 @@ Configuration-file values are used by default. Logging environment variables tak
 }
 ~~~
 
-`databasePath` and `logFilePath` use workspace defaults when set to `null`; `allowedOrigin: null` disables CORS headers. Set `pullRequestReconcileIntervalSeconds` to `0` to disable GitHub polling. Its largest accepted value is `2147483` seconds, matching Node.js timer limits. `cancelledRequirementRetentionDays` and `doneRequirementRetentionDays` accept whole numbers from `0` to `36500`; `0` makes a terminal Requirement eligible for immediate deletion. Agent Manager scans at startup, after either setting changes, and hourly thereafter. Expiry removes the Requirement and all related SQLite records in one transaction, then removes its stored attachment files.
+`databasePath` and `logFilePath` use workspace defaults when set to `null`; `allowedOrigin: null` disables CORS headers. Set `pullRequestReconcileIntervalSeconds` to `0` to disable GitHub polling. Its largest accepted value is `2147483` seconds, matching Node.js timer limits. `cancelledRequirementRetentionDays` and `doneRequirementRetentionDays` accept whole numbers from `0` to `36500`; `0` makes a terminal Requirement eligible for immediate deletion. Agent Manager scans at startup, after either setting changes, and daily thereafter. Expiry removes the Requirement and all related SQLite records in one transaction, then removes its stored attachment files.
 
 ## Workspace data and logs
 

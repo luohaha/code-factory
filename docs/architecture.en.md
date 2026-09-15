@@ -211,7 +211,7 @@ The first implementation uses Node.js `node:sqlite`:
 
 - Foreign keys, WAL mode, and a busy timeout are enabled.
 - Requirement and AgentSession are created atomically.
-- An hourly retention sweep deletes expired CANCELLED and DONE Requirements. Defaults are 7 and 365 days respectively, measured from the terminal transition's `updatedAt`; configuration updates apply immediately and trigger a sweep.
+- A daily retention sweep deletes expired CANCELLED and DONE Requirements. Defaults are 7 and 365 days respectively, measured from the terminal transition's `updatedAt`; configuration updates apply immediately and trigger a sweep.
 - Expiry deletes the Requirement inside one SQLite transaction. Foreign-key cascades remove its AgentSession, Runs, messages, attachment metadata, PRs, PR observations, ReviewRequests, trigger receipts, and related ManagerEvents; surviving child Requirements have parent and source-Session references cleared. Attachment files are removed after the transaction commits.
 - One-to-one relationships, message ordering, and active-Run constraints are enforced by SQLite.
 - The application depends on the business-level `AgentManagerStore` interface, allowing a later PostgreSQL implementation without changing domain workflows.
