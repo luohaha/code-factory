@@ -71,6 +71,8 @@ Different Requirements can run concurrently, while each Requirement has at most 
 
 Agent Manager places `code-factory-cli` on every RD process's `PATH` and injects its API URL, Requirement ID, and Session ID through the environment. The RD prompt names the relevant commands and leaves their arguments to `code-factory-cli --help`; raw HTTP details remain an internal transport contract.
 
+Agent context is scoped to the Requirement rather than copied from whichever interactive agent or terminal started Agent Manager. A Requirement's first RD Run creates a new native Codex thread or Claude Code session; later Runs resume that same native session, preserving its conversation context. Because the child CLI inherits Agent Manager's environment and starts in the managed workspace, it also discovers the provider's configured project/user instructions, Skills, plugins, and local memory features according to the CLI's own rules. Code Factory does not copy another agent's live transcript, merge context from other Requirements, or guarantee that every provider-managed memory entry is injected.
+
 For the complete domain model, state machines, concurrency rules, and delivery semantics, see [Final architecture and domain model](docs/architecture.en.md).
 
 ## Web Dashboard

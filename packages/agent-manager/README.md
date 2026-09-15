@@ -22,6 +22,8 @@ npx --package @luoyixin/code-factory code-factory-agent-manager stop
 
 Headless agents inherit the filesystem, network, and command permissions of the user who starts Agent Manager. Run it only in a trusted workspace and expose its port only to trusted users and networks.
 
+Each Requirement owns a new native Codex or Claude Code session that later RD Runs resume. The child CLI uses the managed workspace and inherited environment, so it loads provider-configured project/user instructions, Skills, plugins, and local memory features through its normal discovery rules. It does not inherit the live transcript or context window of the interactive agent or terminal that launched Agent Manager.
+
 ## License
 
 Licensed under the Apache License 2.0. See the `LICENSE` file included with this package.

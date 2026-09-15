@@ -4,7 +4,7 @@ import test from 'node:test';
 import { ClaudeCodeAdapter } from '../src/adapters/claude-code.ts';
 import { CodexAdapter } from '../src/adapters/codex.ts';
 
-test('Codex starts and resumes through stdin without overriding the workspace', () => {
+test('Codex starts and resumes through stdin without disabling native context discovery', () => {
   const adapter = new CodexAdapter();
   const first = adapter.buildRdInvocation({ prompt: 'implement it', nativeSessionId: null });
   assert.equal(first.command, 'codex');
@@ -14,6 +14,8 @@ test('Codex starts and resumes through stdin without overriding the workspace', 
   const resumed = adapter.buildRdInvocation({ prompt: 'continue', nativeSessionId: 'thread-1' });
   assert.deepEqual(resumed.args, ['exec', '--json', '--color', 'never', '--dangerously-bypass-approvals-and-sandbox', 'resume', 'thread-1', '-']);
   assert.ok(!resumed.args.includes('--cd'));
+  assert.ok(!first.args.includes('--ignore-user-config'));
+  assert.ok(!resumed.args.includes('--ignore-user-config'));
 
   const withImages = adapter.buildRdInvocation({
     prompt: 'inspect screenshots',
@@ -56,9 +58,14 @@ test('Claude Code persists RD sessions but not reviewer sessions', () => {
   assert.ok(first.args.includes('--dangerously-skip-permissions'));
   assert.ok(!first.args.includes('--permission-mode'));
   assert.ok(!first.args.includes('--add-dir'));
+  assert.ok(!first.args.includes('--bare'));
+  assert.ok(!first.args.includes('--disable-slash-commands'));
+  assert.ok(!first.args.includes('--setting-sources'));
 
   const resumed = adapter.buildRdInvocation({ prompt: 'continue', nativeSessionId: 'session-1' });
   assert.deepEqual(resumed.args.slice(-2), ['--resume', 'session-1']);
+  assert.ok(!resumed.args.includes('--bare'));
+  assert.ok(!resumed.args.includes('--disable-slash-commands'));
 
   const review = adapter.buildReviewInvocation({ prompt: 'Review GitHub PR https://github.com/acme/repo/pull/7' });
   assert.ok(review.args.includes('--no-session-persistence'));

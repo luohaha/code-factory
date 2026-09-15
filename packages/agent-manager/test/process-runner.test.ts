@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import type { AgentAdapter } from '../src/adapters/types.ts';
@@ -41,24 +44,44 @@ test('HeadlessProcessRunner terminates an aborted child as a cancelled Run', asy
   assert.match(outcome.error ?? '', /interrupted by human/);
 });
 
-test('HeadlessProcessRunner merges per-Run environment into the child environment', async () => {
-  let output = '';
-  const outcome = await new HeadlessProcessRunner().run({
-    invocation: {
-      command: process.execPath,
-      args: ['-e', 'process.stdout.write(`${process.env.CODE_FACTORY_REQUIREMENT_ID}\\n`)'],
-      input: '',
-    },
-    adapter: noOutputAdapter,
-    workspaceRoot: process.cwd(),
-    environment: { CODE_FACTORY_REQUIREMENT_ID: 'req_environment' },
-    timeoutMs: 30_000,
-    maxOutputBytes: 1024,
-    onOutput: (line) => { output = line; },
-  });
+test('HeadlessProcessRunner preserves the workspace and parent environment while applying Run context', async () => {
+  const workspaceRoot = realpathSync(mkdtempSync(join(tmpdir(), 'code-factory-runner-')));
+  const parentContextName = 'CODE_FACTORY_PARENT_CONTEXT_TEST';
+  const previousParentContext = process.env[parentContextName];
+  process.env[parentContextName] = 'inherited-context';
+  try {
+    let output = '';
+    const outcome = await new HeadlessProcessRunner().run({
+      invocation: {
+        command: process.execPath,
+        args: ['-e', [
+          'process.stdout.write(JSON.stringify({',
+          '  cwd: process.cwd(),',
+          `  parentContext: process.env.${parentContextName},`,
+          '  requirementId: process.env.CODE_FACTORY_REQUIREMENT_ID,',
+          '}) + "\\n")',
+        ].join('\n')],
+        input: '',
+      },
+      adapter: noOutputAdapter,
+      workspaceRoot,
+      environment: { CODE_FACTORY_REQUIREMENT_ID: 'req_environment' },
+      timeoutMs: 30_000,
+      maxOutputBytes: 1024,
+      onOutput: (line) => { output = line; },
+    });
 
-  assert.equal(outcome.status, 'succeeded');
-  assert.equal(output, 'req_environment');
+    assert.equal(outcome.status, 'succeeded');
+    assert.deepEqual(JSON.parse(output), {
+      cwd: workspaceRoot,
+      parentContext: 'inherited-context',
+      requirementId: 'req_environment',
+    });
+  } finally {
+    if (previousParentContext === undefined) delete process.env[parentContextName];
+    else process.env[parentContextName] = previousParentContext;
+    rmSync(workspaceRoot, { recursive: true, force: true });
+  }
 });
 
 test('HeadlessProcessRunner kills descendant tool processes before completing a cancelled Run', async () => {
