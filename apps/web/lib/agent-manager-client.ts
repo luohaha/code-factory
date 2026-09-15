@@ -89,6 +89,8 @@ export interface AgentManagerConfiguration {
   openDashboard: boolean;
   databasePath: string | null;
   pullRequestReconcileIntervalSeconds: number;
+  cancelledRequirementRetentionDays: number;
+  doneRequirementRetentionDays: number;
   logLevel: 'debug' | 'info' | 'warn' | 'error' | 'silent';
   logFilePath: string | null;
   logMaxSize: string | number;
@@ -306,6 +308,7 @@ export class AgentManagerClient {
       'requirement.created',
       'requirement.deleted',
       'requirement.completed',
+      'requirements.purged',
       'run.started',
       'run.succeeded',
       'run.failed',

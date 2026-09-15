@@ -30,7 +30,7 @@ Update workspace configuration:
 PATCH /api/configuration
 ~~~
 
-PR reconciliation interval and log-level changes apply immediately; other settings are persisted for restart. See the API reference for validation and the restart-required response fields.
+PR reconciliation interval, terminal Requirement retention, and log-level changes apply immediately; other settings are persisted for restart. See the API reference for validation and the restart-required response fields.
 
 Create a Requirement:
 
@@ -138,7 +138,7 @@ data: {"id":42,"type":"review_request.started",...}
 
 Current event types include:
 
-- `requirement.created` / `requirement.deleted` / `requirement.completed`;
+- `requirement.created` / `requirement.deleted` / `requirement.completed` / `requirements.purged`;
 - `message.created`;
 - `pull_request.created` / `pull_request.updated`;
 - `review_request.started`;

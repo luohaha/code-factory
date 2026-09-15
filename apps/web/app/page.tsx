@@ -915,7 +915,7 @@ function ManagerConfigurationDialog({
         <form onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>{t('Agent Manager configuration')}</DialogTitle>
-            <DialogDescription>{t('Reconciliation and log level changes apply immediately. Other settings take effect after restart.')}</DialogDescription>
+            <DialogDescription>{t('Reconciliation, requirement retention, and log level changes apply immediately. Other settings take effect after restart.')}</DialogDescription>
           </DialogHeader>
           {configuration?.restartRequired ? (
             <Alert className="mt-4">
@@ -943,6 +943,16 @@ function ManagerConfigurationDialog({
                       <NativeSelectOption value="error">error</NativeSelectOption>
                       <NativeSelectOption value="silent">silent</NativeSelectOption>
                     </NativeSelect>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="configuration-cancelled-retention">{t('Cancelled requirement retention (days)')}</FieldLabel>
+                    <Input id="configuration-cancelled-retention" type="number" min="0" max="36500" step="1" value={values.cancelledRequirementRetentionDays} onChange={(event) => update('cancelledRequirementRetentionDays', Number(event.target.value))} required />
+                    <p className="text-[10px] text-muted-foreground">{t('Use 0 to purge cancelled requirements immediately.')}</p>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="configuration-done-retention">{t('Done requirement retention (days)')}</FieldLabel>
+                    <Input id="configuration-done-retention" type="number" min="0" max="36500" step="1" value={values.doneRequirementRetentionDays} onChange={(event) => update('doneRequirementRetentionDays', Number(event.target.value))} required />
+                    <p className="text-[10px] text-muted-foreground">{t('Use 0 to purge done requirements immediately.')}</p>
                   </Field>
                 </div>
               </div>

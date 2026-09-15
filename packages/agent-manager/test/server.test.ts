@@ -134,7 +134,14 @@ test('HTTP API reports its version and reads, validates, persists, and applies c
     assert.equal(initialResponse.status, 200);
     const initial = await initialResponse.json() as {
       path: string;
-      values: { host: string; port: number; openDashboard: boolean; databasePath: string | null };
+      values: {
+        host: string;
+        port: number;
+        openDashboard: boolean;
+        databasePath: string | null;
+        cancelledRequirementRetentionDays: number;
+        doneRequirementRetentionDays: number;
+      };
       restartRequired: boolean;
     };
     assert.equal(initial.path, configurationFilePath);
@@ -142,16 +149,30 @@ test('HTTP API reports its version and reads, validates, persists, and applies c
     assert.equal(initial.values.port, 4310);
     assert.equal(initial.values.openDashboard, false);
     assert.equal(initial.values.databasePath, null);
+    assert.equal(initial.values.cancelledRequirementRetentionDays, 7);
+    assert.equal(initial.values.doneRequirementRetentionDays, 365);
     assert.equal(initial.restartRequired, false);
 
     const updateResponse = await fetch(`${baseUrl}/api/configuration`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ logLevel: 'warn' }),
+      body: JSON.stringify({
+        logLevel: 'warn',
+        cancelledRequirementRetentionDays: 14,
+        doneRequirementRetentionDays: 730,
+      }),
     });
     assert.equal(updateResponse.status, 200);
     const updated = await updateResponse.json() as {
-      values: { host: string; port: number; openDashboard: boolean; databasePath: string | null; logLevel: string };
+      values: {
+        host: string;
+        port: number;
+        openDashboard: boolean;
+        databasePath: string | null;
+        cancelledRequirementRetentionDays: number;
+        doneRequirementRetentionDays: number;
+        logLevel: string;
+      };
       restartRequired: boolean;
       restartRequiredFields: string[];
     };
@@ -159,6 +180,8 @@ test('HTTP API reports its version and reads, validates, persists, and applies c
     assert.equal(updated.values.port, 4310);
     assert.equal(updated.values.openDashboard, false);
     assert.equal(updated.values.databasePath, null);
+    assert.equal(updated.values.cancelledRequirementRetentionDays, 14);
+    assert.equal(updated.values.doneRequirementRetentionDays, 730);
     assert.equal(updated.values.logLevel, 'warn');
     assert.equal(updated.restartRequired, false);
     assert.deepEqual(updated.restartRequiredFields, []);
