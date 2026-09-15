@@ -1032,6 +1032,7 @@ function RequirementDetail({
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const conversationEndRef = useRef<HTMLDivElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const draftAttachmentsRef = useRef<DraftAttachment[]>([]);
   const open = requirement !== null;
   const requirementId = requirement?.id;
@@ -1108,7 +1109,11 @@ function RequirementDetail({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="data-[side=right]:w-full! data-[side=right]:max-w-none! gap-0 sm:data-[side=right]:w-[min(820px,calc(100vw-48px))]!" side="right">
+      <SheetContent
+        className="data-[side=right]:w-full! data-[side=right]:max-w-none! gap-0 sm:data-[side=right]:w-[min(820px,calc(100vw-48px))]!"
+        side="right"
+        initialFocus={requirement.status === 'todo' ? messageInputRef : true}
+      >
         <SheetHeader className="max-h-[40dvh] shrink-0 overflow-y-auto border-b border-border bg-card py-4 pr-12 pl-5 sm:pr-12 sm:pl-6">
           <div className="mb-2.5 flex items-center gap-2">
             <Badge variant="outline" className="font-mono text-[10px]">REQ-{shortId(requirement.id)}</Badge>
@@ -1285,6 +1290,7 @@ function RequirementDetail({
               </div>
             ) : null}
             <Textarea
+              ref={messageInputRef}
               aria-label={t('Reply to RD Agent')}
               value={message}
               onChange={(event) => setMessage(event.target.value)}
@@ -1707,7 +1713,7 @@ function Dashboard() {
                         run={latestRun(item.id, runs)}
                         busy={busyId === item.id}
                         onOpen={() => setSelectedId(item.id)}
-                        onStart={() => void runAction(item.id, () => client.startRequirement(item.id)).catch(() => undefined)}
+                        onStart={() => setSelectedId(item.id)}
                         onDelete={() => void runAction(item.id, () => client.deleteRequirement(item.id)).then(() => {
                           if (selectedId === item.id) setSelectedId(null);
                         }).catch(() => undefined)}
