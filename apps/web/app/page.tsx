@@ -735,61 +735,69 @@ function NewRequirementDialog({ disabled, modelCatalog, onCreate }: {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger render={<Button size="sm" disabled={disabled} />}><Plus data-icon="inline-start" />{t('New requirement')}</DialogTrigger>
-      <DialogContent className="sm:max-w-lg">
-        <form onSubmit={submit}>
-          <DialogHeader>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-w-lg">
+        <form className="flex max-h-[calc(100dvh-2rem)] min-h-0 flex-col" onSubmit={submit}>
+          <DialogHeader className="shrink-0 px-4 pt-4 pr-12">
             <DialogTitle>{t('Create a requirement and RD Session')}</DialogTitle>
             <DialogDescription>{t('A unique Session is assigned immediately, with no scheduling or Agent allocation.')}</DialogDescription>
           </DialogHeader>
-          <FieldGroup className="my-5 gap-4">
-            <Field>
-              <FieldLabel htmlFor="requirement-title">{t('Requirement title')}</FieldLabel>
-              <Input id="requirement-title" name="title" required placeholder={t('For example: improve bulk import throughput')} />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="requirement-description">{t('Task and acceptance criteria')}</FieldLabel>
-              <Textarea id="requirement-description" name="description" required placeholder={t('Feature work, validation, or performance goals')} />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="requirement-provider">{t('RD Agent')}</FieldLabel>
-              <NativeSelect
-                id="requirement-provider"
-                name="provider"
-                className="w-full"
-                value={provider}
-                onChange={(event) => {
-                  setProvider(event.target.value as AgentProvider);
-                  setModel('');
-                }}
-              >
-                <NativeSelectOption value="codex">Codex headless</NativeSelectOption>
-                <NativeSelectOption value="claude-code">Claude Code headless</NativeSelectOption>
-              </NativeSelect>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="requirement-model">{t('Model')}</FieldLabel>
-              <AgentModelSelect
-                id="requirement-model"
-                name="model"
-                catalog={modelCatalog}
-                provider={provider}
-                value={model}
-                onChange={setModel}
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="requirement-reasoning-effort">{t('Reasoning effort')}</FieldLabel>
-              <NativeSelect id="requirement-reasoning-effort" name="reasoningEffort" className="w-full" defaultValue="">
-                <NativeSelectOption value="">{t('Default reasoning')}</NativeSelectOption>
-                <NativeSelectOption value="low">Low</NativeSelectOption>
-                <NativeSelectOption value="medium">Medium</NativeSelectOption>
-                <NativeSelectOption value="high">High</NativeSelectOption>
-                <NativeSelectOption value="xhigh">XHigh</NativeSelectOption>
-                <NativeSelectOption value="max">Max</NativeSelectOption>
-              </NativeSelect>
-            </Field>
-          </FieldGroup>
-          <DialogFooter>
+          <div className="min-h-0 overflow-y-auto px-4">
+            <FieldGroup className="my-5 gap-4">
+              <Field>
+                <FieldLabel htmlFor="requirement-title">{t('Requirement title')}</FieldLabel>
+                <Input id="requirement-title" name="title" required placeholder={t('For example: improve bulk import throughput')} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="requirement-description">{t('Task and acceptance criteria')}</FieldLabel>
+                <Textarea
+                  id="requirement-description"
+                  name="description"
+                  className="max-h-56 overflow-y-auto"
+                  required
+                  placeholder={t('Feature work, validation, or performance goals')}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="requirement-provider">{t('RD Agent')}</FieldLabel>
+                <NativeSelect
+                  id="requirement-provider"
+                  name="provider"
+                  className="w-full"
+                  value={provider}
+                  onChange={(event) => {
+                    setProvider(event.target.value as AgentProvider);
+                    setModel('');
+                  }}
+                >
+                  <NativeSelectOption value="codex">Codex headless</NativeSelectOption>
+                  <NativeSelectOption value="claude-code">Claude Code headless</NativeSelectOption>
+                </NativeSelect>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="requirement-model">{t('Model')}</FieldLabel>
+                <AgentModelSelect
+                  id="requirement-model"
+                  name="model"
+                  catalog={modelCatalog}
+                  provider={provider}
+                  value={model}
+                  onChange={setModel}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="requirement-reasoning-effort">{t('Reasoning effort')}</FieldLabel>
+                <NativeSelect id="requirement-reasoning-effort" name="reasoningEffort" className="w-full" defaultValue="">
+                  <NativeSelectOption value="">{t('Default reasoning')}</NativeSelectOption>
+                  <NativeSelectOption value="low">Low</NativeSelectOption>
+                  <NativeSelectOption value="medium">Medium</NativeSelectOption>
+                  <NativeSelectOption value="high">High</NativeSelectOption>
+                  <NativeSelectOption value="xhigh">XHigh</NativeSelectOption>
+                  <NativeSelectOption value="max">Max</NativeSelectOption>
+                </NativeSelect>
+              </Field>
+            </FieldGroup>
+          </div>
+          <DialogFooter className="mx-0 mb-0 shrink-0">
             <DialogClose render={<Button type="button" variant="outline" />}>{t('Cancel')}</DialogClose>
             <Button type="submit" disabled={submitting}>{submitting ? <LoaderCircle className="animate-spin" /> : null}{t('Create')}</Button>
           </DialogFooter>
@@ -897,7 +905,7 @@ function ManagerConfigurationDialog({
       <DialogTrigger render={<Button variant="outline" size="icon" disabled={disabled} aria-label={t('Agent Manager configuration')} />}>
         <SlidersHorizontal />
       </DialogTrigger>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="sm:max-w-2xl">
         <form onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>{t('Agent Manager configuration')}</DialogTitle>
@@ -1101,7 +1109,7 @@ function RequirementDetail({
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="data-[side=right]:w-full! data-[side=right]:max-w-none! gap-0 sm:data-[side=right]:w-[min(820px,calc(100vw-48px))]!" side="right">
-        <SheetHeader className="border-b border-border bg-card py-4 pr-12 pl-5 sm:pr-12 sm:pl-6">
+        <SheetHeader className="max-h-[40dvh] shrink-0 overflow-y-auto border-b border-border bg-card py-4 pr-12 pl-5 sm:pr-12 sm:pl-6">
           <div className="mb-2.5 flex items-center gap-2">
             <Badge variant="outline" className="font-mono text-[10px]">REQ-{shortId(requirement.id)}</Badge>
             <Badge variant="secondary" className="text-[10px]">{t(statusLabel[requirement.status])}</Badge>
@@ -1235,7 +1243,7 @@ function RequirementDetail({
           </div>
         </ScrollArea>
 
-        <div className="border-t border-border bg-card px-4 py-3 sm:px-6">
+        <div className="max-h-[60dvh] min-h-0 shrink-0 overflow-y-auto border-t border-border bg-card px-4 py-3 sm:px-6">
           {requirement.status === 'waiting_confirmation' ? (
             <div className="mb-2.5 flex items-center justify-between gap-3 rounded-xl border border-violet-500/15 bg-violet-500/7 px-3 py-2 text-[10px] text-violet-700 dark:text-violet-300">
               <span>{t('The Agent reported completion. You can still ask follow-up questions.')}</span>
@@ -1299,7 +1307,7 @@ function RequirementDetail({
                 }
               }}
               disabled={!canWrite || busy}
-              className="max-h-36 min-h-14 resize-none border-0 bg-transparent px-2 py-1.5 text-xs shadow-none focus-visible:border-transparent focus-visible:ring-0 disabled:bg-transparent"
+              className="max-h-[min(9rem,20dvh)] min-h-14 resize-none border-0 bg-transparent px-2 py-1.5 text-xs shadow-none focus-visible:border-transparent focus-visible:ring-0 disabled:bg-transparent"
               placeholder={requirement.status === 'todo' ? t('Add instructions and start; paste or drop attachments…') : requirement.session.state === 'running' ? t('Send a message or attachment; it will wait for the next Run by default…') : canWrite ? t('Reply to the RD Agent; paste or drop attachments…') : t('Replies are unavailable in the current state')}
             />
             <div className="mt-1 flex items-center justify-between gap-3 px-1">
