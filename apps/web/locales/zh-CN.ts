@@ -123,7 +123,7 @@ export const zhCN = {
   '{count} new messages': '{count} 条新消息',
   'System event': '系统事件',
   'RD Agent is working; new messages are queued by default.': 'RD Agent 正在工作；新消息默认进入队列。',
-  'Interrupt': '打断',
+  'Steering': 'Steering',
   '{count} external messages will be processed by the RD Agent {when}.': '{count} 条外部消息将由 RD Agent {when}处理。',
   'after the current Run': '在当前运行结束后',
   'during the next Run': '在下一次运行中',
