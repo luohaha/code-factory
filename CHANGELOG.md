@@ -6,9 +6,23 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-15
+
+### Added
+
+- Added a persistent dashboard dark mode that follows the operating-system preference by default and includes an accessible theme toggle.
+- Added confirmed deletion for TODO requirements through the dashboard and Agent Manager API.
+
 ### Changed
 
 - Simplified the README quick start to the npm-based launch command and moved operation and local-development details into dedicated guides.
+- Updated the dashboard header and favicon to use the latest Code Factory branding.
+- Enforced a single Agent Manager instance per canonical workspace, including across foreground and daemon startup modes.
+- Shortened the requirement completion action labels in English and Simplified Chinese.
+
+### Fixed
+
+- Kept dialog, sheet, requirement-detail, and composer actions reachable when content is long or the viewport is short.
 
 ## [0.1.0] - 2026-09-13
 
