@@ -150,7 +150,9 @@ Trigger lifecycle is explicit through `startAgentTrigger()` and `stopAgentTrigge
 
 ### PR Reconciliation Triggers
 
-Agent Manager polls each tracked Draft/Open PR through the authenticated local `gh` CLI every 30 seconds by default. The reconciler fetches one snapshot per PR and shares it with four independently registered triggers:
+Agent Manager polls through the authenticated local `gh` CLI every 30 seconds by default. Poll eligibility comes from Code Factory's last persisted PR state: registered Draft and Open PRs are polled, while already-Closed and already-Merged PRs are skipped. A snapshot of an eligible PR can report its transition to Closed or Merged; the reconciler persists and delivers that terminal transition, then excludes the PR from subsequent polls. It does not observe comments, reviews, or check changes that arrive after a PR is already terminal.
+
+For each eligible PR, the GitHub client runs `gh pr view` for lifecycle, metadata, comments, reviews, checks, and mergeability, plus a paginated `gh api` request for inline review comments. The reconciler combines those results into one snapshot and shares it with four independently registered triggers:
 
 - `github.pull-request.status` observes Draft/Open/Closed/Merged lifecycle changes;
 - `github.pull-request.comment` observes general PR comments, submitted reviews, and inline review comments;
