@@ -91,6 +91,8 @@ The dashboard supports light and dark modes from the top-right theme control, re
 
 All four boards share a time-range filter with options for the last 24 hours, 7 days, 30 days, 90 days, or all time. Requirement, PR, and Session boards filter by creation time. The Timer board always retains active timers by their upcoming wake-up and filters completed or cancelled history by its latest update. The default range is 7 days.
 
+The shared search box uses a local hybrid index over Requirement titles and descriptions, complete conversation messages, and Pull Request titles and metadata. Persisted word and character n-gram vectors add similarity ranking to full-text matching, including useful partial and fuzzy matches; Agent Manager also uses SQLite FTS5 ranking when the installed Node.js SQLite build provides it. Search indexing and ranking stay inside the workspace's Agent Manager process and do not call an external embedding service.
+
 The Web dashboard, HTTP API, and SSE event stream run in the same process and use the same port. No separate Web deployment is required.
 
 ## Security Model

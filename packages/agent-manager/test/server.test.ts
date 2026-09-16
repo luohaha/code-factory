@@ -94,6 +94,40 @@ test('HTTP API exposes the cached provider model catalog', async () => {
   assert.equal(stopped, true);
 });
 
+test('HTTP API exposes validated hybrid search', async () => {
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    logger: createLogger({ level: 'silent' }),
+  });
+  const requirement = manager.createRequirement({
+    title: 'Improve Chinese search',
+    description: 'Index requirement conversations with SQLite',
+    provider: 'codex',
+  });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/search?q=${encodeURIComponent('SQLite conversations')}&limit=10`);
+    assert.equal(response.status, 200);
+    const body = await response.json() as { items: Array<{ requirementId: string; kind: string }> };
+    assert.ok(body.items.some((item) => item.requirementId === requirement.id && item.kind === 'requirement'));
+
+    const missingQuery = await fetch(`http://127.0.0.1:${port}/api/search`);
+    assert.equal(missingQuery.status, 400);
+    const invalidLimit = await fetch(`http://127.0.0.1:${port}/api/search?q=test&limit=0`);
+    assert.equal(invalidLimit.status, 400);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
+
 test('HTTP API reports its version and reads, validates, persists, and applies configuration', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-config-api-'));
   const configurationFilePath = join(directory, 'config.json');

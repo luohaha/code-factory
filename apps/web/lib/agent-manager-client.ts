@@ -181,6 +181,18 @@ export interface AgentTimerDto {
   updatedAt: string;
 }
 
+export interface SearchResultDto {
+  kind: 'requirement' | 'message' | 'pull_request';
+  sourceId: string;
+  requirementId: string;
+  title: string;
+  excerpt: string;
+  score: number;
+  fullTextScore: number;
+  vectorScore: number;
+  updatedAt: string;
+}
+
 export const DEFAULT_AGENT_MANAGER_URL = 'http://127.0.0.1:4310';
 
 export class AgentManagerApiError extends Error {
@@ -223,6 +235,12 @@ export class AgentManagerClient {
 
   async listRequirements(): Promise<RequirementDto[]> {
     const response = await this.request<{ items: RequirementDto[] }>('/api/requirements');
+    return response.items;
+  }
+
+  async search(query: string, limit = 100): Promise<SearchResultDto[]> {
+    const parameters = new URLSearchParams({ q: query, limit: String(limit) });
+    const response = await this.request<{ items: SearchResultDto[] }>(`/api/search?${parameters.toString()}`);
     return response.items;
   }
 
