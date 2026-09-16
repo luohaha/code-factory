@@ -255,6 +255,15 @@ test('expired cancelled and done requirements purge their related domain records
       sessionId: 'ses-cancelled-expired',
       now: '2026-08-01T00:03:00.000Z',
     });
+    store.createAgentTimer({
+      id: 'tmr-cancelled-expired',
+      requirementId: 'req-cancelled-expired',
+      description: 'Wake expired work',
+      schedule: 'once',
+      intervalSeconds: 3_600,
+      nextFireAt: '2026-08-01T01:03:00.000Z',
+      now: '2026-08-01T00:03:00.000Z',
+    });
     store.transitionRequirement(
       'req-cancelled-expired',
       ['todo'],
@@ -394,6 +403,7 @@ test('expired cancelled and done requirements purge their related domain records
     assert.equal(store.getPullRequest('pr-cancelled-expired'), null);
     assert.equal(store.getPullRequest('pr-done-expired'), null);
     assert.equal(store.getMessageAttachment('att-cancelled-expired'), null);
+    assert.equal(store.getAgentTimer('tmr-cancelled-expired'), null);
     assert.deepEqual(store.listRuns('req-done-expired'), []);
     assert.deepEqual(store.listReviewRequests(), []);
     assert.equal(store.listEvents(0).some((event) => event.requirementId === 'req-cancelled-expired'), false);
@@ -423,6 +433,7 @@ test('expired cancelled and done requirements purge their related domain records
       'pull_requests',
       'pull_request_observations',
       'agent_trigger_receipts',
+      'agent_timers',
       'review_requests',
     ]) {
       const row = database.prepare(`SELECT COUNT(*) AS count FROM ${table}
