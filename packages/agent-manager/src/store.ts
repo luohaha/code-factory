@@ -10,6 +10,7 @@ import type {
   RequirementMessage,
   PullRequest,
   ReviewRequest,
+  SearchResult,
   PullRequestStatus,
   RequirementCreator,
   RequirementStatus,
@@ -132,6 +133,7 @@ export interface AgentManagerStore {
   createRequirement(input: CreateRequirementRecord): RequirementWithSession;
   getRequirement(id: string): RequirementWithSession | null;
   listRequirements(): RequirementWithSession[];
+  search(query: string, limit?: number): SearchResult[];
   listSessions(): AgentSession[];
   listRuns(requirementId?: string): AgentRun[];
   createMessageAttachment(input: CreateMessageAttachmentRecord): MessageAttachment;

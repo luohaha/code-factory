@@ -212,6 +212,7 @@ The first implementation uses Node.js `node:sqlite`:
 - Foreign keys, WAL mode, and a busy timeout are enabled.
 - Requirement and AgentSession are created atomically.
 - One-to-one relationships, message ordering, and active-Run constraints are enforced by SQLite.
+- Requirement text, conversation messages, and Pull Request metadata are copied into a unified search-document table as part of their owning Store writes. Full-text scores and persisted local word/character n-gram embeddings are combined at query time; an FTS5 trigram index accelerates and refines full-text ranking when the Node.js SQLite build includes FTS5, with deterministic in-process matching as the portable fallback. Existing records are backfilled idempotently when the Store opens.
 - The application depends on the business-level `AgentManagerStore` interface, allowing a later PostgreSQL implementation without changing domain workflows.
 - Configuration is validated before use and replaced atomically with file mode `0600`; it is operational state rather than a domain entity stored in SQLite.
 
@@ -228,6 +229,8 @@ Requirement details form a Jira-like work surface containing the description, li
 The dashboard supports English and Simplified Chinese. The header language switcher applies the locale immediately and persists the choice in browser storage; a visitor without a saved preference defaults to the browser language. Requirement and Reviewer forms select models from the current provider catalog and retain the CLI-default option. The configuration dialog updates the workspace configuration and distinguishes immediately applied settings from restart-required settings.
 
 Requirement, Pull Request, and RD Session boards share a creation-time filter. It defaults to the last 7 days and also offers the last 24 hours, 30 days, 90 days, and all time.
+
+Their shared search box calls the Agent Manager hybrid-search endpoint. A match in a Requirement or any of its conversation messages exposes that Requirement and RD Session; a matching Pull Request title or metadata exposes the PR and its Requirement. Requirement cards show the highest-ranked match source and excerpt so conversation-only matches are explainable.
 
 Running `npx --package @luoyixin/code-factory code-factory-agent-manager start` serves the API, SSE stream, and bundled Web dashboard from the same port and writes the local URL to the log file in the workspace data directory. No separate Web deployment is required.
 

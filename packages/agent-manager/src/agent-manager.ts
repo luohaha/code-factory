@@ -98,6 +98,7 @@ export function defaultLogFilePath(databasePath: string): string {
 
 export const MAX_MESSAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 export const MAX_MESSAGE_ATTACHMENTS = 6;
+export const MAX_SEARCH_QUERY_LENGTH = 500;
 
 const REVIEWER_DEVELOPER_INSTRUCTIONS = [
   'You are a short-lived GitHub pull request reviewer. Review only; do not edit code.',
@@ -463,6 +464,18 @@ export class AgentManager extends EventEmitter {
 
   listRequirements(): RequirementWithSession[] {
     return this.#store.listRequirements();
+  }
+
+  search(query: string, limit = 50) {
+    const trimmed = query.trim();
+    if (!trimmed) throw new TypeError('q is required');
+    if (trimmed.length > MAX_SEARCH_QUERY_LENGTH) {
+      throw new RangeError(`q must be ${MAX_SEARCH_QUERY_LENGTH} characters or fewer`);
+    }
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+      throw new RangeError('limit must be an integer from 1 to 200');
+    }
+    return this.#store.search(trimmed, limit);
   }
 
   deleteRequirement(id: string): void {
