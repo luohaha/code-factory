@@ -189,6 +189,7 @@ function reviewRequestFrom(row: Row): ReviewRequest {
 
 export class SqliteAgentManagerStore implements AgentManagerStore {
   readonly #db: DatabaseSync;
+  readonly #ftsAvailable: boolean;
 
   constructor(databasePath: string) {
     if (databasePath !== ':memory:') mkdirSync(dirname(databasePath), { recursive: true });
@@ -196,6 +197,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     this.#db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
     for (const statement of schemaStatements) this.#db.exec(statement);
     this.migrateLegacySchema();
+    this.#ftsAvailable = this.initializeFullTextSearch();
     this.backfillSearchDocuments();
     this.#db.exec('PRAGMA optimize;');
   }
@@ -265,7 +267,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     const safeLimit = Math.max(1, Math.min(Math.trunc(limit), 200));
     const ftsScores = new Map<string, number>();
     const matchQuery = fullTextQuery(trimmed);
-    if (matchQuery) {
+    if (matchQuery && this.#ftsAvailable) {
       const matches = this.#db.prepare(`SELECT document.id, bm25(search_documents_fts, 5.0, 1.0, 2.0) AS rank
         FROM search_documents_fts
         JOIN search_documents document ON document.rowid = search_documents_fts.rowid
@@ -879,6 +881,49 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     }
     this.#db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS messages_requirement_sequence
       ON requirement_messages (requirement_id, sequence)`);
+  }
+
+  private initializeFullTextSearch(): boolean {
+    const compiled = this.#db.prepare("SELECT sqlite_compileoption_used('ENABLE_FTS5') AS enabled").get() as Row;
+    if (Number(compiled.enabled) !== 1) {
+      this.dropFullTextTriggers();
+      return false;
+    }
+    try {
+      this.#db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS search_documents_fts USING fts5(
+        title,
+        body,
+        keywords,
+        content='search_documents',
+        content_rowid='rowid',
+        tokenize='trigram case_sensitive 0 remove_diacritics 1'
+      );
+      CREATE TRIGGER IF NOT EXISTS search_documents_ai AFTER INSERT ON search_documents BEGIN
+        INSERT INTO search_documents_fts(rowid, title, body, keywords)
+        VALUES (new.rowid, new.title, new.body, new.keywords);
+      END;
+      CREATE TRIGGER IF NOT EXISTS search_documents_ad AFTER DELETE ON search_documents BEGIN
+        INSERT INTO search_documents_fts(search_documents_fts, rowid, title, body, keywords)
+        VALUES ('delete', old.rowid, old.title, old.body, old.keywords);
+      END;
+      CREATE TRIGGER IF NOT EXISTS search_documents_au AFTER UPDATE ON search_documents BEGIN
+        INSERT INTO search_documents_fts(search_documents_fts, rowid, title, body, keywords)
+        VALUES ('delete', old.rowid, old.title, old.body, old.keywords);
+        INSERT INTO search_documents_fts(rowid, title, body, keywords)
+        VALUES (new.rowid, new.title, new.body, new.keywords);
+      END;
+      INSERT INTO search_documents_fts(search_documents_fts) VALUES ('rebuild');`);
+      return true;
+    } catch {
+      this.dropFullTextTriggers();
+      return false;
+    }
+  }
+
+  private dropFullTextTriggers(): void {
+    this.#db.exec(`DROP TRIGGER IF EXISTS search_documents_ai;
+      DROP TRIGGER IF EXISTS search_documents_ad;
+      DROP TRIGGER IF EXISTS search_documents_au;`);
   }
 
   private backfillSearchDocuments(): void {

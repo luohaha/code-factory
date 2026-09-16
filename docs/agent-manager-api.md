@@ -325,7 +325,7 @@ Success: 200 OK with `AgentModelCatalog`.
 
 ### GET /api/search
 
-Searches non-cancelled Requirements, complete Requirement conversations, and registered Pull Request titles and metadata. Ranking combines SQLite FTS5 trigram matching with cosine similarity over locally generated word and character n-gram vectors. Indexing and search are local and do not require an external embedding service. Existing SQLite records are indexed automatically when Agent Manager starts.
+Searches non-cancelled Requirements, complete Requirement conversations, and registered Pull Request titles and metadata. Ranking combines full-text matching with cosine similarity over locally generated word and character n-gram vectors. When the Node.js SQLite build includes FTS5, its trigram rank also contributes; deterministic in-process full-text matching keeps the endpoint available on builds without FTS5. Indexing and search are local and do not require an external embedding service. Existing SQLite records are indexed automatically when Agent Manager starts.
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |

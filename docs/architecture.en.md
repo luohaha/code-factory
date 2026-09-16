@@ -212,7 +212,7 @@ The first implementation uses Node.js `node:sqlite`:
 - Foreign keys, WAL mode, and a busy timeout are enabled.
 - Requirement and AgentSession are created atomically.
 - One-to-one relationships, message ordering, and active-Run constraints are enforced by SQLite.
-- Requirement text, conversation messages, and Pull Request metadata are copied into a unified search-document table as part of their owning Store writes. An FTS5 trigram index and persisted local word/character n-gram embeddings are combined at query time; existing records are backfilled idempotently when the Store opens.
+- Requirement text, conversation messages, and Pull Request metadata are copied into a unified search-document table as part of their owning Store writes. Full-text scores and persisted local word/character n-gram embeddings are combined at query time; an FTS5 trigram index accelerates and refines full-text ranking when the Node.js SQLite build includes FTS5, with deterministic in-process matching as the portable fallback. Existing records are backfilled idempotently when the Store opens.
 - The application depends on the business-level `AgentManagerStore` interface, allowing a later PostgreSQL implementation without changing domain workflows.
 - Configuration is validated before use and replaced atomically with file mode `0600`; it is operational state rather than a domain entity stored in SQLite.
 
