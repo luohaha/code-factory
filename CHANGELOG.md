@@ -6,6 +6,17 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-09-16
+
+### Added
+
+- Added hybrid workspace search across requirements, conversation messages, and pull request metadata using SQLite full-text and vector indexes.
+- Added persistent one-time and recurring Agent timers, with API, CLI, dashboard, restart recovery, and durable Requirement delivery support.
+
+### Fixed
+
+- Kept workspace search available when the local SQLite build does not include FTS5.
+
 ## [0.1.2] - 2026-09-15
 
 ### Added
