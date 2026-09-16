@@ -168,6 +168,19 @@ export interface ReviewRequestDto {
   finishedAt: string | null;
 }
 
+export interface AgentTimerDto {
+  id: string;
+  requirementId: string;
+  description: string;
+  schedule: 'once' | 'recurring';
+  intervalSeconds: number;
+  status: 'active' | 'completed' | 'cancelled';
+  nextFireAt: string | null;
+  lastFiredAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface SearchResultDto {
   kind: 'requirement' | 'message' | 'pull_request';
   sourceId: string;
@@ -241,6 +254,32 @@ export class AgentManagerClient {
       `/api/requirements/${encodeURIComponent(requirementId)}/messages`,
     );
     return response.items;
+  }
+
+  async listAgentTimers(requirementId?: string): Promise<AgentTimerDto[]> {
+    const response = await this.request<{ items: AgentTimerDto[] }>(
+      requirementId
+        ? `/api/requirements/${encodeURIComponent(requirementId)}/timers`
+        : '/api/timers',
+    );
+    return response.items;
+  }
+
+  createAgentTimer(
+    requirementId: string,
+    input: { description: string; schedule: 'once' | 'recurring'; intervalSeconds: number },
+  ): Promise<AgentTimerDto> {
+    return this.request(`/api/requirements/${encodeURIComponent(requirementId)}/timers`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+
+  cancelAgentTimer(requirementId: string, timerId: string): Promise<AgentTimerDto> {
+    return this.request(
+      `/api/requirements/${encodeURIComponent(requirementId)}/timers/${encodeURIComponent(timerId)}`,
+      { method: 'DELETE' },
+    );
   }
 
   async listPullRequests(): Promise<PullRequestDto[]> {
@@ -333,6 +372,9 @@ export class AgentManagerClient {
       'pull_request.created',
       'pull_request.updated',
       'review_request.started',
+      'timer.created',
+      'timer.fired',
+      'timer.cancelled',
       'manager.reconciled',
       'manager.configuration.updated',
       'agent_models.updated',

@@ -13,6 +13,9 @@ Code Factory control-plane commands for RD Agents.
 Commands:
   pr register             Register or refresh a pull request
   requirement propose     Propose a separately tracked TODO requirement
+  timer register          Register a one-time or recurring wake-up timer
+  timer show              Show timers registered for this Requirement
+  timer cancel            Cancel a registered wake-up timer
 
 Options:
   -v, --version           Print the installed Code Factory version
@@ -54,6 +57,35 @@ Optional options:
 
 Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
 CODE_FACTORY_SESSION_ID.`;
+
+const TIMER_REGISTER_HELP = `Usage: code-factory-cli timer register [options]
+
+Register a timer that sends its ID and follow-up description to this Requirement after a delay.
+
+Required options:
+  --after-seconds SECONDS  Delay before the first wake-up (60-31536000)
+  --description TEXT       Follow-up the Agent should perform when the timer fires
+
+Optional options:
+  --repeat                 Repeat at the same interval until cancelled
+
+Context: CODE_FACTORY_API_URL and CODE_FACTORY_REQUIREMENT_ID.`;
+
+const TIMER_SHOW_HELP = `Usage: code-factory-cli timer show
+
+Show every timer registered for this Requirement, including its ID, description,
+status, schedule, interval, and next or previous wake-up time.
+
+Context: CODE_FACTORY_API_URL and CODE_FACTORY_REQUIREMENT_ID.`;
+
+const TIMER_CANCEL_HELP = `Usage: code-factory-cli timer cancel [options]
+
+Cancel an active scheduled wake-up.
+
+Required options:
+  --id TIMER_ID
+
+Context: CODE_FACTORY_API_URL and CODE_FACTORY_REQUIREMENT_ID.`;
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
@@ -181,6 +213,31 @@ function parseRequirementPayload(args: readonly string[], environment: Environme
   };
 }
 
+function parseTimerRegistrationPayload(args: readonly string[]): Record<string, unknown> {
+  const values = parseOptions(args, TIMER_REGISTER_HELP, {
+    'after-seconds': { type: 'string' },
+    description: { type: 'string' },
+    repeat: { type: 'boolean' },
+  });
+  const intervalSeconds = Number(required(
+    values['after-seconds'] as string | undefined,
+    '--after-seconds',
+    TIMER_REGISTER_HELP,
+  ));
+  if (!Number.isInteger(intervalSeconds) || intervalSeconds < 60 || intervalSeconds > 31_536_000) {
+    throw new CliUsageError('--after-seconds must be an integer from 60 to 31536000', TIMER_REGISTER_HELP);
+  }
+  const description = required(values.description as string | undefined, '--description', TIMER_REGISTER_HELP);
+  if (description.length > 500) {
+    throw new CliUsageError('--description must be 500 characters or fewer', TIMER_REGISTER_HELP);
+  }
+  return {
+    description,
+    schedule: values.repeat ? 'recurring' : 'once',
+    intervalSeconds,
+  };
+}
+
 function errorMessage(payload: unknown, fallback: string): string {
   if (payload && typeof payload === 'object' && 'error' in payload) {
     const value = (payload as { error?: unknown }).error;
@@ -189,15 +246,16 @@ function errorMessage(payload: unknown, fallback: string): string {
   return fallback;
 }
 
-async function postJson(
+async function requestJson(
   runtime: CodeFactoryCliRuntime,
   url: string,
-  body: Record<string, unknown>,
+  method: 'GET' | 'POST' | 'DELETE',
+  body?: Record<string, unknown>,
 ): Promise<unknown> {
   const response = await runtime.fetch(url, {
-    method: 'POST',
+    method,
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+    ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const text = await response.text();
   let payload: unknown = null;
@@ -235,7 +293,8 @@ export async function runCodeFactoryCli(
   const command = `${args[0] ?? ''} ${args[1] ?? ''}`.trim();
   let help: string;
   let endpoint: string;
-  let body: Record<string, unknown>;
+  let method: 'GET' | 'POST' | 'DELETE' = 'POST';
+  let body: Record<string, unknown> | undefined;
   try {
     if (command === 'pr register') {
       help = PR_REGISTER_HELP;
@@ -253,10 +312,52 @@ export async function runCodeFactoryCli(
       }
       endpoint = '/agent/requirements';
       body = parseRequirementPayload(args.slice(2), runtime.environment);
+    } else if (command === 'timer register') {
+      help = TIMER_REGISTER_HELP;
+      if (writesHelp(args.slice(2))) {
+        runtime.writeOut(`${help}\n`);
+        return 0;
+      }
+      const requirementId = required(
+        runtime.environment[CODE_FACTORY_REQUIREMENT_ID],
+        CODE_FACTORY_REQUIREMENT_ID,
+        help,
+      );
+      endpoint = `/requirements/${encodeURIComponent(requirementId)}/timers`;
+      body = parseTimerRegistrationPayload(args.slice(2));
+    } else if (command === 'timer show') {
+      help = TIMER_SHOW_HELP;
+      if (writesHelp(args.slice(2))) {
+        runtime.writeOut(`${help}\n`);
+        return 0;
+      }
+      parseOptions(args.slice(2), help, {});
+      const requirementId = required(
+        runtime.environment[CODE_FACTORY_REQUIREMENT_ID],
+        CODE_FACTORY_REQUIREMENT_ID,
+        help,
+      );
+      endpoint = `/requirements/${encodeURIComponent(requirementId)}/timers`;
+      method = 'GET';
+    } else if (command === 'timer cancel') {
+      help = TIMER_CANCEL_HELP;
+      if (writesHelp(args.slice(2))) {
+        runtime.writeOut(`${help}\n`);
+        return 0;
+      }
+      const requirementId = required(
+        runtime.environment[CODE_FACTORY_REQUIREMENT_ID],
+        CODE_FACTORY_REQUIREMENT_ID,
+        help,
+      );
+      const values = parseOptions(args.slice(2), help, { id: { type: 'string' } });
+      const timerId = required(values.id as string | undefined, '--id', help);
+      endpoint = `/requirements/${encodeURIComponent(requirementId)}/timers/${encodeURIComponent(timerId)}`;
+      method = 'DELETE';
     } else {
       throw new CliUsageError(`Unknown command: ${args.join(' ')}`, HELP);
     }
-    const result = await postJson(runtime, `${apiBaseUrl(runtime.environment)}${endpoint}`, body);
+    const result = await requestJson(runtime, `${apiBaseUrl(runtime.environment)}${endpoint}`, method, body);
     runtime.writeOut(`${JSON.stringify(result)}\n`);
     return 0;
   } catch (error) {

@@ -99,17 +99,20 @@ import {
   type RequirementMessageDto,
   type RequirementStatus,
   type ReviewRequestDto,
+  type AgentTimerDto,
   type SearchResultDto,
   type SessionState,
   type WorkspaceDto,
 } from '@/lib/agent-manager-client';
 import { countAddedMessages, isAwayFromConversationTop, isNearConversationBottom } from '@/lib/conversation-scroll';
+import { formatDuration } from '@/lib/format-duration';
 import { I18nProvider, useI18n } from '@/lib/i18n';
 import { useTheme } from '@/lib/theme';
 import type { TranslationKey } from '@/locales/zh-CN';
 
 type ConnectionState = 'connecting' | 'online' | 'reconnecting' | 'offline';
 type TimeRange = '1d' | '7d' | '30d' | '90d' | 'all';
+type DashboardView = 'requirements' | 'pull_requests' | 'sessions' | 'timers';
 
 const timeRangeOptions: Array<{ value: TimeRange; label: TranslationKey }> = [
   { value: '1d', label: 'Last 24 hours' },
@@ -157,6 +160,17 @@ const sessionColumns: Array<{
   { state: 'waiting_human', title: 'WAITING FOR HUMAN', description: 'Awaiting a reply or completion confirmation', tone: 'bg-violet-500' },
   { state: 'failed', title: 'FAILED', description: 'Can continue in the original Session', tone: 'bg-rose-500' },
   { state: 'completed', title: 'COMPLETED', description: 'Requirement complete; reply to reactivate', tone: 'bg-teal-600' },
+];
+
+const agentTimerColumns: Array<{
+  status: AgentTimerDto['status'];
+  title: TranslationKey;
+  description: TranslationKey;
+  tone: string;
+}> = [
+  { status: 'active', title: 'ACTIVE', description: 'Waiting for the next scheduled wake-up', tone: 'bg-emerald-500' },
+  { status: 'completed', title: 'COMPLETED', description: 'One-time wake-up delivered', tone: 'bg-violet-500' },
+  { status: 'cancelled', title: 'CANCELLED', description: 'Stopped manually or with its Requirement', tone: 'bg-slate-400' },
 ];
 
 const stateLabel: Record<SessionState, TranslationKey> = {
@@ -253,7 +267,7 @@ function agentConfigurationLabel(configuration: {
 }
 
 function shortId(id: string): string {
-  const value = id.replace(/^(req|ses|run|msg)_/, '');
+  const value = id.replace(/^(req|ses|run|msg|tmr)_/, '');
   return value.length > 12 ? value.slice(0, 8) : value;
 }
 
@@ -674,6 +688,69 @@ function PullRequestCard({ pullRequest, requirement, activeReview, busy, modelCa
   );
 }
 
+function AgentTimerCard({ timer, requirement, onOpenRequirement }: {
+  timer: AgentTimerDto;
+  requirement?: RequirementDto;
+  onOpenRequirement: () => void;
+}) {
+  const { locale, t } = useI18n();
+  const status = agentTimerColumns.find((column) => column.status === timer.status);
+  const eventLabel = timer.status === 'active'
+    ? t('Next wake-up')
+    : timer.status === 'completed' ? t('Last wake-up') : t('Stopped');
+  const eventTime = timer.status === 'active'
+    ? timer.nextFireAt
+    : timer.status === 'completed' ? timer.lastFiredAt : timer.updatedAt;
+
+  return (
+    <article className="rounded-xl border border-border/80 bg-card p-3.5 shadow-[0_1px_2px_oklch(0.18_0.02_255/0.05)]">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="grid size-7 place-items-center rounded-lg bg-primary/8 text-primary"><Clock3 className="size-3.5" /></span>
+          <Badge variant="outline" className="h-5 font-mono text-[9px]">TIMER-{shortId(timer.id)}</Badge>
+        </div>
+        <span className="flex items-center gap-1.5 text-[9px] font-medium text-muted-foreground">
+          <span className={`size-1.5 rounded-full ${status?.tone ?? 'bg-slate-400'}`} />
+          {status ? t(status.title) : timer.status.toUpperCase()}
+        </span>
+      </div>
+
+      <p className="mt-3 text-[13px] font-semibold">
+        {timer.description}
+      </p>
+      <p className="mt-1 text-[10px] text-muted-foreground">
+        {timer.schedule === 'once'
+          ? t('Once after {duration}', { duration: formatDuration(timer.intervalSeconds, t) })
+          : t('Every {duration}', { duration: formatDuration(timer.intervalSeconds, t) })}
+      </p>
+
+      <div className="mt-3 rounded-lg border border-border/70 bg-muted/35 px-3 py-2.5">
+        <p className="truncate text-[11px] font-medium">{requirement?.title ?? t('Requirement unavailable')}</p>
+        <p className="mt-1 truncate font-mono text-[9px] text-muted-foreground">
+          REQ-{shortId(timer.requirementId)}{requirement ? ` · ${providerLabel(requirement.provider)}` : ''}
+        </p>
+      </div>
+
+      <dl className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
+        <div className="rounded-lg bg-muted/30 px-2.5 py-2">
+          <dt className="text-[9px] text-muted-foreground">{t('Interval')}</dt>
+          <dd className="mt-0.5 font-medium">{formatDuration(timer.intervalSeconds, t)}</dd>
+        </div>
+        <div className="rounded-lg bg-muted/30 px-2.5 py-2">
+          <dt className="text-[9px] text-muted-foreground">{eventLabel}</dt>
+          <dd className="mt-0.5 font-medium">{eventTime ? formatTime(eventTime, locale) : '—'}</dd>
+        </div>
+      </dl>
+
+      {requirement ? (
+        <Button variant="ghost" size="xs" className="mt-3 w-full" onClick={onOpenRequirement}>
+          <MessagesSquare data-icon="inline-start" />{t('Open requirement')}
+        </Button>
+      ) : null}
+    </article>
+  );
+}
+
 function RequirementPullRequestCard({ pullRequest, activeReview, busy, modelCatalog, onReview }: {
   pullRequest: PullRequestDto;
   activeReview?: ReviewRequestDto;
@@ -1015,10 +1092,168 @@ function ManagerConfigurationDialog({
   );
 }
 
+function AgentTimerDialog({
+  timers,
+  disabled,
+  busy,
+  onCreate,
+  onCancel,
+}: {
+  timers: AgentTimerDto[];
+  disabled: boolean;
+  busy: boolean;
+  onCreate: (input: { description: string; schedule: 'once' | 'recurring'; intervalSeconds: number }) => Promise<void>;
+  onCancel: (timerId: string) => Promise<void>;
+}) {
+  const { locale, t } = useI18n();
+  const fieldId = useId();
+  const [open, setOpen] = useState(false);
+  const [description, setDescription] = useState('');
+  const [schedule, setSchedule] = useState<'once' | 'recurring'>('once');
+  const [amount, setAmount] = useState(1);
+  const [unit, setUnit] = useState<'minutes' | 'hours' | 'days'>('hours');
+  const active = timers.filter((timer) => timer.status === 'active');
+  const secondsPerUnit = unit === 'minutes' ? 60 : unit === 'hours' ? 3_600 : 86_400;
+  const intervalSeconds = amount * secondsPerUnit;
+  const normalizedDescription = description.trim();
+  const valid = normalizedDescription.length > 0
+    && normalizedDescription.length <= 500
+    && Number.isInteger(amount)
+    && amount > 0
+    && intervalSeconds <= 31_536_000;
+
+  async function submit(event: SyntheticEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!valid || disabled || busy) return;
+    try {
+      await onCreate({ description: normalizedDescription, schedule, intervalSeconds });
+      setDescription('');
+      setOpen(false);
+    } catch {
+      // The dashboard-level error banner reports the API error.
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger
+        render={(
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 rounded-xl px-2 text-[10px] text-muted-foreground"
+            disabled={disabled}
+            aria-label={t('Scheduled wake-ups')}
+          />
+        )}
+      >
+        <Clock3 data-icon="inline-start" />
+        {active.length > 0 ? t('{count} scheduled', { count: active.length }) : t('Schedule')}
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{t('Scheduled wake-ups')}</DialogTitle>
+          <DialogDescription>{t('Wake this RD Session with a specific follow-up, once or repeatedly.')}</DialogDescription>
+        </DialogHeader>
+
+        <div className="my-4 space-y-2">
+          <p className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Active schedules')}</p>
+          {active.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border px-3 py-4 text-center text-[10px] text-muted-foreground">
+              {t('No scheduled wake-ups')}
+            </div>
+          ) : active.map((timer) => (
+            <div key={timer.id} className="flex items-center gap-3 rounded-xl border border-border bg-muted/30 px-3 py-2.5">
+              <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary/8 text-primary"><Clock3 className="size-4" /></span>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium">
+                  {timer.description}
+                </p>
+                <p className="mt-0.5 text-[9px] text-muted-foreground">
+                  {timer.schedule === 'once'
+                    ? t('Once after {duration}', { duration: formatDuration(timer.intervalSeconds, t) })
+                    : t('Every {duration}', { duration: formatDuration(timer.intervalSeconds, t) })}
+                  {timer.nextFireAt ? ` · ${t('Next wake-up: {time}', { time: formatTime(timer.nextFireAt, locale) })}` : null}
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                disabled={busy}
+                aria-label={t('Cancel scheduled wake-up')}
+                onClick={() => void onCancel(timer.id).catch(() => undefined)}
+              >
+                <Trash2 />
+              </Button>
+            </div>
+          ))}
+        </div>
+
+        <form onSubmit={submit}>
+          <FieldGroup className="gap-4 border-t border-border pt-4">
+            <Field>
+              <FieldLabel htmlFor={`${fieldId}-description`}>{t('Timer description')}</FieldLabel>
+              <Textarea
+                id={`${fieldId}-description`}
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                maxLength={500}
+                required
+                placeholder={t('For example: check the compiler status')}
+              />
+              <p className="text-[10px] text-muted-foreground">{t('The RD Agent receives this description when the timer fires.')}</p>
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field>
+                <FieldLabel htmlFor={`${fieldId}-schedule`}>{t('Pattern')}</FieldLabel>
+                <NativeSelect
+                  id={`${fieldId}-schedule`}
+                  value={schedule}
+                  onChange={(event) => setSchedule(event.target.value as 'once' | 'recurring')}
+                >
+                  <NativeSelectOption value="once">{t('One time')}</NativeSelectOption>
+                  <NativeSelectOption value="recurring">{t('Recurring')}</NativeSelectOption>
+                </NativeSelect>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor={`${fieldId}-amount`}>{t('Delay / interval')}</FieldLabel>
+                <div className="flex gap-2">
+                  <Input
+                    id={`${fieldId}-amount`}
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={amount}
+                    onChange={(event) => setAmount(Number(event.target.value))}
+                    required
+                  />
+                  <NativeSelect className="w-24 shrink-0" value={unit} onChange={(event) => setUnit(event.target.value as typeof unit)}>
+                    <NativeSelectOption value="minutes">{t('Minutes')}</NativeSelectOption>
+                    <NativeSelectOption value="hours">{t('Hours')}</NativeSelectOption>
+                    <NativeSelectOption value="days">{t('Days')}</NativeSelectOption>
+                  </NativeSelect>
+                </div>
+              </Field>
+            </div>
+            <p className="text-[10px] text-muted-foreground">{t('The first wake-up occurs after this interval. Recurring schedules then repeat at the same interval.')}</p>
+          </FieldGroup>
+          <DialogFooter className="mt-5">
+            <DialogClose render={<Button type="button" variant="outline" />}>{t('Close')}</DialogClose>
+            <Button type="submit" disabled={!valid || busy}>{busy ? <LoaderCircle className="animate-spin" /> : <Clock3 />}{t('Schedule wake-up')}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function RequirementDetail({
   requirement,
   runs,
   messages,
+  agentTimers,
   pullRequests,
   reviewRequests,
   modelCatalog,
@@ -1031,11 +1266,14 @@ function RequirementDetail({
   onInterrupt,
   onConfirm,
   onReview,
+  onCreateAgentTimer,
+  onCancelAgentTimer,
   apiUrl,
 }: {
   requirement: RequirementDto | null;
   runs: AgentRunDto[];
   messages: RequirementMessageDto[];
+  agentTimers: AgentTimerDto[];
   pullRequests: PullRequestDto[];
   reviewRequests: ReviewRequestDto[];
   modelCatalog: AgentModelCatalogDto | null;
@@ -1048,6 +1286,10 @@ function RequirementDetail({
   onInterrupt: () => Promise<void>;
   onConfirm: () => Promise<void>;
   onReview: (pullRequestId: string, configuration: AgentConfiguration) => Promise<void>;
+  onCreateAgentTimer: (
+    input: { description: string; schedule: 'once' | 'recurring'; intervalSeconds: number },
+  ) => Promise<void>;
+  onCancelAgentTimer: (timerId: string) => Promise<void>;
   apiUrl: string;
 }) {
   const { locale, t } = useI18n();
@@ -1472,6 +1714,13 @@ function RequirementDetail({
                 >
                   <Paperclip />
                 </Button>
+                <AgentTimerDialog
+                  timers={agentTimers}
+                  disabled={requirement.status === 'done' || requirement.status === 'cancelled'}
+                  busy={busy}
+                  onCreate={onCreateAgentTimer}
+                  onCancel={onCancelAgentTimer}
+                />
                 <span className="truncate text-[9px] text-muted-foreground">{t('Enter to send · Up to 6 attachments')}</span>
               </div>
               <Button type="submit" size="icon-sm" className="rounded-xl" disabled={!canWrite || busy || (!message.trim() && draftAttachments.length === 0)} aria-label={t('Send reply')}>
@@ -1494,7 +1743,7 @@ function RequirementDetail({
 function Dashboard() {
   const { locale, setLocale, t } = useI18n();
   const { theme, setTheme } = useTheme();
-  const [view, setView] = useState<'requirements' | 'pull_requests' | 'sessions'>('requirements');
+  const [view, setView] = useState<DashboardView>('requirements');
   const [apiUrl, setApiUrl] = useState(DEFAULT_AGENT_MANAGER_URL);
   const [connection, setConnection] = useState<ConnectionState>('connecting');
   const [workspace, setWorkspace] = useState<WorkspaceDto | null>(null);
@@ -1505,6 +1754,7 @@ function Dashboard() {
   const [pullRequests, setPullRequests] = useState<PullRequestDto[]>([]);
   const [reviewRequests, setReviewRequests] = useState<ReviewRequestDto[]>([]);
   const [messages, setMessages] = useState<RequirementMessageDto[]>([]);
+  const [agentTimers, setAgentTimers] = useState<AgentTimerDto[]>([]);
   const [messageLoading, setMessageLoading] = useState(false);
   const [messageRevision, setMessageRevision] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1526,7 +1776,7 @@ function Dashboard() {
   const reload = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
     try {
-      const [nextWorkspace, nextConfiguration, nextModelCatalog, nextRequirements, nextRuns, nextPullRequests, nextReviewRequests] = await Promise.all([
+      const [nextWorkspace, nextConfiguration, nextModelCatalog, nextRequirements, nextRuns, nextPullRequests, nextReviewRequests, nextAgentTimers] = await Promise.all([
         client.getWorkspace(),
         client.getConfiguration(),
         client.listAgentModels(),
@@ -1534,6 +1784,7 @@ function Dashboard() {
         client.listRuns(),
         client.listPullRequests(),
         client.listReviewRequests(),
+        client.listAgentTimers(),
       ]);
       setWorkspace(nextWorkspace);
       setConfiguration(nextConfiguration);
@@ -1542,6 +1793,7 @@ function Dashboard() {
       setRuns(nextRuns);
       setPullRequests(nextPullRequests);
       setReviewRequests(nextReviewRequests);
+      setAgentTimers(nextAgentTimers);
       setConnection('online');
       setError(null);
       const syncedAt = new Date();
@@ -1620,7 +1872,7 @@ function Dashboard() {
     const trimmed = query.trim();
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      if (!trimmed) {
+      if (!trimmed || view === 'timers') {
         setSearchResponse({ query: '', items: [] });
         setSearching(false);
         setSearchError(null);
@@ -1645,7 +1897,7 @@ function Dashboard() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [client, lastSynced, query, t]);
+  }, [client, lastSynced, query, t, view]);
 
   const selectedRequirement = requirements.find((item) => item.id === selectedId) ?? null;
   const selectedRuns = runs.filter((run) => run.requirementId === selectedId);
@@ -1696,6 +1948,38 @@ function Dashboard() {
     });
   }, [filterReferenceTime, matchingPullRequestIds, normalizedQuery, pullRequests, timeRange]);
 
+  const requirementsById = useMemo(
+    () => new Map(requirements.map((requirement) => [requirement.id, requirement])),
+    [requirements],
+  );
+
+  const filteredAgentTimers = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return agentTimers.filter((timer) => {
+      const requirement = requirementsById.get(timer.requirementId);
+      const matchesQuery = !needle || [
+        timer.id,
+        timer.description,
+        timer.requirementId,
+        requirement?.title ?? '',
+        requirement?.description ?? '',
+        requirement?.session.id ?? '',
+      ].some((value) => value.toLowerCase().includes(needle));
+      return matchesQuery
+        && (provider === 'all' || requirement?.provider === provider)
+        && isWithinTimeRange(
+          timer.status === 'active' ? timer.nextFireAt ?? timer.createdAt : timer.updatedAt,
+          timeRange,
+          filterReferenceTime,
+        );
+    }).sort((left, right) => {
+      if (left.status === 'active' && right.status === 'active') {
+        return Date.parse(left.nextFireAt ?? '') - Date.parse(right.nextFireAt ?? '');
+      }
+      return Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+    });
+  }, [agentTimers, filterReferenceTime, provider, query, requirementsById, timeRange]);
+
   async function runAction(requirementId: string, action: () => Promise<unknown>): Promise<void> {
     setBusyId(requirementId);
     setError(null);
@@ -1724,6 +2008,18 @@ function Dashboard() {
     } finally {
       setBusyPullRequestId(null);
     }
+  }
+
+  async function createAgentTimer(
+    input: { description: string; schedule: 'once' | 'recurring'; intervalSeconds: number },
+  ): Promise<void> {
+    if (!selectedId) return;
+    await runAction(selectedId, () => client.createAgentTimer(selectedId, input));
+  }
+
+  async function cancelAgentTimer(timerId: string): Promise<void> {
+    if (!selectedId) return;
+    await runAction(selectedId, () => client.cancelAgentTimer(selectedId, timerId));
   }
 
   async function uploadMessageAttachments(requirementId: string, files: File[]): Promise<string[]> {
@@ -1766,7 +2062,26 @@ function Dashboard() {
   const activeSessions = requirements.filter((item) => item.session.state === 'running').length;
   const waitingHumans = requirements.filter((item) => item.session.state === 'waiting_human').length;
   const failures = requirements.filter((item) => item.session.state === 'failed').length;
+  const activeTimers = agentTimers.filter((item) => item.status === 'active');
+  const oneTimeTimers = activeTimers.filter((item) => item.schedule === 'once').length;
+  const recurringTimers = activeTimers.filter((item) => item.schedule === 'recurring').length;
   const workspaceLabel = workspace?.root ?? t('Workspace not connected');
+  const viewTitle: TranslationKey = view === 'requirements'
+    ? 'Requirement workflow'
+    : view === 'pull_requests' ? 'Pull Requests' : view === 'sessions' ? 'RD Agent Sessions' : 'Scheduled wake-ups';
+  const viewDescription: TranslationKey = view === 'requirements'
+    ? 'The requirement conversation is the RD Agent message stream; messages remain available while it runs'
+    : view === 'pull_requests'
+      ? 'A human can select Codex or Claude to run a one-off review on an Open PR'
+      : view === 'sessions'
+        ? 'Sessions inherit the Agent Manager working directory and native Skills'
+        : 'Track timers and the Requirements they will wake';
+  const searchLabel: TranslationKey = view === 'timers'
+    ? 'Search timers or Requirements'
+    : 'Search requirements, conversations, or PRs';
+  const boardLabel: TranslationKey = view === 'requirements'
+    ? 'Requirement board'
+    : view === 'pull_requests' ? 'Pull Request board' : view === 'sessions' ? 'Agent Session board' : 'Timer board';
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -1784,6 +2099,7 @@ function Dashboard() {
             <Button variant="ghost" size="sm" className={view === 'requirements' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('requirements')}><LayoutDashboard data-icon="inline-start" />{t('Requirements')}</Button>
             <Button variant="ghost" size="sm" className={view === 'pull_requests' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('pull_requests')}><GitPullRequest data-icon="inline-start" />PR</Button>
             <Button variant="ghost" size="sm" className={view === 'sessions' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('sessions')}><Activity data-icon="inline-start" />{t('Sessions')}</Button>
+            <Button variant="ghost" size="sm" className={view === 'timers' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('timers')}><Clock3 data-icon="inline-start" />{t('Timers')}</Button>
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
@@ -1814,29 +2130,35 @@ function Dashboard() {
           <div>
             <div className="flex items-center gap-2">
               <h1 id="overview-title" className="text-xl font-semibold tracking-[-0.03em]">
-                {view === 'requirements' ? t('Requirement workflow') : view === 'pull_requests' ? t('Pull Requests') : t('RD Agent Sessions')}
+                {t(viewTitle)}
               </h1>
               <Badge variant="secondary" className="font-mono text-[9px]">{connection === 'online' ? t('LIVE') : t('OFFLINE')}</Badge>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              {view === 'requirements'
-                ? t('The requirement conversation is the RD Agent message stream; messages remain available while it runs')
-                : view === 'pull_requests'
-                  ? t('A human can select Codex or Claude to run a one-off review on an Open PR')
-                  : t('Sessions inherit the Agent Manager working directory and native Skills')}
+              {t(viewDescription)}
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-5 text-xs">
-            <div><span className="mr-1.5 text-lg font-semibold tabular-nums">{activeSessions}</span><span className="text-muted-foreground">{t('Running')}</span></div>
-            <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-violet-600">{waitingHumans}</span><span className="text-muted-foreground">{t('Waiting for human')}</span></div>
-            <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-rose-600">{failures}</span><span className="text-muted-foreground">{t('Failed')}</span></div>
+            {view === 'timers' ? (
+              <>
+                <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-emerald-600">{activeTimers.length}</span><span className="text-muted-foreground">{t('Active')}</span></div>
+                <div><span className="mr-1.5 text-lg font-semibold tabular-nums">{oneTimeTimers}</span><span className="text-muted-foreground">{t('One time')}</span></div>
+                <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-violet-600">{recurringTimers}</span><span className="text-muted-foreground">{t('Recurring')}</span></div>
+              </>
+            ) : (
+              <>
+                <div><span className="mr-1.5 text-lg font-semibold tabular-nums">{activeSessions}</span><span className="text-muted-foreground">{t('Running')}</span></div>
+                <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-violet-600">{waitingHumans}</span><span className="text-muted-foreground">{t('Waiting for human')}</span></div>
+                <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-rose-600">{failures}</span><span className="text-muted-foreground">{t('Failed')}</span></div>
+              </>
+            )}
             <div className="hidden h-7 w-px bg-border sm:block" />
             <div className="relative hidden sm:block">
-              {searching
+              {view !== 'timers' && searching
                 ? <LoaderCircle className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 animate-spin text-muted-foreground" />
                 : <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />}
-              <Input aria-label={t('Search requirements, conversations, or PRs')} value={query} onChange={(event) => setQuery(event.target.value)} className="w-64 pr-3 pl-8 text-xs" placeholder={t('Search requirements, conversations, or PRs')} />
+              <Input aria-label={t(searchLabel)} value={query} onChange={(event) => setQuery(event.target.value)} className="w-64 pr-3 pl-8 text-xs" placeholder={t(searchLabel)} />
             </div>
           </div>
         </div>
@@ -1871,7 +2193,7 @@ function Dashboard() {
             size="sm"
             value={timeRange}
             onChange={(event) => setTimeRange(event.target.value as TimeRange)}
-            aria-label={t('Created within')}
+            aria-label={view === 'timers' ? t('Timer activity within') : t('Created within')}
             className="[&_select]:text-[10px]"
           >
             {timeRangeOptions.map((option) => (
@@ -1882,7 +2204,7 @@ function Dashboard() {
         <span className="ml-auto text-[10px] text-muted-foreground">{lastSynced ? t('Last synced {time}', { time: lastSynced.toLocaleTimeString(locale === 'zh-CN' ? 'zh-CN' : 'en-US') }) : apiUrl}</span>
       </div>
 
-      <section className="kanban-scroll overflow-x-auto" aria-label={view === 'requirements' ? t('Requirement board') : view === 'pull_requests' ? t('Pull Request board') : t('Agent Session board')}>
+      <section className="kanban-scroll overflow-x-auto" aria-label={t(boardLabel)}>
         {view === 'requirements' ? (
           <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-4 gap-4 p-4 lg:p-5">
             {requirementColumns.map((column) => {
@@ -1951,6 +2273,39 @@ function Dashboard() {
               );
             })}
           </div>
+        ) : view === 'timers' ? (
+          <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-3 gap-4 p-4 lg:p-5">
+            {agentTimerColumns.map((column) => {
+              const items = filteredAgentTimers.filter((item) => item.status === column.status);
+              return (
+                <section key={column.status} className="w-[340px]" aria-labelledby={`timer-${column.status}`}>
+                  <header className="mb-3 h-11 px-1">
+                    <div className="flex items-center gap-2">
+                      <span className={`size-1.5 rounded-full ${column.tone}`} />
+                      <h2 id={`timer-${column.status}`} className="text-xs font-semibold">{t(column.title)}</h2>
+                      <span className="font-mono text-[10px] text-muted-foreground">{items.length}</span>
+                    </div>
+                    <p className="mt-1 pl-3.5 text-[10px] text-muted-foreground">{t(column.description)}</p>
+                  </header>
+                  <div className="space-y-2.5">
+                    {items.map((timer) => (
+                      <AgentTimerCard
+                        key={timer.id}
+                        timer={timer}
+                        requirement={requirementsById.get(timer.requirementId)}
+                        onOpenRequirement={() => setSelectedId(timer.requirementId)}
+                      />
+                    ))}
+                    {items.length === 0 ? (
+                      <div className="grid min-h-24 place-items-center rounded-xl border border-dashed border-border text-[10px] text-muted-foreground">
+                        {loading ? t('Loading…') : t('No timers')}
+                      </div>
+                    ) : null}
+                  </div>
+                </section>
+              );
+            })}
+          </div>
         ) : (
           <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-5 gap-3 p-4 lg:p-5">
             {sessionColumns.map((column) => {
@@ -1986,6 +2341,7 @@ function Dashboard() {
         requirement={selectedRequirement}
         runs={selectedRuns}
         messages={messages}
+        agentTimers={agentTimers.filter((timer) => timer.requirementId === selectedId)}
         pullRequests={selectedPullRequests}
         reviewRequests={reviewRequests}
         modelCatalog={modelCatalog}
@@ -2005,6 +2361,8 @@ function Dashboard() {
         onInterrupt={() => selectedRequirement ? runAction(selectedRequirement.id, () => client.interruptRequirement(selectedRequirement.id)) : Promise.resolve()}
         onConfirm={() => selectedRequirement ? runAction(selectedRequirement.id, () => client.confirmRequirement(selectedRequirement.id)) : Promise.resolve()}
         onReview={requestReview}
+        onCreateAgentTimer={createAgentTimer}
+        onCancelAgentTimer={cancelAgentTimer}
       />
 
       <div className="fixed right-4 bottom-4 hidden items-center gap-2 rounded-lg border border-border bg-card/95 px-3 py-2 text-[10px] text-muted-foreground shadow-lg backdrop-blur sm:flex">

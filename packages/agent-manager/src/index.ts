@@ -12,6 +12,7 @@ export * from './model-catalog.js';
 export * from './process-runner.js';
 export * from './pull-request-reconciler.js';
 export * from './pull-request-triggers.js';
+export * from './timer-agent-trigger.js';
 export * from './search.js';
 export * from './server.js';
 export * from './sqlite-store.js';

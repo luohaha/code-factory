@@ -49,6 +49,10 @@ The service listens only on the loopback interface by default and currently has 
 | POST | /api/requirements/:id/interrupt | Interrupt the current RD Run |
 | POST | /api/requirements/:id/confirm | Confirm Requirement completion |
 | GET | /api/requirements/:id/messages | Read the complete Requirement conversation |
+| GET | /api/timers | List Agent Timers across the workspace |
+| GET | /api/requirements/:id/timers | List Agent Timers for a Requirement |
+| POST | /api/requirements/:id/timers | Create a one-time or recurring Agent Timer |
+| DELETE | /api/requirements/:id/timers/:timerId | Cancel an active Agent Timer |
 | POST | /api/requirements/:id/attachments | Upload a conversation attachment |
 | GET | /api/attachments/:id | Read or download an attachment |
 | GET | /api/sessions | List RD Sessions |
@@ -233,7 +237,22 @@ interface AgentModelCatalog {
 
 `stale=true` means the latest provider refresh failed or has not completed. Previously discovered values, or provider-safe fallbacks, remain in `models`.
 
-### 3.8 SearchResult
+### 3.8 AgentTimer
+
+~~~ts
+interface AgentTimer {
+  id: string;                         // tmr_<uuid>
+  requirementId: string;
+  description: string;                // follow-up delivered to the RD Agent
+  schedule: 'once' | 'recurring';
+  intervalSeconds: number;
+  status: 'active' | 'completed' | 'cancelled';
+  nextFireAt: string | null;
+  lastFiredAt: string | null;
+  createdAt: string;
+An active timer always has `nextFireAt`. A one-time timer becomes completed after delivery. A recurring timer remains active and advances to its next future occurrence until it is cancelled or its Requirement becomes done or cancelled. `AgentTimer` is the persisted configuration resource; the built-in `timer` Agent Trigger executes due timers through the shared trigger-delivery framework.
+
+### 3.9 SearchResult
 
 ~~~ts
 interface SearchResult {
@@ -365,6 +384,18 @@ Success: 200 OK with {"items": AgentRun[]}. An unknown requirementId returns an 
 Returns the complete Requirement conversation ordered by ascending sequence.
 
 Success: 200 OK with {"items": RequirementMessage[]}. Returns 404 Not Found for an unknown Requirement.
+
+### GET /api/timers
+
+Returns every scheduled wake-up in the workspace, including active, completed, and cancelled records. Dashboard clients use each record's `requirementId` to show its associated Requirement.
+
+Success: 200 OK with {"items": AgentTimer[]}.
+
+### GET /api/requirements/:id/timers
+
+Returns every scheduled wake-up for the Requirement, including completed and cancelled history.
+
+Success: 200 OK with {"items": AgentTimer[]}. Returns 404 Not Found for an unknown Requirement.
 
 ### POST /api/requirements/:id/attachments
 
@@ -530,6 +561,24 @@ curl -X POST http://127.0.0.1:4310/api/requirements/req_.../confirm \
 
 Success: 200 OK with the updated Requirement. Returns 404 for an unknown Requirement or 409 when its status is not waiting_confirmation.
 
+### POST /api/requirements/:id/timers
+
+Creates a persistent timer for an active Requirement. The first occurrence is the requested interval after creation. Each occurrence appends a System message containing the timer ID, schedule, and description; an idle RD Session starts immediately and a running Session queues the message for its next Run. Recurring messages also tell the RD Agent how to cancel the timer when the follow-up is complete.
+
+~~~json
+{
+  "description": "Check compiler status",
+  "schedule": "recurring",
+  "intervalSeconds": 3600
+}
+~~~
+
+`description` is required after trimming and must contain 1 through 500 characters. `schedule` must be `once` or `recurring`. `intervalSeconds` must be a whole number from 60 through 31536000. Success: 201 Created with the AgentTimer. Returns 404 for an unknown Requirement and 409 for a done or cancelled Requirement.
+
+### DELETE /api/requirements/:id/timers/:timerId
+
+Cancels an active Agent Timer owned by the Requirement. Success: 200 OK with the cancelled AgentTimer. Returns 404 when either ID is unknown or the timer belongs to another Requirement, and 409 when the timer is already completed or cancelled.
+
 ## 6. Pull Request review
 
 ### POST /api/pull-requests/:id/review-requests
@@ -577,7 +626,12 @@ These endpoints are the transport used by `code-factory-cli` and other trusted l
 ~~~bash
 code-factory-cli pr register --help
 code-factory-cli requirement propose --help
+code-factory-cli timer register --help
+code-factory-cli timer show --help
+code-factory-cli timer cancel --help
 ~~~
+
+The timer commands call the Requirement-scoped timer endpoints above. `timer register --description "Check compiler status" --after-seconds 3600` registers a one-time wake-up; add `--repeat` for a recurring timer. `timer show` returns all timers for the current Requirement, including IDs, descriptions, and statuses. `timer cancel --id tmr_...` stops an active timer. They use the injected `CODE_FACTORY_REQUIREMENT_ID`, so the RD Agent does not need to copy its Requirement ID.
 
 ### POST /api/agent/pull-requests
 
@@ -689,6 +743,9 @@ Current event types and primary payloads:
 | pull_request.created | pullRequest |
 | pull_request.updated | pullRequest |
 | review_request.started | reviewRequestId, pullRequestId, provider, targetHeadSha |
+| timer.created | timer |
+| timer.fired | timer, scheduledFor |
+| timer.cancelled | timer |
 | run.started | RD role, provider, resumed, and input message range |
 | run.succeeded | role, exitCode, nativeSessionId, finalMessage, error |
 | run.failed | same as run.succeeded |

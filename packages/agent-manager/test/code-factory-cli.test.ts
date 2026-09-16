@@ -17,16 +17,21 @@ import { CODE_FACTORY_VERSION } from '../src/version.ts';
 
 interface CapturedRequest {
   url: string;
+  method: string;
   body: Record<string, unknown>;
 }
 
 function testRuntime(requests: CapturedRequest[], output: string[], errors: string[]): CodeFactoryCliRuntime {
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url;
-    assert.equal(init?.method, 'POST');
-    assert.equal(typeof init?.body, 'string');
-    requests.push({ url, body: JSON.parse(init.body as string) as Record<string, unknown> });
-    return new Response(JSON.stringify({ ok: true }), {
+    const method = init?.method ?? 'GET';
+    const body = typeof init?.body === 'string'
+      ? JSON.parse(init.body) as Record<string, unknown>
+      : {};
+    requests.push({ url, method, body });
+    return new Response(JSON.stringify(method === 'GET'
+      ? { items: [{ id: 'tmr-123', description: 'Check compiler status', status: 'active' }] }
+      : { ok: true }), {
       status: 201,
       headers: { 'content-type': 'application/json' },
     });
@@ -52,6 +57,8 @@ test('code-factory-cli help discovers the supported RD commands', async () => {
 
   assert.equal(exitCode, 0);
   assert.match(output.join(''), /pr register/);
+  assert.match(output.join(''), /timer register/);
+  assert.match(output.join(''), /timer show/);
   assert.match(output.join(''), /requirement propose/);
   assert.match(output.join(''), /CODE_FACTORY_REQUIREMENT_ID/);
 });
@@ -87,6 +94,7 @@ test('code-factory-cli registers a PR using injected Requirement context', async
   assert.equal(exitCode, 0);
   assert.deepEqual(errors, []);
   assert.equal(requests[0]?.url, 'http://127.0.0.1:4310/api/agent/pull-requests');
+  assert.equal(requests[0]?.method, 'POST');
   assert.deepEqual(requests[0]?.body, {
     requirementId: 'req_cli',
     repository: 'acme/widgets',
@@ -126,6 +134,41 @@ test('code-factory-cli proposes a Requirement using injected Session context', a
   });
 });
 
+test('code-factory-cli registers, shows, and cancels RD wake-up timers', async () => {
+  const requests: CapturedRequest[] = [];
+  const output: string[] = [];
+  const errors: string[] = [];
+  const runtime = testRuntime(requests, output, errors);
+
+  const registerExitCode = await runCodeFactoryCli([
+    'timer', 'register', '--description', 'Check compiler status', '--after-seconds', '3600', '--repeat',
+  ], runtime);
+  const showExitCode = await runCodeFactoryCli(['timer', 'show'], runtime);
+  const cancelExitCode = await runCodeFactoryCli([
+    'timer', 'cancel', '--id', 'tmr-123',
+  ], runtime);
+
+  assert.equal(registerExitCode, 0);
+  assert.equal(showExitCode, 0);
+  assert.equal(cancelExitCode, 0);
+  assert.deepEqual(errors, []);
+  assert.match(output.join(''), /"id":"tmr-123"/);
+  assert.match(output.join(''), /"description":"Check compiler status"/);
+  assert.deepEqual(requests, [{
+    url: 'http://127.0.0.1:4310/api/requirements/req_cli/timers',
+    method: 'POST',
+    body: { description: 'Check compiler status', schedule: 'recurring', intervalSeconds: 3_600 },
+  }, {
+    url: 'http://127.0.0.1:4310/api/requirements/req_cli/timers',
+    method: 'GET',
+    body: {},
+  }, {
+    url: 'http://127.0.0.1:4310/api/requirements/req_cli/timers/tmr-123',
+    method: 'DELETE',
+    body: {},
+  }]);
+});
+
 test('code-factory-cli rejects invalid command input without sending a request', async () => {
   const requests: CapturedRequest[] = [];
   const output: string[] = [];
@@ -138,6 +181,20 @@ test('code-factory-cli rejects invalid command input without sending a request',
   assert.deepEqual(requests, []);
   assert.match(errors.join(''), /--number must be a positive integer/);
   assert.match(errors.join(''), /Usage: code-factory-cli pr register/);
+});
+
+test('code-factory-cli requires a timer description without sending a request', async () => {
+  const requests: CapturedRequest[] = [];
+  const output: string[] = [];
+  const errors: string[] = [];
+  const exitCode = await runCodeFactoryCli([
+    'timer', 'register', '--after-seconds', '3600',
+  ], testRuntime(requests, output, errors));
+
+  assert.equal(exitCode, 2);
+  assert.deepEqual(requests, []);
+  assert.match(errors.join(''), /--description is required/);
+  assert.match(errors.join(''), /Usage: code-factory-cli timer register/);
 });
 
 test('private launcher makes code-factory-cli resolvable through PATH', {

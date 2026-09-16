@@ -36,14 +36,17 @@ Discovery results are cached in memory. Provider failures retain the previous li
 
 ### RD control-plane CLI
 
-RD Agents use two self-describing commands instead of constructing Agent API requests in their prompts:
+RD Agents use self-describing commands instead of constructing Agent API requests in their prompts:
 
 ```bash
 code-factory-cli pr register --help
 code-factory-cli requirement propose --help
+code-factory-cli timer register --help
+code-factory-cli timer show --help
+code-factory-cli timer cancel --help
 ```
 
-`pr register` registers a newly created PR or refreshes metadata changed by the RD Agent. `requirement propose` records separate follow-up work as a linked TODO Requirement. Both commands print the Agent API JSON response and return nonzero exit codes for invalid input, missing context, network failures, or HTTP errors.
+`pr register` registers a newly created PR or refreshes metadata changed by the RD Agent. `requirement propose` records separate follow-up work as a linked TODO Requirement. `timer register` registers a one-time wake-up by default or a recurring one with `--repeat`; `timer show` recovers timer IDs and statuses for the current Requirement; `timer cancel` stops an active timer. The commands print the API JSON response and return nonzero exit codes for invalid input, missing context, network failures, or HTTP errors.
 
 Agent Manager injects `CODE_FACTORY_API_URL`, `CODE_FACTORY_REQUIREMENT_ID`, and `CODE_FACTORY_SESSION_ID` for each RD Run. The CLI supplies those context fields to the HTTP API, so the model does not copy IDs or endpoint paths from its prompt. A workspace-private launcher is created next to the workspace database and prepended to `PATH`, which also supports the documented `node .../dist/cli.js start` development workflow.
 
@@ -128,6 +131,14 @@ Agent Manager depends only on normalized fields. Raw events may be exposed as a 
 `AgentTrigger` is the extension boundary for external systems that should continue an RD session. A trigger owns source-specific polling or listening and emits an `AgentTriggerMessage` containing a target Requirement, an idempotency key, an author, a body, and optional event metadata. Register it with `AgentManager.startAgentTrigger()` and release it with `stopAgentTrigger()`.
 
 Agent Manager deliberately owns the rest of the delivery path: it scopes durable receipts by trigger ID, appends each accepted message to the Requirement conversation, publishes `message.created`, and starts or queues the target RD session. A stopped trigger's delivery context no longer accepts messages. This keeps future integrations such as a Slack-thread listener out of session and persistence internals.
+
+### Built-in Timer Trigger
+
+The `timer` Agent Trigger executes Requirement-scoped one-time and recurring `AgentTimer` resources persisted in SQLite. A timer's first occurrence is `intervalSeconds` after creation; recurring timers continue at the same interval. Each occurrence appends one System message containing the timer ID, schedule, and required follow-up description. Recurring messages also tell the RD Agent how to cancel the timer when it is no longer needed. An idle or waiting RD Session resumes immediately, while an active Run leaves the message queued for the next Run.
+
+Timers survive Agent Manager restarts. If the Manager was stopped across several recurring intervals, startup delivers only one due wake-up and advances directly to the next future occurrence instead of replaying a backlog. The occurrence's scheduled timestamp is part of its trigger-scoped idempotency key, so a crash between message persistence and timer advancement cannot duplicate the conversation message. Completing or cancelling a Requirement cancels its remaining active timers.
+
+Humans manage timers from the clock control beside the Requirement chat composer or through the HTTP API. An RD Agent must track every long-running process or task it starts—including builds, tests, deployments, data jobs, and other background work—to completion. While the current Run remains active, it uses the provider's normal wait, task-output, or monitor mechanism. It registers a Code Factory timer before ending the Run only when the task is guaranteed to continue independently after the Run ends and the Session needs to wake later to inspect it. The Agent can use `code-factory-cli timer register --description DESCRIPTION --after-seconds SECONDS [--repeat]`, recover the timer ID and description later with `code-factory-cli timer show`, then cancel a recurring timer with `code-factory-cli timer cancel --id TIMER_ID` once it is no longer needed. Descriptions must contain 1 through 500 characters after trimming. Intervals must be whole seconds from 60 through 31536000.
 
 ### Built-in PR Triggers
 

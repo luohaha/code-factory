@@ -28,6 +28,7 @@
 - [x] startup reconciliation clears orphaned `running` state;
 - [x] RD receives Human/Reviewer messages during a Run and automatically continues afterward;
 - [x] RD output is displayed but never fed back as next-turn input;
+- [x] persistent one-time and recurring scheduled wake-ups resume or queue the bound RD Session;
 - [ ] complete Run timeline and tool execution logs;
 - [ ] explicit Run cancellation and graceful termination;
 - [ ] local access token, Origin allowlist, and diagnostic-log redaction;
@@ -39,7 +40,7 @@
 - [x] PR/head SHA association with Requirements and a dedicated PR board;
 - [x] human selection of a Reviewer Agent for an Open PR;
 - [x] Reviewer summary appended to the Requirement conversation and automatic RD wake-up;
-- [x] RD Agent API and self-describing `code-factory-cli` commands for registering PRs and proposing TODO Requirements;
+- [x] RD Agent API and self-describing `code-factory-cli` commands for registering PRs, proposing TODO Requirements, and managing scheduled wake-ups;
 - [ ] PR create/update/comment/merge webhooks;
 - [x] Reviewer results associated with the head SHA captured when requested;
 - [ ] explicit stale-review indication after a head SHA update;
