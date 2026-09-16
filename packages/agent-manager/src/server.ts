@@ -72,6 +72,11 @@ function pullRequestStatusField(value: unknown): PullRequestStatus {
   return value;
 }
 
+function agentTimerScheduleField(value: unknown): 'once' | 'recurring' {
+  if (value !== 'once' && value !== 'recurring') throw new TypeError('schedule must be once or recurring');
+  return value;
+}
+
 function positiveIntegerField(body: Record<string, unknown>, name: string): number {
   const value = body[name];
   if (!Number.isInteger(value) || Number(value) <= 0) throw new TypeError(`${name} must be a positive integer`);
@@ -156,6 +161,12 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         sendJson(response, 200, manager.updateConfiguration(patch));
         return;
       }
+      if (request.method === 'GET' && url.pathname === '/api/search') {
+        const rawLimit = url.searchParams.get('limit');
+        const limit = rawLimit === null ? 50 : Number(rawLimit);
+        sendJson(response, 200, { items: manager.search(url.searchParams.get('q') ?? '', limit) });
+        return;
+      }
       if (request.method === 'GET' && url.pathname === '/api/requirements') {
         sendJson(response, 200, { items: manager.listRequirements() });
         return;
@@ -196,6 +207,36 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
       if (request.method === 'GET' && messages) {
         const requirementId = decodeURIComponent(messages[1]!);
         sendJson(response, 200, { items: manager.listMessages(requirementId) });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/timers') {
+        sendJson(response, 200, { items: manager.listAgentTimers() });
+        return;
+      }
+      const agentTimers = url.pathname.match(/^\/api\/requirements\/([^/]+)\/timers$/);
+      if (request.method === 'GET' && agentTimers) {
+        const requirementId = decodeURIComponent(agentTimers[1]!);
+        sendJson(response, 200, { items: manager.listAgentTimers(requirementId) });
+        return;
+      }
+      if (request.method === 'POST' && agentTimers) {
+        const requirementId = decodeURIComponent(agentTimers[1]!);
+        const body = await readJson(request);
+        const item = manager.createAgentTimer(requirementId, {
+          description: stringField(body, 'description', true)!,
+          schedule: agentTimerScheduleField(body.schedule),
+          intervalSeconds: positiveIntegerField(body, 'intervalSeconds'),
+        });
+        sendJson(response, 201, item);
+        return;
+      }
+      const agentTimer = url.pathname.match(
+        /^\/api\/requirements\/([^/]+)\/timers\/([^/]+)$/,
+      );
+      if (request.method === 'DELETE' && agentTimer) {
+        const requirementId = decodeURIComponent(agentTimer[1]!);
+        const timerId = decodeURIComponent(agentTimer[2]!);
+        sendJson(response, 200, manager.cancelAgentTimer(timerId, requirementId));
         return;
       }
       const attachmentUpload = url.pathname.match(/^\/api\/requirements\/([^/]+)\/attachments$/);

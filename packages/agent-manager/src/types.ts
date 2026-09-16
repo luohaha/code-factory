@@ -21,6 +21,9 @@ export type MessageAuthor = 'human' | 'rd_agent' | 'reviewer' | 'system';
 export type RequirementCreator = 'human' | 'rd_agent';
 export type PullRequestStatus = 'draft' | 'open' | 'closed' | 'merged';
 export type ReviewRequestStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
+export type AgentTimerSchedule = 'once' | 'recurring';
+export type AgentTimerStatus = 'active' | 'completed' | 'cancelled';
+export type SearchDocumentKind = 'requirement' | 'message' | 'pull_request';
 
 export interface AgentModel {
   id: string;
@@ -153,8 +156,33 @@ export interface ReviewRequest {
   finishedAt: string | null;
 }
 
+export interface AgentTimer {
+  id: string;
+  requirementId: string;
+  description: string;
+  schedule: AgentTimerSchedule;
+  intervalSeconds: number;
+  status: AgentTimerStatus;
+  nextFireAt: string | null;
+  lastFiredAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface RequirementWithSession extends Requirement {
   session: AgentSession;
+}
+
+export interface SearchResult {
+  kind: SearchDocumentKind;
+  sourceId: string;
+  requirementId: string;
+  title: string;
+  excerpt: string;
+  score: number;
+  fullTextScore: number;
+  vectorScore: number;
+  updatedAt: string;
 }
 
 export interface CreateRequirementInput {

@@ -35,6 +35,99 @@ test('a requirement is created atomically with exactly one RD session', () => {
   }
 });
 
+test('hybrid search indexes requirements, conversations, and pull request metadata', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-search',
+      sessionId: 'ses-search',
+      title: 'Secure user access',
+      description: 'Build authentication middleware for protected routes',
+      provider: 'codex',
+      createdBy: 'human',
+      now,
+    });
+    store.appendMessage({
+      id: 'msg-search',
+      requirementId: 'req-search',
+      sessionId: 'ses-search',
+      author: 'human',
+      body: 'The database deadlock only happens during retry.',
+      deliverToRd: true,
+      now,
+    });
+    store.upsertPullRequest({
+      id: 'pr-search',
+      requirementId: 'req-search',
+      repository: 'acme/repo',
+      number: 42,
+      url: 'https://github.com/acme/repo/pull/42',
+      title: 'Prevent duplicate refresh tokens',
+      baseBranch: 'main',
+      headBranch: 'secure-refresh',
+      headSha: 'abc123',
+      status: 'open',
+      now,
+    });
+
+    assert.equal(store.search('protected routes')[0]?.kind, 'requirement');
+    assert.equal(store.search('database deadlock')[0]?.sourceId, 'msg-search');
+    const pullRequestMatch = store.search('duplicate refresh tokens')[0];
+    assert.equal(pullRequestMatch?.sourceId, 'pr-search');
+    assert.match(pullRequestMatch?.excerpt ?? '', /duplicate refresh tokens/i);
+    assert.ok(store.search('authenticating').some((result) =>
+      result.requirementId === 'req-search' && result.fullTextScore === 0 && result.vectorScore >= 0.2));
+    assert.ok(store.search('ses-search').some((result) => result.requirementId === 'req-search'));
+
+    store.upsertPullRequest({
+      id: 'ignored-on-update',
+      requirementId: 'req-search',
+      repository: 'acme/repo',
+      number: 42,
+      url: 'https://github.com/acme/repo/pull/42',
+      title: 'Rotate encrypted credential marker',
+      baseBranch: 'main',
+      headBranch: 'secure-refresh',
+      headSha: 'def456',
+      status: 'open',
+      now: '2026-09-10T12:01:00.000Z',
+    });
+    assert.equal(store.search('encrypted credential marker')[0]?.sourceId, 'pr-search');
+  } finally {
+    store.close();
+  }
+});
+
+test('search backfills existing records and hides cancelled requirements', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-search-backfill-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const initial = new SqliteAgentManagerStore(databasePath);
+  initial.createRequirement({
+    requirementId: 'req-backfill',
+    sessionId: 'ses-backfill',
+    title: '搜索历史记录',
+    description: '保留旧数据库里的需求内容',
+    provider: 'codex',
+    createdBy: 'human',
+    now,
+  });
+  initial.close();
+
+  const database = new DatabaseSync(databasePath);
+  database.prepare('DELETE FROM search_documents WHERE source_id = ?').run('req-backfill');
+  database.close();
+
+  const migrated = new SqliteAgentManagerStore(databasePath);
+  try {
+    assert.equal(migrated.search('旧数据库')[0]?.requirementId, 'req-backfill');
+    migrated.transitionRequirement('req-backfill', ['todo'], 'cancelled', now);
+    assert.deepEqual(migrated.search('旧数据库'), []);
+  } finally {
+    migrated.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('cancelling a TODO requirement hides it, archives its session, and preserves its records', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {
@@ -57,6 +150,15 @@ test('cancelling a TODO requirement hides it, archives its session, and preserve
       localPath: '/tmp/att-delete-notes.txt',
       now,
     });
+    store.createAgentTimer({
+      id: 'tmr-delete',
+      requirementId: 'req-delete',
+      description: 'Check discarded work',
+      schedule: 'recurring',
+      intervalSeconds: 3_600,
+      nextFireAt: '2026-09-10T13:00:00.000Z',
+      now,
+    });
 
     const cancelled = store.transitionRequirement('req-delete', ['todo'], 'cancelled', now);
 
@@ -64,6 +166,8 @@ test('cancelling a TODO requirement hides it, archives its session, and preserve
     assert.equal(cancelled.session.state, 'completed');
     assert.equal(store.listRequirements().length, 0);
     assert.equal(store.getMessageAttachment('att-delete')?.requirementId, 'req-delete');
+    assert.equal(store.getAgentTimer('tmr-delete')?.status, 'cancelled');
+    assert.equal(store.getAgentTimer('tmr-delete')?.nextFireAt, null);
     assert.throws(
       () => store.transitionRequirement('req-delete', ['todo'], 'cancelled', now),
       StoreConflictError,
@@ -481,10 +585,21 @@ test('successful RD run waits for confirmation and human confirmation completes 
     assert.equal(awaiting.status, 'waiting_confirmation');
     assert.equal(awaiting.session.state, 'waiting_human');
     assert.equal(awaiting.session.nativeSessionId, 'native-1');
+    store.createAgentTimer({
+      id: 'tmr-complete',
+      requirementId: 'req-1',
+      description: 'Check completed work',
+      schedule: 'recurring',
+      intervalSeconds: 3_600,
+      nextFireAt: '2026-09-10T13:01:00.000Z',
+      now: '2026-09-10T12:01:00.000Z',
+    });
 
     const done = store.transitionRequirement('req-1', ['waiting_confirmation'], 'done', '2026-09-10T12:02:00.000Z');
     assert.equal(done.status, 'done');
     assert.equal(done.session.state, 'completed');
+    assert.equal(store.getAgentTimer('tmr-complete')?.status, 'cancelled');
+    assert.equal(store.getAgentTimer('tmr-complete')?.nextFireAt, null);
   } finally {
     store.close();
   }
@@ -846,6 +961,78 @@ test('legacy GitHub event receipts migrate to split triggers without replaying d
   } finally {
     migrated.close();
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Agent Timers persist descriptions, advance, complete, and cancel atomically', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-scheduled',
+      sessionId: 'ses-scheduled',
+      title: 'Wait for a build',
+      description: 'Wake the Agent later',
+      provider: 'codex',
+      createdBy: 'human',
+      now,
+    });
+    const recurring = store.createAgentTimer({
+      id: 'tmr-recurring',
+      requirementId: 'req-scheduled',
+      description: 'Check compiler status',
+      schedule: 'recurring',
+      intervalSeconds: 3_600,
+      nextFireAt: '2026-09-10T13:00:00.000Z',
+      now,
+    });
+    assert.equal(recurring.status, 'active');
+    assert.equal(recurring.description, 'Check compiler status');
+    assert.equal(recurring.lastFiredAt, null);
+
+    const advanced = store.completeAgentTimerOccurrence({
+      id: recurring.id,
+      expectedNextFireAt: recurring.nextFireAt!,
+      nextFireAt: '2026-09-10T14:00:00.000Z',
+      now: '2026-09-10T13:00:01.000Z',
+    });
+    assert.equal(advanced?.status, 'active');
+    assert.equal(advanced?.lastFiredAt, '2026-09-10T13:00:01.000Z');
+    assert.equal(store.completeAgentTimerOccurrence({
+      id: recurring.id,
+      expectedNextFireAt: recurring.nextFireAt!,
+      now: '2026-09-10T13:00:02.000Z',
+    }), null);
+
+    const once = store.createAgentTimer({
+      id: 'tmr-once',
+      requirementId: 'req-scheduled',
+      description: 'Check generated artifacts',
+      schedule: 'once',
+      intervalSeconds: 60,
+      nextFireAt: '2026-09-10T12:01:00.000Z',
+      now,
+    });
+    const completed = store.completeAgentTimerOccurrence({
+      id: once.id,
+      expectedNextFireAt: once.nextFireAt!,
+      now: '2026-09-10T12:01:00.000Z',
+    });
+    assert.equal(completed?.status, 'completed');
+    assert.equal(completed?.nextFireAt, null);
+
+    const cancelled = store.cancelAgentTimer(recurring.id, '2026-09-10T13:10:00.000Z');
+    assert.equal(cancelled.status, 'cancelled');
+    assert.equal(cancelled.nextFireAt, null);
+    assert.throws(
+      () => store.cancelAgentTimer(recurring.id, '2026-09-10T13:11:00.000Z'),
+      StoreConflictError,
+    );
+    assert.deepEqual(
+      store.listAgentTimers('req-scheduled').map((timer) => timer.id).sort(),
+      ['tmr-once', 'tmr-recurring'],
+    );
+  } finally {
+    store.close();
   }
 });
 

@@ -45,6 +45,7 @@ import {
   PullRequestStatusTrigger,
   type PullRequestSnapshotTrigger,
 } from './pull-request-triggers.js';
+import { TimerAgentTrigger } from './timer-agent-trigger.js';
 import { SqliteAgentManagerStore } from './sqlite-store.js';
 import type { AgentManagerStore } from './store.js';
 import { StoreConflictError, StoreNotFoundError } from './store.js';
@@ -60,6 +61,8 @@ import type {
   RequirementWithSession,
   ReviewRequest,
   RunOutcome,
+  AgentTimer,
+  AgentTimerSchedule,
   TrackPullRequestInput,
 } from './types.js';
 
@@ -98,6 +101,10 @@ export function defaultLogFilePath(databasePath: string): string {
 
 export const MAX_MESSAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 export const MAX_MESSAGE_ATTACHMENTS = 6;
+export const MIN_AGENT_TIMER_INTERVAL_SECONDS = 60;
+export const MAX_AGENT_TIMER_INTERVAL_SECONDS = 365 * 24 * 60 * 60;
+export const MAX_AGENT_TIMER_DESCRIPTION_LENGTH = 500;
+export const MAX_SEARCH_QUERY_LENGTH = 500;
 
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
 const REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS = DAY_MILLISECONDS;
@@ -129,6 +136,7 @@ export class AgentManager extends EventEmitter {
   readonly #agentTriggers = new Map<string, AgentTrigger>();
   readonly #pullRequestReconciler: PullRequestReconciler;
   readonly #pullRequestTriggers: readonly PullRequestSnapshotTrigger[];
+  readonly #timerAgentTrigger: TimerAgentTrigger;
   readonly #configurationFilePath: string | null;
   readonly #startupConfiguration: AgentManagerConfiguration;
   #configuration: AgentManagerConfiguration;
@@ -215,6 +223,21 @@ export class AgentManager extends EventEmitter {
       new PullRequestCiFailureTrigger(this.#pullRequestReconciler),
       new PullRequestConflictTrigger(this.#pullRequestReconciler),
     ];
+    this.#timerAgentTrigger = new TimerAgentTrigger({
+      store: this.#store,
+      logger: this.logger,
+      onFired: (timer, scheduledFor) => {
+        if (this.#closed) return;
+        const requirement = this.#store.getRequirement(timer.requirementId);
+        if (!requirement) return;
+        this.publish({
+          type: 'timer.fired',
+          requirementId: timer.requirementId,
+          sessionId: requirement.session.id,
+          payload: { timer, scheduledFor },
+        });
+      },
+    });
     const reconciled = this.#store.reconcileInterruptedRuns(new Date().toISOString());
     if (reconciled.runIds.length > 0) {
       this.logger.warn('Interrupted runs reconciled', {
@@ -293,6 +316,7 @@ export class AgentManager extends EventEmitter {
   }
 
   startConfiguredServices(): void {
+    this.startAgentTrigger(this.#timerAgentTrigger);
     this.configurePullRequestReconciler(this.#initialPullRequestReconcileIntervalSeconds);
     this.startRequirementRetentionSweep();
     this.#modelCatalog.start();
@@ -558,6 +582,18 @@ export class AgentManager extends EventEmitter {
     return this.#store.listRequirements();
   }
 
+  search(query: string, limit = 50) {
+    const trimmed = query.trim();
+    if (!trimmed) throw new TypeError('q is required');
+    if (trimmed.length > MAX_SEARCH_QUERY_LENGTH) {
+      throw new RangeError(`q must be ${MAX_SEARCH_QUERY_LENGTH} characters or fewer`);
+    }
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+      throw new RangeError('limit must be an integer from 1 to 200');
+    }
+    return this.#store.search(trimmed, limit);
+  }
+
   deleteRequirement(id: string): void {
     const requirement = this.#store.transitionRequirement(
       id,
@@ -565,6 +601,7 @@ export class AgentManager extends EventEmitter {
       'cancelled',
       new Date().toISOString(),
     );
+    this.#timerAgentTrigger.refresh();
     this.publish({
       type: 'requirement.deleted',
       requirementId: id,
@@ -588,6 +625,81 @@ export class AgentManager extends EventEmitter {
 
   listMessages(requirementId: string) {
     return this.#store.listMessages(requirementId);
+  }
+
+  listAgentTimers(requirementId?: string): AgentTimer[] {
+    if (requirementId) this.requireRequirement(requirementId);
+    return this.#store.listAgentTimers(requirementId);
+  }
+
+  createAgentTimer(
+    requirementId: string,
+    input: { description: string; schedule: AgentTimerSchedule; intervalSeconds: number },
+  ): AgentTimer {
+    const requirement = this.requireRequirement(requirementId);
+    if (requirement.status === 'done' || requirement.status === 'cancelled') {
+      throw new StoreConflictError(`Requirement ${requirementId} is already ${requirement.status}`);
+    }
+    if (input.schedule !== 'once' && input.schedule !== 'recurring') {
+      throw new TypeError('schedule must be once or recurring');
+    }
+    const description = input.description.trim();
+    if (!description || description.length > MAX_AGENT_TIMER_DESCRIPTION_LENGTH) {
+      throw new RangeError(`description must contain from 1 to ${MAX_AGENT_TIMER_DESCRIPTION_LENGTH} characters`);
+    }
+    if (!Number.isInteger(input.intervalSeconds)
+      || input.intervalSeconds < MIN_AGENT_TIMER_INTERVAL_SECONDS
+      || input.intervalSeconds > MAX_AGENT_TIMER_INTERVAL_SECONDS) {
+      throw new RangeError(
+        `intervalSeconds must be an integer from ${MIN_AGENT_TIMER_INTERVAL_SECONDS} to ${MAX_AGENT_TIMER_INTERVAL_SECONDS}`,
+      );
+    }
+    const now = new Date();
+    const timer = this.#store.createAgentTimer({
+      id: `tmr_${randomUUID()}`,
+      requirementId,
+      description,
+      schedule: input.schedule,
+      intervalSeconds: input.intervalSeconds,
+      nextFireAt: new Date(now.getTime() + input.intervalSeconds * 1_000).toISOString(),
+      now: now.toISOString(),
+    });
+    this.#timerAgentTrigger.refresh();
+    this.publish({
+      type: 'timer.created',
+      requirementId,
+      sessionId: requirement.session.id,
+      payload: { timer },
+    });
+    this.logger.info('Agent Timer created', {
+      timerId: timer.id,
+      requirementId,
+      schedule: timer.schedule,
+      intervalSeconds: timer.intervalSeconds,
+      nextFireAt: timer.nextFireAt,
+    });
+    return timer;
+  }
+
+  cancelAgentTimer(id: string, requirementId?: string): AgentTimer {
+    const existing = this.#store.getAgentTimer(id);
+    if (!existing || (requirementId && existing.requirementId !== requirementId)) {
+      throw new StoreNotFoundError(`Agent Timer ${id} not found`);
+    }
+    const requirement = this.requireRequirement(existing.requirementId);
+    const timer = this.#store.cancelAgentTimer(id, new Date().toISOString());
+    this.#timerAgentTrigger.refresh();
+    this.publish({
+      type: 'timer.cancelled',
+      requirementId: timer.requirementId,
+      sessionId: requirement.session.id,
+      payload: { timer },
+    });
+    this.logger.info('Agent Timer cancelled', {
+      timerId: timer.id,
+      requirementId: timer.requirementId,
+    });
+    return timer;
   }
 
   getMessageAttachment(id: string): MessageAttachment | null {
@@ -887,6 +999,7 @@ export class AgentManager extends EventEmitter {
       'done',
       new Date().toISOString(),
     );
+    this.#timerAgentTrigger.refresh();
     this.publish({ type: 'requirement.completed', requirementId, sessionId: current.session.id, payload: {} });
     this.logger.info('Requirement completed', { requirementId, sessionId: current.session.id });
     this.sweepImmediateTerminalRequirement('done');
@@ -1101,6 +1214,7 @@ export class AgentManager extends EventEmitter {
       'Use code-factory-cli for Code Factory control-plane actions. Run code-factory-cli --help or code-factory-cli <command> --help for usage; do not call the underlying HTTP endpoints directly.',
       'Immediately after you create a GitHub pull request for this requirement, run code-factory-cli pr register. Run it again only when your own push or edit changes PR metadata such as its title, branches, or head SHA.',
       'Agent Manager owns draft/open/closed/merged lifecycle synchronization through its GitHub reconciler. Never run the registration command merely to mirror a lifecycle event reported by a System message or observed on GitHub.',
+      'For every long-running process or task you start—including builds, tests, deployments, data jobs, and other background work—track it to completion. While the current Run remains active, use the agent provider\'s normal wait, task-output, or monitor mechanism. Register a Code Factory timer with code-factory-cli timer register before ending the Run only when the task is guaranteed to continue independently after the Run ends, so Code Factory can wake this same Session to check its progress and result. Use code-factory-cli timer show to recover timer IDs and status, and cancel recurring timers as soon as they are no longer needed.',
       'When you discover separate follow-up work, you may propose a linked TODO requirement with code-factory-cli requirement propose.',
     ].join('\n');
   }
