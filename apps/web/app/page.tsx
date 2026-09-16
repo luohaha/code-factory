@@ -701,52 +701,40 @@ function AgentTimerCard({ timer, requirement, onOpenRequirement }: {
   const eventTime = timer.status === 'active'
     ? timer.nextFireAt
     : timer.status === 'completed' ? timer.lastFiredAt : timer.updatedAt;
+  const scheduleLabel = timer.schedule === 'once'
+    ? t('Once after {duration}', { duration: formatDuration(timer.intervalSeconds, t) })
+    : t('Every {duration}', { duration: formatDuration(timer.intervalSeconds, t) });
 
   return (
-    <article className="rounded-xl border border-border/80 bg-card p-3.5 shadow-[0_1px_2px_oklch(0.18_0.02_255/0.05)]">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <span className="grid size-7 place-items-center rounded-lg bg-primary/8 text-primary"><Clock3 className="size-3.5" /></span>
-          <Badge variant="outline" className="h-5 font-mono text-[9px]">TIMER-{shortId(timer.id)}</Badge>
+    <article className="overflow-hidden rounded-xl border border-border/80 bg-card shadow-[0_1px_2px_oklch(0.18_0.02_255/0.05)]">
+      <button
+        type="button"
+        className="group block w-full p-3.5 text-left transition-colors hover:bg-muted/25 disabled:cursor-default"
+        disabled={!requirement}
+        onClick={onOpenRequirement}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className={`size-2 shrink-0 rounded-full ${status?.tone ?? 'bg-slate-400'}`} />
+            <span className="truncate font-mono text-[10px] font-semibold">TIMER-{shortId(timer.id)}</span>
+          </div>
+          <span className="shrink-0 text-[9px] font-medium text-muted-foreground">
+            {status ? t(status.title) : timer.status.toUpperCase()}
+          </span>
         </div>
-        <span className="flex items-center gap-1.5 text-[9px] font-medium text-muted-foreground">
-          <span className={`size-1.5 rounded-full ${status?.tone ?? 'bg-slate-400'}`} />
-          {status ? t(status.title) : timer.status.toUpperCase()}
-        </span>
-      </div>
 
-      <p className="mt-3 text-[13px] font-semibold">
-        {timer.description}
-      </p>
-      <p className="mt-1 text-[10px] text-muted-foreground">
-        {timer.schedule === 'once'
-          ? t('Once after {duration}', { duration: formatDuration(timer.intervalSeconds, t) })
-          : t('Every {duration}', { duration: formatDuration(timer.intervalSeconds, t) })}
-      </p>
-
-      <div className="mt-3 rounded-lg border border-border/70 bg-muted/35 px-3 py-2.5">
-        <p className="truncate text-[11px] font-medium">{requirement?.title ?? t('Requirement unavailable')}</p>
-        <p className="mt-1 truncate font-mono text-[9px] text-muted-foreground">
-          REQ-{shortId(timer.requirementId)}{requirement ? ` · ${providerLabel(requirement.provider)}` : ''}
+        <h3 className="mt-2.5 truncate text-xs font-semibold group-hover:underline">
+          {timer.description}
+        </h3>
+        <p className="mt-1.5 truncate text-[10px] text-foreground/75">
+          REQ-{shortId(timer.requirementId)} · {requirement?.title ?? t('Requirement unavailable')}
         </p>
-      </div>
 
-      <dl className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
-        <div className="rounded-lg bg-muted/30 px-2.5 py-2">
-          <dt className="text-[9px] text-muted-foreground">{t('Interval')}</dt>
-          <dd className="mt-0.5 font-medium">{formatDuration(timer.intervalSeconds, t)}</dd>
+        <div className="mt-2.5 flex items-center justify-between gap-3 text-[10px] text-muted-foreground">
+          <span className="truncate">{scheduleLabel}</span>
+          <span className="shrink-0">{eventLabel}: {eventTime ? formatTime(eventTime, locale) : '—'}</span>
         </div>
-        <div className="rounded-lg bg-muted/30 px-2.5 py-2">
-          <dt className="text-[9px] text-muted-foreground">{eventLabel}</dt>
-          <dd className="mt-0.5 font-medium">{eventTime ? formatTime(eventTime, locale) : '—'}</dd>
-        </div>
-      </dl>
-
-      {requirement ? (
-        <Button variant="ghost" size="xs" className="mt-3 w-full" onClick={onOpenRequirement}>
-          <MessagesSquare data-icon="inline-start" />{t('Open requirement')}
-        </Button>
-      ) : null}
+      </button>
     </article>
   );
 }
@@ -2274,11 +2262,11 @@ function Dashboard() {
             })}
           </div>
         ) : view === 'timers' ? (
-          <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-3 gap-4 p-4 lg:p-5">
+          <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-3 gap-3 p-4 lg:p-5">
             {agentTimerColumns.map((column) => {
               const items = filteredAgentTimers.filter((item) => item.status === column.status);
               return (
-                <section key={column.status} className="w-[340px]" aria-labelledby={`timer-${column.status}`}>
+                <section key={column.status} className="w-[266px]" aria-labelledby={`timer-${column.status}`}>
                   <header className="mb-3 h-11 px-1">
                     <div className="flex items-center gap-2">
                       <span className={`size-1.5 rounded-full ${column.tone}`} />
