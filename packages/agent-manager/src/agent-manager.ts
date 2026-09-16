@@ -495,13 +495,13 @@ export class AgentManager extends EventEmitter {
       'cancelled',
       new Date().toISOString(),
     );
+    this.#timerAgentTrigger.refresh();
     this.publish({
       type: 'requirement.deleted',
       requirementId: id,
       sessionId: requirement.session.id,
       payload: {},
     });
-    this.cancelAgentTimersForRequirement(id);
     this.logger.info('Requirement deleted', {
       requirementId: id,
       sessionId: requirement.session.id,
@@ -885,16 +885,10 @@ export class AgentManager extends EventEmitter {
       'done',
       new Date().toISOString(),
     );
+    this.#timerAgentTrigger.refresh();
     this.publish({ type: 'requirement.completed', requirementId, sessionId: current.session.id, payload: {} });
-    this.cancelAgentTimersForRequirement(requirementId);
     this.logger.info('Requirement completed', { requirementId, sessionId: current.session.id });
     return current;
-  }
-
-  private cancelAgentTimersForRequirement(requirementId: string): void {
-    for (const timer of this.#store.listAgentTimers(requirementId)) {
-      if (timer.status === 'active') this.cancelAgentTimer(timer.id, requirementId);
-    }
   }
 
   private startRdRun(requirementId: string): Promise<RequirementWithSession> {

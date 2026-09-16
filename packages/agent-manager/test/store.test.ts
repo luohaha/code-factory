@@ -57,6 +57,15 @@ test('cancelling a TODO requirement hides it, archives its session, and preserve
       localPath: '/tmp/att-delete-notes.txt',
       now,
     });
+    store.createAgentTimer({
+      id: 'tmr-delete',
+      requirementId: 'req-delete',
+      description: 'Check discarded work',
+      schedule: 'recurring',
+      intervalSeconds: 3_600,
+      nextFireAt: '2026-09-10T13:00:00.000Z',
+      now,
+    });
 
     const cancelled = store.transitionRequirement('req-delete', ['todo'], 'cancelled', now);
 
@@ -64,6 +73,8 @@ test('cancelling a TODO requirement hides it, archives its session, and preserve
     assert.equal(cancelled.session.state, 'completed');
     assert.equal(store.listRequirements().length, 0);
     assert.equal(store.getMessageAttachment('att-delete')?.requirementId, 'req-delete');
+    assert.equal(store.getAgentTimer('tmr-delete')?.status, 'cancelled');
+    assert.equal(store.getAgentTimer('tmr-delete')?.nextFireAt, null);
     assert.throws(
       () => store.transitionRequirement('req-delete', ['todo'], 'cancelled', now),
       StoreConflictError,
@@ -166,10 +177,21 @@ test('successful RD run waits for confirmation and human confirmation completes 
     assert.equal(awaiting.status, 'waiting_confirmation');
     assert.equal(awaiting.session.state, 'waiting_human');
     assert.equal(awaiting.session.nativeSessionId, 'native-1');
+    store.createAgentTimer({
+      id: 'tmr-complete',
+      requirementId: 'req-1',
+      description: 'Check completed work',
+      schedule: 'recurring',
+      intervalSeconds: 3_600,
+      nextFireAt: '2026-09-10T13:01:00.000Z',
+      now: '2026-09-10T12:01:00.000Z',
+    });
 
     const done = store.transitionRequirement('req-1', ['waiting_confirmation'], 'done', '2026-09-10T12:02:00.000Z');
     assert.equal(done.status, 'done');
     assert.equal(done.session.state, 'completed');
+    assert.equal(store.getAgentTimer('tmr-complete')?.status, 'cancelled');
+    assert.equal(store.getAgentTimer('tmr-complete')?.nextFireAt, null);
   } finally {
     store.close();
   }

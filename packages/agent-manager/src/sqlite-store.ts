@@ -661,6 +661,10 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       if (next === 'done' || next === 'cancelled') {
         this.#db.prepare("UPDATE agent_sessions SET state = 'completed', last_error = NULL, updated_at = ? WHERE requirement_id = ?")
           .run(now, requirementId);
+        this.#db.prepare(`UPDATE agent_timers
+          SET status = 'cancelled', next_fire_at = NULL, updated_at = ?
+          WHERE requirement_id = ? AND status = 'active'`)
+          .run(now, requirementId);
       }
       this.#db.exec('COMMIT');
       return this.requireBundle(requirementId);

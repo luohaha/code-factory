@@ -104,6 +104,7 @@ import {
   type WorkspaceDto,
 } from '@/lib/agent-manager-client';
 import { countAddedMessages, isAwayFromConversationTop, isNearConversationBottom } from '@/lib/conversation-scroll';
+import { formatDuration } from '@/lib/format-duration';
 import { I18nProvider, useI18n } from '@/lib/i18n';
 import { useTheme } from '@/lib/theme';
 import type { TranslationKey } from '@/locales/zh-CN';
@@ -281,19 +282,6 @@ function formatTime(value: string, locale: 'en' | 'zh-CN'): string {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value));
-}
-
-function formatDuration(seconds: number, t: ReturnType<typeof useI18n>['t']): string {
-  if (seconds % 86_400 === 0) {
-    const count = seconds / 86_400;
-    return count === 1 ? t('1 day') : t('{count} days', { count });
-  }
-  if (seconds % 3_600 === 0) {
-    const count = seconds / 3_600;
-    return count === 1 ? t('1 hour') : t('{count} hours', { count });
-  }
-  const count = seconds / 60;
-  return count === 1 ? t('1 minute') : t('{count} minutes', { count });
 }
 
 function isWithinTimeRange(value: string, timeRange: TimeRange, now: number): boolean {
