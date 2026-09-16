@@ -168,6 +168,18 @@ export interface ReviewRequestDto {
   finishedAt: string | null;
 }
 
+export interface ScheduledAgentTriggerDto {
+  id: string;
+  requirementId: string;
+  schedule: 'once' | 'recurring';
+  intervalSeconds: number;
+  status: 'active' | 'completed' | 'cancelled';
+  nextFireAt: string | null;
+  lastFiredAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export const DEFAULT_AGENT_MANAGER_URL = 'http://127.0.0.1:4310';
 
 export class AgentManagerApiError extends Error {
@@ -223,6 +235,32 @@ export class AgentManagerClient {
       `/api/requirements/${encodeURIComponent(requirementId)}/messages`,
     );
     return response.items;
+  }
+
+  async listScheduledAgentTriggers(requirementId?: string): Promise<ScheduledAgentTriggerDto[]> {
+    const response = await this.request<{ items: ScheduledAgentTriggerDto[] }>(
+      requirementId
+        ? `/api/requirements/${encodeURIComponent(requirementId)}/scheduled-agent-triggers`
+        : '/api/scheduled-agent-triggers',
+    );
+    return response.items;
+  }
+
+  createScheduledAgentTrigger(
+    requirementId: string,
+    input: { schedule: 'once' | 'recurring'; intervalSeconds: number },
+  ): Promise<ScheduledAgentTriggerDto> {
+    return this.request(`/api/requirements/${encodeURIComponent(requirementId)}/scheduled-agent-triggers`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+
+  cancelScheduledAgentTrigger(requirementId: string, triggerId: string): Promise<ScheduledAgentTriggerDto> {
+    return this.request(
+      `/api/requirements/${encodeURIComponent(requirementId)}/scheduled-agent-triggers/${encodeURIComponent(triggerId)}`,
+      { method: 'DELETE' },
+    );
   }
 
   async listPullRequests(): Promise<PullRequestDto[]> {
@@ -315,6 +353,9 @@ export class AgentManagerClient {
       'pull_request.created',
       'pull_request.updated',
       'review_request.started',
+      'scheduled_agent_trigger.created',
+      'scheduled_agent_trigger.fired',
+      'scheduled_agent_trigger.cancelled',
       'manager.reconciled',
       'manager.configuration.updated',
       'agent_models.updated',

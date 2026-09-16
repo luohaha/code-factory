@@ -72,6 +72,11 @@ function pullRequestStatusField(value: unknown): PullRequestStatus {
   return value;
 }
 
+function scheduledAgentTriggerScheduleField(value: unknown): 'once' | 'recurring' {
+  if (value !== 'once' && value !== 'recurring') throw new TypeError('schedule must be once or recurring');
+  return value;
+}
+
 function positiveIntegerField(body: Record<string, unknown>, name: string): number {
   const value = body[name];
   if (!Number.isInteger(value) || Number(value) <= 0) throw new TypeError(`${name} must be a positive integer`);
@@ -196,6 +201,35 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
       if (request.method === 'GET' && messages) {
         const requirementId = decodeURIComponent(messages[1]!);
         sendJson(response, 200, { items: manager.listMessages(requirementId) });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/scheduled-agent-triggers') {
+        sendJson(response, 200, { items: manager.listScheduledAgentTriggers() });
+        return;
+      }
+      const scheduledAgentTriggers = url.pathname.match(/^\/api\/requirements\/([^/]+)\/scheduled-agent-triggers$/);
+      if (request.method === 'GET' && scheduledAgentTriggers) {
+        const requirementId = decodeURIComponent(scheduledAgentTriggers[1]!);
+        sendJson(response, 200, { items: manager.listScheduledAgentTriggers(requirementId) });
+        return;
+      }
+      if (request.method === 'POST' && scheduledAgentTriggers) {
+        const requirementId = decodeURIComponent(scheduledAgentTriggers[1]!);
+        const body = await readJson(request);
+        const item = manager.createScheduledAgentTrigger(requirementId, {
+          schedule: scheduledAgentTriggerScheduleField(body.schedule),
+          intervalSeconds: positiveIntegerField(body, 'intervalSeconds'),
+        });
+        sendJson(response, 201, item);
+        return;
+      }
+      const scheduledAgentTrigger = url.pathname.match(
+        /^\/api\/requirements\/([^/]+)\/scheduled-agent-triggers\/([^/]+)$/,
+      );
+      if (request.method === 'DELETE' && scheduledAgentTrigger) {
+        const requirementId = decodeURIComponent(scheduledAgentTrigger[1]!);
+        const triggerId = decodeURIComponent(scheduledAgentTrigger[2]!);
+        sendJson(response, 200, manager.cancelScheduledAgentTrigger(triggerId, requirementId));
         return;
       }
       const attachmentUpload = url.pathname.match(/^\/api\/requirements\/([^/]+)\/attachments$/);

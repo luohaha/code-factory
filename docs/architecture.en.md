@@ -10,19 +10,20 @@ The system has three first-class domain entities:
 - `AgentSession`: the long-lived RD session uniquely bound to a Requirement;
 - `PullRequest`: a GitHub pull request produced by a Requirement. One Requirement may have multiple PRs.
 
-`AgentRun`, `RequirementMessage`, and `ReviewRequest` are execution and interaction records. They are not long-lived agents that require scheduling.
+`AgentRun`, `RequirementMessage`, `ReviewRequest`, and `ScheduledAgentTrigger` are execution and interaction records. They are not long-lived agents that require allocation from a pool.
 
 ~~~mermaid
 erDiagram
   Requirement ||--|| AgentSession : owns
   Requirement ||--o{ RequirementMessage : contains
   Requirement ||--o{ PullRequest : produces
+  Requirement ||--o{ ScheduledAgentTrigger : wakes
   AgentSession ||--o{ AgentRun : resumes
   PullRequest ||--o{ ReviewRequest : receives
   ReviewRequest ||--|| AgentRun : executes
 ~~~
 
-Agent Manager is not a scheduler. There is no agent pool and no “waiting for scheduling” state. An RD AgentSession is created and permanently bound when its Requirement is created.
+Agent Manager is not an agent scheduler. There is no agent pool and no “waiting for scheduling” state. An RD AgentSession is created and permanently bound when its Requirement is created. Scheduled Agent Triggers are persisted timers that add a conversation message to an already bound Session; they do not allocate Agents or queue execution capacity.
 
 ## 2. Runtime Boundary
 
@@ -34,11 +35,13 @@ flowchart LR
   M <--> DB[(SQLite)]
   M -->|Same cwd, long-lived resume| RD[Codex / Claude Code RD]
   M -->|Short-lived, no persistent session| RV[Codex / Claude Code Reviewer]
-  RD -->|Register PR / Propose requirement| CLI[code-factory-cli]
+  RD -->|Register PR / Propose requirement / Schedule wake-up| CLI[code-factory-cli]
   CLI --> API[Agent API]
   API --> M
   RV -->|GitHub inline comments| GH[GitHub PR]
   GH -->|Poll status, comments, reviews, CI, conflicts| T[PR Agent Triggers]
+  DB -->|Due schedules| ST[Scheduled Continue Trigger]
+  ST -->|System message: continue.| M
   T -->|Normalized messages| M
   RV -->|Reviewer message| M
 ~~~
@@ -103,6 +106,13 @@ Every headless RD and Reviewer invocation skips interactive approval and CLI san
 - owns one short-lived Reviewer AgentRun and never creates an AgentSession;
 - allows at most one active ReviewRequest per PR.
 
+### ScheduledAgentTrigger
+
+- belongs to one Requirement and uses `once | recurring` as its schedule pattern;
+- stores a whole-second interval from 60 through 31536000, the next occurrence, and the last fired timestamp;
+- follows `active | completed | cancelled`; a one-time occurrence completes automatically, while a recurring occurrence advances to its next future time;
+- survives Agent Manager restarts and is cancelled automatically when its Requirement becomes DONE or CANCELLED.
+
 ## 4. The Requirement Conversation Is the RD Message Stream
 
 The system does not maintain a separate RD message-queue table. `requirement_messages` is the single source of truth for both display and delivery:
@@ -148,6 +158,12 @@ If the PR head SHA changes, previous reviews remain historical results for the o
 `AgentTrigger` is the narrow integration boundary between external event sources and RD sessions. Each trigger owns source-specific polling or listening and emits normalized messages with a target Requirement and a trigger-scoped idempotency key. Agent Manager owns durable deduplication, conversation persistence, event publication, and the decision to start an idle RD session or queue input for a running one.
 
 Trigger lifecycle is explicit through `startAgentTrigger()` and `stopAgentTrigger()`. Once stopped, a trigger's delivery context is invalidated. Receipts refer to Requirements rather than Pull Requests, so a future trigger such as a Slack-thread listener does not need GitHub-shaped persistence.
+
+### Scheduled Continue Trigger
+
+`scheduled.continue` is a built-in persistent Agent Trigger. Humans configure it from the Requirement chat composer or HTTP API; an RD Agent can use `code-factory-cli timer register` when it leaves a long-running build or external command behind. Every due occurrence delivers exactly one System message with body `continue.` through the normal Requirement message stream. The existing delivery rules then resume an idle Session or queue the message behind its active Run.
+
+Each occurrence is deduplicated by the schedule ID plus its scheduled timestamp. Delivery happens before the stored schedule advances, so a process exit in between is retried safely after restart. A delayed recurring schedule produces one wake-up and advances directly to its next future occurrence rather than replaying every missed interval. `timer show` lets the RD Agent recover the IDs and statuses of timers scoped to its Requirement. `timer cancel` and the dashboard stop an active schedule; Requirement completion or cancellation stops all remaining schedules automatically.
 
 ### PR Reconciliation Triggers
 
@@ -223,7 +239,7 @@ The Web application contains three boards:
 - Pull Request: `DRAFT / OPEN / CLOSED / MERGED`;
 - RD Session: `Idle / Running / Waiting for human / Failed / Completed`.
 
-Requirement details form a Jira-like work surface containing the description, linked PRs, Run information, and a unified Human/RD/Reviewer/System conversation. A TODO card's Start action opens this work surface and focuses the message composer, allowing optional instructions and attachments to be captured as input to the initial Run; the work surface also offers an explicit start-without-instructions action. TODO cards offer an adjacent Delete action; deletion requires confirmation and is no longer available after execution starts. The input remains available while RD is running, and pending external-message counts appear on Requirement and Session cards.
+Requirement details form a Jira-like work surface containing the description, linked PRs, Run information, and a unified Human/RD/Reviewer/System conversation. A TODO card's Start action opens this work surface and focuses the message composer, allowing optional instructions and attachments to be captured as input to the initial Run; the work surface also offers an explicit start-without-instructions action. TODO cards offer an adjacent Delete action; deletion requires confirmation and is no longer available after execution starts. The input remains available while RD is running, and pending external-message counts appear on Requirement and Session cards. A clock control beside the chat attachment button creates and cancels one-time or recurring scheduled wake-ups using minute, hour, or day intervals.
 
 The dashboard supports English and Simplified Chinese. The header language switcher applies the locale immediately and persists the choice in browser storage; a visitor without a saved preference defaults to the browser language. Requirement and Reviewer forms select models from the current provider catalog and retain the CLI-default option. The configuration dialog updates the workspace configuration and distinguishes immediately applied settings from restart-required settings.
 
@@ -233,4 +249,4 @@ Running `npx --package @luoyixin/code-factory code-factory-agent-manager start` 
 
 ## 10. Current Boundary
 
-The Reviewer is instructed to use the GitHub CLI/API to publish inline comments, but structured verification that every expected comment was posted is not implemented yet. The Agent Trigger extension API is code-level; dynamic trigger discovery/configuration and a Slack trigger are not implemented. Reconciliation currently uses local `gh` polling; GitHub webhook synchronization, stale-review indicators after head-SHA changes, access tokens, and Manager-enforced worktree isolation remain future work. The daemon supervisor recovers an exited Agent Manager process, but it does not register itself with systemd, launchd, or Windows Service Control Manager and therefore does not provide machine-reboot recovery.
+The Reviewer is instructed to use the GitHub CLI/API to publish inline comments, but structured verification that every expected comment was posted is not implemented yet. The native scheduled trigger is configurable, while the general Agent Trigger extension API remains code-level; dynamic third-party trigger discovery/configuration and a Slack trigger are not implemented. Reconciliation currently uses local `gh` polling; GitHub webhook synchronization, stale-review indicators after head-SHA changes, access tokens, and Manager-enforced worktree isolation remain future work. The daemon supervisor recovers an exited Agent Manager process, but it does not register itself with systemd, launchd, or Windows Service Control Manager and therefore does not provide machine-reboot recovery.

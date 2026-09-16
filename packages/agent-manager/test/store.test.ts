@@ -534,6 +534,75 @@ test('legacy GitHub event receipts migrate to split triggers without replaying d
   }
 });
 
+test('scheduled Agent Triggers persist, advance, complete, and cancel atomically', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-scheduled',
+      sessionId: 'ses-scheduled',
+      title: 'Wait for a build',
+      description: 'Wake the Agent later',
+      provider: 'codex',
+      createdBy: 'human',
+      now,
+    });
+    const recurring = store.createScheduledAgentTrigger({
+      id: 'sat-recurring',
+      requirementId: 'req-scheduled',
+      schedule: 'recurring',
+      intervalSeconds: 3_600,
+      nextFireAt: '2026-09-10T13:00:00.000Z',
+      now,
+    });
+    assert.equal(recurring.status, 'active');
+    assert.equal(recurring.lastFiredAt, null);
+
+    const advanced = store.completeScheduledAgentTriggerOccurrence({
+      id: recurring.id,
+      expectedNextFireAt: recurring.nextFireAt!,
+      nextFireAt: '2026-09-10T14:00:00.000Z',
+      now: '2026-09-10T13:00:01.000Z',
+    });
+    assert.equal(advanced?.status, 'active');
+    assert.equal(advanced?.lastFiredAt, '2026-09-10T13:00:01.000Z');
+    assert.equal(store.completeScheduledAgentTriggerOccurrence({
+      id: recurring.id,
+      expectedNextFireAt: recurring.nextFireAt!,
+      now: '2026-09-10T13:00:02.000Z',
+    }), null);
+
+    const once = store.createScheduledAgentTrigger({
+      id: 'sat-once',
+      requirementId: 'req-scheduled',
+      schedule: 'once',
+      intervalSeconds: 60,
+      nextFireAt: '2026-09-10T12:01:00.000Z',
+      now,
+    });
+    const completed = store.completeScheduledAgentTriggerOccurrence({
+      id: once.id,
+      expectedNextFireAt: once.nextFireAt!,
+      now: '2026-09-10T12:01:00.000Z',
+    });
+    assert.equal(completed?.status, 'completed');
+    assert.equal(completed?.nextFireAt, null);
+
+    const cancelled = store.cancelScheduledAgentTrigger(recurring.id, '2026-09-10T13:10:00.000Z');
+    assert.equal(cancelled.status, 'cancelled');
+    assert.equal(cancelled.nextFireAt, null);
+    assert.throws(
+      () => store.cancelScheduledAgentTrigger(recurring.id, '2026-09-10T13:11:00.000Z'),
+      StoreConflictError,
+    );
+    assert.deepEqual(
+      store.listScheduledAgentTriggers('req-scheduled').map((trigger) => trigger.id).sort(),
+      ['sat-once', 'sat-recurring'],
+    );
+  } finally {
+    store.close();
+  }
+});
+
 test('manager restart marks orphaned runs and sessions as failed', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {

@@ -45,6 +45,7 @@ import {
   PullRequestStatusTrigger,
   type PullRequestSnapshotTrigger,
 } from './pull-request-triggers.js';
+import { ScheduledContinueTrigger } from './scheduled-agent-trigger.js';
 import { SqliteAgentManagerStore } from './sqlite-store.js';
 import type { AgentManagerStore } from './store.js';
 import { StoreConflictError, StoreNotFoundError } from './store.js';
@@ -60,6 +61,8 @@ import type {
   RequirementWithSession,
   ReviewRequest,
   RunOutcome,
+  ScheduledAgentTrigger,
+  ScheduledAgentTriggerSchedule,
   TrackPullRequestInput,
 } from './types.js';
 
@@ -98,6 +101,8 @@ export function defaultLogFilePath(databasePath: string): string {
 
 export const MAX_MESSAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 export const MAX_MESSAGE_ATTACHMENTS = 6;
+export const MIN_SCHEDULED_AGENT_TRIGGER_INTERVAL_SECONDS = 60;
+export const MAX_SCHEDULED_AGENT_TRIGGER_INTERVAL_SECONDS = 365 * 24 * 60 * 60;
 
 const REVIEWER_DEVELOPER_INSTRUCTIONS = [
   'You are a short-lived GitHub pull request reviewer. Review only; do not edit code.',
@@ -126,6 +131,7 @@ export class AgentManager extends EventEmitter {
   readonly #agentTriggers = new Map<string, AgentTrigger>();
   readonly #pullRequestReconciler: PullRequestReconciler;
   readonly #pullRequestTriggers: readonly PullRequestSnapshotTrigger[];
+  readonly #scheduledContinueTrigger: ScheduledContinueTrigger;
   readonly #configurationFilePath: string | null;
   readonly #startupConfiguration: AgentManagerConfiguration;
   #configuration: AgentManagerConfiguration;
@@ -211,6 +217,21 @@ export class AgentManager extends EventEmitter {
       new PullRequestCiFailureTrigger(this.#pullRequestReconciler),
       new PullRequestConflictTrigger(this.#pullRequestReconciler),
     ];
+    this.#scheduledContinueTrigger = new ScheduledContinueTrigger({
+      store: this.#store,
+      logger: this.logger,
+      onFired: (trigger, scheduledFor) => {
+        if (this.#closed) return;
+        const requirement = this.#store.getRequirement(trigger.requirementId);
+        if (!requirement) return;
+        this.publish({
+          type: 'scheduled_agent_trigger.fired',
+          requirementId: trigger.requirementId,
+          sessionId: requirement.session.id,
+          payload: { scheduledAgentTrigger: trigger, scheduledFor },
+        });
+      },
+    });
     const reconciled = this.#store.reconcileInterruptedRuns(new Date().toISOString());
     if (reconciled.runIds.length > 0) {
       this.logger.warn('Interrupted runs reconciled', {
@@ -285,6 +306,7 @@ export class AgentManager extends EventEmitter {
   }
 
   startConfiguredServices(): void {
+    this.startAgentTrigger(this.#scheduledContinueTrigger);
     this.configurePullRequestReconciler(this.#initialPullRequestReconcileIntervalSeconds);
     this.#modelCatalog.start();
   }
@@ -478,6 +500,7 @@ export class AgentManager extends EventEmitter {
       sessionId: requirement.session.id,
       payload: {},
     });
+    this.cancelScheduledAgentTriggersForRequirement(id);
     this.logger.info('Requirement deleted', {
       requirementId: id,
       sessionId: requirement.session.id,
@@ -494,6 +517,76 @@ export class AgentManager extends EventEmitter {
 
   listMessages(requirementId: string) {
     return this.#store.listMessages(requirementId);
+  }
+
+  listScheduledAgentTriggers(requirementId?: string): ScheduledAgentTrigger[] {
+    if (requirementId) this.requireRequirement(requirementId);
+    return this.#store.listScheduledAgentTriggers(requirementId);
+  }
+
+  createScheduledAgentTrigger(
+    requirementId: string,
+    input: { schedule: ScheduledAgentTriggerSchedule; intervalSeconds: number },
+  ): ScheduledAgentTrigger {
+    const requirement = this.requireRequirement(requirementId);
+    if (requirement.status === 'done' || requirement.status === 'cancelled') {
+      throw new StoreConflictError(`Requirement ${requirementId} is already ${requirement.status}`);
+    }
+    if (input.schedule !== 'once' && input.schedule !== 'recurring') {
+      throw new TypeError('schedule must be once or recurring');
+    }
+    if (!Number.isInteger(input.intervalSeconds)
+      || input.intervalSeconds < MIN_SCHEDULED_AGENT_TRIGGER_INTERVAL_SECONDS
+      || input.intervalSeconds > MAX_SCHEDULED_AGENT_TRIGGER_INTERVAL_SECONDS) {
+      throw new RangeError(
+        `intervalSeconds must be an integer from ${MIN_SCHEDULED_AGENT_TRIGGER_INTERVAL_SECONDS} to ${MAX_SCHEDULED_AGENT_TRIGGER_INTERVAL_SECONDS}`,
+      );
+    }
+    const now = new Date();
+    const trigger = this.#store.createScheduledAgentTrigger({
+      id: `sat_${randomUUID()}`,
+      requirementId,
+      schedule: input.schedule,
+      intervalSeconds: input.intervalSeconds,
+      nextFireAt: new Date(now.getTime() + input.intervalSeconds * 1_000).toISOString(),
+      now: now.toISOString(),
+    });
+    this.#scheduledContinueTrigger.refresh();
+    this.publish({
+      type: 'scheduled_agent_trigger.created',
+      requirementId,
+      sessionId: requirement.session.id,
+      payload: { scheduledAgentTrigger: trigger },
+    });
+    this.logger.info('Scheduled Agent Trigger created', {
+      scheduledAgentTriggerId: trigger.id,
+      requirementId,
+      schedule: trigger.schedule,
+      intervalSeconds: trigger.intervalSeconds,
+      nextFireAt: trigger.nextFireAt,
+    });
+    return trigger;
+  }
+
+  cancelScheduledAgentTrigger(id: string, requirementId?: string): ScheduledAgentTrigger {
+    const existing = this.#store.getScheduledAgentTrigger(id);
+    if (!existing || (requirementId && existing.requirementId !== requirementId)) {
+      throw new StoreNotFoundError(`Scheduled Agent Trigger ${id} not found`);
+    }
+    const requirement = this.requireRequirement(existing.requirementId);
+    const trigger = this.#store.cancelScheduledAgentTrigger(id, new Date().toISOString());
+    this.#scheduledContinueTrigger.refresh();
+    this.publish({
+      type: 'scheduled_agent_trigger.cancelled',
+      requirementId: trigger.requirementId,
+      sessionId: requirement.session.id,
+      payload: { scheduledAgentTrigger: trigger },
+    });
+    this.logger.info('Scheduled Agent Trigger cancelled', {
+      scheduledAgentTriggerId: trigger.id,
+      requirementId: trigger.requirementId,
+    });
+    return trigger;
   }
 
   getMessageAttachment(id: string): MessageAttachment | null {
@@ -787,8 +880,15 @@ export class AgentManager extends EventEmitter {
       new Date().toISOString(),
     );
     this.publish({ type: 'requirement.completed', requirementId, sessionId: current.session.id, payload: {} });
+    this.cancelScheduledAgentTriggersForRequirement(requirementId);
     this.logger.info('Requirement completed', { requirementId, sessionId: current.session.id });
     return current;
+  }
+
+  private cancelScheduledAgentTriggersForRequirement(requirementId: string): void {
+    for (const trigger of this.#store.listScheduledAgentTriggers(requirementId)) {
+      if (trigger.status === 'active') this.cancelScheduledAgentTrigger(trigger.id, requirementId);
+    }
   }
 
   private startRdRun(requirementId: string): Promise<RequirementWithSession> {
@@ -998,6 +1098,7 @@ export class AgentManager extends EventEmitter {
       'Use code-factory-cli for Code Factory control-plane actions. Run code-factory-cli --help or code-factory-cli <command> --help for usage; do not call the underlying HTTP endpoints directly.',
       'Immediately after you create a GitHub pull request for this requirement, run code-factory-cli pr register. Run it again only when your own push or edit changes PR metadata such as its title, branches, or head SHA.',
       'Agent Manager owns draft/open/closed/merged lifecycle synchronization through its GitHub reconciler. Never run the registration command merely to mirror a lifecycle event reported by a System message or observed on GitHub.',
+      'If you leave a long-running external command or build behind, use code-factory-cli timer register before ending your Run so Code Factory can wake this same Session later. Use code-factory-cli timer show to recover timer IDs and status, and cancel recurring timers as soon as they are no longer needed.',
       'When you discover separate follow-up work, you may propose a linked TODO requirement with code-factory-cli requirement propose.',
     ].join('\n');
   }

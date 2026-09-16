@@ -222,6 +222,96 @@ test('HTTP API rejects unsupported reasoning effort values', async () => {
   }
 });
 
+test('HTTP API creates, lists, validates, and cancels Scheduled Agent Triggers', async () => {
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    logger: createLogger({ level: 'silent' }),
+  });
+  const requirement = manager.createRequirement({
+    title: 'Long build',
+    description: 'Wake the RD Agent after the compiler finishes',
+    provider: 'codex',
+  });
+  const otherRequirement = manager.createRequirement({
+    title: 'Other work',
+    description: 'Keep trigger ownership scoped',
+    provider: 'codex',
+  });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const collectionUrl = `${baseUrl}/api/requirements/${requirement.id}/scheduled-agent-triggers`;
+
+  try {
+    const invalid = await fetch(collectionUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ schedule: 'recurring', intervalSeconds: 30 }),
+    });
+    assert.equal(invalid.status, 400);
+
+    const createdResponse = await fetch(collectionUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ schedule: 'recurring', intervalSeconds: 3_600 }),
+    });
+    assert.equal(createdResponse.status, 201);
+    const created = await createdResponse.json() as {
+      id: string;
+      requirementId: string;
+      schedule: string;
+      status: string;
+      nextFireAt: string | null;
+    };
+    assert.equal(created.requirementId, requirement.id);
+    assert.equal(created.schedule, 'recurring');
+    assert.equal(created.status, 'active');
+    assert.ok(created.nextFireAt);
+
+    const otherCreatedResponse = await fetch(
+      `${baseUrl}/api/requirements/${otherRequirement.id}/scheduled-agent-triggers`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ schedule: 'once', intervalSeconds: 7_200 }),
+      },
+    );
+    assert.equal(otherCreatedResponse.status, 201);
+    const otherCreated = await otherCreatedResponse.json() as { id: string };
+
+    const listResponse = await fetch(collectionUrl);
+    assert.equal(listResponse.status, 200);
+    assert.deepEqual((await listResponse.json() as { items: Array<{ id: string }> }).items.map((item) => item.id), [created.id]);
+
+    const globalListResponse = await fetch(`${baseUrl}/api/scheduled-agent-triggers`);
+    assert.equal(globalListResponse.status, 200);
+    assert.deepEqual(
+      (await globalListResponse.json() as { items: Array<{ id: string }> }).items.map((item) => item.id).sort(),
+      [created.id, otherCreated.id].sort(),
+    );
+
+    const wrongRequirement = await fetch(
+      `${baseUrl}/api/requirements/${otherRequirement.id}/scheduled-agent-triggers/${created.id}`,
+      { method: 'DELETE' },
+    );
+    assert.equal(wrongRequirement.status, 404);
+
+    const cancelledResponse = await fetch(`${collectionUrl}/${created.id}`, { method: 'DELETE' });
+    assert.equal(cancelledResponse.status, 200);
+    assert.equal((await cancelledResponse.json() as { status: string }).status, 'cancelled');
+    const repeatedCancel = await fetch(`${collectionUrl}/${created.id}`, { method: 'DELETE' });
+    assert.equal(repeatedCancel.status, 409);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
+
 test('HTTP API deletes only TODO requirements', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const manager = new AgentManager({

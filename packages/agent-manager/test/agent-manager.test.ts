@@ -18,6 +18,7 @@ import {
   PULL_REQUEST_CONFLICT_TRIGGER_ID,
   PULL_REQUEST_STATUS_TRIGGER_ID,
 } from '../src/pull-request-triggers.ts';
+import { SCHEDULED_CONTINUE_TRIGGER_ID } from '../src/scheduled-agent-trigger.ts';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
 import type { PullRequest, RunOutcome } from '../src/types.ts';
 
@@ -288,6 +289,10 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
       value.includes('code-factory-cli pr register')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
       value.includes('code-factory-cli requirement propose')));
+    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
+      value.includes('code-factory-cli timer register')));
+    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
+      value.includes('code-factory-cli timer show')));
     assert.ok(runner.requests[0]?.invocation.args.every((value) =>
       !value.includes('/agent/pull-requests') && !value.includes('/agent/requirements')));
     assert.ok(runner.requests[0]?.invocation.args.every((value) =>
@@ -371,10 +376,17 @@ test('a human reply reactivates a completed requirement in its original RD sessi
     });
     await firstExecution;
 
+    const scheduled = manager.createScheduledAgentTrigger(requirement.id, {
+      schedule: 'recurring',
+      intervalSeconds: 3_600,
+    });
+
     const completed = manager.confirmRequirement(requirement.id);
     assert.equal(completed.status, 'done');
     assert.equal(completed.session.state, 'completed');
     assert.ok(completed.completedAt);
+    assert.equal(manager.listScheduledAgentTriggers(requirement.id)
+      .find((trigger) => trigger.id === scheduled.id)?.status, 'cancelled');
 
     const reply = manager.postHumanMessage(requirement.id, 'Please add one more regression test.');
     assert.equal(reply.queued, false);
@@ -401,6 +413,57 @@ test('a human reply reactivates a completed requirement in its original RD sessi
     assert.equal(manager.getRequirement(requirement.id)?.status, 'waiting_confirmation');
   } finally {
     manager.close();
+  }
+});
+
+test('the native Scheduled Agent Trigger wakes an idle RD session with continue', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
+  try {
+    const requirement = manager.createRequirement({
+      title: 'Long compiler job',
+      description: 'Inspect the compiler result after the timer fires',
+      provider: 'codex',
+    });
+    const scheduledFor = new Date(Date.now() - 1_000).toISOString();
+    store.createScheduledAgentTrigger({
+      id: 'sat-due',
+      requirementId: requirement.id,
+      schedule: 'once',
+      intervalSeconds: 60,
+      nextFireAt: scheduledFor,
+      now: scheduledFor,
+    });
+
+    manager.startConfiguredServices();
+    const deadline = Date.now() + 1_000;
+    while (runner.requests.length === 0 && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    }
+
+    assert.equal(runner.requests.length, 1);
+    assert.match(runner.requests[0]?.invocation.input ?? '', /continue\./);
+    const message = manager.listMessages(requirement.id)[0];
+    assert.equal(message?.author, 'system');
+    assert.equal(message?.body, 'continue.');
+    const messageEvent = manager.listEvents().find((event) =>
+      event.type === 'message.created' && event.payload.scheduledAgentTriggerId === 'sat-due');
+    assert.equal(messageEvent?.payload.triggerId, SCHEDULED_CONTINUE_TRIGGER_ID);
+    assert.equal(messageEvent?.payload.source, 'scheduled');
+    assert.equal(store.getScheduledAgentTrigger('sat-due')?.status, 'completed');
+    assert.ok(manager.listEvents().some((event) => event.type === 'scheduled_agent_trigger.fired'));
+
+    runner.resolvers[0]?.({
+      status: 'succeeded',
+      exitCode: 0,
+      nativeSessionId: 'native-scheduled-session',
+      finalMessage: 'Build inspected',
+      error: null,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  } finally {
+    await manager.close();
   }
 });
 

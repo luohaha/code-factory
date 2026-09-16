@@ -10,6 +10,8 @@ import type {
   RequirementMessage,
   PullRequest,
   ReviewRequest,
+  ScheduledAgentTrigger,
+  ScheduledAgentTriggerSchedule,
   PullRequestStatus,
   RequirementCreator,
   RequirementStatus,
@@ -126,6 +128,22 @@ export interface BeginReviewRequestRecord {
   now: string;
 }
 
+export interface CreateScheduledAgentTriggerRecord {
+  id: string;
+  requirementId: string;
+  schedule: ScheduledAgentTriggerSchedule;
+  intervalSeconds: number;
+  nextFireAt: string;
+  now: string;
+}
+
+export interface CompleteScheduledAgentTriggerOccurrenceRecord {
+  id: string;
+  expectedNextFireAt: string;
+  nextFireAt?: string;
+  now: string;
+}
+
 /** Business-level persistence contract; PostgreSQL can implement this without leaking SQL upward. */
 export interface AgentManagerStore {
   close(): void;
@@ -142,6 +160,13 @@ export interface AgentManagerStore {
   appendExternalMessage(input: AppendExternalMessageRecord): RequirementMessage | null;
   listMessages(requirementId: string): RequirementMessage[];
   listPendingRdMessages(requirementId: string): RequirementMessage[];
+  createScheduledAgentTrigger(input: CreateScheduledAgentTriggerRecord): ScheduledAgentTrigger;
+  getScheduledAgentTrigger(id: string): ScheduledAgentTrigger | null;
+  listScheduledAgentTriggers(requirementId?: string): ScheduledAgentTrigger[];
+  completeScheduledAgentTriggerOccurrence(
+    input: CompleteScheduledAgentTriggerOccurrenceRecord,
+  ): ScheduledAgentTrigger | null;
+  cancelScheduledAgentTrigger(id: string, now: string): ScheduledAgentTrigger;
   upsertPullRequest(input: UpsertPullRequestRecord): PullRequest;
   getPullRequest(id: string): PullRequest | null;
   listPullRequests(requirementId?: string): PullRequest[];

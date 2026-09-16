@@ -116,6 +116,17 @@ Content-Type: application/json
 
 `provider` is optional and defaults to the source Session provider. The proposed Requirement is created as `createdBy=rd_agent` in TODO and does not start automatically.
 
+Schedule or cancel a wake-up for the current Requirement:
+
+~~~bash
+code-factory-cli timer register --after-seconds 3600
+code-factory-cli timer register --after-seconds 900 --repeat
+code-factory-cli timer show
+code-factory-cli timer cancel --id sat_...
+~~~
+
+The CLI uses the Requirement-scoped scheduled-trigger GET, POST, and DELETE endpoints with the injected Requirement ID. `timer show` returns every timer for the current Requirement, including its ID and status, so an Agent can recover the ID needed by `timer cancel`. A due occurrence writes the System message `continue.` through the same durable delivery path as other Agent Triggers. One-time schedules complete after delivery; recurring schedules advance to their next future occurrence and skip replaying missed intervals after downtime.
+
 ## 4. Message delivery
 
 `GET /api/requirements/:id/messages` returns the unified conversation. Each message contains:
@@ -142,10 +153,13 @@ Current event types include:
 - `message.created`;
 - `pull_request.created` / `pull_request.updated`;
 - `review_request.started`;
+- `scheduled_agent_trigger.created` / `scheduled_agent_trigger.fired` / `scheduled_agent_trigger.cancelled`;
 - `run.started` / `run.succeeded` / `run.failed` / `run.timed_out` / `run.cancelled`;
 - `manager.reconciled`.
 
 The PR Reconciler publishes GitHub state and head-SHA changes through `pull_request.updated`. PR status changes, new comments/reviews, CI failures, and merge conflicts are first stored in the Requirement conversation and then published through `message.created`. Their payload includes `source: "github"`, `pullRequestId`, and the corresponding `triggerId`: `github.pull-request.status`, `github.pull-request.comment`, `github.pull-request.ci-failure`, or `github.pull-request.conflict`. SQLite Agent Trigger receipts deduplicate external events across Agent Manager restarts.
+
+Scheduled wake-up messages publish `message.created` with `source: "scheduled"`, `triggerId: "scheduled.continue"`, `scheduledAgentTriggerId`, and `scheduledFor`. Their trigger receipt is keyed by schedule ID plus occurrence time, while the separate scheduled-trigger events expose configuration and lifecycle changes to dashboard clients.
 
 ## 6. Error semantics
 

@@ -11,8 +11,10 @@ import {
   type AppendEventRecord,
   type BeginReviewRequestRecord,
   type BeginRunRecord,
+  type CompleteScheduledAgentTriggerOccurrenceRecord,
   type CreateMessageAttachmentRecord,
   type CreateRequirementRecord,
+  type CreateScheduledAgentTriggerRecord,
   type PullRequestObservation,
   type UpsertPullRequestRecord,
   StoreConflictError,
@@ -27,6 +29,7 @@ import type {
   RequirementMessage,
   PullRequest,
   ReviewRequest,
+  ScheduledAgentTrigger,
   RequirementStatus,
   RequirementWithSession,
   RunOutcome,
@@ -174,6 +177,20 @@ function reviewRequestFrom(row: Row): ReviewRequest {
     error: row.error === null ? null : String(row.error),
     createdAt: String(row.created_at),
     finishedAt: row.finished_at === null ? null : String(row.finished_at),
+  };
+}
+
+function scheduledAgentTriggerFrom(row: Row): ScheduledAgentTrigger {
+  return {
+    id: String(row.id),
+    requirementId: String(row.requirement_id),
+    schedule: String(row.schedule) as ScheduledAgentTrigger['schedule'],
+    intervalSeconds: Number(row.interval_seconds),
+    status: String(row.status) as ScheduledAgentTrigger['status'],
+    nextFireAt: row.next_fire_at === null ? null : String(row.next_fire_at),
+    lastFiredAt: row.last_fired_at === null ? null : String(row.last_fired_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
   };
 }
 
@@ -360,6 +377,66 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       WHERE requirement_id = ? AND deliver_to_rd = 1 AND sequence > ? ORDER BY sequence ASC`)
       .all(requirementId, bundle.session.lastConsumedMessageSequence) as Row[])
       .map((row) => messageFrom(row, this.listMessageAttachments(String(row.id))));
+  }
+
+  createScheduledAgentTrigger(input: CreateScheduledAgentTriggerRecord): ScheduledAgentTrigger {
+    this.requireBundle(input.requirementId);
+    if (!Number.isInteger(input.intervalSeconds) || input.intervalSeconds <= 0) {
+      throw new TypeError('intervalSeconds must be a positive integer');
+    }
+    this.#db.prepare(`INSERT INTO scheduled_agent_triggers
+      (id, requirement_id, schedule, interval_seconds, status, next_fire_at, last_fired_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 'active', ?, NULL, ?, ?)`).run(
+      input.id,
+      input.requirementId,
+      input.schedule,
+      input.intervalSeconds,
+      input.nextFireAt,
+      input.now,
+      input.now,
+    );
+    return this.requireScheduledAgentTrigger(input.id);
+  }
+
+  getScheduledAgentTrigger(id: string): ScheduledAgentTrigger | null {
+    const row = this.#db.prepare('SELECT * FROM scheduled_agent_triggers WHERE id = ?').get(id) as Row | undefined;
+    return row ? scheduledAgentTriggerFrom(row) : null;
+  }
+
+  listScheduledAgentTriggers(requirementId?: string): ScheduledAgentTrigger[] {
+    const rows = requirementId
+      ? this.#db.prepare(`SELECT * FROM scheduled_agent_triggers
+        WHERE requirement_id = ? ORDER BY created_at DESC, id DESC`).all(requirementId)
+      : this.#db.prepare(`SELECT * FROM scheduled_agent_triggers
+        ORDER BY CASE WHEN next_fire_at IS NULL THEN 1 ELSE 0 END, next_fire_at ASC, id ASC`).all();
+    return (rows as Row[]).map(scheduledAgentTriggerFrom);
+  }
+
+  completeScheduledAgentTriggerOccurrence(
+    input: CompleteScheduledAgentTriggerOccurrenceRecord,
+  ): ScheduledAgentTrigger | null {
+    const status = input.nextFireAt ? 'active' : 'completed';
+    const result = this.#db.prepare(`UPDATE scheduled_agent_triggers
+      SET status = ?, next_fire_at = ?, last_fired_at = ?, updated_at = ?
+      WHERE id = ? AND status = 'active' AND next_fire_at = ?`).run(
+      status,
+      input.nextFireAt ?? null,
+      input.now,
+      input.now,
+      input.id,
+      input.expectedNextFireAt,
+    );
+    return result.changes === 0 ? null : this.requireScheduledAgentTrigger(input.id);
+  }
+
+  cancelScheduledAgentTrigger(id: string, now: string): ScheduledAgentTrigger {
+    const existing = this.getScheduledAgentTrigger(id);
+    if (!existing) throw new StoreNotFoundError(`Scheduled Agent Trigger ${id} not found`);
+    const result = this.#db.prepare(`UPDATE scheduled_agent_triggers
+      SET status = 'cancelled', next_fire_at = NULL, updated_at = ? WHERE id = ? AND status = 'active'`)
+      .run(now, id);
+    if (result.changes === 0) throw new StoreConflictError(`Scheduled Agent Trigger ${id} is already ${existing.status}`);
+    return this.requireScheduledAgentTrigger(id);
   }
 
   upsertPullRequest(input: UpsertPullRequestRecord): PullRequest {
@@ -669,6 +746,12 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     const row = this.#db.prepare('SELECT * FROM review_requests WHERE id = ?').get(id) as Row | undefined;
     if (!row) throw new StoreNotFoundError(`Review request ${id} not found`);
     return reviewRequestFrom(row);
+  }
+
+  private requireScheduledAgentTrigger(id: string): ScheduledAgentTrigger {
+    const value = this.getScheduledAgentTrigger(id);
+    if (!value) throw new StoreNotFoundError(`Scheduled Agent Trigger ${id} not found`);
+    return value;
   }
 
   private migrateLegacySchema(): void {

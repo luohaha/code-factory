@@ -21,6 +21,8 @@ export type MessageAuthor = 'human' | 'rd_agent' | 'reviewer' | 'system';
 export type RequirementCreator = 'human' | 'rd_agent';
 export type PullRequestStatus = 'draft' | 'open' | 'closed' | 'merged';
 export type ReviewRequestStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
+export type ScheduledAgentTriggerSchedule = 'once' | 'recurring';
+export type ScheduledAgentTriggerStatus = 'active' | 'completed' | 'cancelled';
 
 export interface AgentModel {
   id: string;
@@ -151,6 +153,18 @@ export interface ReviewRequest {
   error: string | null;
   createdAt: string;
   finishedAt: string | null;
+}
+
+export interface ScheduledAgentTrigger {
+  id: string;
+  requirementId: string;
+  schedule: ScheduledAgentTriggerSchedule;
+  intervalSeconds: number;
+  status: ScheduledAgentTriggerStatus;
+  nextFireAt: string | null;
+  lastFiredAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface RequirementWithSession extends Requirement {
