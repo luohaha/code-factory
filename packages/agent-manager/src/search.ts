@@ -91,7 +91,15 @@ export function localFullTextScore(query: string, title: string, body: string, k
 export function searchExcerpt(value: string, query: string, maximumLength = 180): string {
   const compact = value.replace(/\s+/gu, ' ').trim();
   if (compact.length <= maximumLength) return compact;
-  const matchIndex = normalizedText(compact).indexOf(normalizedText(query));
+  const normalizedCompact = normalizedText(compact);
+  const normalizedQuery = normalizedText(query);
+  let matchIndex = normalizedCompact.indexOf(normalizedQuery);
+  if (matchIndex < 0) {
+    const termIndices = (normalizedQuery.match(/[\p{L}\p{N}_]+/gu) ?? [])
+      .map((term) => normalizedCompact.indexOf(term))
+      .filter((index) => index >= 0);
+    matchIndex = termIndices.length > 0 ? Math.min(...termIndices) : -1;
+  }
   const start = Math.max(0, (matchIndex < 0 ? 0 : matchIndex) - Math.floor(maximumLength / 3));
   const excerpt = compact.slice(start, start + maximumLength).trim();
   return `${start > 0 ? '…' : ''}${excerpt}${start + maximumLength < compact.length ? '…' : ''}`;

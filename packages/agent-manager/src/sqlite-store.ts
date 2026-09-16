@@ -303,7 +303,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
         sourceId: String(row.source_id),
         requirementId: String(row.requirement_id),
         title,
-        excerpt: searchExcerpt(body || title, trimmed),
+        excerpt: searchExcerpt([title, body].filter(Boolean).join('\n'), trimmed),
         score: Number(score.toFixed(6)),
         fullTextScore: Number(fullTextScore.toFixed(6)),
         vectorScore: Number(vectorScore.toFixed(6)),

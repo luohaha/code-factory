@@ -1511,6 +1511,7 @@ function Dashboard() {
   const [query, setQuery] = useState('');
   const [searchResponse, setSearchResponse] = useState<{ query: string; items: SearchResultDto[] }>({ query: '', items: [] });
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [provider, setProvider] = useState<'all' | AgentProvider>('all');
   const [timeRange, setTimeRange] = useState<TimeRange>('7d');
   const [loading, setLoading] = useState(true);
@@ -1622,15 +1623,19 @@ function Dashboard() {
       if (!trimmed) {
         setSearchResponse({ query: '', items: [] });
         setSearching(false);
+        setSearchError(null);
         return;
       }
       setSearching(true);
       client.search(trimmed, 200)
         .then((items) => {
-          if (!cancelled) setSearchResponse({ query: trimmed, items });
+          if (!cancelled) {
+            setSearchResponse({ query: trimmed, items });
+            setSearchError(null);
+          }
         })
         .catch((caught: unknown) => {
-          if (!cancelled) setError(caught instanceof Error ? caught.message : t('Search failed'));
+          if (!cancelled) setSearchError(caught instanceof Error ? caught.message : t('Search failed'));
         })
         .finally(() => {
           if (!cancelled) setSearching(false);
@@ -1843,6 +1848,16 @@ function Dashboard() {
             <WifiOff />
             <AlertTitle>{connection === 'offline' ? t('Agent Manager not connected') : t('Operation incomplete')}</AlertTitle>
             <AlertDescription>{error} {connection === 'offline' ? t('Confirm that Agent Manager is running and allows access from http://localhost:3000.') : ''}</AlertDescription>
+          </Alert>
+        </div>
+      ) : null}
+
+      {searchError ? (
+        <div className="px-4 pt-4 lg:px-6">
+          <Alert variant="destructive">
+            <Search />
+            <AlertTitle>{t('Search failed')}</AlertTitle>
+            <AlertDescription>{searchError}</AlertDescription>
           </Alert>
         </div>
       ) : null}

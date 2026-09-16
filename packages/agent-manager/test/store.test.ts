@@ -72,7 +72,9 @@ test('hybrid search indexes requirements, conversations, and pull request metada
 
     assert.equal(store.search('protected routes')[0]?.kind, 'requirement');
     assert.equal(store.search('database deadlock')[0]?.sourceId, 'msg-search');
-    assert.equal(store.search('duplicate refresh tokens')[0]?.sourceId, 'pr-search');
+    const pullRequestMatch = store.search('duplicate refresh tokens')[0];
+    assert.equal(pullRequestMatch?.sourceId, 'pr-search');
+    assert.match(pullRequestMatch?.excerpt ?? '', /duplicate refresh tokens/i);
     assert.ok(store.search('authenticating').some((result) =>
       result.requirementId === 'req-search' && result.fullTextScore === 0 && result.vectorScore >= 0.2));
     assert.ok(store.search('ses-search').some((result) => result.requirementId === 'req-search'));
