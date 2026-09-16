@@ -40,6 +40,7 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/configuration | Read desired Agent Manager configuration and restart status |
 | PATCH | /api/configuration | Validate, persist, and apply configuration changes |
 | GET | /api/agent-models | Read cached Codex and Claude Code model options |
+| GET | /api/search | Hybrid-search Requirements, conversations, and Pull Requests |
 | GET | /api/requirements | List Requirements with their RD Sessions |
 | POST | /api/requirements | Create a Requirement and RD Session |
 | DELETE | /api/requirements/:id | Remove a TODO Requirement |
@@ -232,6 +233,24 @@ interface AgentModelCatalog {
 
 `stale=true` means the latest provider refresh failed or has not completed. Previously discovered values, or provider-safe fallbacks, remain in `models`.
 
+### 3.8 SearchResult
+
+~~~ts
+interface SearchResult {
+  kind: 'requirement' | 'message' | 'pull_request';
+  sourceId: string;
+  requirementId: string;
+  title: string;
+  excerpt: string;
+  score: number;             // blended full-text and vector score
+  fullTextScore: number;
+  vectorScore: number;
+  updatedAt: string;
+}
+~~~
+
+Search results are document-level matches. `requirementId` lets clients group a matching conversation message or Pull Request under its owning Requirement.
+
 ## 4. Query endpoints
 
 ### GET /api/health
@@ -303,6 +322,21 @@ curl -X PATCH http://127.0.0.1:4310/api/configuration \
 Returns the in-memory provider model catalog. Agent Manager refreshes it at startup and every 24 hours. Codex discovery uses the authenticated local CLI. Claude discovery uses the configured API or gateway when possible and otherwise returns Claude Code rolling aliases and environment-configured model IDs. Refresh failures do not fail this endpoint; the affected provider is returned with `stale=true` and its last usable models.
 
 Success: 200 OK with `AgentModelCatalog`.
+
+### GET /api/search
+
+Searches non-cancelled Requirements, complete Requirement conversations, and registered Pull Request titles and metadata. Ranking combines SQLite FTS5 trigram matching with cosine similarity over locally generated word and character n-gram vectors. Indexing and search are local and do not require an external embedding service. Existing SQLite records are indexed automatically when Agent Manager starts.
+
+| Parameter | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| q | string | yes | Non-empty query of at most 500 characters |
+| limit | integer | no | Result count from 1 to 200; defaults to 50 |
+
+~~~bash
+curl 'http://127.0.0.1:4310/api/search?q=database%20deadlock&limit=20'
+~~~
+
+Success: 200 OK with `{"items": SearchResult[]}` ordered by descending hybrid score. At most two hits of each kind are returned per Requirement so a long conversation cannot crowd every other result out. Invalid queries return 400 Bad Request.
 
 ### GET /api/requirements
 

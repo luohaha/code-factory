@@ -35,6 +35,97 @@ test('a requirement is created atomically with exactly one RD session', () => {
   }
 });
 
+test('hybrid search indexes requirements, conversations, and pull request metadata', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-search',
+      sessionId: 'ses-search',
+      title: 'Secure user access',
+      description: 'Build authentication middleware for protected routes',
+      provider: 'codex',
+      createdBy: 'human',
+      now,
+    });
+    store.appendMessage({
+      id: 'msg-search',
+      requirementId: 'req-search',
+      sessionId: 'ses-search',
+      author: 'human',
+      body: 'The database deadlock only happens during retry.',
+      deliverToRd: true,
+      now,
+    });
+    store.upsertPullRequest({
+      id: 'pr-search',
+      requirementId: 'req-search',
+      repository: 'acme/repo',
+      number: 42,
+      url: 'https://github.com/acme/repo/pull/42',
+      title: 'Prevent duplicate refresh tokens',
+      baseBranch: 'main',
+      headBranch: 'secure-refresh',
+      headSha: 'abc123',
+      status: 'open',
+      now,
+    });
+
+    assert.equal(store.search('protected routes')[0]?.kind, 'requirement');
+    assert.equal(store.search('database deadlock')[0]?.sourceId, 'msg-search');
+    assert.equal(store.search('duplicate refresh tokens')[0]?.sourceId, 'pr-search');
+    assert.ok(store.search('authenticating').some((result) =>
+      result.requirementId === 'req-search' && result.fullTextScore === 0 && result.vectorScore >= 0.2));
+    assert.ok(store.search('ses-search').some((result) => result.requirementId === 'req-search'));
+
+    store.upsertPullRequest({
+      id: 'ignored-on-update',
+      requirementId: 'req-search',
+      repository: 'acme/repo',
+      number: 42,
+      url: 'https://github.com/acme/repo/pull/42',
+      title: 'Rotate encrypted credential marker',
+      baseBranch: 'main',
+      headBranch: 'secure-refresh',
+      headSha: 'def456',
+      status: 'open',
+      now: '2026-09-10T12:01:00.000Z',
+    });
+    assert.equal(store.search('encrypted credential marker')[0]?.sourceId, 'pr-search');
+  } finally {
+    store.close();
+  }
+});
+
+test('search backfills existing records and hides cancelled requirements', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-search-backfill-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const initial = new SqliteAgentManagerStore(databasePath);
+  initial.createRequirement({
+    requirementId: 'req-backfill',
+    sessionId: 'ses-backfill',
+    title: '搜索历史记录',
+    description: '保留旧数据库里的需求内容',
+    provider: 'codex',
+    createdBy: 'human',
+    now,
+  });
+  initial.close();
+
+  const database = new DatabaseSync(databasePath);
+  database.prepare('DELETE FROM search_documents WHERE source_id = ?').run('req-backfill');
+  database.close();
+
+  const migrated = new SqliteAgentManagerStore(databasePath);
+  try {
+    assert.equal(migrated.search('旧数据库')[0]?.requirementId, 'req-backfill');
+    migrated.transitionRequirement('req-backfill', ['todo'], 'cancelled', now);
+    assert.deepEqual(migrated.search('旧数据库'), []);
+  } finally {
+    migrated.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('cancelling a TODO requirement hides it, archives its session, and preserves its records', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {

@@ -99,6 +99,7 @@ import {
   type RequirementMessageDto,
   type RequirementStatus,
   type ReviewRequestDto,
+  type SearchResultDto,
   type SessionState,
   type WorkspaceDto,
 } from '@/lib/agent-manager-client';
@@ -195,6 +196,12 @@ const authorLabel: Record<RequirementMessageDto['author'], TranslationKey> = {
   rd_agent: 'RD Agent',
   reviewer: 'Reviewer',
   system: 'System',
+};
+
+const searchKindLabel: Record<SearchResultDto['kind'], TranslationKey> = {
+  requirement: 'Requirement match',
+  message: 'Conversation match',
+  pull_request: 'Pull Request match',
 };
 
 function providerLabel(provider: AgentProvider): string {
@@ -372,6 +379,7 @@ function latestRun(requirementId: string, runs: AgentRunDto[]): AgentRunDto | un
 function RequirementCard({
   requirement,
   run,
+  searchMatch,
   busy,
   onOpen,
   onStart,
@@ -380,6 +388,7 @@ function RequirementCard({
 }: {
   requirement: RequirementDto;
   run?: AgentRunDto;
+  searchMatch?: SearchResultDto;
   busy: boolean;
   onOpen: () => void;
   onStart: () => void;
@@ -403,6 +412,15 @@ function RequirementCard({
         <h3 className="line-clamp-2 text-[13px] leading-5 font-semibold tracking-[-0.01em] [overflow-wrap:anywhere] hover:underline">{requirement.title}</h3>
         <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-muted-foreground [overflow-wrap:anywhere]">{requirement.description}</p>
       </button>
+
+      {searchMatch ? (
+        <button type="button" className="mt-3 block w-full rounded-lg bg-sky-500/7 px-2.5 py-2 text-left" onClick={onOpen}>
+          <span className="flex items-center gap-1.5 text-[9px] font-semibold text-sky-700 dark:text-sky-300">
+            <Search className="size-3" />{t(searchKindLabel[searchMatch.kind])}
+          </span>
+          <span className="mt-1 line-clamp-2 block text-[10px] leading-4 text-foreground/75 [overflow-wrap:anywhere]">{searchMatch.excerpt || searchMatch.title}</span>
+        </button>
+      ) : null}
 
       {requirement.session.lastError ? (
         <div className="mt-3 flex items-start gap-2 rounded-lg bg-rose-500/8 px-2.5 py-2 text-[10px] leading-4 text-rose-700 dark:text-rose-300">
@@ -1491,6 +1509,8 @@ function Dashboard() {
   const [messageRevision, setMessageRevision] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [searchResponse, setSearchResponse] = useState<{ query: string; items: SearchResultDto[] }>({ query: '', items: [] });
+  const [searching, setSearching] = useState(false);
   const [provider, setProvider] = useState<'all' | AgentProvider>('all');
   const [timeRange, setTimeRange] = useState<TimeRange>('7d');
   const [loading, setLoading] = useState(true);
@@ -1595,44 +1615,81 @@ function Dashboard() {
     };
   }, [client, messageRevision, selectedId, t]);
 
+  useEffect(() => {
+    const trimmed = query.trim();
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (!trimmed) {
+        setSearchResponse({ query: '', items: [] });
+        setSearching(false);
+        return;
+      }
+      setSearching(true);
+      client.search(trimmed, 200)
+        .then((items) => {
+          if (!cancelled) setSearchResponse({ query: trimmed, items });
+        })
+        .catch((caught: unknown) => {
+          if (!cancelled) setError(caught instanceof Error ? caught.message : t('Search failed'));
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
+    }, trimmed ? 200 : 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [client, lastSynced, query, t]);
+
   const selectedRequirement = requirements.find((item) => item.id === selectedId) ?? null;
   const selectedRuns = runs.filter((run) => run.requirementId === selectedId);
   const selectedPullRequests = pullRequests.filter((pullRequest) => pullRequest.requirementId === selectedId);
+  const normalizedQuery = query.trim();
+  const searchResults = useMemo(
+    () => searchResponse.query === normalizedQuery ? searchResponse.items : [],
+    [normalizedQuery, searchResponse],
+  );
+  const matchingRequirementIds = useMemo(
+    () => new Set(searchResults.map((result) => result.requirementId)),
+    [searchResults],
+  );
+  const matchingPullRequestIds = useMemo(
+    () => new Set(searchResults.filter((result) => result.kind === 'pull_request').map((result) => result.sourceId)),
+    [searchResults],
+  );
+  const searchMatchByRequirement = useMemo(() => {
+    const matches = new Map<string, SearchResultDto>();
+    for (const result of searchResults) {
+      if (!matches.has(result.requirementId)) matches.set(result.requirementId, result);
+    }
+    return matches;
+  }, [searchResults]);
 
   const filteredRequirements = useMemo(() => {
-    const needle = query.trim().toLowerCase();
     return requirements.filter((requirement) => {
-      const matchesQuery = !needle || [requirement.id, requirement.title, requirement.description, requirement.session.id]
-        .some((value) => value.toLowerCase().includes(needle));
+      const matchesQuery = !normalizedQuery || matchingRequirementIds.has(requirement.id);
       return matchesQuery
         && (provider === 'all' || requirement.provider === provider)
         && isWithinTimeRange(requirement.createdAt, timeRange, filterReferenceTime);
     });
-  }, [filterReferenceTime, provider, query, requirements, timeRange]);
+  }, [filterReferenceTime, matchingRequirementIds, normalizedQuery, provider, requirements, timeRange]);
 
   const filteredSessions = useMemo(() => {
-    const needle = query.trim().toLowerCase();
     return requirements.filter((requirement) => {
-      const matchesQuery = !needle || [requirement.id, requirement.title, requirement.description, requirement.session.id]
-        .some((value) => value.toLowerCase().includes(needle));
+      const matchesQuery = !normalizedQuery || matchingRequirementIds.has(requirement.id);
       return matchesQuery
         && (provider === 'all' || requirement.provider === provider)
         && isWithinTimeRange(requirement.session.createdAt, timeRange, filterReferenceTime);
     });
-  }, [filterReferenceTime, provider, query, requirements, timeRange]);
+  }, [filterReferenceTime, matchingRequirementIds, normalizedQuery, provider, requirements, timeRange]);
 
   const filteredPullRequests = useMemo(() => {
-    const needle = query.trim().toLowerCase();
     return pullRequests.filter((pullRequest) => {
-      const matchesQuery = !needle || [
-        pullRequest.repository,
-        String(pullRequest.number),
-        pullRequest.title,
-        pullRequest.headBranch,
-      ].some((value) => value.toLowerCase().includes(needle));
+      const matchesQuery = !normalizedQuery || matchingPullRequestIds.has(pullRequest.id);
       return matchesQuery && isWithinTimeRange(pullRequest.createdAt, timeRange, filterReferenceTime);
     });
-  }, [filterReferenceTime, pullRequests, query, timeRange]);
+  }, [filterReferenceTime, matchingPullRequestIds, normalizedQuery, pullRequests, timeRange]);
 
   async function runAction(requirementId: string, action: () => Promise<unknown>): Promise<void> {
     setBusyId(requirementId);
@@ -1771,8 +1828,10 @@ function Dashboard() {
             <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-rose-600">{failures}</span><span className="text-muted-foreground">{t('Failed')}</span></div>
             <div className="hidden h-7 w-px bg-border sm:block" />
             <div className="relative hidden sm:block">
-              <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input aria-label={t('Search requirements or Sessions')} value={query} onChange={(event) => setQuery(event.target.value)} className="w-56 pr-3 pl-8 text-xs" placeholder={t('Search requirements or Sessions')} />
+              {searching
+                ? <LoaderCircle className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 animate-spin text-muted-foreground" />
+                : <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />}
+              <Input aria-label={t('Search requirements, conversations, or PRs')} value={query} onChange={(event) => setQuery(event.target.value)} className="w-64 pr-3 pl-8 text-xs" placeholder={t('Search requirements, conversations, or PRs')} />
             </div>
           </div>
         </div>
@@ -1825,6 +1884,7 @@ function Dashboard() {
                         key={item.id}
                         requirement={item}
                         run={latestRun(item.id, runs)}
+                        searchMatch={normalizedQuery ? searchMatchByRequirement.get(item.id) : undefined}
                         busy={busyId === item.id}
                         onOpen={() => setSelectedId(item.id)}
                         onStart={() => setSelectedId(item.id)}

@@ -118,6 +118,41 @@ export const schemaStatements = [
     created_at TEXT NOT NULL,
     finished_at TEXT
   ) STRICT`,
+  `CREATE TABLE IF NOT EXISTS search_documents (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('requirement', 'message', 'pull_request')),
+    source_id TEXT NOT NULL,
+    requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    keywords TEXT NOT NULL,
+    embedding BLOB NOT NULL,
+    embedding_version INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (kind, source_id)
+  ) STRICT`,
+  `CREATE VIRTUAL TABLE IF NOT EXISTS search_documents_fts USING fts5(
+    title,
+    body,
+    keywords,
+    content='search_documents',
+    content_rowid='rowid',
+    tokenize='trigram case_sensitive 0 remove_diacritics 1'
+  )`,
+  `CREATE TRIGGER IF NOT EXISTS search_documents_ai AFTER INSERT ON search_documents BEGIN
+    INSERT INTO search_documents_fts(rowid, title, body, keywords)
+    VALUES (new.rowid, new.title, new.body, new.keywords);
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS search_documents_ad AFTER DELETE ON search_documents BEGIN
+    INSERT INTO search_documents_fts(search_documents_fts, rowid, title, body, keywords)
+    VALUES ('delete', old.rowid, old.title, old.body, old.keywords);
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS search_documents_au AFTER UPDATE ON search_documents BEGIN
+    INSERT INTO search_documents_fts(search_documents_fts, rowid, title, body, keywords)
+    VALUES ('delete', old.rowid, old.title, old.body, old.keywords);
+    INSERT INTO search_documents_fts(rowid, title, body, keywords)
+    VALUES (new.rowid, new.title, new.body, new.keywords);
+  END`,
   `DROP INDEX IF EXISTS one_active_rd_run_per_workspace`,
   `CREATE UNIQUE INDEX IF NOT EXISTS one_active_rd_run_per_session
     ON agent_runs (session_id) WHERE role = 'rd' AND status = 'running'`,
@@ -140,4 +175,6 @@ export const schemaStatements = [
     ON agent_trigger_receipts (requirement_id, created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS review_requests_pull_request_created
     ON review_requests (pull_request_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS search_documents_requirement_updated
+    ON search_documents (requirement_id, updated_at DESC)`,
 ] as const;

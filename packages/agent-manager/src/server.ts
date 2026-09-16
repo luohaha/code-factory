@@ -156,6 +156,12 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         sendJson(response, 200, manager.updateConfiguration(patch));
         return;
       }
+      if (request.method === 'GET' && url.pathname === '/api/search') {
+        const rawLimit = url.searchParams.get('limit');
+        const limit = rawLimit === null ? 50 : Number(rawLimit);
+        sendJson(response, 200, { items: manager.search(url.searchParams.get('q') ?? '', limit) });
+        return;
+      }
       if (request.method === 'GET' && url.pathname === '/api/requirements') {
         sendJson(response, 200, { items: manager.listRequirements() });
         return;
