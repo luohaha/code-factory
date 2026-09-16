@@ -222,7 +222,7 @@ test('HTTP API rejects unsupported reasoning effort values', async () => {
   }
 });
 
-test('HTTP API creates, lists, validates, and cancels Scheduled Agent Triggers', async () => {
+test('HTTP API creates, lists, validates, and cancels Agent Timers', async () => {
   const manager = new AgentManager({
     workspaceRoot: process.cwd(),
     store: new SqliteAgentManagerStore(':memory:'),
@@ -245,40 +245,49 @@ test('HTTP API creates, lists, validates, and cancels Scheduled Agent Triggers',
   });
   const port = (server.address() as AddressInfo).port;
   const baseUrl = `http://127.0.0.1:${port}`;
-  const collectionUrl = `${baseUrl}/api/requirements/${requirement.id}/scheduled-agent-triggers`;
+  const collectionUrl = `${baseUrl}/api/requirements/${requirement.id}/timers`;
 
   try {
+    const missingDescription = await fetch(collectionUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ schedule: 'once', intervalSeconds: 60 }),
+    });
+    assert.equal(missingDescription.status, 400);
+
     const invalid = await fetch(collectionUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ schedule: 'recurring', intervalSeconds: 30 }),
+      body: JSON.stringify({ description: 'Check compiler status', schedule: 'recurring', intervalSeconds: 30 }),
     });
     assert.equal(invalid.status, 400);
 
     const createdResponse = await fetch(collectionUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ schedule: 'recurring', intervalSeconds: 3_600 }),
+      body: JSON.stringify({ description: 'Check compiler status', schedule: 'recurring', intervalSeconds: 3_600 }),
     });
     assert.equal(createdResponse.status, 201);
     const created = await createdResponse.json() as {
       id: string;
       requirementId: string;
+      description: string;
       schedule: string;
       status: string;
       nextFireAt: string | null;
     };
     assert.equal(created.requirementId, requirement.id);
+    assert.equal(created.description, 'Check compiler status');
     assert.equal(created.schedule, 'recurring');
     assert.equal(created.status, 'active');
     assert.ok(created.nextFireAt);
 
     const otherCreatedResponse = await fetch(
-      `${baseUrl}/api/requirements/${otherRequirement.id}/scheduled-agent-triggers`,
+      `${baseUrl}/api/requirements/${otherRequirement.id}/timers`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ schedule: 'once', intervalSeconds: 7_200 }),
+        body: JSON.stringify({ description: 'Check other work', schedule: 'once', intervalSeconds: 7_200 }),
       },
     );
     assert.equal(otherCreatedResponse.status, 201);
@@ -288,7 +297,7 @@ test('HTTP API creates, lists, validates, and cancels Scheduled Agent Triggers',
     assert.equal(listResponse.status, 200);
     assert.deepEqual((await listResponse.json() as { items: Array<{ id: string }> }).items.map((item) => item.id), [created.id]);
 
-    const globalListResponse = await fetch(`${baseUrl}/api/scheduled-agent-triggers`);
+    const globalListResponse = await fetch(`${baseUrl}/api/timers`);
     assert.equal(globalListResponse.status, 200);
     assert.deepEqual(
       (await globalListResponse.json() as { items: Array<{ id: string }> }).items.map((item) => item.id).sort(),
@@ -296,7 +305,7 @@ test('HTTP API creates, lists, validates, and cancels Scheduled Agent Triggers',
     );
 
     const wrongRequirement = await fetch(
-      `${baseUrl}/api/requirements/${otherRequirement.id}/scheduled-agent-triggers/${created.id}`,
+      `${baseUrl}/api/requirements/${otherRequirement.id}/timers/${created.id}`,
       { method: 'DELETE' },
     );
     assert.equal(wrongRequirement.status, 404);

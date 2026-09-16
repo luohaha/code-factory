@@ -99,7 +99,7 @@ import {
   type RequirementMessageDto,
   type RequirementStatus,
   type ReviewRequestDto,
-  type ScheduledAgentTriggerDto,
+  type AgentTimerDto,
   type SessionState,
   type WorkspaceDto,
 } from '@/lib/agent-manager-client';
@@ -160,8 +160,8 @@ const sessionColumns: Array<{
   { state: 'completed', title: 'COMPLETED', description: 'Requirement complete; reply to reactivate', tone: 'bg-teal-600' },
 ];
 
-const scheduledAgentTriggerColumns: Array<{
-  status: ScheduledAgentTriggerDto['status'];
+const agentTimerColumns: Array<{
+  status: AgentTimerDto['status'];
   title: TranslationKey;
   description: TranslationKey;
   tone: string;
@@ -259,7 +259,7 @@ function agentConfigurationLabel(configuration: {
 }
 
 function shortId(id: string): string {
-  const value = id.replace(/^(req|ses|run|msg|sat)_/, '');
+  const value = id.replace(/^(req|ses|run|msg|tmr)_/, '');
   return value.length > 12 ? value.slice(0, 8) : value;
 }
 
@@ -682,51 +682,53 @@ function PullRequestCard({ pullRequest, requirement, activeReview, busy, modelCa
   );
 }
 
-function ScheduledAgentTriggerCard({ trigger, requirement, onOpenRequirement }: {
-  trigger: ScheduledAgentTriggerDto;
+function AgentTimerCard({ timer, requirement, onOpenRequirement }: {
+  timer: AgentTimerDto;
   requirement?: RequirementDto;
   onOpenRequirement: () => void;
 }) {
   const { locale, t } = useI18n();
-  const status = scheduledAgentTriggerColumns.find((column) => column.status === trigger.status);
-  const eventLabel = trigger.status === 'active'
+  const status = agentTimerColumns.find((column) => column.status === timer.status);
+  const eventLabel = timer.status === 'active'
     ? t('Next wake-up')
-    : trigger.status === 'completed' ? t('Last wake-up') : t('Stopped');
-  const eventTime = trigger.status === 'active'
-    ? trigger.nextFireAt
-    : trigger.status === 'completed' ? trigger.lastFiredAt : trigger.updatedAt;
+    : timer.status === 'completed' ? t('Last wake-up') : t('Stopped');
+  const eventTime = timer.status === 'active'
+    ? timer.nextFireAt
+    : timer.status === 'completed' ? timer.lastFiredAt : timer.updatedAt;
 
   return (
     <article className="rounded-xl border border-border/80 bg-card p-3.5 shadow-[0_1px_2px_oklch(0.18_0.02_255/0.05)]">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <span className="grid size-7 place-items-center rounded-lg bg-primary/8 text-primary"><Clock3 className="size-3.5" /></span>
-          <Badge variant="outline" className="h-5 font-mono text-[9px]">TIMER-{shortId(trigger.id)}</Badge>
+          <Badge variant="outline" className="h-5 font-mono text-[9px]">TIMER-{shortId(timer.id)}</Badge>
         </div>
         <span className="flex items-center gap-1.5 text-[9px] font-medium text-muted-foreground">
           <span className={`size-1.5 rounded-full ${status?.tone ?? 'bg-slate-400'}`} />
-          {status ? t(status.title) : trigger.status.toUpperCase()}
+          {status ? t(status.title) : timer.status.toUpperCase()}
         </span>
       </div>
 
       <p className="mt-3 text-[13px] font-semibold">
-        {trigger.schedule === 'once'
-          ? t('Once after {duration}', { duration: formatDuration(trigger.intervalSeconds, t) })
-          : t('Every {duration}', { duration: formatDuration(trigger.intervalSeconds, t) })}
+        {timer.description}
       </p>
-      <p className="mt-1 text-[10px] text-muted-foreground">{t('Sends “continue.” to the linked RD Session')}</p>
+      <p className="mt-1 text-[10px] text-muted-foreground">
+        {timer.schedule === 'once'
+          ? t('Once after {duration}', { duration: formatDuration(timer.intervalSeconds, t) })
+          : t('Every {duration}', { duration: formatDuration(timer.intervalSeconds, t) })}
+      </p>
 
       <div className="mt-3 rounded-lg border border-border/70 bg-muted/35 px-3 py-2.5">
         <p className="truncate text-[11px] font-medium">{requirement?.title ?? t('Requirement unavailable')}</p>
         <p className="mt-1 truncate font-mono text-[9px] text-muted-foreground">
-          REQ-{shortId(trigger.requirementId)}{requirement ? ` · ${providerLabel(requirement.provider)}` : ''}
+          REQ-{shortId(timer.requirementId)}{requirement ? ` · ${providerLabel(requirement.provider)}` : ''}
         </p>
       </div>
 
       <dl className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
         <div className="rounded-lg bg-muted/30 px-2.5 py-2">
           <dt className="text-[9px] text-muted-foreground">{t('Interval')}</dt>
-          <dd className="mt-0.5 font-medium">{formatDuration(trigger.intervalSeconds, t)}</dd>
+          <dd className="mt-0.5 font-medium">{formatDuration(timer.intervalSeconds, t)}</dd>
         </div>
         <div className="rounded-lg bg-muted/30 px-2.5 py-2">
           <dt className="text-[9px] text-muted-foreground">{eventLabel}</dt>
@@ -1084,35 +1086,42 @@ function ManagerConfigurationDialog({
   );
 }
 
-function ScheduledAgentTriggerDialog({
-  triggers,
+function AgentTimerDialog({
+  timers,
   disabled,
   busy,
   onCreate,
   onCancel,
 }: {
-  triggers: ScheduledAgentTriggerDto[];
+  timers: AgentTimerDto[];
   disabled: boolean;
   busy: boolean;
-  onCreate: (input: { schedule: 'once' | 'recurring'; intervalSeconds: number }) => Promise<void>;
-  onCancel: (triggerId: string) => Promise<void>;
+  onCreate: (input: { description: string; schedule: 'once' | 'recurring'; intervalSeconds: number }) => Promise<void>;
+  onCancel: (timerId: string) => Promise<void>;
 }) {
   const { locale, t } = useI18n();
   const fieldId = useId();
   const [open, setOpen] = useState(false);
+  const [description, setDescription] = useState('');
   const [schedule, setSchedule] = useState<'once' | 'recurring'>('once');
   const [amount, setAmount] = useState(1);
   const [unit, setUnit] = useState<'minutes' | 'hours' | 'days'>('hours');
-  const active = triggers.filter((trigger) => trigger.status === 'active');
+  const active = timers.filter((timer) => timer.status === 'active');
   const secondsPerUnit = unit === 'minutes' ? 60 : unit === 'hours' ? 3_600 : 86_400;
   const intervalSeconds = amount * secondsPerUnit;
-  const valid = Number.isInteger(amount) && amount > 0 && intervalSeconds <= 31_536_000;
+  const normalizedDescription = description.trim();
+  const valid = normalizedDescription.length > 0
+    && normalizedDescription.length <= 500
+    && Number.isInteger(amount)
+    && amount > 0
+    && intervalSeconds <= 31_536_000;
 
   async function submit(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!valid || disabled || busy) return;
     try {
-      await onCreate({ schedule, intervalSeconds });
+      await onCreate({ description: normalizedDescription, schedule, intervalSeconds });
+      setDescription('');
       setOpen(false);
     } catch {
       // The dashboard-level error banner reports the API error.
@@ -1139,7 +1148,7 @@ function ScheduledAgentTriggerDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{t('Scheduled wake-ups')}</DialogTitle>
-          <DialogDescription>{t('Send “continue.” to this RD Session after a delay, once or repeatedly.')}</DialogDescription>
+          <DialogDescription>{t('Wake this RD Session with a specific follow-up, once or repeatedly.')}</DialogDescription>
         </DialogHeader>
 
         <div className="my-4 space-y-2">
@@ -1148,17 +1157,18 @@ function ScheduledAgentTriggerDialog({
             <div className="rounded-xl border border-dashed border-border px-3 py-4 text-center text-[10px] text-muted-foreground">
               {t('No scheduled wake-ups')}
             </div>
-          ) : active.map((trigger) => (
-            <div key={trigger.id} className="flex items-center gap-3 rounded-xl border border-border bg-muted/30 px-3 py-2.5">
+          ) : active.map((timer) => (
+            <div key={timer.id} className="flex items-center gap-3 rounded-xl border border-border bg-muted/30 px-3 py-2.5">
               <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary/8 text-primary"><Clock3 className="size-4" /></span>
               <div className="min-w-0 flex-1">
                 <p className="text-xs font-medium">
-                  {trigger.schedule === 'once'
-                    ? t('Once after {duration}', { duration: formatDuration(trigger.intervalSeconds, t) })
-                    : t('Every {duration}', { duration: formatDuration(trigger.intervalSeconds, t) })}
+                  {timer.description}
                 </p>
                 <p className="mt-0.5 text-[9px] text-muted-foreground">
-                  {trigger.nextFireAt ? t('Next wake-up: {time}', { time: formatTime(trigger.nextFireAt, locale) }) : null}
+                  {timer.schedule === 'once'
+                    ? t('Once after {duration}', { duration: formatDuration(timer.intervalSeconds, t) })
+                    : t('Every {duration}', { duration: formatDuration(timer.intervalSeconds, t) })}
+                  {timer.nextFireAt ? ` · ${t('Next wake-up: {time}', { time: formatTime(timer.nextFireAt, locale) })}` : null}
                 </p>
               </div>
               <Button
@@ -1167,7 +1177,7 @@ function ScheduledAgentTriggerDialog({
                 size="icon-sm"
                 disabled={busy}
                 aria-label={t('Cancel scheduled wake-up')}
-                onClick={() => void onCancel(trigger.id).catch(() => undefined)}
+                onClick={() => void onCancel(timer.id).catch(() => undefined)}
               >
                 <Trash2 />
               </Button>
@@ -1177,6 +1187,18 @@ function ScheduledAgentTriggerDialog({
 
         <form onSubmit={submit}>
           <FieldGroup className="gap-4 border-t border-border pt-4">
+            <Field>
+              <FieldLabel htmlFor={`${fieldId}-description`}>{t('Timer description')}</FieldLabel>
+              <Textarea
+                id={`${fieldId}-description`}
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                maxLength={500}
+                required
+                placeholder={t('For example: check the compiler status')}
+              />
+              <p className="text-[10px] text-muted-foreground">{t('The RD Agent receives this description when the timer fires.')}</p>
+            </Field>
             <div className="grid grid-cols-2 gap-3">
               <Field>
                 <FieldLabel htmlFor={`${fieldId}-schedule`}>{t('Pattern')}</FieldLabel>
@@ -1225,7 +1247,7 @@ function RequirementDetail({
   requirement,
   runs,
   messages,
-  scheduledAgentTriggers,
+  agentTimers,
   pullRequests,
   reviewRequests,
   modelCatalog,
@@ -1238,14 +1260,14 @@ function RequirementDetail({
   onInterrupt,
   onConfirm,
   onReview,
-  onCreateScheduledAgentTrigger,
-  onCancelScheduledAgentTrigger,
+  onCreateAgentTimer,
+  onCancelAgentTimer,
   apiUrl,
 }: {
   requirement: RequirementDto | null;
   runs: AgentRunDto[];
   messages: RequirementMessageDto[];
-  scheduledAgentTriggers: ScheduledAgentTriggerDto[];
+  agentTimers: AgentTimerDto[];
   pullRequests: PullRequestDto[];
   reviewRequests: ReviewRequestDto[];
   modelCatalog: AgentModelCatalogDto | null;
@@ -1258,10 +1280,10 @@ function RequirementDetail({
   onInterrupt: () => Promise<void>;
   onConfirm: () => Promise<void>;
   onReview: (pullRequestId: string, configuration: AgentConfiguration) => Promise<void>;
-  onCreateScheduledAgentTrigger: (
-    input: { schedule: 'once' | 'recurring'; intervalSeconds: number },
+  onCreateAgentTimer: (
+    input: { description: string; schedule: 'once' | 'recurring'; intervalSeconds: number },
   ) => Promise<void>;
-  onCancelScheduledAgentTrigger: (triggerId: string) => Promise<void>;
+  onCancelAgentTimer: (timerId: string) => Promise<void>;
   apiUrl: string;
 }) {
   const { locale, t } = useI18n();
@@ -1686,12 +1708,12 @@ function RequirementDetail({
                 >
                   <Paperclip />
                 </Button>
-                <ScheduledAgentTriggerDialog
-                  triggers={scheduledAgentTriggers}
+                <AgentTimerDialog
+                  timers={agentTimers}
                   disabled={requirement.status === 'done' || requirement.status === 'cancelled'}
                   busy={busy}
-                  onCreate={onCreateScheduledAgentTrigger}
-                  onCancel={onCancelScheduledAgentTrigger}
+                  onCreate={onCreateAgentTimer}
+                  onCancel={onCancelAgentTimer}
                 />
                 <span className="truncate text-[9px] text-muted-foreground">{t('Enter to send · Up to 6 attachments')}</span>
               </div>
@@ -1726,7 +1748,7 @@ function Dashboard() {
   const [pullRequests, setPullRequests] = useState<PullRequestDto[]>([]);
   const [reviewRequests, setReviewRequests] = useState<ReviewRequestDto[]>([]);
   const [messages, setMessages] = useState<RequirementMessageDto[]>([]);
-  const [scheduledAgentTriggers, setScheduledAgentTriggers] = useState<ScheduledAgentTriggerDto[]>([]);
+  const [agentTimers, setAgentTimers] = useState<AgentTimerDto[]>([]);
   const [messageLoading, setMessageLoading] = useState(false);
   const [messageRevision, setMessageRevision] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1745,7 +1767,7 @@ function Dashboard() {
   const reload = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
     try {
-      const [nextWorkspace, nextConfiguration, nextModelCatalog, nextRequirements, nextRuns, nextPullRequests, nextReviewRequests, nextScheduledAgentTriggers] = await Promise.all([
+      const [nextWorkspace, nextConfiguration, nextModelCatalog, nextRequirements, nextRuns, nextPullRequests, nextReviewRequests, nextAgentTimers] = await Promise.all([
         client.getWorkspace(),
         client.getConfiguration(),
         client.listAgentModels(),
@@ -1753,7 +1775,7 @@ function Dashboard() {
         client.listRuns(),
         client.listPullRequests(),
         client.listReviewRequests(),
-        client.listScheduledAgentTriggers(),
+        client.listAgentTimers(),
       ]);
       setWorkspace(nextWorkspace);
       setConfiguration(nextConfiguration);
@@ -1762,7 +1784,7 @@ function Dashboard() {
       setRuns(nextRuns);
       setPullRequests(nextPullRequests);
       setReviewRequests(nextReviewRequests);
-      setScheduledAgentTriggers(nextScheduledAgentTriggers);
+      setAgentTimers(nextAgentTimers);
       setConnection('online');
       setError(null);
       const syncedAt = new Date();
@@ -1881,13 +1903,14 @@ function Dashboard() {
     [requirements],
   );
 
-  const filteredScheduledAgentTriggers = useMemo(() => {
+  const filteredAgentTimers = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return scheduledAgentTriggers.filter((trigger) => {
-      const requirement = requirementsById.get(trigger.requirementId);
+    return agentTimers.filter((timer) => {
+      const requirement = requirementsById.get(timer.requirementId);
       const matchesQuery = !needle || [
-        trigger.id,
-        trigger.requirementId,
+        timer.id,
+        timer.description,
+        timer.requirementId,
         requirement?.title ?? '',
         requirement?.description ?? '',
         requirement?.session.id ?? '',
@@ -1895,7 +1918,7 @@ function Dashboard() {
       return matchesQuery
         && (provider === 'all' || requirement?.provider === provider)
         && isWithinTimeRange(
-          trigger.status === 'active' ? trigger.nextFireAt ?? trigger.createdAt : trigger.updatedAt,
+          timer.status === 'active' ? timer.nextFireAt ?? timer.createdAt : timer.updatedAt,
           timeRange,
           filterReferenceTime,
         );
@@ -1905,7 +1928,7 @@ function Dashboard() {
       }
       return Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
     });
-  }, [filterReferenceTime, provider, query, requirementsById, scheduledAgentTriggers, timeRange]);
+  }, [agentTimers, filterReferenceTime, provider, query, requirementsById, timeRange]);
 
   async function runAction(requirementId: string, action: () => Promise<unknown>): Promise<void> {
     setBusyId(requirementId);
@@ -1937,16 +1960,16 @@ function Dashboard() {
     }
   }
 
-  async function createScheduledAgentTrigger(
-    input: { schedule: 'once' | 'recurring'; intervalSeconds: number },
+  async function createAgentTimer(
+    input: { description: string; schedule: 'once' | 'recurring'; intervalSeconds: number },
   ): Promise<void> {
     if (!selectedId) return;
-    await runAction(selectedId, () => client.createScheduledAgentTrigger(selectedId, input));
+    await runAction(selectedId, () => client.createAgentTimer(selectedId, input));
   }
 
-  async function cancelScheduledAgentTrigger(triggerId: string): Promise<void> {
+  async function cancelAgentTimer(timerId: string): Promise<void> {
     if (!selectedId) return;
-    await runAction(selectedId, () => client.cancelScheduledAgentTrigger(selectedId, triggerId));
+    await runAction(selectedId, () => client.cancelAgentTimer(selectedId, timerId));
   }
 
   async function uploadMessageAttachments(requirementId: string, files: File[]): Promise<string[]> {
@@ -1989,7 +2012,7 @@ function Dashboard() {
   const activeSessions = requirements.filter((item) => item.session.state === 'running').length;
   const waitingHumans = requirements.filter((item) => item.session.state === 'waiting_human').length;
   const failures = requirements.filter((item) => item.session.state === 'failed').length;
-  const activeTimers = scheduledAgentTriggers.filter((item) => item.status === 'active');
+  const activeTimers = agentTimers.filter((item) => item.status === 'active');
   const oneTimeTimers = activeTimers.filter((item) => item.schedule === 'once').length;
   const recurringTimers = activeTimers.filter((item) => item.schedule === 'recurring').length;
   const workspaceLabel = workspace?.root ?? t('Workspace not connected');
@@ -2187,8 +2210,8 @@ function Dashboard() {
           </div>
         ) : view === 'timers' ? (
           <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-3 gap-4 p-4 lg:p-5">
-            {scheduledAgentTriggerColumns.map((column) => {
-              const items = filteredScheduledAgentTriggers.filter((item) => item.status === column.status);
+            {agentTimerColumns.map((column) => {
+              const items = filteredAgentTimers.filter((item) => item.status === column.status);
               return (
                 <section key={column.status} className="w-[340px]" aria-labelledby={`timer-${column.status}`}>
                   <header className="mb-3 h-11 px-1">
@@ -2200,12 +2223,12 @@ function Dashboard() {
                     <p className="mt-1 pl-3.5 text-[10px] text-muted-foreground">{t(column.description)}</p>
                   </header>
                   <div className="space-y-2.5">
-                    {items.map((trigger) => (
-                      <ScheduledAgentTriggerCard
-                        key={trigger.id}
-                        trigger={trigger}
-                        requirement={requirementsById.get(trigger.requirementId)}
-                        onOpenRequirement={() => setSelectedId(trigger.requirementId)}
+                    {items.map((timer) => (
+                      <AgentTimerCard
+                        key={timer.id}
+                        timer={timer}
+                        requirement={requirementsById.get(timer.requirementId)}
+                        onOpenRequirement={() => setSelectedId(timer.requirementId)}
                       />
                     ))}
                     {items.length === 0 ? (
@@ -2253,7 +2276,7 @@ function Dashboard() {
         requirement={selectedRequirement}
         runs={selectedRuns}
         messages={messages}
-        scheduledAgentTriggers={scheduledAgentTriggers.filter((trigger) => trigger.requirementId === selectedId)}
+        agentTimers={agentTimers.filter((timer) => timer.requirementId === selectedId)}
         pullRequests={selectedPullRequests}
         reviewRequests={reviewRequests}
         modelCatalog={modelCatalog}
@@ -2273,8 +2296,8 @@ function Dashboard() {
         onInterrupt={() => selectedRequirement ? runAction(selectedRequirement.id, () => client.interruptRequirement(selectedRequirement.id)) : Promise.resolve()}
         onConfirm={() => selectedRequirement ? runAction(selectedRequirement.id, () => client.confirmRequirement(selectedRequirement.id)) : Promise.resolve()}
         onReview={requestReview}
-        onCreateScheduledAgentTrigger={createScheduledAgentTrigger}
-        onCancelScheduledAgentTrigger={cancelScheduledAgentTrigger}
+        onCreateAgentTimer={createAgentTimer}
+        onCancelAgentTimer={cancelAgentTimer}
       />
 
       <div className="fixed right-4 bottom-4 hidden items-center gap-2 rounded-lg border border-border bg-card/95 px-3 py-2 text-[10px] text-muted-foreground shadow-lg backdrop-blur sm:flex">

@@ -104,9 +104,10 @@ export const schemaStatements = [
     created_at TEXT NOT NULL,
     PRIMARY KEY (trigger_id, idempotency_key)
   ) STRICT`,
-  `CREATE TABLE IF NOT EXISTS scheduled_agent_triggers (
+  `CREATE TABLE IF NOT EXISTS agent_timers (
     id TEXT PRIMARY KEY,
     requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+    description TEXT NOT NULL CHECK (length(trim(description)) BETWEEN 1 AND 500),
     schedule TEXT NOT NULL CHECK (schedule IN ('once', 'recurring')),
     interval_seconds INTEGER NOT NULL CHECK (interval_seconds > 0),
     status TEXT NOT NULL CHECK (status IN ('active', 'completed', 'cancelled')),
@@ -150,10 +151,10 @@ export const schemaStatements = [
     ON pull_requests (requirement_id, updated_at DESC)`,
   `CREATE INDEX IF NOT EXISTS agent_trigger_receipts_requirement
     ON agent_trigger_receipts (requirement_id, created_at DESC)`,
-  `CREATE INDEX IF NOT EXISTS scheduled_agent_triggers_due
-    ON scheduled_agent_triggers (status, next_fire_at)`,
-  `CREATE INDEX IF NOT EXISTS scheduled_agent_triggers_requirement
-    ON scheduled_agent_triggers (requirement_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS agent_timers_due
+    ON agent_timers (status, next_fire_at)`,
+  `CREATE INDEX IF NOT EXISTS agent_timers_requirement
+    ON agent_timers (requirement_id, created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS review_requests_pull_request_created
     ON review_requests (pull_request_id, created_at DESC)`,
 ] as const;

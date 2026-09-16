@@ -21,8 +21,8 @@ export type MessageAuthor = 'human' | 'rd_agent' | 'reviewer' | 'system';
 export type RequirementCreator = 'human' | 'rd_agent';
 export type PullRequestStatus = 'draft' | 'open' | 'closed' | 'merged';
 export type ReviewRequestStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
-export type ScheduledAgentTriggerSchedule = 'once' | 'recurring';
-export type ScheduledAgentTriggerStatus = 'active' | 'completed' | 'cancelled';
+export type AgentTimerSchedule = 'once' | 'recurring';
+export type AgentTimerStatus = 'active' | 'completed' | 'cancelled';
 
 export interface AgentModel {
   id: string;
@@ -155,12 +155,13 @@ export interface ReviewRequest {
   finishedAt: string | null;
 }
 
-export interface ScheduledAgentTrigger {
+export interface AgentTimer {
   id: string;
   requirementId: string;
-  schedule: ScheduledAgentTriggerSchedule;
+  description: string;
+  schedule: AgentTimerSchedule;
   intervalSeconds: number;
-  status: ScheduledAgentTriggerStatus;
+  status: AgentTimerStatus;
   nextFireAt: string | null;
   lastFiredAt: string | null;
   createdAt: string;

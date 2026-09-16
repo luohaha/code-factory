@@ -168,9 +168,10 @@ export interface ReviewRequestDto {
   finishedAt: string | null;
 }
 
-export interface ScheduledAgentTriggerDto {
+export interface AgentTimerDto {
   id: string;
   requirementId: string;
+  description: string;
   schedule: 'once' | 'recurring';
   intervalSeconds: number;
   status: 'active' | 'completed' | 'cancelled';
@@ -237,28 +238,28 @@ export class AgentManagerClient {
     return response.items;
   }
 
-  async listScheduledAgentTriggers(requirementId?: string): Promise<ScheduledAgentTriggerDto[]> {
-    const response = await this.request<{ items: ScheduledAgentTriggerDto[] }>(
+  async listAgentTimers(requirementId?: string): Promise<AgentTimerDto[]> {
+    const response = await this.request<{ items: AgentTimerDto[] }>(
       requirementId
-        ? `/api/requirements/${encodeURIComponent(requirementId)}/scheduled-agent-triggers`
-        : '/api/scheduled-agent-triggers',
+        ? `/api/requirements/${encodeURIComponent(requirementId)}/timers`
+        : '/api/timers',
     );
     return response.items;
   }
 
-  createScheduledAgentTrigger(
+  createAgentTimer(
     requirementId: string,
-    input: { schedule: 'once' | 'recurring'; intervalSeconds: number },
-  ): Promise<ScheduledAgentTriggerDto> {
-    return this.request(`/api/requirements/${encodeURIComponent(requirementId)}/scheduled-agent-triggers`, {
+    input: { description: string; schedule: 'once' | 'recurring'; intervalSeconds: number },
+  ): Promise<AgentTimerDto> {
+    return this.request(`/api/requirements/${encodeURIComponent(requirementId)}/timers`, {
       method: 'POST',
       body: JSON.stringify(input),
     });
   }
 
-  cancelScheduledAgentTrigger(requirementId: string, triggerId: string): Promise<ScheduledAgentTriggerDto> {
+  cancelAgentTimer(requirementId: string, timerId: string): Promise<AgentTimerDto> {
     return this.request(
-      `/api/requirements/${encodeURIComponent(requirementId)}/scheduled-agent-triggers/${encodeURIComponent(triggerId)}`,
+      `/api/requirements/${encodeURIComponent(requirementId)}/timers/${encodeURIComponent(timerId)}`,
       { method: 'DELETE' },
     );
   }
@@ -353,9 +354,9 @@ export class AgentManagerClient {
       'pull_request.created',
       'pull_request.updated',
       'review_request.started',
-      'scheduled_agent_trigger.created',
-      'scheduled_agent_trigger.fired',
-      'scheduled_agent_trigger.cancelled',
+      'timer.created',
+      'timer.fired',
+      'timer.cancelled',
       'manager.reconciled',
       'manager.configuration.updated',
       'agent_models.updated',

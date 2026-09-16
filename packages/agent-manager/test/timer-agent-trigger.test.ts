@@ -3,11 +3,8 @@ import test from 'node:test';
 
 import type { AgentTriggerMessage } from '../src/agent-trigger.ts';
 import { silentLogger } from '../src/logger.ts';
-import {
-  SCHEDULED_CONTINUE_MESSAGE,
-  ScheduledContinueTrigger,
-} from '../src/scheduled-agent-trigger.ts';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
+import { TimerAgentTrigger } from '../src/timer-agent-trigger.ts';
 
 async function waitFor(check: () => boolean): Promise<void> {
   const deadline = Date.now() + 1_000;
@@ -29,21 +26,22 @@ function createRequirement(store: SqliteAgentManagerStore): void {
   });
 }
 
-test('one-time Scheduled Agent Trigger delivers continue and completes', async () => {
+test('one-time Agent Timer delivers its identity and description, then completes', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const messages: AgentTriggerMessage[] = [];
   const fired: string[] = [];
   createRequirement(store);
   const scheduledFor = new Date(Date.now() - 1_000).toISOString();
-  store.createScheduledAgentTrigger({
-    id: 'sat-once',
+  store.createAgentTimer({
+    id: 'tmr-once',
     requirementId: 'req-scheduled',
+    description: 'Check compiler status',
     schedule: 'once',
     intervalSeconds: 60,
     nextFireAt: scheduledFor,
     now: scheduledFor,
   });
-  const trigger = new ScheduledContinueTrigger({
+  const trigger = new TimerAgentTrigger({
     store,
     logger: silentLogger,
     onFired: (item) => fired.push(item.id),
@@ -57,11 +55,14 @@ test('one-time Scheduled Agent Trigger delivers continue and completes', async (
     });
     await waitFor(() => messages.length === 1);
 
-    assert.equal(messages[0]?.body, SCHEDULED_CONTINUE_MESSAGE);
+    assert.match(messages[0]?.body ?? '', /^Timer fired\./);
+    assert.match(messages[0]?.body ?? '', /Timer ID: tmr-once/);
+    assert.match(messages[0]?.body ?? '', /Description: Check compiler status/);
     assert.equal(messages[0]?.author, 'system');
-    assert.equal(messages[0]?.idempotencyKey, `sat-once:${scheduledFor}`);
-    assert.deepEqual(fired, ['sat-once']);
-    const persisted = store.getScheduledAgentTrigger('sat-once');
+    assert.equal(messages[0]?.idempotencyKey, `tmr-once:${scheduledFor}`);
+    assert.equal(messages[0]?.metadata.timerId, 'tmr-once');
+    assert.deepEqual(fired, ['tmr-once']);
+    const persisted = store.getAgentTimer('tmr-once');
     assert.equal(persisted?.status, 'completed');
     assert.equal(persisted?.nextFireAt, null);
   } finally {
@@ -70,34 +71,38 @@ test('one-time Scheduled Agent Trigger delivers continue and completes', async (
   }
 });
 
-test('recurring Scheduled Agent Trigger skips missed intervals instead of replaying a backlog', async () => {
+test('recurring Agent Timer skips missed intervals and tells the Agent how to cancel it', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   let deliveryCount = 0;
   createRequirement(store);
   const scheduledFor = new Date(Date.now() - 5 * 60_000).toISOString();
-  store.createScheduledAgentTrigger({
-    id: 'sat-recurring',
+  store.createAgentTimer({
+    id: 'tmr-recurring',
     requirementId: 'req-scheduled',
+    description: 'Check compiler status',
     schedule: 'recurring',
     intervalSeconds: 60,
     nextFireAt: scheduledFor,
     now: scheduledFor,
   });
-  const trigger = new ScheduledContinueTrigger({ store, logger: silentLogger });
+  const messages: AgentTriggerMessage[] = [];
+  const trigger = new TimerAgentTrigger({ store, logger: silentLogger });
   try {
     trigger.start({
-      deliver: () => {
+      deliver: (message) => {
+        messages.push(message);
         deliveryCount += 1;
         return null;
       },
     });
     await waitFor(() => deliveryCount === 1);
 
-    const persisted = store.getScheduledAgentTrigger('sat-recurring');
+    const persisted = store.getAgentTimer('tmr-recurring');
     assert.equal(persisted?.status, 'active');
     assert.ok(Date.parse(persisted?.nextFireAt ?? '') > Date.now());
     assert.ok(Date.parse(persisted?.nextFireAt ?? '') <= Date.now() + 60_000);
     assert.equal(deliveryCount, 1);
+    assert.match(messages[0]?.body ?? '', /code-factory-cli timer cancel --id tmr-recurring/);
   } finally {
     trigger.stop();
     store.close();

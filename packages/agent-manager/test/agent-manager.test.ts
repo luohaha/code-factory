@@ -18,8 +18,8 @@ import {
   PULL_REQUEST_CONFLICT_TRIGGER_ID,
   PULL_REQUEST_STATUS_TRIGGER_ID,
 } from '../src/pull-request-triggers.ts';
-import { SCHEDULED_CONTINUE_TRIGGER_ID } from '../src/scheduled-agent-trigger.ts';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
+import { TIMER_AGENT_TRIGGER_ID } from '../src/timer-agent-trigger.ts';
 import type { PullRequest, RunOutcome } from '../src/types.ts';
 
 class DeferredRunner implements AgentProcessRunner {
@@ -376,7 +376,8 @@ test('a human reply reactivates a completed requirement in its original RD sessi
     });
     await firstExecution;
 
-    const scheduled = manager.createScheduledAgentTrigger(requirement.id, {
+    const scheduled = manager.createAgentTimer(requirement.id, {
+      description: 'Check compiler status',
       schedule: 'recurring',
       intervalSeconds: 3_600,
     });
@@ -385,8 +386,8 @@ test('a human reply reactivates a completed requirement in its original RD sessi
     assert.equal(completed.status, 'done');
     assert.equal(completed.session.state, 'completed');
     assert.ok(completed.completedAt);
-    assert.equal(manager.listScheduledAgentTriggers(requirement.id)
-      .find((trigger) => trigger.id === scheduled.id)?.status, 'cancelled');
+    assert.equal(manager.listAgentTimers(requirement.id)
+      .find((timer) => timer.id === scheduled.id)?.status, 'cancelled');
 
     const reply = manager.postHumanMessage(requirement.id, 'Please add one more regression test.');
     assert.equal(reply.queued, false);
@@ -416,7 +417,7 @@ test('a human reply reactivates a completed requirement in its original RD sessi
   }
 });
 
-test('the native Scheduled Agent Trigger wakes an idle RD session with continue', async () => {
+test('the native Timer Agent Trigger wakes an idle RD session with timer context', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new DeferredRunner();
   const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
@@ -427,9 +428,10 @@ test('the native Scheduled Agent Trigger wakes an idle RD session with continue'
       provider: 'codex',
     });
     const scheduledFor = new Date(Date.now() - 1_000).toISOString();
-    store.createScheduledAgentTrigger({
-      id: 'sat-due',
+    store.createAgentTimer({
+      id: 'tmr-due',
       requirementId: requirement.id,
+      description: 'Check compiler status',
       schedule: 'once',
       intervalSeconds: 60,
       nextFireAt: scheduledFor,
@@ -443,16 +445,17 @@ test('the native Scheduled Agent Trigger wakes an idle RD session with continue'
     }
 
     assert.equal(runner.requests.length, 1);
-    assert.match(runner.requests[0]?.invocation.input ?? '', /continue\./);
+    assert.match(runner.requests[0]?.invocation.input ?? '', /Timer ID: tmr-due/);
+    assert.match(runner.requests[0]?.invocation.input ?? '', /Description: Check compiler status/);
     const message = manager.listMessages(requirement.id)[0];
     assert.equal(message?.author, 'system');
-    assert.equal(message?.body, 'continue.');
+    assert.match(message?.body ?? '', /^Timer fired\./);
     const messageEvent = manager.listEvents().find((event) =>
-      event.type === 'message.created' && event.payload.scheduledAgentTriggerId === 'sat-due');
-    assert.equal(messageEvent?.payload.triggerId, SCHEDULED_CONTINUE_TRIGGER_ID);
-    assert.equal(messageEvent?.payload.source, 'scheduled');
-    assert.equal(store.getScheduledAgentTrigger('sat-due')?.status, 'completed');
-    assert.ok(manager.listEvents().some((event) => event.type === 'scheduled_agent_trigger.fired'));
+      event.type === 'message.created' && event.payload.timerId === 'tmr-due');
+    assert.equal(messageEvent?.payload.triggerId, TIMER_AGENT_TRIGGER_ID);
+    assert.equal(messageEvent?.payload.source, 'timer');
+    assert.equal(store.getAgentTimer('tmr-due')?.status, 'completed');
+    assert.ok(manager.listEvents().some((event) => event.type === 'timer.fired'));
 
     runner.resolvers[0]?.({
       status: 'succeeded',

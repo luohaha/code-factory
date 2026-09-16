@@ -30,7 +30,7 @@ function testRuntime(requests: CapturedRequest[], output: string[], errors: stri
       : {};
     requests.push({ url, method, body });
     return new Response(JSON.stringify(method === 'GET'
-      ? { items: [{ id: 'sat-123', status: 'active' }] }
+      ? { items: [{ id: 'tmr-123', description: 'Check compiler status', status: 'active' }] }
       : { ok: true }), {
       status: 201,
       headers: { 'content-type': 'application/json' },
@@ -141,28 +141,29 @@ test('code-factory-cli registers, shows, and cancels RD wake-up timers', async (
   const runtime = testRuntime(requests, output, errors);
 
   const registerExitCode = await runCodeFactoryCli([
-    'timer', 'register', '--after-seconds', '3600', '--repeat',
+    'timer', 'register', '--description', 'Check compiler status', '--after-seconds', '3600', '--repeat',
   ], runtime);
   const showExitCode = await runCodeFactoryCli(['timer', 'show'], runtime);
   const cancelExitCode = await runCodeFactoryCli([
-    'timer', 'cancel', '--id', 'sat-123',
+    'timer', 'cancel', '--id', 'tmr-123',
   ], runtime);
 
   assert.equal(registerExitCode, 0);
   assert.equal(showExitCode, 0);
   assert.equal(cancelExitCode, 0);
   assert.deepEqual(errors, []);
-  assert.match(output.join(''), /"id":"sat-123"/);
+  assert.match(output.join(''), /"id":"tmr-123"/);
+  assert.match(output.join(''), /"description":"Check compiler status"/);
   assert.deepEqual(requests, [{
-    url: 'http://127.0.0.1:4310/api/requirements/req_cli/scheduled-agent-triggers',
+    url: 'http://127.0.0.1:4310/api/requirements/req_cli/timers',
     method: 'POST',
-    body: { schedule: 'recurring', intervalSeconds: 3_600 },
+    body: { description: 'Check compiler status', schedule: 'recurring', intervalSeconds: 3_600 },
   }, {
-    url: 'http://127.0.0.1:4310/api/requirements/req_cli/scheduled-agent-triggers',
+    url: 'http://127.0.0.1:4310/api/requirements/req_cli/timers',
     method: 'GET',
     body: {},
   }, {
-    url: 'http://127.0.0.1:4310/api/requirements/req_cli/scheduled-agent-triggers/sat-123',
+    url: 'http://127.0.0.1:4310/api/requirements/req_cli/timers/tmr-123',
     method: 'DELETE',
     body: {},
   }]);
@@ -180,6 +181,20 @@ test('code-factory-cli rejects invalid command input without sending a request',
   assert.deepEqual(requests, []);
   assert.match(errors.join(''), /--number must be a positive integer/);
   assert.match(errors.join(''), /Usage: code-factory-cli pr register/);
+});
+
+test('code-factory-cli requires a timer description without sending a request', async () => {
+  const requests: CapturedRequest[] = [];
+  const output: string[] = [];
+  const errors: string[] = [];
+  const exitCode = await runCodeFactoryCli([
+    'timer', 'register', '--after-seconds', '3600',
+  ], testRuntime(requests, output, errors));
+
+  assert.equal(exitCode, 2);
+  assert.deepEqual(requests, []);
+  assert.match(errors.join(''), /--description is required/);
+  assert.match(errors.join(''), /Usage: code-factory-cli timer register/);
 });
 
 test('private launcher makes code-factory-cli resolvable through PATH', {

@@ -72,7 +72,7 @@ function pullRequestStatusField(value: unknown): PullRequestStatus {
   return value;
 }
 
-function scheduledAgentTriggerScheduleField(value: unknown): 'once' | 'recurring' {
+function agentTimerScheduleField(value: unknown): 'once' | 'recurring' {
   if (value !== 'once' && value !== 'recurring') throw new TypeError('schedule must be once or recurring');
   return value;
 }
@@ -203,33 +203,34 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         sendJson(response, 200, { items: manager.listMessages(requirementId) });
         return;
       }
-      if (request.method === 'GET' && url.pathname === '/api/scheduled-agent-triggers') {
-        sendJson(response, 200, { items: manager.listScheduledAgentTriggers() });
+      if (request.method === 'GET' && url.pathname === '/api/timers') {
+        sendJson(response, 200, { items: manager.listAgentTimers() });
         return;
       }
-      const scheduledAgentTriggers = url.pathname.match(/^\/api\/requirements\/([^/]+)\/scheduled-agent-triggers$/);
-      if (request.method === 'GET' && scheduledAgentTriggers) {
-        const requirementId = decodeURIComponent(scheduledAgentTriggers[1]!);
-        sendJson(response, 200, { items: manager.listScheduledAgentTriggers(requirementId) });
+      const agentTimers = url.pathname.match(/^\/api\/requirements\/([^/]+)\/timers$/);
+      if (request.method === 'GET' && agentTimers) {
+        const requirementId = decodeURIComponent(agentTimers[1]!);
+        sendJson(response, 200, { items: manager.listAgentTimers(requirementId) });
         return;
       }
-      if (request.method === 'POST' && scheduledAgentTriggers) {
-        const requirementId = decodeURIComponent(scheduledAgentTriggers[1]!);
+      if (request.method === 'POST' && agentTimers) {
+        const requirementId = decodeURIComponent(agentTimers[1]!);
         const body = await readJson(request);
-        const item = manager.createScheduledAgentTrigger(requirementId, {
-          schedule: scheduledAgentTriggerScheduleField(body.schedule),
+        const item = manager.createAgentTimer(requirementId, {
+          description: stringField(body, 'description', true)!,
+          schedule: agentTimerScheduleField(body.schedule),
           intervalSeconds: positiveIntegerField(body, 'intervalSeconds'),
         });
         sendJson(response, 201, item);
         return;
       }
-      const scheduledAgentTrigger = url.pathname.match(
-        /^\/api\/requirements\/([^/]+)\/scheduled-agent-triggers\/([^/]+)$/,
+      const agentTimer = url.pathname.match(
+        /^\/api\/requirements\/([^/]+)\/timers\/([^/]+)$/,
       );
-      if (request.method === 'DELETE' && scheduledAgentTrigger) {
-        const requirementId = decodeURIComponent(scheduledAgentTrigger[1]!);
-        const triggerId = decodeURIComponent(scheduledAgentTrigger[2]!);
-        sendJson(response, 200, manager.cancelScheduledAgentTrigger(triggerId, requirementId));
+      if (request.method === 'DELETE' && agentTimer) {
+        const requirementId = decodeURIComponent(agentTimer[1]!);
+        const timerId = decodeURIComponent(agentTimer[2]!);
+        sendJson(response, 200, manager.cancelAgentTimer(timerId, requirementId));
         return;
       }
       const attachmentUpload = url.pathname.match(/^\/api\/requirements\/([^/]+)\/attachments$/);

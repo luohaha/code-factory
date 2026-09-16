@@ -60,10 +60,11 @@ CODE_FACTORY_SESSION_ID.`;
 
 const TIMER_REGISTER_HELP = `Usage: code-factory-cli timer register [options]
 
-Register a timer that sends "continue." to this Requirement after a delay.
+Register a timer that sends its ID and follow-up description to this Requirement after a delay.
 
 Required options:
   --after-seconds SECONDS  Delay before the first wake-up (60-31536000)
+  --description TEXT       Follow-up the Agent should perform when the timer fires
 
 Optional options:
   --repeat                 Repeat at the same interval until cancelled
@@ -72,8 +73,8 @@ Context: CODE_FACTORY_API_URL and CODE_FACTORY_REQUIREMENT_ID.`;
 
 const TIMER_SHOW_HELP = `Usage: code-factory-cli timer show
 
-Show every timer registered for this Requirement, including its ID, status,
-schedule, interval, and next or previous wake-up time.
+Show every timer registered for this Requirement, including its ID, description,
+status, schedule, interval, and next or previous wake-up time.
 
 Context: CODE_FACTORY_API_URL and CODE_FACTORY_REQUIREMENT_ID.`;
 
@@ -215,6 +216,7 @@ function parseRequirementPayload(args: readonly string[], environment: Environme
 function parseTimerRegistrationPayload(args: readonly string[]): Record<string, unknown> {
   const values = parseOptions(args, TIMER_REGISTER_HELP, {
     'after-seconds': { type: 'string' },
+    description: { type: 'string' },
     repeat: { type: 'boolean' },
   });
   const intervalSeconds = Number(required(
@@ -225,7 +227,12 @@ function parseTimerRegistrationPayload(args: readonly string[]): Record<string, 
   if (!Number.isInteger(intervalSeconds) || intervalSeconds < 60 || intervalSeconds > 31_536_000) {
     throw new CliUsageError('--after-seconds must be an integer from 60 to 31536000', TIMER_REGISTER_HELP);
   }
+  const description = required(values.description as string | undefined, '--description', TIMER_REGISTER_HELP);
+  if (description.length > 500) {
+    throw new CliUsageError('--description must be 500 characters or fewer', TIMER_REGISTER_HELP);
+  }
   return {
+    description,
     schedule: values.repeat ? 'recurring' : 'once',
     intervalSeconds,
   };
@@ -316,7 +323,7 @@ export async function runCodeFactoryCli(
         CODE_FACTORY_REQUIREMENT_ID,
         help,
       );
-      endpoint = `/requirements/${encodeURIComponent(requirementId)}/scheduled-agent-triggers`;
+      endpoint = `/requirements/${encodeURIComponent(requirementId)}/timers`;
       body = parseTimerRegistrationPayload(args.slice(2));
     } else if (command === 'timer show') {
       help = TIMER_SHOW_HELP;
@@ -330,7 +337,7 @@ export async function runCodeFactoryCli(
         CODE_FACTORY_REQUIREMENT_ID,
         help,
       );
-      endpoint = `/requirements/${encodeURIComponent(requirementId)}/scheduled-agent-triggers`;
+      endpoint = `/requirements/${encodeURIComponent(requirementId)}/timers`;
       method = 'GET';
     } else if (command === 'timer cancel') {
       help = TIMER_CANCEL_HELP;
@@ -344,8 +351,8 @@ export async function runCodeFactoryCli(
         help,
       );
       const values = parseOptions(args.slice(2), help, { id: { type: 'string' } });
-      const triggerId = required(values.id as string | undefined, '--id', help);
-      endpoint = `/requirements/${encodeURIComponent(requirementId)}/scheduled-agent-triggers/${encodeURIComponent(triggerId)}`;
+      const timerId = required(values.id as string | undefined, '--id', help);
+      endpoint = `/requirements/${encodeURIComponent(requirementId)}/timers/${encodeURIComponent(timerId)}`;
       method = 'DELETE';
     } else {
       throw new CliUsageError(`Unknown command: ${args.join(' ')}`, HELP);

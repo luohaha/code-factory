@@ -10,8 +10,8 @@ import type {
   RequirementMessage,
   PullRequest,
   ReviewRequest,
-  ScheduledAgentTrigger,
-  ScheduledAgentTriggerSchedule,
+  AgentTimer,
+  AgentTimerSchedule,
   PullRequestStatus,
   RequirementCreator,
   RequirementStatus,
@@ -128,16 +128,17 @@ export interface BeginReviewRequestRecord {
   now: string;
 }
 
-export interface CreateScheduledAgentTriggerRecord {
+export interface CreateAgentTimerRecord {
   id: string;
   requirementId: string;
-  schedule: ScheduledAgentTriggerSchedule;
+  description: string;
+  schedule: AgentTimerSchedule;
   intervalSeconds: number;
   nextFireAt: string;
   now: string;
 }
 
-export interface CompleteScheduledAgentTriggerOccurrenceRecord {
+export interface CompleteAgentTimerOccurrenceRecord {
   id: string;
   expectedNextFireAt: string;
   nextFireAt?: string;
@@ -160,13 +161,11 @@ export interface AgentManagerStore {
   appendExternalMessage(input: AppendExternalMessageRecord): RequirementMessage | null;
   listMessages(requirementId: string): RequirementMessage[];
   listPendingRdMessages(requirementId: string): RequirementMessage[];
-  createScheduledAgentTrigger(input: CreateScheduledAgentTriggerRecord): ScheduledAgentTrigger;
-  getScheduledAgentTrigger(id: string): ScheduledAgentTrigger | null;
-  listScheduledAgentTriggers(requirementId?: string): ScheduledAgentTrigger[];
-  completeScheduledAgentTriggerOccurrence(
-    input: CompleteScheduledAgentTriggerOccurrenceRecord,
-  ): ScheduledAgentTrigger | null;
-  cancelScheduledAgentTrigger(id: string, now: string): ScheduledAgentTrigger;
+  createAgentTimer(input: CreateAgentTimerRecord): AgentTimer;
+  getAgentTimer(id: string): AgentTimer | null;
+  listAgentTimers(requirementId?: string): AgentTimer[];
+  completeAgentTimerOccurrence(input: CompleteAgentTimerOccurrenceRecord): AgentTimer | null;
+  cancelAgentTimer(id: string, now: string): AgentTimer;
   upsertPullRequest(input: UpsertPullRequestRecord): PullRequest;
   getPullRequest(id: string): PullRequest | null;
   listPullRequests(requirementId?: string): PullRequest[];

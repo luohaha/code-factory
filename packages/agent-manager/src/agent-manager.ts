@@ -45,7 +45,7 @@ import {
   PullRequestStatusTrigger,
   type PullRequestSnapshotTrigger,
 } from './pull-request-triggers.js';
-import { ScheduledContinueTrigger } from './scheduled-agent-trigger.js';
+import { TimerAgentTrigger } from './timer-agent-trigger.js';
 import { SqliteAgentManagerStore } from './sqlite-store.js';
 import type { AgentManagerStore } from './store.js';
 import { StoreConflictError, StoreNotFoundError } from './store.js';
@@ -61,8 +61,8 @@ import type {
   RequirementWithSession,
   ReviewRequest,
   RunOutcome,
-  ScheduledAgentTrigger,
-  ScheduledAgentTriggerSchedule,
+  AgentTimer,
+  AgentTimerSchedule,
   TrackPullRequestInput,
 } from './types.js';
 
@@ -101,8 +101,9 @@ export function defaultLogFilePath(databasePath: string): string {
 
 export const MAX_MESSAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 export const MAX_MESSAGE_ATTACHMENTS = 6;
-export const MIN_SCHEDULED_AGENT_TRIGGER_INTERVAL_SECONDS = 60;
-export const MAX_SCHEDULED_AGENT_TRIGGER_INTERVAL_SECONDS = 365 * 24 * 60 * 60;
+export const MIN_AGENT_TIMER_INTERVAL_SECONDS = 60;
+export const MAX_AGENT_TIMER_INTERVAL_SECONDS = 365 * 24 * 60 * 60;
+export const MAX_AGENT_TIMER_DESCRIPTION_LENGTH = 500;
 
 const REVIEWER_DEVELOPER_INSTRUCTIONS = [
   'You are a short-lived GitHub pull request reviewer. Review only; do not edit code.',
@@ -131,7 +132,7 @@ export class AgentManager extends EventEmitter {
   readonly #agentTriggers = new Map<string, AgentTrigger>();
   readonly #pullRequestReconciler: PullRequestReconciler;
   readonly #pullRequestTriggers: readonly PullRequestSnapshotTrigger[];
-  readonly #scheduledContinueTrigger: ScheduledContinueTrigger;
+  readonly #timerAgentTrigger: TimerAgentTrigger;
   readonly #configurationFilePath: string | null;
   readonly #startupConfiguration: AgentManagerConfiguration;
   #configuration: AgentManagerConfiguration;
@@ -217,18 +218,18 @@ export class AgentManager extends EventEmitter {
       new PullRequestCiFailureTrigger(this.#pullRequestReconciler),
       new PullRequestConflictTrigger(this.#pullRequestReconciler),
     ];
-    this.#scheduledContinueTrigger = new ScheduledContinueTrigger({
+    this.#timerAgentTrigger = new TimerAgentTrigger({
       store: this.#store,
       logger: this.logger,
-      onFired: (trigger, scheduledFor) => {
+      onFired: (timer, scheduledFor) => {
         if (this.#closed) return;
-        const requirement = this.#store.getRequirement(trigger.requirementId);
+        const requirement = this.#store.getRequirement(timer.requirementId);
         if (!requirement) return;
         this.publish({
-          type: 'scheduled_agent_trigger.fired',
-          requirementId: trigger.requirementId,
+          type: 'timer.fired',
+          requirementId: timer.requirementId,
           sessionId: requirement.session.id,
-          payload: { scheduledAgentTrigger: trigger, scheduledFor },
+          payload: { timer, scheduledFor },
         });
       },
     });
@@ -306,7 +307,7 @@ export class AgentManager extends EventEmitter {
   }
 
   startConfiguredServices(): void {
-    this.startAgentTrigger(this.#scheduledContinueTrigger);
+    this.startAgentTrigger(this.#timerAgentTrigger);
     this.configurePullRequestReconciler(this.#initialPullRequestReconcileIntervalSeconds);
     this.#modelCatalog.start();
   }
@@ -500,7 +501,7 @@ export class AgentManager extends EventEmitter {
       sessionId: requirement.session.id,
       payload: {},
     });
-    this.cancelScheduledAgentTriggersForRequirement(id);
+    this.cancelAgentTimersForRequirement(id);
     this.logger.info('Requirement deleted', {
       requirementId: id,
       sessionId: requirement.session.id,
@@ -519,15 +520,15 @@ export class AgentManager extends EventEmitter {
     return this.#store.listMessages(requirementId);
   }
 
-  listScheduledAgentTriggers(requirementId?: string): ScheduledAgentTrigger[] {
+  listAgentTimers(requirementId?: string): AgentTimer[] {
     if (requirementId) this.requireRequirement(requirementId);
-    return this.#store.listScheduledAgentTriggers(requirementId);
+    return this.#store.listAgentTimers(requirementId);
   }
 
-  createScheduledAgentTrigger(
+  createAgentTimer(
     requirementId: string,
-    input: { schedule: ScheduledAgentTriggerSchedule; intervalSeconds: number },
-  ): ScheduledAgentTrigger {
+    input: { description: string; schedule: AgentTimerSchedule; intervalSeconds: number },
+  ): AgentTimer {
     const requirement = this.requireRequirement(requirementId);
     if (requirement.status === 'done' || requirement.status === 'cancelled') {
       throw new StoreConflictError(`Requirement ${requirementId} is already ${requirement.status}`);
@@ -535,58 +536,63 @@ export class AgentManager extends EventEmitter {
     if (input.schedule !== 'once' && input.schedule !== 'recurring') {
       throw new TypeError('schedule must be once or recurring');
     }
+    const description = input.description.trim();
+    if (!description || description.length > MAX_AGENT_TIMER_DESCRIPTION_LENGTH) {
+      throw new RangeError(`description must contain from 1 to ${MAX_AGENT_TIMER_DESCRIPTION_LENGTH} characters`);
+    }
     if (!Number.isInteger(input.intervalSeconds)
-      || input.intervalSeconds < MIN_SCHEDULED_AGENT_TRIGGER_INTERVAL_SECONDS
-      || input.intervalSeconds > MAX_SCHEDULED_AGENT_TRIGGER_INTERVAL_SECONDS) {
+      || input.intervalSeconds < MIN_AGENT_TIMER_INTERVAL_SECONDS
+      || input.intervalSeconds > MAX_AGENT_TIMER_INTERVAL_SECONDS) {
       throw new RangeError(
-        `intervalSeconds must be an integer from ${MIN_SCHEDULED_AGENT_TRIGGER_INTERVAL_SECONDS} to ${MAX_SCHEDULED_AGENT_TRIGGER_INTERVAL_SECONDS}`,
+        `intervalSeconds must be an integer from ${MIN_AGENT_TIMER_INTERVAL_SECONDS} to ${MAX_AGENT_TIMER_INTERVAL_SECONDS}`,
       );
     }
     const now = new Date();
-    const trigger = this.#store.createScheduledAgentTrigger({
-      id: `sat_${randomUUID()}`,
+    const timer = this.#store.createAgentTimer({
+      id: `tmr_${randomUUID()}`,
       requirementId,
+      description,
       schedule: input.schedule,
       intervalSeconds: input.intervalSeconds,
       nextFireAt: new Date(now.getTime() + input.intervalSeconds * 1_000).toISOString(),
       now: now.toISOString(),
     });
-    this.#scheduledContinueTrigger.refresh();
+    this.#timerAgentTrigger.refresh();
     this.publish({
-      type: 'scheduled_agent_trigger.created',
+      type: 'timer.created',
       requirementId,
       sessionId: requirement.session.id,
-      payload: { scheduledAgentTrigger: trigger },
+      payload: { timer },
     });
-    this.logger.info('Scheduled Agent Trigger created', {
-      scheduledAgentTriggerId: trigger.id,
+    this.logger.info('Agent Timer created', {
+      timerId: timer.id,
       requirementId,
-      schedule: trigger.schedule,
-      intervalSeconds: trigger.intervalSeconds,
-      nextFireAt: trigger.nextFireAt,
+      schedule: timer.schedule,
+      intervalSeconds: timer.intervalSeconds,
+      nextFireAt: timer.nextFireAt,
     });
-    return trigger;
+    return timer;
   }
 
-  cancelScheduledAgentTrigger(id: string, requirementId?: string): ScheduledAgentTrigger {
-    const existing = this.#store.getScheduledAgentTrigger(id);
+  cancelAgentTimer(id: string, requirementId?: string): AgentTimer {
+    const existing = this.#store.getAgentTimer(id);
     if (!existing || (requirementId && existing.requirementId !== requirementId)) {
-      throw new StoreNotFoundError(`Scheduled Agent Trigger ${id} not found`);
+      throw new StoreNotFoundError(`Agent Timer ${id} not found`);
     }
     const requirement = this.requireRequirement(existing.requirementId);
-    const trigger = this.#store.cancelScheduledAgentTrigger(id, new Date().toISOString());
-    this.#scheduledContinueTrigger.refresh();
+    const timer = this.#store.cancelAgentTimer(id, new Date().toISOString());
+    this.#timerAgentTrigger.refresh();
     this.publish({
-      type: 'scheduled_agent_trigger.cancelled',
-      requirementId: trigger.requirementId,
+      type: 'timer.cancelled',
+      requirementId: timer.requirementId,
       sessionId: requirement.session.id,
-      payload: { scheduledAgentTrigger: trigger },
+      payload: { timer },
     });
-    this.logger.info('Scheduled Agent Trigger cancelled', {
-      scheduledAgentTriggerId: trigger.id,
-      requirementId: trigger.requirementId,
+    this.logger.info('Agent Timer cancelled', {
+      timerId: timer.id,
+      requirementId: timer.requirementId,
     });
-    return trigger;
+    return timer;
   }
 
   getMessageAttachment(id: string): MessageAttachment | null {
@@ -880,14 +886,14 @@ export class AgentManager extends EventEmitter {
       new Date().toISOString(),
     );
     this.publish({ type: 'requirement.completed', requirementId, sessionId: current.session.id, payload: {} });
-    this.cancelScheduledAgentTriggersForRequirement(requirementId);
+    this.cancelAgentTimersForRequirement(requirementId);
     this.logger.info('Requirement completed', { requirementId, sessionId: current.session.id });
     return current;
   }
 
-  private cancelScheduledAgentTriggersForRequirement(requirementId: string): void {
-    for (const trigger of this.#store.listScheduledAgentTriggers(requirementId)) {
-      if (trigger.status === 'active') this.cancelScheduledAgentTrigger(trigger.id, requirementId);
+  private cancelAgentTimersForRequirement(requirementId: string): void {
+    for (const timer of this.#store.listAgentTimers(requirementId)) {
+      if (timer.status === 'active') this.cancelAgentTimer(timer.id, requirementId);
     }
   }
 
