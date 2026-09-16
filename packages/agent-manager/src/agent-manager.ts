@@ -1104,7 +1104,7 @@ export class AgentManager extends EventEmitter {
       'Use code-factory-cli for Code Factory control-plane actions. Run code-factory-cli --help or code-factory-cli <command> --help for usage; do not call the underlying HTTP endpoints directly.',
       'Immediately after you create a GitHub pull request for this requirement, run code-factory-cli pr register. Run it again only when your own push or edit changes PR metadata such as its title, branches, or head SHA.',
       'Agent Manager owns draft/open/closed/merged lifecycle synchronization through its GitHub reconciler. Never run the registration command merely to mirror a lifecycle event reported by a System message or observed on GitHub.',
-      'If you leave a long-running external command or build behind, use code-factory-cli timer register before ending your Run so Code Factory can wake this same Session later. Use code-factory-cli timer show to recover timer IDs and status, and cancel recurring timers as soon as they are no longer needed.',
+      'For every long-running process or task you start—including builds, tests, deployments, data jobs, and other background work—either wait for it to finish during the current Run or run code-factory-cli timer register before ending the Run so Code Factory can wake this same Session to check its progress and result. Use code-factory-cli timer show to recover timer IDs and status, and cancel recurring timers as soon as they are no longer needed.',
       'When you discover separate follow-up work, you may propose a linked TODO requirement with code-factory-cli requirement propose.',
     ].join('\n');
   }
