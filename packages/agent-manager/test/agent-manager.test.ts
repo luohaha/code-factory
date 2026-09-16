@@ -262,6 +262,97 @@ test('runtime retention configuration immediately purges expired requirements an
   }
 });
 
+test('zero-day retention purges requirements as cancellation and completion become terminal', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store,
+    logger: silentLogger,
+    configuration: {
+      ...DEFAULT_AGENT_MANAGER_CONFIGURATION,
+      cancelledRequirementRetentionDays: 0,
+      doneRequirementRetentionDays: 0,
+    },
+  });
+  try {
+    const cancelled = manager.createRequirement({
+      title: 'Cancel immediately',
+      description: 'Apply an existing zero-day policy on cancellation',
+      provider: 'codex',
+    });
+    manager.deleteRequirement(cancelled.id);
+    assert.equal(manager.getRequirement(cancelled.id), null);
+
+    const done = manager.createRequirement({
+      title: 'Complete immediately',
+      description: 'Apply an existing zero-day policy on completion',
+      provider: 'codex',
+    });
+    store.transitionRequirement(done.id, ['todo'], 'waiting_confirmation', new Date().toISOString());
+    const completed = manager.confirmRequirement(done.id);
+    assert.equal(completed.status, 'done');
+    assert.equal(manager.getRequirement(done.id), null);
+
+    assert.deepEqual(
+      manager.listEvents().filter((event) => event.type === 'requirements.purged').map((event) => event.payload),
+      [
+        { cancelledCount: 1, doneCount: 0 },
+        { cancelledCount: 0, doneCount: 1 },
+      ],
+    );
+  } finally {
+    await manager.close();
+  }
+});
+
+test('zero-day retention retries after an in-flight reviewer finishes', async () => {
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    logger: silentLogger,
+    configuration: {
+      ...DEFAULT_AGENT_MANAGER_CONFIGURATION,
+      cancelledRequirementRetentionDays: 0,
+    },
+  });
+  try {
+    const requirement = manager.createRequirement({
+      title: 'Cancel while review is running',
+      description: 'Defer zero-day cleanup until the reviewer result is recorded',
+      provider: 'codex',
+    });
+    const pullRequest = manager.trackPullRequest({
+      requirementId: requirement.id,
+      repository: 'acme/repo',
+      number: 40,
+      url: 'https://github.com/acme/repo/pull/40',
+      title: 'Review before cleanup',
+      baseBranch: 'main',
+      headBranch: 'review-before-cleanup',
+      headSha: 'review-before-cleanup-sha',
+      status: 'open',
+    });
+    const review = manager.requestReview(pullRequest.id, { provider: 'codex' });
+
+    manager.deleteRequirement(requirement.id);
+    assert.equal(manager.getRequirement(requirement.id)?.status, 'cancelled');
+    runner.resolvers[0]?.({
+      status: 'succeeded',
+      exitCode: 0,
+      nativeSessionId: null,
+      finalMessage: 'reviewed',
+      error: null,
+    });
+    await review;
+
+    assert.equal(manager.getRequirement(requirement.id), null);
+  } finally {
+    await manager.close();
+  }
+});
+
 test('PR reconciliation polls only PRs whose persisted status is Open', async () => {
   const openSnapshot: GitHubPullRequestSnapshot = {
     status: 'open',

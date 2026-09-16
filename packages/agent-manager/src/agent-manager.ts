@@ -451,6 +451,13 @@ export class AgentManager extends EventEmitter {
     }
   }
 
+  private sweepImmediateTerminalRequirement(status: 'cancelled' | 'done'): void {
+    const retentionDays = status === 'cancelled'
+      ? this.#configuration.cancelledRequirementRetentionDays
+      : this.#configuration.doneRequirementRetentionDays;
+    if (retentionDays === 0) this.runRequirementRetentionSweep();
+  }
+
   async reconcilePullRequests(): Promise<void> {
     if (this.#pullRequestReconciler.isRunning) {
       await this.#pullRequestReconciler.reconcile();
@@ -568,6 +575,7 @@ export class AgentManager extends EventEmitter {
       requirementId: id,
       sessionId: requirement.session.id,
     });
+    this.sweepImmediateTerminalRequirement('cancelled');
   }
 
   listSessions() {
@@ -860,7 +868,14 @@ export class AgentManager extends EventEmitter {
       }
       this.publishOutcome(requirement.id, requirement.session.id, runId, 'reviewer', outcome);
       this.logRunOutcome(requirement.id, runId, 'reviewer', outcome, performance.now() - startedAt);
-      if (outcome.status === 'succeeded') this.schedulePendingRdMessages(requirement.id);
+      const current = this.#store.getRequirement(requirement.id);
+      if (outcome.status === 'succeeded' && current
+        && current.status !== 'done' && current.status !== 'cancelled') {
+        this.schedulePendingRdMessages(requirement.id);
+      }
+      if (current?.status === 'done' || current?.status === 'cancelled') {
+        this.sweepImmediateTerminalRequirement(current.status);
+      }
       return outcome;
     });
   }
@@ -874,6 +889,7 @@ export class AgentManager extends EventEmitter {
     );
     this.publish({ type: 'requirement.completed', requirementId, sessionId: current.session.id, payload: {} });
     this.logger.info('Requirement completed', { requirementId, sessionId: current.session.id });
+    this.sweepImmediateTerminalRequirement('done');
     return current;
   }
 
@@ -997,7 +1013,8 @@ export class AgentManager extends EventEmitter {
 
   private schedulePendingRdMessages(requirementId: string, afterSequence = 0): void {
     queueMicrotask(() => {
-      const current = this.requireRequirement(requirementId);
+      const current = this.#store.getRequirement(requirementId);
+      if (!current) return;
       if (current.status === 'done' || current.status === 'cancelled' || current.session.state === 'running') return;
       if (!this.#store.listPendingRdMessages(requirementId).some((message) => message.sequence > afterSequence)) return;
       void this.startRdRun(requirementId).catch((error: unknown) => {
