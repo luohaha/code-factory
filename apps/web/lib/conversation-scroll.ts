@@ -12,6 +12,13 @@ export function isNearConversationBottom(
   return scrollHeight - scrollTop - clientHeight <= threshold;
 }
 
+export function isAwayFromConversationBottom(
+  metrics: ScrollMetrics,
+  threshold = conversationBottomThreshold,
+): boolean {
+  return !isNearConversationBottom(metrics, threshold);
+}
+
 export function isAwayFromConversationTop(
   { scrollTop }: Pick<HTMLElement, 'scrollTop'>,
   threshold = conversationBottomThreshold,

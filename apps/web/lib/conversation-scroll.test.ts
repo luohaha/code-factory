@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   conversationBottomThreshold,
   countAddedMessages,
+  isAwayFromConversationBottom,
   isAwayFromConversationTop,
   isNearConversationBottom,
 } from './conversation-scroll.ts';
@@ -42,6 +43,25 @@ void test('treats content that does not overflow as already at the bottom', () =
 void test('shows the return-to-top control only after leaving the top threshold', () => {
   assert.equal(isAwayFromConversationTop({ scrollTop: 96 }), false);
   assert.equal(isAwayFromConversationTop({ scrollTop: 97 }), true);
+});
+
+void test('shows the return-to-bottom control only after leaving the bottom threshold', () => {
+  assert.equal(
+    isAwayFromConversationBottom({
+      clientHeight: 500,
+      scrollHeight: 1_000,
+      scrollTop: 404,
+    }),
+    false,
+  );
+  assert.equal(
+    isAwayFromConversationBottom({
+      clientHeight: 500,
+      scrollHeight: 1_000,
+      scrollTop: 403,
+    }),
+    true,
+  );
 });
 
 void test('counts only message ids that were not present in the previous refresh', () => {

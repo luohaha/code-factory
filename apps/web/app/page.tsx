@@ -105,7 +105,11 @@ import {
   type SessionState,
   type WorkspaceDto,
 } from '@/lib/agent-manager-client';
-import { countAddedMessages, isAwayFromConversationTop, isNearConversationBottom } from '@/lib/conversation-scroll';
+import {
+  countAddedMessages,
+  isAwayFromConversationBottom,
+  isAwayFromConversationTop,
+} from '@/lib/conversation-scroll';
 import { formatDuration } from '@/lib/format-duration';
 import { I18nProvider, useI18n } from '@/lib/i18n';
 import { useTheme } from '@/lib/theme';
@@ -1410,6 +1414,7 @@ function RequirementDetail({
   const [draftAttachments, setDraftAttachments] = useState<DraftAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [newMessages, setNewMessages] = useState<{ requirementId: string; count: number } | null>(null);
+  const [scrollToBottomRequirementId, setScrollToBottomRequirementId] = useState<string | null>(null);
   const [scrollToTopRequirementId, setScrollToTopRequirementId] = useState<string | null>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
@@ -1424,11 +1429,13 @@ function RequirementDetail({
   const newMessageCount = newMessages && newMessages.requirementId === requirementId
     ? newMessages.count
     : 0;
+  const showScrollToBottom = scrollToBottomRequirementId === requirementId;
   const showScrollToTop = scrollToTopRequirementId === requirementId;
 
   const scrollToLatest = useCallback(() => {
     followsLatestRef.current = true;
     setNewMessages(null);
+    setScrollToBottomRequirementId(null);
     const viewport = scrollViewportRef.current;
     if (viewport) viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'auto' });
   }, []);
@@ -1572,9 +1579,13 @@ function RequirementDetail({
           className="min-h-0 flex-1 bg-muted/15"
           viewportRef={scrollViewportRef}
           onViewportScroll={(event) => {
-            const followsLatest = isNearConversationBottom(event.currentTarget);
+            const awayFromBottom = isAwayFromConversationBottom(event.currentTarget);
+            const followsLatest = !awayFromBottom;
             followsLatestRef.current = followsLatest;
             if (followsLatest && newMessageCount > 0) setNewMessages(null);
+            setScrollToBottomRequirementId(
+              requirementId && awayFromBottom ? requirementId : null,
+            );
             setScrollToTopRequirementId(
               requirementId && isAwayFromConversationTop(event.currentTarget)
                 ? requirementId
@@ -1593,6 +1604,18 @@ function RequirementDetail({
                 >
                   <ArrowUp data-icon="inline-start" />
                   {t('Back to top')}
+                </Button>
+              ) : null}
+              {showScrollToBottom && newMessageCount === 0 ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="absolute right-4 bottom-4 z-10 rounded-full border border-border bg-background shadow-lg hover:bg-muted"
+                  onClick={scrollToLatest}
+                >
+                  {t('Back to bottom')}
+                  <ArrowDown data-icon="inline-end" />
                 </Button>
               ) : null}
               {newMessageCount > 0 ? (
