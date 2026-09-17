@@ -7,6 +7,7 @@ import remarkGfm from 'remark-gfm';
 import {
   Activity,
   ArrowDown,
+  ArrowLeft,
   ArrowUp,
   Bot,
   Check,
@@ -688,6 +689,74 @@ function PullRequestCard({ pullRequest, requirement, activeReview, busy, modelCa
   );
 }
 
+function AgentTimerDetails({ timer, requirement, showRequirement = false }: {
+  timer: AgentTimerDto;
+  requirement?: RequirementDto;
+  showRequirement?: boolean;
+}) {
+  const { locale, t } = useI18n();
+  const status = agentTimerColumns.find((column) => column.status === timer.status);
+  const eventLabel = timer.status === 'active'
+    ? t('Next wake-up')
+    : timer.status === 'completed' ? t('Last wake-up') : t('Stopped');
+  const eventTime = timer.status === 'active'
+    ? timer.nextFireAt
+    : timer.status === 'completed' ? timer.lastFiredAt : timer.updatedAt;
+
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2">
+          <span className="grid size-7 place-items-center rounded-lg bg-primary/8 text-primary"><Clock3 className="size-3.5" /></span>
+          {t('Timer details')}
+        </DialogTitle>
+        <DialogDescription className="flex items-center gap-2 font-mono text-[10px]">
+          TIMER-{shortId(timer.id)}
+          <span aria-hidden="true">·</span>
+          <span className="flex items-center gap-1.5 font-sans font-medium">
+            <span className={`size-1.5 rounded-full ${status?.tone ?? 'bg-slate-400'}`} />
+            {status ? t(status.title) : timer.status.toUpperCase()}
+          </span>
+        </DialogDescription>
+      </DialogHeader>
+
+      <div className="space-y-4">
+        <section>
+          <h3 className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Timer description')}</h3>
+          <p className="mt-1.5 whitespace-pre-wrap break-words rounded-xl border border-border/70 bg-muted/30 px-3 py-2.5 text-xs leading-5">
+            {timer.description}
+          </p>
+        </section>
+
+        <dl className="grid grid-cols-2 gap-2 text-[10px]">
+          <div className="rounded-lg bg-muted/30 px-3 py-2.5">
+            <dt className="text-[9px] text-muted-foreground">{t('Pattern')}</dt>
+            <dd className="mt-0.5 font-medium">{timer.schedule === 'once' ? t('One time') : t('Recurring')}</dd>
+          </div>
+          <div className="rounded-lg bg-muted/30 px-3 py-2.5">
+            <dt className="text-[9px] text-muted-foreground">{t('Interval')}</dt>
+            <dd className="mt-0.5 font-medium">{formatDuration(timer.intervalSeconds, t)}</dd>
+          </div>
+          <div className="col-span-2 rounded-lg bg-muted/30 px-3 py-2.5">
+            <dt className="text-[9px] text-muted-foreground">{eventLabel}</dt>
+            <dd className="mt-0.5 font-medium">{eventTime ? formatTime(eventTime, locale) : '—'}</dd>
+          </div>
+        </dl>
+
+        {showRequirement ? (
+          <section>
+            <h3 className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Linked requirement')}</h3>
+            <div className="mt-1.5 rounded-xl border border-border/70 px-3 py-2.5">
+              <p className="truncate text-xs font-medium">{requirement?.title ?? t('Requirement unavailable')}</p>
+              <p className="mt-1 font-mono text-[9px] text-muted-foreground">REQ-{shortId(timer.requirementId)}</p>
+            </div>
+          </section>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
 function AgentTimerCard({ timer, requirement, onOpenRequirement }: {
   timer: AgentTimerDto;
   requirement?: RequirementDto;
@@ -737,52 +806,7 @@ function AgentTimerCard({ timer, requirement, onOpenRequirement }: {
       </article>
 
       <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <span className="grid size-7 place-items-center rounded-lg bg-primary/8 text-primary"><Clock3 className="size-3.5" /></span>
-            {t('Timer details')}
-          </DialogTitle>
-          <DialogDescription className="flex items-center gap-2 font-mono text-[10px]">
-            TIMER-{shortId(timer.id)}
-            <span aria-hidden="true">·</span>
-            <span className="flex items-center gap-1.5 font-sans font-medium">
-              <span className={`size-1.5 rounded-full ${status?.tone ?? 'bg-slate-400'}`} />
-              {status ? t(status.title) : timer.status.toUpperCase()}
-            </span>
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-4">
-          <section>
-            <h3 className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Timer description')}</h3>
-            <p className="mt-1.5 whitespace-pre-wrap break-words rounded-xl border border-border/70 bg-muted/30 px-3 py-2.5 text-xs leading-5">
-              {timer.description}
-            </p>
-          </section>
-
-          <dl className="grid grid-cols-2 gap-2 text-[10px]">
-            <div className="rounded-lg bg-muted/30 px-3 py-2.5">
-              <dt className="text-[9px] text-muted-foreground">{t('Pattern')}</dt>
-              <dd className="mt-0.5 font-medium">{timer.schedule === 'once' ? t('One time') : t('Recurring')}</dd>
-            </div>
-            <div className="rounded-lg bg-muted/30 px-3 py-2.5">
-              <dt className="text-[9px] text-muted-foreground">{t('Interval')}</dt>
-              <dd className="mt-0.5 font-medium">{formatDuration(timer.intervalSeconds, t)}</dd>
-            </div>
-            <div className="col-span-2 rounded-lg bg-muted/30 px-3 py-2.5">
-              <dt className="text-[9px] text-muted-foreground">{eventLabel}</dt>
-              <dd className="mt-0.5 font-medium">{eventTime ? formatTime(eventTime, locale) : '—'}</dd>
-            </div>
-          </dl>
-
-          <section>
-            <h3 className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Linked requirement')}</h3>
-            <div className="mt-1.5 rounded-xl border border-border/70 px-3 py-2.5">
-              <p className="truncate text-xs font-medium">{requirement?.title ?? t('Requirement unavailable')}</p>
-              <p className="mt-1 font-mono text-[9px] text-muted-foreground">REQ-{shortId(timer.requirementId)}</p>
-            </div>
-          </section>
-        </div>
+        <AgentTimerDetails timer={timer} requirement={requirement} showRequirement />
 
         <DialogFooter>
           <DialogClose render={<Button type="button" variant="outline" />}>{t('Close')}</DialogClose>
@@ -1159,11 +1183,13 @@ function AgentTimerDialog({
   const { locale, t } = useI18n();
   const fieldId = useId();
   const [open, setOpen] = useState(false);
+  const [selectedTimerId, setSelectedTimerId] = useState<string | null>(null);
   const [description, setDescription] = useState('');
   const [schedule, setSchedule] = useState<'once' | 'recurring'>('once');
   const [amount, setAmount] = useState(1);
   const [unit, setUnit] = useState<'minutes' | 'hours' | 'days'>('hours');
   const active = timers.filter((timer) => timer.status === 'active');
+  const selectedTimer = active.find((timer) => timer.id === selectedTimerId);
   const secondsPerUnit = unit === 'minutes' ? 60 : unit === 'hours' ? 3_600 : 86_400;
   const intervalSeconds = amount * secondsPerUnit;
   const normalizedDescription = description.trim();
@@ -1186,7 +1212,13 @@ function AgentTimerDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (!nextOpen) setSelectedTimerId(null);
+      }}
+    >
       <DialogTrigger
         render={(
           <Button
@@ -1203,6 +1235,17 @@ function AgentTimerDialog({
         {active.length > 0 ? t('{count} scheduled', { count: active.length }) : t('Schedule')}
       </DialogTrigger>
       <DialogContent className="sm:max-w-lg">
+        {selectedTimer ? (
+          <>
+            <AgentTimerDetails timer={selectedTimer} />
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setSelectedTimerId(null)}>
+                <ArrowLeft data-icon="inline-start" />{t('Back to schedules')}
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
         <DialogHeader>
           <DialogTitle>{t('Scheduled wake-ups')}</DialogTitle>
           <DialogDescription>{t('Wake this RD Session with a specific follow-up, once or repeatedly.')}</DialogDescription>
@@ -1215,19 +1258,26 @@ function AgentTimerDialog({
               {t('No scheduled wake-ups')}
             </div>
           ) : active.map((timer) => (
-            <div key={timer.id} className="flex items-center gap-3 rounded-xl border border-border bg-muted/30 px-3 py-2.5">
-              <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary/8 text-primary"><Clock3 className="size-4" /></span>
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-medium">
+            <div key={timer.id} className="flex items-center gap-1.5 rounded-xl border border-border bg-muted/30 p-1.5">
+              <button
+                type="button"
+                className="group flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-background/70"
+                aria-label={`${t('Timer details')}: ${timer.description}`}
+                onClick={() => setSelectedTimerId(timer.id)}
+              >
+                <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-primary/8 text-primary"><Clock3 className="size-3.5" /></span>
+                <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-medium group-hover:underline">
                   {timer.description}
-                </p>
-                <p className="mt-0.5 text-[9px] text-muted-foreground">
+                </span>
+                <span className="mt-0.5 block truncate text-[9px] text-muted-foreground">
                   {timer.schedule === 'once'
                     ? t('Once after {duration}', { duration: formatDuration(timer.intervalSeconds, t) })
                     : t('Every {duration}', { duration: formatDuration(timer.intervalSeconds, t) })}
                   {timer.nextFireAt ? ` · ${t('Next wake-up: {time}', { time: formatTime(timer.nextFireAt, locale) })}` : null}
-                </p>
-              </div>
+                </span>
+                </span>
+              </button>
               <Button
                 type="button"
                 variant="ghost"
@@ -1295,6 +1345,8 @@ function AgentTimerDialog({
             <Button type="submit" disabled={!valid || busy}>{busy ? <LoaderCircle className="animate-spin" /> : <Clock3 />}{t('Schedule wake-up')}</Button>
           </DialogFooter>
         </form>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );
