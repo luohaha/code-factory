@@ -694,6 +694,7 @@ function AgentTimerCard({ timer, requirement, onOpenRequirement }: {
   onOpenRequirement: () => void;
 }) {
   const { locale, t } = useI18n();
+  const [open, setOpen] = useState(false);
   const status = agentTimerColumns.find((column) => column.status === timer.status);
   const eventLabel = timer.status === 'active'
     ? t('Next wake-up')
@@ -706,36 +707,98 @@ function AgentTimerCard({ timer, requirement, onOpenRequirement }: {
     : t('Every {duration}', { duration: formatDuration(timer.intervalSeconds, t) });
 
   return (
-    <article className="overflow-hidden rounded-xl border border-border/80 bg-card shadow-[0_1px_2px_oklch(0.18_0.02_255/0.05)]">
-      <button
-        type="button"
-        className="group block w-full p-3.5 text-left transition-colors hover:bg-muted/25 disabled:cursor-default"
-        disabled={!requirement}
-        onClick={onOpenRequirement}
-      >
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className={`size-2 shrink-0 rounded-full ${status?.tone ?? 'bg-slate-400'}`} />
-            <span className="truncate font-mono text-[10px] font-semibold">TIMER-{shortId(timer.id)}</span>
+    <Dialog open={open} onOpenChange={setOpen}>
+      <article className="overflow-hidden rounded-xl border border-border/80 bg-card shadow-[0_1px_2px_oklch(0.18_0.02_255/0.05)]">
+        <DialogTrigger
+          render={<button type="button" aria-label={`${t('Timer details')}: ${timer.description}`} className="group block w-full p-3.5 text-left transition-colors hover:bg-muted/25" />}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className={`size-2 shrink-0 rounded-full ${status?.tone ?? 'bg-slate-400'}`} />
+              <span className="truncate font-mono text-[10px] font-semibold">TIMER-{shortId(timer.id)}</span>
+            </div>
+            <span className="shrink-0 text-[9px] font-medium text-muted-foreground">
+              {status ? t(status.title) : timer.status.toUpperCase()}
+            </span>
           </div>
-          <span className="shrink-0 text-[9px] font-medium text-muted-foreground">
-            {status ? t(status.title) : timer.status.toUpperCase()}
-          </span>
+
+          <h3 className="mt-2.5 truncate text-xs font-semibold group-hover:underline">
+            {timer.description}
+          </h3>
+          <p className="mt-1.5 truncate text-[10px] text-foreground/75">
+            REQ-{shortId(timer.requirementId)} · {requirement?.title ?? t('Requirement unavailable')}
+          </p>
+
+          <div className="mt-2.5 flex items-center justify-between gap-3 text-[10px] text-muted-foreground">
+            <span className="truncate">{scheduleLabel}</span>
+            <span className="shrink-0">{eventLabel}: {eventTime ? formatTime(eventTime, locale) : '—'}</span>
+          </div>
+        </DialogTrigger>
+      </article>
+
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <span className="grid size-7 place-items-center rounded-lg bg-primary/8 text-primary"><Clock3 className="size-3.5" /></span>
+            {t('Timer details')}
+          </DialogTitle>
+          <DialogDescription className="flex items-center gap-2 font-mono text-[10px]">
+            TIMER-{shortId(timer.id)}
+            <span aria-hidden="true">·</span>
+            <span className="flex items-center gap-1.5 font-sans font-medium">
+              <span className={`size-1.5 rounded-full ${status?.tone ?? 'bg-slate-400'}`} />
+              {status ? t(status.title) : timer.status.toUpperCase()}
+            </span>
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <section>
+            <h3 className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Timer description')}</h3>
+            <p className="mt-1.5 whitespace-pre-wrap break-words rounded-xl border border-border/70 bg-muted/30 px-3 py-2.5 text-xs leading-5">
+              {timer.description}
+            </p>
+          </section>
+
+          <dl className="grid grid-cols-2 gap-2 text-[10px]">
+            <div className="rounded-lg bg-muted/30 px-3 py-2.5">
+              <dt className="text-[9px] text-muted-foreground">{t('Pattern')}</dt>
+              <dd className="mt-0.5 font-medium">{timer.schedule === 'once' ? t('One time') : t('Recurring')}</dd>
+            </div>
+            <div className="rounded-lg bg-muted/30 px-3 py-2.5">
+              <dt className="text-[9px] text-muted-foreground">{t('Interval')}</dt>
+              <dd className="mt-0.5 font-medium">{formatDuration(timer.intervalSeconds, t)}</dd>
+            </div>
+            <div className="col-span-2 rounded-lg bg-muted/30 px-3 py-2.5">
+              <dt className="text-[9px] text-muted-foreground">{eventLabel}</dt>
+              <dd className="mt-0.5 font-medium">{eventTime ? formatTime(eventTime, locale) : '—'}</dd>
+            </div>
+          </dl>
+
+          <section>
+            <h3 className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Linked requirement')}</h3>
+            <div className="mt-1.5 rounded-xl border border-border/70 px-3 py-2.5">
+              <p className="truncate text-xs font-medium">{requirement?.title ?? t('Requirement unavailable')}</p>
+              <p className="mt-1 font-mono text-[9px] text-muted-foreground">REQ-{shortId(timer.requirementId)}</p>
+            </div>
+          </section>
         </div>
 
-        <h3 className="mt-2.5 truncate text-xs font-semibold group-hover:underline">
-          {timer.description}
-        </h3>
-        <p className="mt-1.5 truncate text-[10px] text-foreground/75">
-          REQ-{shortId(timer.requirementId)} · {requirement?.title ?? t('Requirement unavailable')}
-        </p>
-
-        <div className="mt-2.5 flex items-center justify-between gap-3 text-[10px] text-muted-foreground">
-          <span className="truncate">{scheduleLabel}</span>
-          <span className="shrink-0">{eventLabel}: {eventTime ? formatTime(eventTime, locale) : '—'}</span>
-        </div>
-      </button>
-    </article>
+        <DialogFooter>
+          <DialogClose render={<Button type="button" variant="outline" />}>{t('Close')}</DialogClose>
+          <Button
+            type="button"
+            disabled={!requirement}
+            onClick={() => {
+              setOpen(false);
+              onOpenRequirement();
+            }}
+          >
+            <MessagesSquare data-icon="inline-start" />{t('Open requirement')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
