@@ -12,7 +12,7 @@ Agent Manager listens on 127.0.0.1:4310 by default. Its API base URL is:
 http://127.0.0.1:4310/api
 ~~~
 
-By default, Agent Manager uses the authenticated local GitHub CLI every 30 seconds to synchronize state, comments, reviews, inline review comments, CI failures, and merge conflicts. It polls only registered PRs whose last stored state is Open. This captures a transition to Draft, Closed, or Merged; once that state is persisted, later polls skip the PR. A PR registered as Draft is not polled to discover that it later became Open, so a PR must initially be registered as Open to enter the polling set. Change `pullRequestReconcileIntervalSeconds` through the configuration API or dashboard; use `0` to disable polling. The compatible `--pr-reconcile-interval SECONDS` option overrides the file for the launched process only. Reconciliation messages are exposed and delivered through the Requirement conversation and SSE endpoints documented here.
+By default, Agent Manager uses the authenticated local GitHub CLI every 30 seconds to synchronize state, comments, reviews, inline review comments, CI failures, and merge conflicts. It polls registered PRs whose last stored state is Draft or Open, so it can discover Draft-to-Open transitions as well as transitions to Closed or Merged. Once a terminal state is persisted, later polls skip the PR. Change `pullRequestReconcileIntervalSeconds` through the configuration API or dashboard; use `0` to disable polling. The compatible `--pr-reconcile-interval SECONDS` option overrides the file for the launched process only. Reconciliation messages are exposed and delivered through the Requirement conversation and SSE endpoints documented here.
 
 Check the service and bound workspace first:
 
