@@ -146,6 +146,7 @@ export const zhCN = {
   'Last wake-up': '最近唤醒',
   'Stopped': '停止时间',
   'Timer details': '定时任务详情',
+  'Back to schedules': '返回定时列表',
   'Requirement unavailable': '需求不可用',
   'Linked requirement': '关联需求',
   'Interval': '间隔',
