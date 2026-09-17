@@ -128,6 +128,7 @@ export const zhCN = {
   'No Agent output yet': '还没有 Agent 输出',
   'RD Agent messages will appear here in real time after the requirement starts.': '需求开始后，RD Agent 的消息会实时显示在这里。',
   'Back to top': '返回顶部',
+  'Back to bottom': '返回底部',
   'New message': '1 条新消息',
   '{count} new messages': '{count} 条新消息',
   'System event': '系统事件',
