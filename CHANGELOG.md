@@ -6,6 +6,13 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-09-17
+
+### Fixed
+
+- Continued reconciling Draft pull requests so transitions to Open are persisted and delivered to their Requirements.
+- Kept long timer descriptions and scheduling forms contained within timer dialogs without hiding cancellation controls.
+
 ## [0.1.4] - 2026-09-17
 
 ### Added
