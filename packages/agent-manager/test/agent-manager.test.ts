@@ -354,7 +354,7 @@ test('zero-day retention retries after an in-flight reviewer finishes', async ()
   }
 });
 
-test('PR reconciliation polls only PRs whose persisted status is Open', async () => {
+test('PR reconciliation polls Draft and Open PRs and persists Draft to Open transitions', async () => {
   const openSnapshot: GitHubPullRequestSnapshot = {
     status: 'open',
     title: 'open',
@@ -368,9 +368,11 @@ test('PR reconciliation polls only PRs whose persisted status is Open', async ()
     checks: [],
   };
   const githubClient = new SequenceGitHubClient([openSnapshot]);
+  const runner = new DeferredRunner();
   const manager = new AgentManager({
     workspaceRoot: process.cwd(),
     store: new SqliteAgentManagerStore(':memory:'),
+    runner,
     githubClient,
     logger: silentLogger,
   });
@@ -392,11 +394,22 @@ test('PR reconciliation polls only PRs whose persisted status is Open', async ()
     }
 
     await manager.reconcilePullRequests();
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     assert.deepEqual(githubClient.inspections.map((pullRequest) => ({
       number: pullRequest.number,
       status: pullRequest.status,
-    })), [{ number: 2, status: 'open' }]);
+    })).sort((left, right) => left.number - right.number), [
+      { number: 1, status: 'draft' },
+      { number: 2, status: 'open' },
+    ]);
+    assert.equal(manager.listPullRequests().find((pullRequest) => pullRequest.number === 1)?.status, 'open');
+    assert.equal(manager.listMessages(requirement.id).filter((message) => message.body.includes('draft -> open')).length, 1);
+
+    runner.resolvers[0]?.({
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'rd-session', finalMessage: 'ready', error: null,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
   } finally {
     await manager.close();
   }

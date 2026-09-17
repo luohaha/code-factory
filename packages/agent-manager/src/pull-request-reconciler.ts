@@ -22,9 +22,9 @@ export interface PullRequestReconcilerOptions {
 }
 
 /**
- * Polls PRs whose last persisted status is Open and shares each snapshot with
- * independent PR triggers. A snapshot may move an eligible PR to Draft,
- * Closed, or Merged; after that transition it is no longer polled.
+ * Polls PRs whose last persisted status is Draft or Open and shares each
+ * snapshot with independent PR triggers. A snapshot may move an eligible PR
+ * to Closed or Merged; after that terminal transition it is no longer polled.
  */
 export class PullRequestReconciler {
   readonly #store: AgentManagerStore;
@@ -109,7 +109,7 @@ export class PullRequestReconciler {
     if (registrations.length === 0) return;
     const errors: Error[] = [];
     for (const pullRequest of this.#store.listPullRequests()
-      .filter((item) => item.status === 'open')) {
+      .filter((item) => item.status === 'draft' || item.status === 'open')) {
       try {
         const snapshot = await this.#githubClient.inspectPullRequest(pullRequest);
         if (this.#isClosed()) return;

@@ -142,7 +142,7 @@ Humans manage timers from the clock control beside the Requirement chat composer
 
 ### Built-in PR Triggers
 
-By default, Agent Manager polls only registered PRs whose last stored state is Open every 30 seconds through the authenticated local `gh` CLI. A poll can capture and persist the PR's transition to Draft, Closed, or Merged; the PR is then skipped on later polls. A PR registered as Draft is not polled and must initially be registered as Open to enter the polling set. One fetched snapshot is shared by four independently registered triggers, so the split does not multiply GitHub requests:
+By default, Agent Manager polls registered PRs whose last stored state is Draft or Open every 30 seconds through the authenticated local `gh` CLI. A poll can capture and persist a Draft-to-Open transition as well as transitions to Draft, Closed, or Merged; terminal PRs are then skipped on later polls. One fetched snapshot is shared by four independently registered triggers, so the split does not multiply GitHub requests:
 
 - `github.pull-request.status` turns PR lifecycle changes into System messages;
 - `github.pull-request.comment` turns general comments, reviews, and inline review comments into Reviewer messages that explicitly mark their bodies as untrusted external feedback;
