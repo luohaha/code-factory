@@ -805,7 +805,7 @@ function AgentTimerCard({ timer, requirement, onOpenRequirement }: {
         </DialogTrigger>
       </article>
 
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="min-w-0 overflow-x-hidden sm:max-w-lg">
         <AgentTimerDetails timer={timer} requirement={requirement} showRequirement />
 
         <DialogFooter>
@@ -1244,7 +1244,7 @@ function AgentTimerDialog({
         <Clock3 data-icon="inline-start" />
         {active.length > 0 ? t('{count} scheduled', { count: active.length }) : t('Schedule')}
       </DialogTrigger>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="min-w-0 overflow-x-hidden sm:max-w-lg">
         {selectedTimer ? (
           <>
             <AgentTimerDetails timer={selectedTimer} />
@@ -1261,22 +1261,22 @@ function AgentTimerDialog({
           <DialogDescription>{t('Wake this RD Session with a specific follow-up, once or repeatedly.')}</DialogDescription>
         </DialogHeader>
 
-        <div className="my-4 space-y-2">
+        <div className="my-4 min-w-0 space-y-2">
           <p className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Active schedules')}</p>
           {active.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border px-3 py-4 text-center text-[10px] text-muted-foreground">
               {t('No scheduled wake-ups')}
             </div>
           ) : active.map((timer) => (
-            <div key={timer.id} className="flex items-center gap-1.5 rounded-xl border border-border bg-muted/30 p-1.5">
+            <div key={timer.id} className="flex min-w-0 max-w-full items-center gap-1.5 overflow-hidden rounded-xl border border-border bg-muted/30 p-1.5">
               <button
                 type="button"
-                className="group flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-background/70"
+                className="group flex w-0 min-w-0 flex-1 items-center gap-2.5 overflow-hidden rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-background/70"
                 aria-label={`${t('Timer details')}: ${timer.description}`}
                 onClick={() => setSelectedTimerId(timer.id)}
               >
                 <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-primary/8 text-primary"><Clock3 className="size-3.5" /></span>
-                <span className="min-w-0 flex-1">
+                <span className="min-w-0 flex-1 overflow-hidden">
                 <span className="block truncate text-xs font-medium group-hover:underline">
                   {timer.description}
                 </span>
@@ -1302,7 +1302,7 @@ function AgentTimerDialog({
           ))}
         </div>
 
-        <form onSubmit={submit}>
+        <form className="min-w-0" onSubmit={submit}>
           <FieldGroup className="gap-4 border-t border-border pt-4">
             <Field>
               <FieldLabel htmlFor={`${fieldId}-description`}>{t('Timer description')}</FieldLabel>
