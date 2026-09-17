@@ -6,6 +6,17 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-09-17
+
+### Added
+
+- Added configurable retention periods for cancelled and completed Requirements, with safe automatic cleanup of related records and retryable attachment deletion.
+- Added timer detail views from both the Timer board and a Requirement's scheduled wake-up list.
+
+### Changed
+
+- Made Timer board cards and active scheduled wake-up rows more compact for faster scanning.
+
 ## [0.1.3] - 2026-09-16
 
 ### Added
