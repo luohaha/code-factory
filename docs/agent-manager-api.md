@@ -314,6 +314,8 @@ Returns the configuration file path, file-backed desired values, and any fields 
     "openDashboard": false,
     "databasePath": null,
     "pullRequestReconcileIntervalSeconds": 30,
+    "cancelledRequirementRetentionDays": 7,
+    "doneRequirementRetentionDays": 365,
     "logLevel": "info",
     "logFilePath": null,
     "logMaxSize": "20m",
@@ -326,7 +328,7 @@ Returns the configuration file path, file-backed desired values, and any fields 
 
 ### PATCH /api/configuration
 
-Accepts any subset of `values`. The patch is merged into the file-backed desired values and the complete validated document is atomically written; unrelated launch-only overrides are never persisted. `pullRequestReconcileIntervalSeconds` and `logLevel` apply immediately. All other fields are persisted, returned in `restartRequiredFields`, and apply on restart.
+Accepts any subset of `values`. The patch is merged into the file-backed desired values and the complete validated document is atomically written; unrelated launch-only overrides are never persisted. `pullRequestReconcileIntervalSeconds`, `cancelledRequirementRetentionDays`, `doneRequirementRetentionDays`, and `logLevel` apply immediately. All other fields are persisted, returned in `restartRequiredFields`, and apply on restart.
 
 ~~~bash
 curl -X PATCH http://127.0.0.1:4310/api/configuration \
@@ -334,7 +336,7 @@ curl -X PATCH http://127.0.0.1:4310/api/configuration \
   -d '{"pullRequestReconcileIntervalSeconds":10,"logLevel":"debug"}'
 ~~~
 
-`port` must be an integer from 1 to 65535. The reconcile interval must be an integer from 0 to 2147483 seconds, the largest whole-second delay supported by Node.js timers. `logLevel` accepts `debug`, `info`, `warn`, `error`, or `silent`. Paths and origins accept a non-empty string or `null`; a null database or log path selects its workspace default, while a null origin disables CORS. Unknown fields return 400 Bad Request.
+`port` must be an integer from 1 to 65535. The reconcile interval must be an integer from 0 to 2147483 seconds, the largest whole-second delay supported by Node.js timers. Each Requirement retention value must be an integer from 0 to 36500 days; `0` deletes matching Requirements as they become terminal. Updating either retention value triggers a scan immediately, in addition to the startup and daily scans. A terminal Requirement with any running Run is deferred; a zero-day purge is retried immediately when that Run finishes. Requirement-linked domain records are deleted in one transaction; pending attachment-file deletions are persisted as tombstones and retried until the file is absent. `logLevel` accepts `debug`, `info`, `warn`, `error`, or `silent`. Paths and origins accept a non-empty string or `null`; a null database or log path selects its workspace default, while a null origin disables CORS. Unknown fields return 400 Bad Request.
 
 ### GET /api/agent-models
 
@@ -466,7 +468,7 @@ Success: 201 Created with the new Requirement. Its initial status is todo and it
 
 ### DELETE /api/requirements/:id
 
-Removes a Requirement that is still in `todo` from active lists by marking it `cancelled` and archiving its Session. The underlying record is retained for auditability. A Requirement cannot be deleted after execution starts.
+Removes a Requirement that is still in `todo` from active lists by marking it `cancelled` and archiving its Session. The underlying records remain until the cancelled-Requirement retention period expires (7 days by default), then are deleted together. A Requirement cannot be deleted after execution starts.
 
 Success: `204 No Content`. Returns `404 Not Found` for an unknown Requirement and `409 Conflict` unless the Requirement is still `todo`.
 
@@ -739,6 +741,7 @@ Current event types and primary payloads:
 | requirement.created | provider, createdBy |
 | requirement.deleted | empty object |
 | requirement.completed | empty object |
+| requirements.purged | cancelledCount, doneCount |
 | message.created | message |
 | pull_request.created | pullRequest |
 | pull_request.updated | pullRequest |

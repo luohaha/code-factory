@@ -7,6 +7,7 @@ import test from 'node:test';
 import {
   DEFAULT_AGENT_MANAGER_CONFIGURATION,
   MAX_PULL_REQUEST_RECONCILE_INTERVAL_SECONDS,
+  MAX_REQUIREMENT_RETENTION_DAYS,
   loadAgentManagerConfiguration,
   validateAgentManagerConfigurationPatch,
   writeAgentManagerConfiguration,
@@ -45,6 +46,19 @@ test('configuration file fills omitted defaults and rejects unknown or invalid f
     assert.throws(() => validateAgentManagerConfigurationPatch({
       pullRequestReconcileIntervalSeconds: MAX_PULL_REQUEST_RECONCILE_INTERVAL_SECONDS + 1,
     }), /pullRequestReconcileIntervalSeconds/);
+    assert.deepEqual(validateAgentManagerConfigurationPatch({
+      cancelledRequirementRetentionDays: 0,
+      doneRequirementRetentionDays: MAX_REQUIREMENT_RETENTION_DAYS,
+    }), {
+      cancelledRequirementRetentionDays: 0,
+      doneRequirementRetentionDays: MAX_REQUIREMENT_RETENTION_DAYS,
+    });
+    assert.throws(() => validateAgentManagerConfigurationPatch({
+      cancelledRequirementRetentionDays: -1,
+    }), /cancelledRequirementRetentionDays/);
+    assert.throws(() => validateAgentManagerConfigurationPatch({
+      doneRequirementRetentionDays: MAX_REQUIREMENT_RETENTION_DAYS + 1,
+    }), /doneRequirementRetentionDays/);
     assert.throws(() => validateAgentManagerConfigurationPatch({ logMaxSize: 'large' }), /logMaxSize/);
     assert.throws(() => validateAgentManagerConfigurationPatch({ logMaxFiles: 1.5 }), /logMaxFiles/);
     assert.throws(() => validateAgentManagerConfigurationPatch({ unexpected: true }), /Unknown configuration field/);

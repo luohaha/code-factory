@@ -21,7 +21,7 @@ The startup directory becomes the managed workspace and the initial working dire
 
 Code Factory allows only one Agent Manager process for the same canonical workspace. A second foreground start, or a foreground/daemon mixed start, fails with an `already running for workspace` error even if it uses a different port, configuration file, or database path. Repeating `start --daemon` is idempotent: it reports the existing daemon instead of launching another one. The workspace lock is released automatically when the owning process exits, including after a crash.
 
-On first start, Agent Manager creates a workspace-scoped configuration file at `~/.code-factory/workspaces/<workspace-hash>/config.json`. The dashboard settings dialog can edit it. PR reconciliation intervals and log levels are applied immediately; network, storage, browser, and log-rotation changes are saved for the next restart.
+On first start, Agent Manager creates a workspace-scoped configuration file at `~/.code-factory/workspaces/<workspace-hash>/config.json`. The dashboard settings dialog can edit it. PR reconciliation intervals, terminal Requirement retention periods, and log levels are applied immediately; network, storage, browser, and log-rotation changes are saved for the next restart.
 
 ## Network and port
 
@@ -105,6 +105,8 @@ Configuration-file values are used by default. Logging environment variables tak
   "openDashboard": false,
   "databasePath": null,
   "pullRequestReconcileIntervalSeconds": 30,
+  "cancelledRequirementRetentionDays": 7,
+  "doneRequirementRetentionDays": 365,
   "logLevel": "info",
   "logFilePath": null,
   "logMaxSize": "20m",
@@ -112,7 +114,7 @@ Configuration-file values are used by default. Logging environment variables tak
 }
 ~~~
 
-`databasePath` and `logFilePath` use workspace defaults when set to `null`; `allowedOrigin: null` disables CORS headers. Set `pullRequestReconcileIntervalSeconds` to `0` to disable GitHub polling. Its largest accepted value is `2147483` seconds, matching Node.js timer limits.
+`databasePath` and `logFilePath` use workspace defaults when set to `null`; `allowedOrigin: null` disables CORS headers. Set `pullRequestReconcileIntervalSeconds` to `0` to disable GitHub polling. Its largest accepted value is `2147483` seconds, matching Node.js timer limits. `cancelledRequirementRetentionDays` and `doneRequirementRetentionDays` accept whole numbers from `0` to `36500`; `0` deletes matching Requirements as they become terminal. Agent Manager also scans at startup, after either setting changes, and daily thereafter. Requirements with a running RD or Reviewer Run are deferred; a zero-day purge is retried as soon as that Run finishes. Expiry removes the Requirement and all related domain records in one SQLite transaction while recording attachment-file deletion tombstones; unsuccessful file deletions are retried on later scans.
 
 ## Workspace data and logs
 

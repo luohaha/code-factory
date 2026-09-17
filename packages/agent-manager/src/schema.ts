@@ -76,6 +76,10 @@ export const schemaStatements = [
     local_path TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL
   ) STRICT`,
+  `CREATE TABLE IF NOT EXISTS pending_attachment_deletions (
+    local_path TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL
+  ) STRICT`,
   `CREATE TABLE IF NOT EXISTS pull_requests (
     id TEXT PRIMARY KEY,
     requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,

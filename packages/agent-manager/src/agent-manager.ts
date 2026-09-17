@@ -106,6 +106,9 @@ export const MAX_AGENT_TIMER_INTERVAL_SECONDS = 365 * 24 * 60 * 60;
 export const MAX_AGENT_TIMER_DESCRIPTION_LENGTH = 500;
 export const MAX_SEARCH_QUERY_LENGTH = 500;
 
+const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
+const REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS = DAY_MILLISECONDS;
+
 const REVIEWER_DEVELOPER_INSTRUCTIONS = [
   'You are a short-lived GitHub pull request reviewer. Review only; do not edit code.',
   'The user message identifies the GitHub PR to review.',
@@ -139,6 +142,7 @@ export class AgentManager extends EventEmitter {
   #configuration: AgentManagerConfiguration;
   readonly #initialPullRequestReconcileIntervalSeconds: number;
   #pullRequestReconcileIntervalSeconds: number | null = null;
+  #requirementRetentionTimer: NodeJS.Timeout | null = null;
   #apiBaseUrl = 'http://127.0.0.1:4310/api';
   #closed = false;
   #closePromise: Promise<void> | null = null;
@@ -288,6 +292,10 @@ export class AgentManager extends EventEmitter {
     if (appliedFields.includes('logLevel') && next.logLevel !== this.logger.level) {
       this.logger.setLevel?.(next.logLevel);
     }
+    if (appliedFields.includes('cancelledRequirementRetentionDays')
+      || appliedFields.includes('doneRequirementRetentionDays')) {
+      this.runRequirementRetentionSweep();
+    }
     const snapshot = this.getConfiguration();
     this.publish({
       type: 'manager.configuration.updated',
@@ -310,6 +318,7 @@ export class AgentManager extends EventEmitter {
   startConfiguredServices(): void {
     this.startAgentTrigger(this.#timerAgentTrigger);
     this.configurePullRequestReconciler(this.#initialPullRequestReconcileIntervalSeconds);
+    this.startRequirementRetentionSweep();
     this.#modelCatalog.start();
   }
 
@@ -323,6 +332,8 @@ export class AgentManager extends EventEmitter {
     this.#closed = true;
     this.#modelCatalog.stop();
     this.#pullRequestReconciler.stop();
+    if (this.#requirementRetentionTimer) clearInterval(this.#requirementRetentionTimer);
+    this.#requirementRetentionTimer = null;
     for (const trigger of this.#agentTriggers.values()) {
       try {
         trigger.stop();
@@ -387,6 +398,88 @@ export class AgentManager extends EventEmitter {
     this.#pullRequestReconciler.stop();
     this.#pullRequestReconcileIntervalSeconds = intervalSeconds;
     if (intervalSeconds > 0) this.startPullRequestReconciler(intervalSeconds * 1_000);
+  }
+
+  private startRequirementRetentionSweep(): void {
+    if (this.#requirementRetentionTimer) return;
+    this.runRequirementRetentionSweep();
+    this.#requirementRetentionTimer = setInterval(
+      () => this.runRequirementRetentionSweep(),
+      REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS,
+    );
+    this.#requirementRetentionTimer.unref();
+    this.logger.info('Requirement retention sweep started', {
+      intervalMs: REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS,
+      cancelledRetentionDays: this.#configuration.cancelledRequirementRetentionDays,
+      doneRetentionDays: this.#configuration.doneRequirementRetentionDays,
+    });
+  }
+
+  private runRequirementRetentionSweep(): void {
+    if (this.#closed) return;
+    try {
+      const now = Date.now();
+      const result = this.#store.purgeExpiredRequirements({
+        cancelledBefore: new Date(
+          now - this.#configuration.cancelledRequirementRetentionDays * DAY_MILLISECONDS,
+        ).toISOString(),
+        doneBefore: new Date(
+          now - this.#configuration.doneRequirementRetentionDays * DAY_MILLISECONDS,
+        ).toISOString(),
+        now: new Date(now).toISOString(),
+      });
+
+      const pendingAttachmentPaths = this.#store.listPendingAttachmentDeletions();
+      let attachmentCleanupFailureCount = 0;
+      for (const path of pendingAttachmentPaths) {
+        let removed = false;
+        try {
+          unlinkSync(path);
+          removed = true;
+        } catch (error) {
+          removed = Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT');
+        }
+        if (!removed) {
+          attachmentCleanupFailureCount += 1;
+          continue;
+        }
+        try {
+          this.#store.completePendingAttachmentDeletion(path);
+        } catch {
+          attachmentCleanupFailureCount += 1;
+        }
+      }
+      if (result.requirements.length === 0 && pendingAttachmentPaths.length === 0) return;
+
+      const cancelledCount = result.requirements.filter((requirement) => requirement.status === 'cancelled').length;
+      const doneCount = result.requirements.length - cancelledCount;
+      if (result.requirements.length > 0) {
+        this.publish({
+          type: 'requirements.purged',
+          payload: { cancelledCount, doneCount },
+        });
+        this.logger.info('Expired requirements purged', {
+          cancelledCount,
+          doneCount,
+          pendingAttachmentCount: pendingAttachmentPaths.length,
+          attachmentCleanupFailureCount,
+        });
+      }
+      if (attachmentCleanupFailureCount > 0) {
+        this.logger.warn('Some expired requirement attachments could not be deleted', {
+          attachmentCleanupFailureCount,
+        });
+      }
+    } catch (error) {
+      this.logger.error('Requirement retention sweep failed', { error });
+    }
+  }
+
+  private sweepImmediateTerminalRequirement(status: 'cancelled' | 'done'): void {
+    const retentionDays = status === 'cancelled'
+      ? this.#configuration.cancelledRequirementRetentionDays
+      : this.#configuration.doneRequirementRetentionDays;
+    if (retentionDays === 0) this.runRequirementRetentionSweep();
   }
 
   async reconcilePullRequests(): Promise<void> {
@@ -519,6 +612,7 @@ export class AgentManager extends EventEmitter {
       requirementId: id,
       sessionId: requirement.session.id,
     });
+    this.sweepImmediateTerminalRequirement('cancelled');
   }
 
   listSessions() {
@@ -886,7 +980,14 @@ export class AgentManager extends EventEmitter {
       }
       this.publishOutcome(requirement.id, requirement.session.id, runId, 'reviewer', outcome);
       this.logRunOutcome(requirement.id, runId, 'reviewer', outcome, performance.now() - startedAt);
-      if (outcome.status === 'succeeded') this.schedulePendingRdMessages(requirement.id);
+      const current = this.#store.getRequirement(requirement.id);
+      if (outcome.status === 'succeeded' && current
+        && current.status !== 'done' && current.status !== 'cancelled') {
+        this.schedulePendingRdMessages(requirement.id);
+      }
+      if (current?.status === 'done' || current?.status === 'cancelled') {
+        this.sweepImmediateTerminalRequirement(current.status);
+      }
       return outcome;
     });
   }
@@ -901,6 +1002,7 @@ export class AgentManager extends EventEmitter {
     this.#timerAgentTrigger.refresh();
     this.publish({ type: 'requirement.completed', requirementId, sessionId: current.session.id, payload: {} });
     this.logger.info('Requirement completed', { requirementId, sessionId: current.session.id });
+    this.sweepImmediateTerminalRequirement('done');
     return current;
   }
 
@@ -1024,7 +1126,8 @@ export class AgentManager extends EventEmitter {
 
   private schedulePendingRdMessages(requirementId: string, afterSequence = 0): void {
     queueMicrotask(() => {
-      const current = this.requireRequirement(requirementId);
+      const current = this.#store.getRequirement(requirementId);
+      if (!current) return;
       if (current.status === 'done' || current.status === 'cancelled' || current.session.state === 'running') return;
       if (!this.#store.listPendingRdMessages(requirementId).some((message) => message.sequence > afterSequence)) return;
       void this.startRdRun(requirementId).catch((error: unknown) => {

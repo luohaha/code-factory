@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import type { AgentTrigger, AgentTriggerContext, AgentTriggerMessage } from '../src/agent-trigger.ts';
@@ -136,6 +139,216 @@ test('runtime configuration starts and stops PR reconciliation without restartin
       manager.startAgentTrigger(probe);
       manager.stopAgentTrigger(triggerId);
     }
+  } finally {
+    await manager.close();
+  }
+});
+
+test('runtime retention configuration immediately purges expired requirements and attachment files', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-manager-retention-'));
+  const attachmentPath = join(directory, 'expired.txt');
+  const retryAttachmentPath = join(directory, 'retry-expired');
+  writeFileSync(attachmentPath, 'expired');
+  mkdirSync(retryAttachmentPath);
+  const store = new SqliteAgentManagerStore(':memory:');
+  store.createRequirement({
+    requirementId: 'req-cancelled-expired',
+    sessionId: 'ses-cancelled-expired',
+    title: 'Old cancellation',
+    description: 'Purge after the retention setting changes',
+    provider: 'codex',
+    createdBy: 'human',
+    now: '2020-01-01T00:00:00.000Z',
+  });
+  store.createMessageAttachment({
+    id: 'att-cancelled-expired',
+    requirementId: 'req-cancelled-expired',
+    fileName: 'expired.txt',
+    kind: 'file',
+    mediaType: 'text/plain',
+    byteSize: 7,
+    localPath: attachmentPath,
+    now: '2020-01-01T00:00:00.000Z',
+  });
+  store.createMessageAttachment({
+    id: 'att-cancelled-retry',
+    requirementId: 'req-cancelled-expired',
+    fileName: 'retry-expired',
+    kind: 'file',
+    mediaType: 'application/octet-stream',
+    byteSize: 1,
+    localPath: retryAttachmentPath,
+    now: '2020-01-01T00:00:00.000Z',
+  });
+  store.transitionRequirement(
+    'req-cancelled-expired',
+    ['todo'],
+    'cancelled',
+    '2020-01-01T00:01:00.000Z',
+  );
+  store.createRequirement({
+    requirementId: 'req-done-expired',
+    sessionId: 'ses-done-expired',
+    title: 'Old completion',
+    description: 'Purge after the retention setting changes',
+    provider: 'codex',
+    createdBy: 'human',
+    now: '2020-01-01T00:00:00.000Z',
+  });
+  store.transitionRequirement(
+    'req-done-expired',
+    ['todo'],
+    'done',
+    '2020-01-01T00:01:00.000Z',
+  );
+  store.createRequirement({
+    requirementId: 'req-cancelled-ancient',
+    sessionId: 'ses-cancelled-ancient',
+    title: 'Ancient cancellation',
+    description: 'Purge during the startup sweep',
+    provider: 'codex',
+    createdBy: 'human',
+    now: '1900-01-01T00:00:00.000Z',
+  });
+  store.transitionRequirement(
+    'req-cancelled-ancient',
+    ['todo'],
+    'cancelled',
+    '1900-01-01T00:01:00.000Z',
+  );
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store,
+    attachmentDirectory: directory,
+    logger: silentLogger,
+    configuration: {
+      ...DEFAULT_AGENT_MANAGER_CONFIGURATION,
+      pullRequestReconcileIntervalSeconds: 0,
+      cancelledRequirementRetentionDays: 36_500,
+      doneRequirementRetentionDays: 36_500,
+    },
+    modelCatalog: {
+      start: () => undefined,
+      stop: () => undefined,
+      getModels: () => Promise.resolve({ refreshIntervalSeconds: 86_400, providers: [] }),
+    },
+  });
+  try {
+    manager.startConfiguredServices();
+    assert.equal(manager.getRequirement('req-cancelled-ancient'), null);
+    assert.notEqual(manager.getRequirement('req-cancelled-expired'), null);
+    assert.notEqual(manager.getRequirement('req-done-expired'), null);
+
+    const snapshot = manager.updateConfiguration({
+      cancelledRequirementRetentionDays: 7,
+      doneRequirementRetentionDays: 365,
+    });
+
+    assert.equal(snapshot.restartRequired, false);
+    assert.deepEqual(snapshot.restartRequiredFields, []);
+    assert.equal(manager.getRequirement('req-cancelled-expired'), null);
+    assert.equal(manager.getRequirement('req-done-expired'), null);
+    assert.equal(existsSync(attachmentPath), false);
+    assert.equal(existsSync(retryAttachmentPath), true);
+    assert.deepEqual(store.listPendingAttachmentDeletions(), [retryAttachmentPath]);
+    const purgeEvent = manager.listEvents().filter((event) => event.type === 'requirements.purged').at(-1);
+    assert.deepEqual(purgeEvent?.payload, { cancelledCount: 1, doneCount: 1 });
+
+    rmSync(retryAttachmentPath, { recursive: true, force: true });
+    manager.updateConfiguration({ cancelledRequirementRetentionDays: 7 });
+    assert.deepEqual(store.listPendingAttachmentDeletions(), []);
+  } finally {
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('zero-day retention purges requirements as cancellation and completion become terminal', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store,
+    logger: silentLogger,
+    configuration: {
+      ...DEFAULT_AGENT_MANAGER_CONFIGURATION,
+      cancelledRequirementRetentionDays: 0,
+      doneRequirementRetentionDays: 0,
+    },
+  });
+  try {
+    const cancelled = manager.createRequirement({
+      title: 'Cancel immediately',
+      description: 'Apply an existing zero-day policy on cancellation',
+      provider: 'codex',
+    });
+    manager.deleteRequirement(cancelled.id);
+    assert.equal(manager.getRequirement(cancelled.id), null);
+
+    const done = manager.createRequirement({
+      title: 'Complete immediately',
+      description: 'Apply an existing zero-day policy on completion',
+      provider: 'codex',
+    });
+    store.transitionRequirement(done.id, ['todo'], 'waiting_confirmation', new Date().toISOString());
+    const completed = manager.confirmRequirement(done.id);
+    assert.equal(completed.status, 'done');
+    assert.equal(manager.getRequirement(done.id), null);
+
+    assert.deepEqual(
+      manager.listEvents().filter((event) => event.type === 'requirements.purged').map((event) => event.payload),
+      [
+        { cancelledCount: 1, doneCount: 0 },
+        { cancelledCount: 0, doneCount: 1 },
+      ],
+    );
+  } finally {
+    await manager.close();
+  }
+});
+
+test('zero-day retention retries after an in-flight reviewer finishes', async () => {
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    logger: silentLogger,
+    configuration: {
+      ...DEFAULT_AGENT_MANAGER_CONFIGURATION,
+      cancelledRequirementRetentionDays: 0,
+    },
+  });
+  try {
+    const requirement = manager.createRequirement({
+      title: 'Cancel while review is running',
+      description: 'Defer zero-day cleanup until the reviewer result is recorded',
+      provider: 'codex',
+    });
+    const pullRequest = manager.trackPullRequest({
+      requirementId: requirement.id,
+      repository: 'acme/repo',
+      number: 40,
+      url: 'https://github.com/acme/repo/pull/40',
+      title: 'Review before cleanup',
+      baseBranch: 'main',
+      headBranch: 'review-before-cleanup',
+      headSha: 'review-before-cleanup-sha',
+      status: 'open',
+    });
+    const review = manager.requestReview(pullRequest.id, { provider: 'codex' });
+
+    manager.deleteRequirement(requirement.id);
+    assert.equal(manager.getRequirement(requirement.id)?.status, 'cancelled');
+    runner.resolvers[0]?.({
+      status: 'succeeded',
+      exitCode: 0,
+      nativeSessionId: null,
+      finalMessage: 'reviewed',
+      error: null,
+    });
+    await review;
+
+    assert.equal(manager.getRequirement(requirement.id), null);
   } finally {
     await manager.close();
   }
