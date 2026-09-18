@@ -849,6 +849,7 @@ Current event types and primary payloads:
 | run.failed | same as run.succeeded |
 | run.timed_out | same as run.succeeded |
 | run.cancelled | same as run.succeeded |
+| run.trace.appended | trace |
 | manager.reconciled | runIds and requirementIds repaired at startup |
 | manager.configuration.updated | configuration snapshot, changedFields, appliedFields, restartRequired, restartRequiredFields |
 | agent_models.updated | modelCatalog plus provider refresh timestamps and stale flags |

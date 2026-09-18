@@ -106,10 +106,24 @@ export const MIN_AGENT_TIMER_INTERVAL_SECONDS = 60;
 export const MAX_AGENT_TIMER_INTERVAL_SECONDS = 365 * 24 * 60 * 60;
 export const MAX_AGENT_TIMER_DESCRIPTION_LENGTH = 500;
 export const MAX_SEARCH_QUERY_LENGTH = 500;
-export const MAX_AGENT_TRACE_DETAIL_LENGTH = 65_536;
+export const MAX_AGENT_TRACE_DETAIL_BYTES = 65_536;
 
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
 const REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS = DAY_MILLISECONDS;
+const AGENT_TRACE_TRUNCATION_SUFFIX = '\n… trace output truncated';
+
+function truncateAgentTraceDetail(detail: string): string {
+  if (Buffer.byteLength(detail) <= MAX_AGENT_TRACE_DETAIL_BYTES) return detail;
+  const bytes = Buffer.from(detail);
+  const prefixByteLimit = MAX_AGENT_TRACE_DETAIL_BYTES - Buffer.byteLength(AGENT_TRACE_TRUNCATION_SUFFIX);
+  let prefixEnd = prefixByteLimit;
+  while (prefixEnd > 0) {
+    const byte = bytes[prefixEnd];
+    if (byte === undefined || (byte & 0xc0) !== 0x80) break;
+    prefixEnd -= 1;
+  }
+  return `${bytes.subarray(0, prefixEnd).toString('utf8')}${AGENT_TRACE_TRUNCATION_SUFFIX}`;
+}
 
 const REVIEWER_DEVELOPER_INSTRUCTIONS = [
   'You are a short-lived GitHub pull request reviewer. Review only; do not edit code.',
@@ -1442,9 +1456,7 @@ export class AgentManager extends EventEmitter {
       const normalizedTitle = item.title.trim().slice(0, 500) || 'Agent event';
       const detail = item.detail === undefined
         ? undefined
-        : item.detail.length <= MAX_AGENT_TRACE_DETAIL_LENGTH
-          ? item.detail
-          : `${item.detail.slice(0, MAX_AGENT_TRACE_DETAIL_LENGTH - 25)}\n… trace output truncated`;
+        : truncateAgentTraceDetail(item.detail);
       const trace = this.#store.appendAgentTrace({
         id: `trc_${randomUUID()}`,
         runId,

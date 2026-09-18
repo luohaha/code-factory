@@ -1415,21 +1415,23 @@ function AgentTracePanel({ runs, tracesByRun, loadedRunIds, onLoadTrace }: {
     ? manuallySelectedRunId!
     : latestRunId;
 
-  useEffect(() => {
-    if (!selectedRunId || loadedRunIds.has(selectedRunId) || requestedRunIdsRef.current.has(selectedRunId)) return;
-    let cancelled = false;
-    requestedRunIdsRef.current.add(selectedRunId);
-    void onLoadTrace(selectedRunId)
+  const requestTrace = useCallback((runId: string) => {
+    if (!runId || requestedRunIdsRef.current.has(runId)) return;
+    requestedRunIdsRef.current.add(runId);
+    setLoadError((current) => current?.runId === runId ? null : current);
+    void onLoadTrace(runId)
       .catch((caught: unknown) => {
-        if (!cancelled) {
-          setLoadError({
-            runId: selectedRunId,
-            message: caught instanceof Error ? caught.message : t('Failed to load Agent trace'),
-          });
-        }
+        setLoadError({
+          runId,
+          message: caught instanceof Error ? caught.message : t('Failed to load Agent trace'),
+        });
       });
-    return () => { cancelled = true; };
-  }, [loadedRunIds, onLoadTrace, selectedRunId, t]);
+  }, [onLoadTrace, t]);
+
+  useEffect(() => {
+    if (!selectedRunId || loadedRunIds.has(selectedRunId)) return;
+    requestTrace(selectedRunId);
+  }, [loadedRunIds, requestTrace, selectedRunId]);
 
   if (runs.length === 0) return null;
   const selectedRun = runs.find((run) => run.id === selectedRunId) ?? runs[0]!;
@@ -1483,7 +1485,7 @@ function AgentTracePanel({ runs, tracesByRun, loadedRunIds, onLoadTrace }: {
               variant="outline"
               onClick={() => {
                 requestedRunIdsRef.current.delete(selectedRun.id);
-                setLoadError(null);
+                requestTrace(selectedRun.id);
               }}
             >
               <RotateCcw data-icon="inline-start" />{t('Retry trace')}

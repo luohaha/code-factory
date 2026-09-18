@@ -51,7 +51,7 @@ export const schemaStatements = [
     kind TEXT NOT NULL CHECK (kind IN ('lifecycle', 'reasoning', 'assistant_message', 'tool_call', 'tool_result', 'error')),
     status TEXT CHECK (status IN ('started', 'completed', 'failed')),
     title TEXT NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 500),
-    detail TEXT CHECK (detail IS NULL OR length(detail) <= 65536),
+    detail TEXT CHECK (detail IS NULL OR length(CAST(detail AS BLOB)) <= 65536),
     tool_name TEXT,
     tool_call_id TEXT,
     native_type TEXT,

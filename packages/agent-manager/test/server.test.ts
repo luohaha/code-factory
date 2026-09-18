@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { AgentManager } from '../src/agent-manager.ts';
+import { AgentManager, MAX_AGENT_TRACE_DETAIL_BYTES } from '../src/agent-manager.ts';
 import {
   DEFAULT_AGENT_MANAGER_CONFIGURATION,
   MAX_PULL_REQUEST_RECONCILE_INTERVAL_SECONDS,
@@ -842,27 +842,43 @@ test('HTTP API exposes the persisted human and RD Agent conversation', async () 
     assert.ok(!runner.request?.invocation.args.includes(uploadedFile.localPath));
     assert.match(runner.request?.invocation.input ?? '', /failure screenshot\.png/);
     assert.match(runner.request?.invocation.input ?? '', /debug notes\.txt/);
+    const oversizedTraceDetail = '界'.repeat(MAX_AGENT_TRACE_DETAIL_BYTES);
     runner.request?.onEvent?.({
       kind: 'message',
       message: 'I added the regression test.',
-      traces: [{
-        kind: 'tool_call',
-        status: 'started',
-        title: 'Run command',
-        detail: 'npm test',
-        toolName: 'shell',
-        toolCallId: 'item-1',
-        nativeType: 'item.started',
-      }],
+      traces: [
+        {
+          kind: 'tool_call',
+          status: 'started',
+          title: 'Run command',
+          detail: 'npm test',
+          toolName: 'shell',
+          toolCallId: 'item-1',
+          nativeType: 'item.started',
+        },
+        {
+          kind: 'tool_result',
+          status: 'completed',
+          title: 'Command result',
+          detail: oversizedTraceDetail,
+          toolName: 'shell',
+          toolCallId: 'item-1',
+          nativeType: 'item.completed',
+        },
+      ],
       raw: {},
     });
 
     const traceResponse = await fetch(`${baseUrl}/api/runs/${acceptedStart.run?.id}/trace`);
     assert.equal(traceResponse.status, 200);
     const traceBody = await traceResponse.json() as { items: Array<{ kind: string; detail: string; sequence: number }> };
-    assert.deepEqual(traceBody.items.map((item) => ({ kind: item.kind, detail: item.detail, sequence: item.sequence })), [
+    assert.deepEqual(traceBody.items.slice(0, 1).map((item) => ({ kind: item.kind, detail: item.detail, sequence: item.sequence })), [
       { kind: 'tool_call', detail: 'npm test', sequence: 1 },
     ]);
+    const cappedTraceDetail = traceBody.items[1]?.detail ?? '';
+    assert.ok(Buffer.byteLength(cappedTraceDetail) <= MAX_AGENT_TRACE_DETAIL_BYTES);
+    assert.match(cappedTraceDetail, /… trace output truncated$/);
+    assert.doesNotMatch(cappedTraceDetail, /�/);
 
     const missingTraceResponse = await fetch(`${baseUrl}/api/runs/missing-run/trace`);
     assert.equal(missingTraceResponse.status, 404);

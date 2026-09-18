@@ -1,3 +1,5 @@
+import { MANAGER_EVENT_TYPES } from './manager-event-types.ts';
+
 export type AgentProvider = 'codex' | 'claude-code';
 export type AgentReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export interface AgentConfiguration {
@@ -435,27 +437,6 @@ export class AgentManagerClient {
     onError: () => void;
   }): () => void {
     const source = new EventSource(`${this.baseUrl}/api/events`);
-    const types = [
-      'requirement.created',
-      'requirement.deleted',
-      'requirement.completed',
-      'requirements.purged',
-      'run.started',
-      'run.succeeded',
-      'run.failed',
-      'run.timed_out',
-      'run.cancelled',
-      'message.created',
-      'pull_request.created',
-      'pull_request.updated',
-      'review_request.started',
-      'timer.created',
-      'timer.fired',
-      'timer.cancelled',
-      'manager.reconciled',
-      'manager.configuration.updated',
-      'agent_models.updated',
-    ];
     const listener = (raw: Event) => {
       try {
         const event = raw as MessageEvent<string>;
@@ -464,11 +445,11 @@ export class AgentManagerClient {
         // Ignore malformed event payloads; the next valid event or manual refresh repairs state.
       }
     };
-    for (const type of types) source.addEventListener(type, listener);
+    for (const type of MANAGER_EVENT_TYPES) source.addEventListener(type, listener);
     source.onopen = callbacks.onOpen;
     source.onerror = callbacks.onError;
     return () => {
-      for (const type of types) source.removeEventListener(type, listener);
+      for (const type of MANAGER_EVENT_TYPES) source.removeEventListener(type, listener);
       source.close();
     };
   }
