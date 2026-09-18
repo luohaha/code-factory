@@ -6,6 +6,23 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-09-18
+
+### Added
+
+- Added parent-child Requirement relationships, cross-Requirement agent messaging through the API and CLI, and a dashboard relationship tree.
+- Added a conversation control for returning directly to the latest message.
+
+### Changed
+
+- Reduced dashboard synchronization latency with scoped reads and updates, and indexed Requirement parent lookups.
+
+### Fixed
+
+- Displayed persisted RD replies promptly and refreshed reply state without waiting for a full dashboard reload.
+- Prevented new SSE connections from replaying stale event history.
+- Preserved newer scoped dashboard and conversation updates when concurrent requests complete out of order.
+
 ## [0.1.5] - 2026-09-17
 
 ### Fixed
