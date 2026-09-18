@@ -274,6 +274,10 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
     assert.ok(runner.requests[2]?.invocation.args.includes('gpt-5.6'));
     assert.ok(runner.requests[2]?.invocation.args.includes('model_reasoning_effort="max"'));
     assert.match(runner.requests[2]?.invocation.input ?? '', /add another test/);
+    assert.match(runner.requests[2]?.invocation.input ?? '', /Title: First/);
+    assert.match(runner.requests[2]?.invocation.input ?? '', /Description:\nFirst task/);
+    assert.ok(runner.requests[2]?.invocation.args.some((value) => value.includes('avoid duplicating commits')));
+    assert.ok(runner.requests[1]?.invocation.args.some((value) => value.includes('human confirmation owns completion')));
     assert.doesNotMatch(runner.requests[2]?.invocation.input ?? '', /Implementation is ready/);
     runner.resolvers[2]?.({
       status: 'succeeded',
