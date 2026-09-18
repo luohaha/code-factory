@@ -1,5 +1,8 @@
-import { parseArgs } from 'node:util';
+import { execFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { parseArgs, promisify } from 'node:util';
 
+import { normalizeRepositoryKey } from './repository-key.js';
 import { CODE_FACTORY_VERSION } from './version.js';
 
 export const CODE_FACTORY_API_URL = 'CODE_FACTORY_API_URL';
@@ -25,15 +28,22 @@ Options:
 Run code-factory-cli <command> --help for command options.
 
 RD Agents receive connection context through CODE_FACTORY_API_URL,
-CODE_FACTORY_REQUIREMENT_ID, and CODE_FACTORY_SESSION_ID.`;
+CODE_FACTORY_REQUIREMENT_ID, and CODE_FACTORY_SESSION_ID.
+
+Success prints JSON to stdout. Errors go to stderr: exit 2 for usage/context
+errors, exit 1 for execution failures. Requests time out after 30 seconds and
+writes are never automatically retried.`;
 
 const PR_REGISTER_HELP = `Usage: code-factory-cli pr register [options]
 
 Register a pull request after creating it. Run this command again only when your
 own push or edit changes its metadata. Code Factory owns lifecycle synchronization.
 
-Required options:
-  --repository OWNER/REPO
+Recommended (requires authenticated gh):
+  --from-github URL        Read current metadata from an explicit PR URL
+
+Or supply all metadata manually (cannot combine with --from-github):
+  --repository OWNER/REPO or HOST/OWNER/REPO
   --number NUMBER
   --url URL
   --title TITLE
@@ -41,6 +51,11 @@ Required options:
   --head-branch BRANCH
   --head-sha SHA
   --status draft|open|closed|merged
+
+For existing PRs, --status does not change the stored lifecycle state.
+
+Example:
+  code-factory-cli pr register --from-github https://github.com/OWNER/REPO/pull/123
 
 Context: CODE_FACTORY_API_URL and CODE_FACTORY_REQUIREMENT_ID.`;
 
@@ -50,12 +65,14 @@ Propose separate follow-up work as a linked TODO requirement.
 
 Required options:
   --title TITLE
-  --description DESCRIPTION
+  --description DESCRIPTION or --description-file PATH (UTF-8)
 
 Optional options:
   --provider codex|claude-code
   --model MODEL
   --reasoning-effort low|medium|high|xhigh|max
+
+Proposals remain TODO until a human starts them.
 
 Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
 CODE_FACTORY_SESSION_ID.`;
@@ -115,6 +132,9 @@ type Environment = Readonly<Record<string, string | undefined>>;
 export interface CodeFactoryCliRuntime {
   environment: Environment;
   fetch: typeof globalThis.fetch;
+  runGitHub: (args: string[]) => Promise<string>;
+  readTextFile: (path: string) => Promise<string>;
+  requestTimeoutMs: number;
   writeOut: (value: string) => void;
   writeError: (value: string) => void;
 }
@@ -131,6 +151,14 @@ function defaultRuntime(): CodeFactoryCliRuntime {
   return {
     environment: process.env,
     fetch: globalThis.fetch,
+    runGitHub: async (args) => {
+      const { stdout } = await promisify(execFile)('gh', args, {
+        encoding: 'utf8', timeout: 30_000, maxBuffer: 1024 * 1024,
+      });
+      return stdout;
+    },
+    readTextFile: (path) => readFile(path, 'utf8'),
+    requestTimeoutMs: 30_000,
     writeOut: (value) => process.stdout.write(value),
     writeError: (value) => process.stderr.write(value),
   };
@@ -153,6 +181,9 @@ function apiBaseUrl(environment: Environment): string {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new CliUsageError(`${CODE_FACTORY_API_URL} must use http or https`, HELP);
   }
+  if (parsed.search || parsed.hash || parsed.username || parsed.password) {
+    throw new CliUsageError(`${CODE_FACTORY_API_URL} must not contain credentials, a query, or a fragment`, HELP);
+  }
   return value;
 }
 
@@ -168,8 +199,26 @@ function parseOptions(
   }
 }
 
-function parsePullRequestPayload(args: readonly string[], environment: Environment): Record<string, unknown> {
+function pullRequestTarget(value: string): { repository: string; number: number } {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new CliUsageError('--from-github must be an absolute HTTPS PR URL', PR_REGISTER_HELP);
+  }
+  const match = url.pathname.match(/^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/([1-9][0-9]*)\/?$/);
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash ||
+      url.port || !match || !Number.isSafeInteger(Number(match[3]))) {
+    throw new CliUsageError('--from-github must be https://HOST/OWNER/REPO/pull/NUMBER', PR_REGISTER_HELP);
+  }
+  const repository = `${match[1]}/${match[2]}`;
+  return { repository: url.hostname === 'github.com' ? repository : `${url.hostname}/${repository}`, number: Number(match[3]) };
+}
+
+async function parsePullRequestPayload(args: readonly string[], runtime: CodeFactoryCliRuntime): Promise<Record<string, unknown>> {
+  const { environment } = runtime;
   const values = parseOptions(args, PR_REGISTER_HELP, {
+    'from-github': { type: 'string' },
     repository: { type: 'string' },
     number: { type: 'string' },
     url: { type: 'string' },
@@ -179,8 +228,44 @@ function parsePullRequestPayload(args: readonly string[], environment: Environme
     'head-sha': { type: 'string' },
     status: { type: 'string' },
   });
+  if (values['from-github'] !== undefined) {
+    if (Object.keys(values).some((key) => key !== 'from-github')) {
+      throw new CliUsageError('--from-github cannot be combined with manual metadata options', PR_REGISTER_HELP);
+    }
+    const requirementId = required(environment[CODE_FACTORY_REQUIREMENT_ID], CODE_FACTORY_REQUIREMENT_ID, PR_REGISTER_HELP);
+    const url = required(values['from-github'] as string | undefined, '--from-github', PR_REGISTER_HELP);
+    const target = pullRequestTarget(url);
+    const raw: unknown = JSON.parse(await runtime.runGitHub([
+      'pr', 'view', String(target.number), '--repo', target.repository, '--json',
+      'number,url,title,baseRefName,headRefName,headRefOid,state,isDraft',
+    ]));
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new CliRequestError('gh returned invalid PR metadata');
+    }
+    const details = raw as Record<string, unknown>;
+    const field = (name: string): string => {
+      const value = details[name];
+      if (typeof value !== 'string' || !value.trim()) throw new CliRequestError(`gh returned invalid ${name}`);
+      return value;
+    };
+    const returned = pullRequestTarget(field('url'));
+    if (details.number !== target.number || returned.number !== target.number ||
+        normalizeRepositoryKey(returned.repository) !== normalizeRepositoryKey(target.repository)) {
+      throw new CliRequestError('gh returned metadata for a different pull request');
+    }
+    const state = field('state');
+    if (!['OPEN', 'CLOSED', 'MERGED'].includes(state) || typeof details.isDraft !== 'boolean') {
+      throw new CliRequestError('gh returned invalid PR state');
+    }
+    return {
+      requirementId, repository: normalizeRepositoryKey(returned.repository), number: target.number, url: field('url'),
+      title: field('title'), baseBranch: field('baseRefName'), headBranch: field('headRefName'),
+      headSha: field('headRefOid'),
+      status: state === 'MERGED' ? 'merged' : state === 'CLOSED' ? 'closed' : details.isDraft ? 'draft' : 'open',
+    };
+  }
   const numberValue = Number(required(values.number as string | undefined, '--number', PR_REGISTER_HELP));
-  if (!Number.isInteger(numberValue) || numberValue <= 0) {
+  if (!Number.isSafeInteger(numberValue) || numberValue <= 0) {
     throw new CliUsageError('--number must be a positive integer', PR_REGISTER_HELP);
   }
   const status = required(values.status as string | undefined, '--status', PR_REGISTER_HELP);
@@ -200,14 +285,19 @@ function parsePullRequestPayload(args: readonly string[], environment: Environme
   };
 }
 
-function parseRequirementPayload(args: readonly string[], environment: Environment): Record<string, unknown> {
+async function parseRequirementPayload(args: readonly string[], runtime: CodeFactoryCliRuntime): Promise<Record<string, unknown>> {
+  const { environment } = runtime;
   const values = parseOptions(args, REQUIREMENT_PROPOSE_HELP, {
     title: { type: 'string' },
     description: { type: 'string' },
+    'description-file': { type: 'string' },
     provider: { type: 'string' },
     model: { type: 'string' },
     'reasoning-effort': { type: 'string' },
   });
+  if (values.description !== undefined && values['description-file'] !== undefined) {
+    throw new CliUsageError('Use either --description or --description-file', REQUIREMENT_PROPOSE_HELP);
+  }
   const provider = values.provider as string | undefined;
   if (provider !== undefined && provider !== 'codex' && provider !== 'claude-code') {
     throw new CliUsageError('--provider must be codex or claude-code', REQUIREMENT_PROPOSE_HELP);
@@ -227,7 +317,10 @@ function parseRequirementPayload(args: readonly string[], environment: Environme
       REQUIREMENT_PROPOSE_HELP,
     ),
     title: required(values.title as string | undefined, '--title', REQUIREMENT_PROPOSE_HELP),
-    description: required(values.description as string | undefined, '--description', REQUIREMENT_PROPOSE_HELP),
+    description: required(values['description-file'] === undefined
+      ? values.description as string | undefined
+      : await runtime.readTextFile(required(values['description-file'] as string | undefined, '--description-file', REQUIREMENT_PROPOSE_HELP)),
+    '--description or --description-file', REQUIREMENT_PROPOSE_HELP),
     ...(provider === undefined ? {} : { provider }),
     ...(values.model === undefined ? {} : {
       model: required(values.model as string | undefined, '--model', REQUIREMENT_PROPOSE_HELP),
@@ -275,22 +368,37 @@ async function requestJson(
   method: 'GET' | 'POST' | 'DELETE',
   body?: Record<string, unknown>,
 ): Promise<unknown> {
-  const response = await runtime.fetch(url, {
-    method,
-    headers: { 'content-type': 'application/json' },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
-  const text = await response.text();
+  const retryGuidance = method === 'GET'
+    ? ''
+    : '; the write may have succeeded. Check the Requirement before retrying.';
+  let response: Response;
+  let text: string;
+  try {
+    response = await runtime.fetch(url, {
+      method,
+      headers: { 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(runtime.requestTimeoutMs),
+    });
+    text = await response.text();
+  } catch (error) {
+    const timeout = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
+    const detail = timeout ? 'timed out' : `failed: ${error instanceof Error ? error.message : String(error)}`;
+    throw new CliRequestError(`Code Factory API request ${detail}${retryGuidance}`);
+  }
   let payload: unknown = null;
   if (text) {
     try {
       payload = JSON.parse(text) as unknown;
     } catch {
-      payload = { result: text };
+      if (response.ok) throw new CliRequestError(`Code Factory API returned invalid JSON${retryGuidance}`);
     }
   }
   if (!response.ok) {
     throw new CliRequestError(`Code Factory API returned ${response.status}: ${errorMessage(payload, response.statusText)}`);
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new CliRequestError(`Code Factory API returned an invalid response object${retryGuidance}`);
   }
   return payload;
 }
@@ -326,7 +434,8 @@ export async function runCodeFactoryCli(
         return 0;
       }
       endpoint = '/agent/pull-requests';
-      body = parsePullRequestPayload(args.slice(2), runtime.environment);
+      apiBaseUrl(runtime.environment);
+      body = await parsePullRequestPayload(args.slice(2), runtime);
     } else if (command === 'requirement propose') {
       help = REQUIREMENT_PROPOSE_HELP;
       if (writesHelp(args.slice(2))) {
@@ -334,7 +443,8 @@ export async function runCodeFactoryCli(
         return 0;
       }
       endpoint = '/agent/requirements';
-      body = parseRequirementPayload(args.slice(2), runtime.environment);
+      apiBaseUrl(runtime.environment);
+      body = await parseRequirementPayload(args.slice(2), runtime);
     } else if (command === 'requirement related') {
       help = REQUIREMENT_RELATED_HELP;
       if (writesHelp(args.slice(2))) {

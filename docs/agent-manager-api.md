@@ -219,7 +219,7 @@ interface PullRequest {
 }
 ~~~
 
-repository + number is the idempotency key for a PR.
+The lowercase repository key + number is the idempotency key for a PR. Repository casing does not change identity or bypass Requirement ownership checks.
 
 ### 3.7 ReviewRequest
 
@@ -707,7 +707,7 @@ The timer commands call the Requirement-scoped timer endpoints above. `timer reg
 
 ### POST /api/agent/pull-requests
 
-Registers or updates GitHub PR metadata. Later requests for the same repository + number update the same entity but cannot advance lifecycle state. The PR Reconciler owns draft/open/closed/merged state.
+Registers or updates GitHub PR metadata. Repository keys are normalized to lowercase, including Enterprise hostnames. Later requests for the same repository + number update the same entity but cannot advance lifecycle state. The PR Reconciler owns draft/open/closed/merged state.
 
 Every request field is required:
 

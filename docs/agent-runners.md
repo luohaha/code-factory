@@ -46,7 +46,20 @@ code-factory-cli timer show --help
 code-factory-cli timer cancel --help
 ```
 
-`pr register` registers a newly created PR or refreshes metadata changed by the RD Agent. `requirement propose` records separate follow-up work as a linked TODO Requirement. `timer register` registers a one-time wake-up by default or a recurring one with `--repeat`; `timer show` recovers timer IDs and statuses for the current Requirement; `timer cancel` stops an active timer. The commands print the API JSON response and return nonzero exit codes for invalid input, missing context, network failures, or HTTP errors.
+`pr register` registers a newly created PR or refreshes metadata changed by the RD Agent. `requirement propose` records separate follow-up work as a linked TODO Requirement. `requirement related` lists direct parent and child Requirements; `requirement message` coordinates with their RD Agents. `timer register` registers a one-time wake-up by default or a recurring one with `--repeat`; `timer show` recovers timer IDs and statuses for the current Requirement; `timer cancel` stops an active timer. The commands print the Agent API JSON response on stdout. Exit code `0` means success, `2` means invalid input or missing context, and `1` means an execution, network, HTTP, or response-format failure. Errors go to stderr. API requests and GitHub lookups time out after 30 seconds; writes are never automatically retried. A timeout or invalid response can occur after the server commits a write: inspect the Requirement before retrying, especially when proposing follow-up work.
+
+Prefer registration from an explicit PR URL, using the authenticated local `gh` CLI:
+
+```bash
+code-factory-cli pr register --from-github https://github.com/OWNER/REPO/pull/123
+code-factory-cli requirement propose --title 'Follow-up task' --description-file ./follow-up.md
+```
+
+`--from-github` reads the PR number, title, URL, branches, head SHA, and state from GitHub and validates the returned identity before registration. The repository key comes from the returned URL and is normalized to lowercase, matching Manager and Store identity checks. GitHub Enterprise URLs are supported and retain the hostname in the repository identifier. It cannot be mixed with manual metadata flags. The existing full manual registration form remains supported for callers that already have a snapshot; an existing PR's lifecycle is still owned by the reconciler, even when `--status` is supplied. The CLI does not create or edit GitHub PRs.
+
+`--description-file` reads a UTF-8 file relative to the CLI's working directory and is mutually exclusive with `--description`. This avoids shell quoting problems for multiline descriptions. Proposed Requirements remain TODO until a human starts them.
+
+The RD behavioral prompt is supplied on both initial and resumed invocations. It describes CLI capabilities and behavioral constraints, leaving command names and arguments to `code-factory-cli --help`. It covers Requirement scope, worktree isolation, recovery without duplicate actions, control-plane commands, lifecycle ownership, evaluating external feedback, and evidence-based handoff. Task-specific content stays in the stdin prompt; every invocation includes the current Requirement ID, title, and description, with only new external conversation messages on resume. Questions and investigations do not inherently require code changes, and the RD Agent must not substitute follow-up proposals for work required by the current Requirement. A successful GitHub PR creation and a successful Code Factory registration are separate outcomes; a failed registration must be reported without recreating the PR. Human confirmation owns Requirement completion.
 
 Agent Manager injects `CODE_FACTORY_API_URL`, `CODE_FACTORY_REQUIREMENT_ID`, and `CODE_FACTORY_SESSION_ID` for each RD Run. The CLI supplies those context fields to the HTTP API, so the model does not copy IDs or endpoint paths from its prompt. A workspace-private launcher is created next to the workspace database and prepended to `PATH`, which also supports the documented `node .../dist/cli.js start` development workflow.
 
@@ -65,6 +78,7 @@ Resume a native RD session:
 ```bash
 codex exec --json --color never --dangerously-bypass-approvals-and-sandbox \
   --model <model> -c 'model_reasoning_effort="high"' \
+  -c 'developer_instructions="...code-factory-cli behavior..."' \
   resume <thread-id> -
 ```
 
@@ -97,6 +111,7 @@ Resume a native RD session:
 ```bash
 claude --print --output-format stream-json --verbose \
   --dangerously-skip-permissions --model <model> --effort high \
+  --append-system-prompt "...code-factory-cli behavior..." \
   --resume <session-id>
 ```
 

@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 
+import { normalizeRepositoryKey } from './repository-key.js';
 import { postMigrationSchemaStatements, schemaStatements } from './schema.js';
 import {
   SEARCH_EMBEDDING_VERSION,
@@ -619,9 +620,20 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
   }
 
   upsertPullRequest(input: UpsertPullRequestRecord): PullRequest {
+    input = { ...input, repository: normalizeRepositoryKey(input.repository) };
     this.requireBundle(input.requirementId);
     this.#db.exec('BEGIN IMMEDIATE');
     try {
+      // Normalize a legacy mixed-case key in place, retaining its ID and references.
+      const matches = this.#db.prepare('SELECT id FROM pull_requests WHERE lower(repository) = ? AND number = ?')
+        .all(input.repository, input.number);
+      if (matches.length > 1) {
+        throw new StoreConflictError(`Multiple tracked PRs match ${input.repository}#${input.number}; resolve existing duplicates before updating`);
+      }
+      if (matches[0]) {
+        this.#db.prepare('UPDATE pull_requests SET repository = ? WHERE id = ?')
+          .run(input.repository, matches[0].id!);
+      }
       this.#db.prepare(`INSERT INTO pull_requests
         (id, requirement_id, repository, number, url, title, base_branch, head_branch, head_sha, status, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

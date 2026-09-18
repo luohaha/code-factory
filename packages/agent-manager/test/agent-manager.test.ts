@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 
 import type { AgentTrigger, AgentTriggerContext, AgentTriggerMessage } from '../src/agent-trigger.ts';
 import { AgentManager } from '../src/agent-manager.ts';
@@ -681,29 +682,19 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
     const firstExecution = manager.runRequirement(first.id);
     assert.equal(runner.requests[0]?.workspaceRoot, manager.workspaceRoot);
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('Agent Manager owns draft/open/closed/merged lifecycle synchronization')));
+      value.includes('The GitHub reconciler owns lifecycle')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('Reuse a worktree dedicated to this requirement')));
+      value.includes('reuse or create a Requirement-specific worktree')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('Do not move, discard, or overwrite pre-existing changes')));
-    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('code-factory-cli pr register')));
-    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('code-factory-cli requirement propose')));
-    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('code-factory-cli requirement related')));
-    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('code-factory-cli requirement message')));
-    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('code-factory-cli timer register')));
-    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('For every long-running process or task you start')));
-    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes("use the agent provider's normal wait, task-output, or monitor mechanism")));
-    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('only when the task is guaranteed to continue independently after the Run ends')));
-    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('code-factory-cli timer show')));
+      value.includes('Preserve pre-existing changes')));
+    for (const capability of [
+      'register PRs', 'propose separate TODO follow-ups', 'inspect direct parent/child requirements',
+      'message their RD Agents', 'manage wake-up timers', 'code-factory-cli --help',
+      'Track started tasks to completion', 'provider wait/monitor tools',
+      'only for work guaranteed to continue independently afterward', 'cancel unneeded recurring timers',
+    ]) {
+      assert.ok(runner.requests[0]?.invocation.args.some((value) => value.includes(capability)));
+    }
     assert.ok(runner.requests[0]?.invocation.args.every((value) =>
       !value.includes('/agent/pull-requests') && !value.includes('/agent/requirements')));
     assert.ok(runner.requests[0]?.invocation.args.every((value) =>
@@ -743,6 +734,10 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
     assert.ok(runner.requests[2]?.invocation.args.includes('gpt-5.6'));
     assert.ok(runner.requests[2]?.invocation.args.includes('model_reasoning_effort="max"'));
     assert.match(runner.requests[2]?.invocation.input ?? '', /add another test/);
+    assert.match(runner.requests[2]?.invocation.input ?? '', /Title: First/);
+    assert.match(runner.requests[2]?.invocation.input ?? '', /Description:\nFirst task/);
+    assert.ok(runner.requests[2]?.invocation.args.some((value) => value.includes('check worktree and PR state before repeating actions')));
+    assert.ok(runner.requests[1]?.invocation.args.some((value) => value.includes('humans confirm completion')));
     assert.doesNotMatch(runner.requests[2]?.invocation.input ?? '', /Implementation is ready/);
     runner.resolvers[2]?.({
       status: 'succeeded',
@@ -1378,5 +1373,50 @@ test('scheduled PR triggers can be stopped independently while sharing one polle
     await new Promise<void>((resolve) => setImmediate(resolve));
   } finally {
     manager.close();
+  }
+});
+
+test('mixed-case PR registration preserves identity, lifecycle, and Requirement ownership', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-pr-owner-'));
+  const databasePath = join(directory, 'store.sqlite');
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(databasePath), logger: silentLogger,
+  });
+  try {
+    const owner = manager.createRequirement({ title: 'Owner', description: 'Task', provider: 'codex' });
+    const other = manager.createRequirement({ title: 'Other', description: 'Task', provider: 'codex' });
+    const initial = manager.registerAgentPullRequest({
+      requirementId: owner.id, repository: 'Acme/Widgets', number: 184,
+      url: 'https://github.com/Acme/Widgets/pull/184', title: 'Feature',
+      baseBranch: 'main', headBranch: 'feature', headSha: 'abc123', status: 'open',
+    });
+    assert.equal(initial.repository, 'acme/widgets');
+    const legacy = new DatabaseSync(databasePath);
+    try {
+      legacy.prepare('UPDATE pull_requests SET repository = ? WHERE id = ?').run('Acme/Widgets', initial.id);
+    } finally {
+      legacy.close();
+    }
+    assert.throws(() => manager.registerAgentPullRequest({
+      ...initial, requirementId: other.id, repository: 'ACME/widgets',
+    }), /already belongs to requirement/);
+    const updated = manager.registerAgentPullRequest({
+      ...initial, repository: 'ACME/widgets', headSha: 'def456', status: 'merged',
+    });
+    assert.equal(updated.id, initial.id);
+    assert.equal(updated.status, 'open');
+    assert.equal(updated.headSha, 'def456');
+    assert.throws(() => manager.registerAgentPullRequest({
+      ...updated, requirementId: other.id, repository: 'acme/WIDGETS',
+    }), /already belongs to requirement/);
+    assert.equal(manager.listPullRequests().length, 1);
+    assert.equal(manager.listPullRequests()[0]?.requirementId, owner.id);
+    const reconciled = manager.trackPullRequest({ ...updated, repository: 'ACME/WIDGETS', status: 'merged' });
+    assert.equal(reconciled.id, initial.id);
+    assert.equal(reconciled.status, 'merged');
+    assert.equal(manager.listEvents().filter((event) => event.type === 'pull_request.created').length, 1);
+  } finally {
+    manager.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 });

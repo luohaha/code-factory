@@ -202,6 +202,7 @@ export interface AgentManagerStore {
   listAgentTimers(requirementId?: string): AgentTimer[];
   completeAgentTimerOccurrence(input: CompleteAgentTimerOccurrenceRecord): AgentTimer | null;
   cancelAgentTimer(id: string, now: string): AgentTimer;
+  /** Lowercase repository keys; preserve existing PR identity across case variants. */
   upsertPullRequest(input: UpsertPullRequestRecord): PullRequest;
   getPullRequest(id: string): PullRequest | null;
   listPullRequests(requirementId?: string): PullRequest[];

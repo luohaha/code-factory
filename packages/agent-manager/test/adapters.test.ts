@@ -143,24 +143,26 @@ test('Claude Code normalizes tool use and tool results into correlated trace eve
   assert.equal(result?.traces?.[0]?.detail, 'clean');
 });
 
-test('RD adapters inject manager guidance as developer or appended system instructions', () => {
-  const codex = new CodexAdapter().buildRdInvocation({
-    prompt: 'implement it',
-    nativeSessionId: null,
-    developerInstructions: 'Track PRs through Code Factory.',
-  });
-  assert.ok(codex.args.includes('-c'));
-  assert.ok(codex.args.some((value) => value.includes('developer_instructions=') && value.includes('Track PRs')));
+for (const nativeSessionId of [null, 'existing-session']) {
+  test(`RD adapters inject manager guidance for ${nativeSessionId ? 'resumed' : 'new'} sessions`, () => {
+    const codex = new CodexAdapter().buildRdInvocation({
+      prompt: 'implement it',
+      nativeSessionId,
+      developerInstructions: 'Track PRs through Code Factory.',
+    });
+    assert.ok(codex.args.includes('-c'));
+    assert.ok(codex.args.some((value) => value.includes('developer_instructions=') && value.includes('Track PRs')));
 
-  const claude = new ClaudeCodeAdapter().buildRdInvocation({
-    prompt: 'implement it',
-    nativeSessionId: null,
-    developerInstructions: 'Track PRs through Code Factory.',
+    const claude = new ClaudeCodeAdapter().buildRdInvocation({
+      prompt: 'implement it',
+      nativeSessionId,
+      developerInstructions: 'Track PRs through Code Factory.',
+    });
+    const flag = claude.args.indexOf('--append-system-prompt');
+    assert.ok(flag >= 0);
+    assert.equal(claude.args[flag + 1], 'Track PRs through Code Factory.');
   });
-  const flag = claude.args.indexOf('--append-system-prompt');
-  assert.ok(flag >= 0);
-  assert.equal(claude.args[flag + 1], 'Track PRs through Code Factory.');
-});
+}
 
 test('adapters pass explicit model and reasoning effort to both RD and Reviewer CLIs', () => {
   const codex = new CodexAdapter();
