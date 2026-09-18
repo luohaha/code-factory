@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import type { ManagerEventDto } from './agent-manager-client.ts';
 import {
+  applyRequirementScopedUpdate,
   mergeRefreshTargets,
   mergeVersionedSnapshot,
   refreshTargetsForManagerEvent,
@@ -140,6 +141,30 @@ void test('rejects cross-Requirement rows from a targeted Run refresh', () => {
   );
 });
 
+void test('does not apply an in-flight scoped response after its Requirement is removed', () => {
+  const current = [{ id: 'requirement-2' }];
+  const removedRequirementIds = new Set(['requirement-1']);
+
+  assert.equal(
+    applyRequirementScopedUpdate(
+      current,
+      'requirement-1',
+      removedRequirementIds,
+      (items) => [...items, { id: 'requirement-1' }],
+    ),
+    current,
+  );
+  assert.deepEqual(
+    applyRequirementScopedUpdate(
+      current,
+      'requirement-2',
+      removedRequirementIds,
+      (items) => [...items, { id: 'requirement-3' }],
+    ),
+    [{ id: 'requirement-2' }, { id: 'requirement-3' }],
+  );
+});
+
 void test('routes legacy SSE payloads to precise resource refreshes', () => {
   assert.deepEqual(refreshTargetsForManagerEvent(managerEvent('message.created')), [
     { scope: 'messages', requirementId: 'requirement-1' },
@@ -158,7 +183,11 @@ void test('routes legacy SSE payloads to precise resource refreshes', () => {
     'review_request.started',
     { pullRequestId: 'pull-request-1' },
   )), [
-    { scope: 'review_requests', pullRequestId: 'pull-request-1' },
+    {
+      scope: 'review_requests',
+      pullRequestId: 'pull-request-1',
+      requirementId: 'requirement-1',
+    },
     { scope: 'requirement', requirementId: 'requirement-1', includeRuns: true },
   ]);
 });

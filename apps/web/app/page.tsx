@@ -110,9 +110,11 @@ import {
   countAddedMessages,
   isAwayFromConversationBottom,
   isAwayFromConversationTop,
-  upsertConversationMessage,
+  mergeConversationSnapshot,
+  mergeSelectedConversationMessage,
 } from '@/lib/conversation-scroll';
 import {
+  applyRequirementScopedUpdate,
   managerEventInvalidatesSearch,
   mergeVersionedSnapshot,
   mergeRefreshTargets,
@@ -1947,6 +1949,25 @@ function Dashboard() {
     setFilterReferenceTime(syncedAt.getTime());
   }, []);
 
+  const removeRequirementState = useCallback((requirementIds: readonly string[]) => {
+    if (requirementIds.length === 0) return;
+    const removed = new Set(requirementIds);
+    for (const requirementId of requirementIds) removedRequirementIdsRef.current.add(requirementId);
+    setRequirements((current) => current.filter((item) => !removed.has(item.id)));
+    setRuns((current) => current.filter((run) => !removed.has(run.requirementId)));
+    setPullRequests((current) => current.filter((pullRequest) => !removed.has(pullRequest.requirementId)));
+    setAgentTimers((current) => current.filter((timer) => !removed.has(timer.requirementId)));
+    setConversation((current) => current.requirementId && removed.has(current.requirementId)
+      ? { requirementId: null, items: [] }
+      : current);
+    setInterruptingRequirementIds((current) => {
+      const next = new Set(current);
+      for (const requirementId of requirementIds) next.delete(requirementId);
+      return next;
+    });
+    if (selectedIdRef.current && removed.has(selectedIdRef.current)) setSelectedId(null);
+  }, []);
+
   const reload = useCallback(async (showLoading = false) => {
     const eventRevision = eventRevisionRef.current;
     if (showLoading) setLoading(true);
@@ -1967,26 +1988,43 @@ function Dashboard() {
       const receivedEventsDuringRequest = eventRevisionRef.current !== eventRevision;
       const removedRequirementIds = removedRequirementIdsRef.current;
       setRequirements((current) => {
-        const snapshot = nextRequirements.filter((item) => !removedRequirementIds.has(item.id));
+        const snapshot = nextRequirements.filter(
+          (item) => !removedRequirementIdsRef.current.has(item.id),
+        );
         return receivedEventsDuringRequest
           ? mergeVersionedSnapshot(snapshot, current, upsertRequirement)
           : snapshot;
       });
-      setRuns((current) => receivedEventsDuringRequest
-        ? mergeVersionedSnapshot(nextRuns, current, upsertRun)
-          .filter((run) => !removedRequirementIds.has(run.requirementId))
-        : nextRuns);
-      setPullRequests((current) => receivedEventsDuringRequest
-        ? mergeVersionedSnapshot(nextPullRequests, current, upsertPullRequest)
-          .filter((pullRequest) => !removedRequirementIds.has(pullRequest.requirementId))
-        : nextPullRequests);
+      setRuns((current) => {
+        const snapshot = nextRuns.filter(
+          (run) => !removedRequirementIdsRef.current.has(run.requirementId),
+        );
+        return receivedEventsDuringRequest
+          ? mergeVersionedSnapshot(snapshot, current, upsertRun)
+            .filter((run) => !removedRequirementIds.has(run.requirementId))
+          : snapshot;
+      });
+      setPullRequests((current) => {
+        const snapshot = nextPullRequests.filter(
+          (pullRequest) => !removedRequirementIdsRef.current.has(pullRequest.requirementId),
+        );
+        return receivedEventsDuringRequest
+          ? mergeVersionedSnapshot(snapshot, current, upsertPullRequest)
+            .filter((pullRequest) => !removedRequirementIds.has(pullRequest.requirementId))
+          : snapshot;
+      });
       setReviewRequests((current) => receivedEventsDuringRequest
         ? mergeVersionedSnapshot(nextReviewRequests, current, upsertReviewRequest)
         : nextReviewRequests);
-      setAgentTimers((current) => receivedEventsDuringRequest
-        ? mergeVersionedSnapshot(nextAgentTimers, current, upsertAgentTimer)
-          .filter((agentTimer) => !removedRequirementIds.has(agentTimer.requirementId))
-        : nextAgentTimers);
+      setAgentTimers((current) => {
+        const snapshot = nextAgentTimers.filter(
+          (agentTimer) => !removedRequirementIdsRef.current.has(agentTimer.requirementId),
+        );
+        return receivedEventsDuringRequest
+          ? mergeVersionedSnapshot(snapshot, current, upsertAgentTimer)
+            .filter((agentTimer) => !removedRequirementIds.has(agentTimer.requirementId))
+          : snapshot;
+      });
       setConnection('online');
       setError(null);
       markSynced();
@@ -2009,92 +2047,136 @@ function Dashboard() {
         switch (target.scope) {
           case 'workspace':
             return;
-          case 'requirements':
-            setRequirements(await client.listRequirements());
+          case 'requirements': {
+            const items = await client.listRequirements();
+            setRequirements(() => items.filter(
+              (requirement) => !removedRequirementIdsRef.current.has(requirement.id),
+            ));
             return;
+          }
           case 'requirement': {
             try {
               const [requirement, requirementRuns] = await Promise.all([
                 client.getRequirement(target.requirementId),
                 target.includeRuns ? client.listRuns(target.requirementId) : Promise.resolve(null),
               ]);
-              setRequirements((current) => {
-                const existing = current.find((item) => item.id === target.requirementId);
-                const accepted = existing && eventRevisionRef.current !== refreshRevision
-                  ? upsertRequirement([requirement], existing)[0] ?? requirement
-                  : requirement;
-                return upsertRequirement(current, accepted);
-              });
+              setRequirements((current) => applyRequirementScopedUpdate(
+                current,
+                target.requirementId,
+                removedRequirementIdsRef.current,
+                (acceptedCurrent) => {
+                  const existing = acceptedCurrent.find((item) => item.id === target.requirementId);
+                  const accepted = existing && eventRevisionRef.current !== refreshRevision
+                    ? upsertRequirement([requirement], existing)[0] ?? requirement
+                    : requirement;
+                  return upsertRequirement(acceptedCurrent, accepted);
+                },
+              ));
               if (requirementRuns) {
-                setRuns((current) => {
-                  const accepted = eventRevisionRef.current !== refreshRevision
-                    ? current.filter((run) => run.requirementId === target.requirementId)
-                      .reduce((merged, run) => upsertRun(merged, run), requirementRuns)
-                    : requirementRuns;
-                  return replaceRequirementRuns(current, target.requirementId, accepted);
-                });
+                setRuns((current) => applyRequirementScopedUpdate(
+                  current,
+                  target.requirementId,
+                  removedRequirementIdsRef.current,
+                  (acceptedCurrent) => {
+                    const accepted = eventRevisionRef.current !== refreshRevision
+                      ? acceptedCurrent.filter((run) => run.requirementId === target.requirementId)
+                        .reduce((merged, run) => upsertRun(merged, run), requirementRuns)
+                      : requirementRuns;
+                    return replaceRequirementRuns(acceptedCurrent, target.requirementId, accepted);
+                  },
+                ));
               }
             } catch (caught) {
               if (!(caught instanceof AgentManagerApiError) || caught.status !== 404) throw caught;
-              setRequirements((current) => current.filter((item) => item.id !== target.requirementId));
-              setRuns((current) => current.filter((run) => run.requirementId !== target.requirementId));
+              removeRequirementState([target.requirementId]);
             }
             return;
           }
           case 'messages':
-            if (selectedIdRef.current === target.requirementId) {
-              const items = (await client.listMessages(target.requirementId))
-                .filter((message) => message.requirementId === target.requirementId);
+            if (selectedIdRef.current === target.requirementId
+              && !removedRequirementIdsRef.current.has(target.requirementId)) {
+              const items = await client.listMessages(target.requirementId);
               if (selectedIdRef.current === target.requirementId) {
-                setConversation((current) => ({
-                  requirementId: target.requirementId,
-                  items: current.requirementId === target.requirementId
-                    ? current.items.reduce(
-                        (merged, message) => upsertConversationMessage(merged, message),
-                        items,
-                      )
-                    : items,
-                }));
+                setConversation((current) => applyRequirementScopedUpdate(
+                  current,
+                  target.requirementId,
+                  removedRequirementIdsRef.current,
+                  (acceptedCurrent) => mergeConversationSnapshot(
+                    acceptedCurrent,
+                    target.requirementId,
+                    items,
+                  ),
+                ));
               }
             }
             return;
           case 'pull_requests': {
             const items = await client.listPullRequests(target.requirementId);
-            setPullRequests((current) => {
-              const accepted = eventRevisionRef.current !== refreshRevision
-                ? current.filter((pullRequest) => pullRequest.requirementId === target.requirementId)
-                  .reduce((merged, pullRequest) => upsertPullRequest(merged, pullRequest), items)
-                : items;
-              return replaceRequirementPullRequests(current, target.requirementId, accepted);
-            });
+            setPullRequests((current) => applyRequirementScopedUpdate(
+              current,
+              target.requirementId,
+              removedRequirementIdsRef.current,
+              (acceptedCurrent) => {
+                const accepted = eventRevisionRef.current !== refreshRevision
+                  ? acceptedCurrent.filter((pullRequest) => pullRequest.requirementId === target.requirementId)
+                    .reduce((merged, pullRequest) => upsertPullRequest(merged, pullRequest), items)
+                  : items;
+                return replaceRequirementPullRequests(acceptedCurrent, target.requirementId, accepted);
+              },
+            ));
             return;
           }
           case 'review_requests': {
             const items = await client.listReviewRequests(target.pullRequestId);
             if (target.pullRequestId) {
               setReviewRequests((current) => {
-                const accepted = eventRevisionRef.current !== refreshRevision
-                  ? current.filter((review) => review.pullRequestId === target.pullRequestId)
-                    .reduce((merged, review) => upsertReviewRequest(merged, review), items)
-                  : items;
-                return replacePullRequestReviews(current, target.pullRequestId!, accepted);
+                const update = (acceptedCurrent: ReviewRequestDto[]) => {
+                  const accepted = eventRevisionRef.current !== refreshRevision
+                    ? acceptedCurrent.filter((review) => review.pullRequestId === target.pullRequestId)
+                      .reduce((merged, review) => upsertReviewRequest(merged, review), items)
+                    : items;
+                  return replacePullRequestReviews(acceptedCurrent, target.pullRequestId!, accepted);
+                };
+                return target.requirementId
+                  ? applyRequirementScopedUpdate(
+                      current,
+                      target.requirementId,
+                      removedRequirementIdsRef.current,
+                      update,
+                    )
+                  : update(current);
               });
             } else {
-              setReviewRequests((current) => eventRevisionRef.current !== refreshRevision
-                ? current.reduce((merged, review) => upsertReviewRequest(merged, review), items)
-                : items);
+              setReviewRequests((current) => {
+                const update = (acceptedCurrent: ReviewRequestDto[]) => eventRevisionRef.current !== refreshRevision
+                  ? acceptedCurrent.reduce((merged, review) => upsertReviewRequest(merged, review), items)
+                  : items;
+                return target.requirementId
+                  ? applyRequirementScopedUpdate(
+                      current,
+                      target.requirementId,
+                      removedRequirementIdsRef.current,
+                      update,
+                    )
+                  : update(current);
+              });
             }
             return;
           }
           case 'timers': {
             const items = await client.listAgentTimers(target.requirementId);
-            setAgentTimers((current) => {
-              const accepted = eventRevisionRef.current !== refreshRevision
-                ? current.filter((timer) => timer.requirementId === target.requirementId)
-                  .reduce((merged, timer) => upsertAgentTimer(merged, timer), items)
-                : items;
-              return replaceRequirementTimers(current, target.requirementId, accepted);
-            });
+            setAgentTimers((current) => applyRequirementScopedUpdate(
+              current,
+              target.requirementId,
+              removedRequirementIdsRef.current,
+              (acceptedCurrent) => {
+                const accepted = eventRevisionRef.current !== refreshRevision
+                  ? acceptedCurrent.filter((timer) => timer.requirementId === target.requirementId)
+                    .reduce((merged, timer) => upsertAgentTimer(merged, timer), items)
+                  : items;
+                return replaceRequirementTimers(acceptedCurrent, target.requirementId, accepted);
+              },
+            ));
             return;
           }
           case 'configuration':
@@ -2111,7 +2193,7 @@ function Dashboard() {
       setConnection('offline');
       setError(caught instanceof Error ? caught.message : t('Unable to connect to Agent Manager'));
     }
-  }, [client, markSynced, reload, t]);
+  }, [client, markSynced, reload, removeRequirementState, t]);
 
   const enqueueRefreshTargets = useCallback((targets: readonly DashboardRefreshTarget[]) => {
     if (targets.length === 0) return;
@@ -2125,25 +2207,6 @@ function Dashboard() {
     }, 50);
   }, [refreshTargets]);
 
-  const removeRequirementState = useCallback((requirementIds: readonly string[]) => {
-    if (requirementIds.length === 0) return;
-    const removed = new Set(requirementIds);
-    for (const requirementId of requirementIds) removedRequirementIdsRef.current.add(requirementId);
-    setRequirements((current) => current.filter((item) => !removed.has(item.id)));
-    setRuns((current) => current.filter((run) => !removed.has(run.requirementId)));
-    setPullRequests((current) => current.filter((pullRequest) => !removed.has(pullRequest.requirementId)));
-    setAgentTimers((current) => current.filter((timer) => !removed.has(timer.requirementId)));
-    setConversation((current) => current.requirementId && removed.has(current.requirementId)
-      ? { requirementId: null, items: [] }
-      : current);
-    setInterruptingRequirementIds((current) => {
-      const next = new Set(current);
-      for (const requirementId of requirementIds) next.delete(requirementId);
-      return next;
-    });
-    if (selectedIdRef.current && removed.has(selectedIdRef.current)) setSelectedId(null);
-  }, []);
-
   const applyManagerEvent = useCallback((event: ManagerEventDto) => {
     eventRevisionRef.current += 1;
     const payload = event.payload;
@@ -2154,42 +2217,52 @@ function Dashboard() {
     } else if (event.type === 'requirements.purged' && Array.isArray(payload.requirementIds)) {
       removeRequirementState(payload.requirementIds);
     } else if (payload.requirement
-      && (!event.requirementId || payload.requirement.id === event.requirementId)) {
-      removedRequirementIdsRef.current.delete(payload.requirement.id);
+      && (!event.requirementId || payload.requirement.id === event.requirementId)
+      && !removedRequirementIdsRef.current.has(payload.requirement.id)) {
       setRequirements((current) => upsertRequirement(current, payload.requirement!));
     }
 
     if (!removesRequirement
       && payload.run
-      && (!event.requirementId || payload.run.requirementId === event.requirementId)) {
+      && (!event.requirementId || payload.run.requirementId === event.requirementId)
+      && !removedRequirementIdsRef.current.has(payload.run.requirementId)) {
       setRuns((current) => upsertRun(current, payload.run!));
     }
     if (!removesRequirement
       && payload.pullRequest
-      && (!event.requirementId || payload.pullRequest.requirementId === event.requirementId)) {
+      && (!event.requirementId || payload.pullRequest.requirementId === event.requirementId)
+      && !removedRequirementIdsRef.current.has(payload.pullRequest.requirementId)) {
       setPullRequests((current) => upsertPullRequest(current, payload.pullRequest!));
     }
     if (!removesRequirement
       && payload.reviewRequest
       && payload.pullRequest?.id === payload.reviewRequest.pullRequestId
-      && (!event.requirementId || payload.pullRequest.requirementId === event.requirementId)) {
+      && (!event.requirementId || payload.pullRequest.requirementId === event.requirementId)
+      && !removedRequirementIdsRef.current.has(payload.pullRequest.requirementId)) {
       setReviewRequests((current) => upsertReviewRequest(current, payload.reviewRequest!));
     }
     if (!removesRequirement
       && payload.timer
-      && (!event.requirementId || payload.timer.requirementId === event.requirementId)) {
+      && (!event.requirementId || payload.timer.requirementId === event.requirementId)
+      && !removedRequirementIdsRef.current.has(payload.timer.requirementId)) {
       setAgentTimers((current) => upsertAgentTimer(current, payload.timer!));
     }
-    if (!removesRequirement && payload.timers && event.requirementId) {
+    if (!removesRequirement
+      && payload.timers
+      && event.requirementId
+      && !removedRequirementIdsRef.current.has(event.requirementId)) {
       setAgentTimers((current) => replaceRequirementTimers(current, event.requirementId!, payload.timers!));
     }
     if (!removesRequirement
       && payload.message
       && payload.message.requirementId === event.requirementId
-      && event.requirementId === selectedIdRef.current) {
-      setConversation((current) => current.requirementId === event.requirementId
-        ? { ...current, items: upsertConversationMessage(current.items, payload.message!) }
-        : current);
+      && event.requirementId === selectedIdRef.current
+      && !removedRequirementIdsRef.current.has(event.requirementId)) {
+      setConversation((current) => mergeSelectedConversationMessage(
+        current,
+        selectedIdRef.current,
+        payload.message!,
+      ));
     }
     if (payload.configuration) setConfiguration(payload.configuration);
     if (payload.modelCatalog) setModelCatalog(payload.modelCatalog);
@@ -2266,17 +2339,17 @@ function Dashboard() {
       setMessageLoading(true);
       client.listMessages(selectedId)
         .then((received) => {
-          const items = received.filter((message) => message.requirementId === selectedId);
           if (!cancelled) {
-            setConversation((current) => ({
-              requirementId: selectedId,
-              items: current.requirementId === selectedId
-                ? current.items.reduce(
-                    (merged, message) => upsertConversationMessage(merged, message),
-                    items,
-                  )
-                : items,
-            }));
+            setConversation((current) => applyRequirementScopedUpdate(
+              current,
+              selectedId,
+              removedRequirementIdsRef.current,
+              (acceptedCurrent) => mergeConversationSnapshot(
+                acceptedCurrent,
+                selectedId,
+                received,
+              ),
+            ));
           }
         })
         .catch((caught: unknown) => { if (!cancelled) setError(caught instanceof Error ? caught.message : t('Failed to load messages')); })
@@ -2405,15 +2478,32 @@ function Dashboard() {
 
   function applyRequirementAction(result: RequirementActionAcceptedDto): void {
     if (result.requirement.id !== result.requirementId) return;
-    setRequirements((current) => upsertRequirement(current, result.requirement));
+    setRequirements((current) => applyRequirementScopedUpdate(
+      current,
+      result.requirementId,
+      removedRequirementIdsRef.current,
+      (acceptedCurrent) => upsertRequirement(acceptedCurrent, result.requirement),
+    ));
     if (result.run?.requirementId === result.requirementId) {
-      setRuns((current) => upsertRun(current, result.run!));
+      setRuns((current) => applyRequirementScopedUpdate(
+        current,
+        result.requirementId,
+        removedRequirementIdsRef.current,
+        (acceptedCurrent) => upsertRun(acceptedCurrent, result.run!),
+      ));
     }
     if (result.message?.requirementId === result.requirementId
       && selectedIdRef.current === result.requirementId) {
-      setConversation((current) => current.requirementId === result.requirementId
-        ? { ...current, items: upsertConversationMessage(current.items, result.message!) }
-        : current);
+      setConversation((current) => applyRequirementScopedUpdate(
+        current,
+        result.requirementId,
+        removedRequirementIdsRef.current,
+        (acceptedCurrent) => mergeSelectedConversationMessage(
+          acceptedCurrent,
+          selectedIdRef.current,
+          result.message!,
+        ),
+      ));
       setSearchRevision((value) => value + 1);
     }
   }
@@ -2448,12 +2538,26 @@ function Dashboard() {
       const reviewRequest = result.reviewRequest;
       const run = result.run;
       if (reviewRequest?.pullRequestId === pullRequestId) {
-        setReviewRequests((current) => upsertReviewRequest(current, reviewRequest));
+        setReviewRequests((current) => owningRequirementId
+          ? applyRequirementScopedUpdate(
+              current,
+              owningRequirementId,
+              removedRequirementIdsRef.current,
+              (acceptedCurrent) => upsertReviewRequest(acceptedCurrent, reviewRequest),
+            )
+          : upsertReviewRequest(current, reviewRequest));
       }
       if (run
         && run.id === reviewRequest?.runId
         && (!owningRequirementId || run.requirementId === owningRequirementId)) {
-        setRuns((current) => upsertRun(current, run));
+        setRuns((current) => owningRequirementId
+          ? applyRequirementScopedUpdate(
+              current,
+              owningRequirementId,
+              removedRequirementIdsRef.current,
+              (acceptedCurrent) => upsertRun(acceptedCurrent, run),
+            )
+          : upsertRun(current, run));
       }
       markSynced();
     } catch (caught) {
@@ -2471,7 +2575,12 @@ function Dashboard() {
     await runAction(
       selectedId,
       () => client.createAgentTimer(selectedId, input),
-      (timer) => setAgentTimers((current) => upsertAgentTimer(current, timer)),
+      (timer) => setAgentTimers((current) => applyRequirementScopedUpdate(
+        current,
+        timer.requirementId,
+        removedRequirementIdsRef.current,
+        (acceptedCurrent) => upsertAgentTimer(acceptedCurrent, timer),
+      )),
     );
   }
 
@@ -2480,7 +2589,12 @@ function Dashboard() {
     await runAction(
       selectedId,
       () => client.cancelAgentTimer(selectedId, timerId),
-      (timer) => setAgentTimers((current) => upsertAgentTimer(current, timer)),
+      (timer) => setAgentTimers((current) => applyRequirementScopedUpdate(
+        current,
+        timer.requirementId,
+        removedRequirementIdsRef.current,
+        (acceptedCurrent) => upsertAgentTimer(acceptedCurrent, timer),
+      )),
     );
   }
 
@@ -2499,11 +2613,23 @@ function Dashboard() {
     try {
       const attachmentIds = await uploadMessageAttachments(requirementId, attachments);
       const result = await client.replyToRequirement(requirementId, message, attachmentIds);
-      setRequirements((current) => upsertRequirement(current, result.requirement));
+      setRequirements((current) => applyRequirementScopedUpdate(
+        current,
+        requirementId,
+        removedRequirementIdsRef.current,
+        (acceptedCurrent) => upsertRequirement(acceptedCurrent, result.requirement),
+      ));
       if (selectedIdRef.current === requirementId) {
-        setConversation((current) => current.requirementId === requirementId
-          ? { ...current, items: upsertConversationMessage(current.items, result.message) }
-          : current);
+        setConversation((current) => applyRequirementScopedUpdate(
+          current,
+          requirementId,
+          removedRequirementIdsRef.current,
+          (acceptedCurrent) => mergeSelectedConversationMessage(
+            acceptedCurrent,
+            selectedIdRef.current,
+            result.message,
+          ),
+        ));
       }
       setSearchRevision((value) => value + 1);
       markSynced();
@@ -2742,7 +2868,12 @@ function Dashboard() {
                         onConfirm={() => void runAction(
                           item.id,
                           () => client.confirmRequirement(item.id),
-                          (requirement) => setRequirements((current) => upsertRequirement(current, requirement)),
+                          (requirement) => setRequirements((current) => applyRequirementScopedUpdate(
+                            current,
+                            requirement.id,
+                            removedRequirementIdsRef.current,
+                            (acceptedCurrent) => upsertRequirement(acceptedCurrent, requirement),
+                          )),
                         ).catch(() => undefined)}
                       />
                     ))}
@@ -2888,7 +3019,12 @@ function Dashboard() {
         onConfirm={() => selectedRequirement ? runAction(
           selectedRequirement.id,
           () => client.confirmRequirement(selectedRequirement.id),
-          (requirement) => setRequirements((current) => upsertRequirement(current, requirement)),
+          (requirement) => setRequirements((current) => applyRequirementScopedUpdate(
+            current,
+            requirement.id,
+            removedRequirementIdsRef.current,
+            (acceptedCurrent) => upsertRequirement(acceptedCurrent, requirement),
+          )),
         ).then(() => undefined) : Promise.resolve()}
         onReview={requestReview}
         onCreateAgentTimer={createAgentTimer}

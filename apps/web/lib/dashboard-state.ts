@@ -26,6 +26,15 @@ export function mergeVersionedSnapshot<T>(
   return current.reduce((merged, item) => upsert(merged, item), [...snapshot]);
 }
 
+export function applyRequirementScopedUpdate<T>(
+  current: T,
+  requirementId: string,
+  removedRequirementIds: ReadonlySet<string>,
+  update: (value: T) => T,
+): T {
+  return removedRequirementIds.has(requirementId) ? current : update(current);
+}
+
 export function upsertRequirement<
   T extends { id: string; updatedAt: string; session?: { updatedAt: string } },
 >(requirements: readonly T[], requirement: T): T[] {
@@ -132,7 +141,7 @@ export type DashboardRefreshTarget =
   | { scope: 'requirement'; requirementId: string; includeRuns: boolean }
   | { scope: 'messages'; requirementId: string }
   | { scope: 'pull_requests'; requirementId: string }
-  | { scope: 'review_requests'; pullRequestId?: string }
+  | { scope: 'review_requests'; pullRequestId?: string; requirementId?: string }
   | { scope: 'timers'; requirementId: string }
   | { scope: 'configuration' }
   | { scope: 'models' };
@@ -188,7 +197,11 @@ export function refreshTargetsForManagerEvent(event: ManagerEventDto): Dashboard
       const pullRequestId = stringPayload(event.payload, 'pullRequestId');
       return [
         ...(!hasReviewRequest
-          ? [{ scope: 'review_requests' as const, ...(pullRequestId ? { pullRequestId } : {}) }]
+          ? [{
+              scope: 'review_requests' as const,
+              ...(pullRequestId ? { pullRequestId } : {}),
+              ...(requirementId ? { requirementId } : {}),
+            }]
           : []),
         ...(!hasRun && requirementId
           ? [{ scope: 'requirement' as const, requirementId, includeRuns: true }]
@@ -211,7 +224,10 @@ export function refreshTargetsForManagerEvent(event: ManagerEventDto): Dashboard
           ? [{ scope: 'requirement' as const, requirementId, includeRuns: true }]
           : []),
         ...(event.payload.role === 'reviewer' && !hasReviewRequest
-          ? [{ scope: 'review_requests' as const }]
+          ? [{
+              scope: 'review_requests' as const,
+              ...(requirementId ? { requirementId } : {}),
+            }]
           : []),
       ];
     case 'manager.reconciled':
