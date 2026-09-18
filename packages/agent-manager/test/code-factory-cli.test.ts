@@ -174,27 +174,31 @@ test('code-factory-cli reads complete, head, tail, and paginated Requirement con
   const errors: string[] = [];
   const runtime = testRuntime(requests, output, errors);
 
-  assert.equal(await runCodeFactoryCli(['requirement', 'conversation'], runtime), 0);
+  assert.equal(await runCodeFactoryCli([
+    'requirement', 'conversation', '--requirement-id', 'req_parent',
+  ], runtime), 0);
   assert.equal(await runCodeFactoryCli([
     'requirement', 'conversation', '--requirement-id', 'req_parent', '--head', '5',
   ], runtime), 0);
-  assert.equal(await runCodeFactoryCli(['requirement', 'conversation', '--tail', '7'], runtime), 0);
   assert.equal(await runCodeFactoryCli([
-    'requirement', 'conversation', '--page', '3', '--page-size', '25',
+    'requirement', 'conversation', '--requirement-id', 'req_child', '--tail', '7',
+  ], runtime), 0);
+  assert.equal(await runCodeFactoryCli([
+    'requirement', 'conversation', '--requirement-id', 'req_other', '--page', '3', '--page-size', '25',
   ], runtime), 0);
 
   assert.deepEqual(errors, []);
   assert.deepEqual(requests.map(({ url, method }) => ({ url, method })), [{
-    url: 'http://127.0.0.1:4310/api/requirements/req_cli/messages',
+    url: 'http://127.0.0.1:4310/api/requirements/req_parent/messages',
     method: 'GET',
   }, {
     url: 'http://127.0.0.1:4310/api/requirements/req_parent/messages?head=5',
     method: 'GET',
   }, {
-    url: 'http://127.0.0.1:4310/api/requirements/req_cli/messages?tail=7',
+    url: 'http://127.0.0.1:4310/api/requirements/req_child/messages?tail=7',
     method: 'GET',
   }, {
-    url: 'http://127.0.0.1:4310/api/requirements/req_cli/messages?page=3&pageSize=25',
+    url: 'http://127.0.0.1:4310/api/requirements/req_other/messages?page=3&pageSize=25',
     method: 'GET',
   }]);
 });
@@ -204,13 +208,31 @@ test('code-factory-cli rejects conflicting Requirement conversation selections',
   const output: string[] = [];
   const errors: string[] = [];
   const exitCode = await runCodeFactoryCli([
-    'requirement', 'conversation', '--head', '5', '--page', '2',
+    'requirement', 'conversation', '--requirement-id', 'req_parent', '--head', '5', '--page', '2',
   ], testRuntime(requests, output, errors));
 
   assert.equal(exitCode, 2);
   assert.deepEqual(requests, []);
   assert.match(errors.join(''), /mutually exclusive/);
   assert.match(errors.join(''), /Usage: code-factory-cli requirement conversation/);
+});
+
+test('code-factory-cli requires another Requirement for conversation reads', async () => {
+  const requests: CapturedRequest[] = [];
+  const output: string[] = [];
+  const errors: string[] = [];
+  const runtime = testRuntime(requests, output, errors);
+
+  const missingExitCode = await runCodeFactoryCli(['requirement', 'conversation'], runtime);
+  const currentExitCode = await runCodeFactoryCli([
+    'requirement', 'conversation', '--requirement-id', 'req_cli',
+  ], runtime);
+
+  assert.equal(missingExitCode, 2);
+  assert.equal(currentExitCode, 2);
+  assert.deepEqual(requests, []);
+  assert.match(errors[0] ?? '', /--requirement-id is required/);
+  assert.match(errors[1] ?? '', /--requirement-id must identify another Requirement/);
 });
 
 test('code-factory-cli registers, shows, and cancels RD wake-up timers', async () => {

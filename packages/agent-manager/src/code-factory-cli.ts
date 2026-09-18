@@ -14,7 +14,7 @@ Commands:
   pr register              Register or refresh a pull request
   requirement propose      Propose a separately tracked TODO requirement
   requirement related      Show this Requirement's direct parent and children
-  requirement conversation Read a Requirement's conversation
+  requirement conversation Read another Requirement's conversation
   requirement message      Send a message to a related Requirement's RD Agent
   timer register           Register a one-time or recurring wake-up timer
   timer show               Show timers registered for this Requirement
@@ -84,11 +84,13 @@ CODE_FACTORY_SESSION_ID.`;
 
 const REQUIREMENT_CONVERSATION_HELP = `Usage: code-factory-cli requirement conversation [options]
 
-Read a Requirement's conversation messages as JSON in ascending sequence order.
+Read another Requirement's conversation messages as JSON in ascending sequence order.
 Without a selection option, the complete conversation is returned.
 
+Required options:
+  --requirement-id ID     Another Requirement to read (current Requirement is rejected)
+
 Optional options:
-  --requirement-id ID     Requirement to read (default: current Requirement)
   --head COUNT            Return the first COUNT messages (1-200)
   --tail COUNT            Return the last COUNT messages (1-200)
   --page NUMBER           Return a one-based page (default page size: 20)
@@ -432,9 +434,19 @@ export async function runCodeFactoryCli(
         page: { type: 'string' },
         'page-size': { type: 'string' },
       });
-      const requirementId = values['requirement-id'] === undefined
-        ? required(runtime.environment[CODE_FACTORY_REQUIREMENT_ID], CODE_FACTORY_REQUIREMENT_ID, help)
-        : required(values['requirement-id'] as string | undefined, '--requirement-id', help);
+      const requirementId = required(
+        values['requirement-id'] as string | undefined,
+        '--requirement-id',
+        help,
+      );
+      const currentRequirementId = required(
+        runtime.environment[CODE_FACTORY_REQUIREMENT_ID],
+        CODE_FACTORY_REQUIREMENT_ID,
+        help,
+      );
+      if (requirementId === currentRequirementId) {
+        throw new CliUsageError('--requirement-id must identify another Requirement', help);
+      }
       const head = positiveIntegerOption(values.head as string | undefined, '--head', help, 200);
       const tail = positiveIntegerOption(values.tail as string | undefined, '--tail', help, 200);
       const page = positiveIntegerOption(values.page as string | undefined, '--page', help);

@@ -131,13 +131,13 @@ code-factory-cli requirement message --requirement-id req_... --message "Use con
 Read a Requirement conversation without loading more history than needed:
 
 ~~~bash
-code-factory-cli requirement conversation
+code-factory-cli requirement conversation --requirement-id req_...
 code-factory-cli requirement conversation --requirement-id req_... --head 20
-code-factory-cli requirement conversation --tail 20
-code-factory-cli requirement conversation --page 2 --page-size 50
+code-factory-cli requirement conversation --requirement-id req_... --tail 20
+code-factory-cli requirement conversation --requirement-id req_... --page 2 --page-size 50
 ~~~
 
-The command defaults to the injected current Requirement and may target another Requirement by ID. With no selection option it returns the complete conversation. `--head`, `--tail`, and one-based `--page` selection are mutually exclusive; bounded reads return at most 200 messages, always ordered by ascending message sequence, together with pagination metadata.
+The command requires another Requirement's ID and rejects the injected current Requirement ID, whose conversation is already available in the RD Session. With no head, tail, or page selection it returns the target's complete conversation. `--head`, `--tail`, and one-based `--page` selection are mutually exclusive; bounded reads return at most 200 messages, always ordered by ascending message sequence, together with pagination metadata.
 
 Schedule or cancel a wake-up for the current Requirement:
 
