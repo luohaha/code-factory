@@ -1111,3 +1111,53 @@ test('manager restart marks orphaned runs and sessions as failed', () => {
     store.close();
   }
 });
+
+test('PR upserts normalize keys and preserve legacy PR IDs and references', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-pr-case-'));
+  const databasePath = join(directory, 'store.sqlite');
+  const store = new SqliteAgentManagerStore(databasePath);
+  try {
+    store.createRequirement({
+      requirementId: 'req-case', sessionId: 'ses-case', title: 'Case', description: 'Task',
+      provider: 'codex', createdBy: 'human', now,
+    });
+    const input = {
+      id: 'pr-case', requirementId: 'req-case', repository: 'Acme/Widgets', number: 184,
+      url: 'https://github.com/Acme/Widgets/pull/184', title: 'Feature', baseBranch: 'main',
+      headBranch: 'feature', headSha: 'abc123', status: 'open' as const, now,
+    };
+    const initial = store.upsertPullRequest(input);
+    assert.equal(initial.repository, 'acme/widgets');
+    store.ensurePullRequestObservation(initial.id, now);
+    const legacy = new DatabaseSync(databasePath);
+    try {
+      legacy.prepare('UPDATE pull_requests SET repository = ? WHERE id = ?').run('Acme/Widgets', initial.id);
+    } finally {
+      legacy.close();
+    }
+    const updated = store.upsertPullRequest({ ...input, id: 'unused-new-id', repository: 'ACME/widgets', headSha: 'def456' });
+    assert.equal(updated.id, initial.id);
+    assert.equal(updated.repository, 'acme/widgets');
+    assert.equal(updated.createdAt, initial.createdAt);
+    assert.equal(updated.headSha, 'def456');
+    assert.equal(store.listPullRequests().length, 1);
+    const database = new DatabaseSync(databasePath);
+    try {
+      assert.equal(database.prepare('SELECT pull_request_id FROM pull_request_observations').get()?.pull_request_id, initial.id);
+      // Existing duplicates are ambiguous: normalization must fail without deleting or merging rows.
+      database.prepare(`INSERT INTO pull_requests
+        SELECT 'pr-duplicate', requirement_id, 'ACME/Widgets', number, url, title,
+          base_branch, head_branch, head_sha, status, created_at, updated_at
+        FROM pull_requests WHERE id = ?`).run(initial.id);
+      assert.throws(() => store.upsertPullRequest(input), StoreConflictError);
+      assert.equal(store.listPullRequests().length, 2);
+      assert.equal(store.getPullRequest(initial.id)?.headSha, 'def456');
+      assert.equal(store.getPullRequest('pr-duplicate')?.repository, 'ACME/Widgets');
+    } finally {
+      database.close();
+    }
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

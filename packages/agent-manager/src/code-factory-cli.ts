@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { parseArgs, promisify } from 'node:util';
 
+import { normalizeRepositoryKey } from './repository-key.js';
 import { CODE_FACTORY_VERSION } from './version.js';
 
 export const CODE_FACTORY_API_URL = 'CODE_FACTORY_API_URL';
@@ -249,7 +250,7 @@ async function parsePullRequestPayload(args: readonly string[], runtime: CodeFac
     };
     const returned = pullRequestTarget(field('url'));
     if (details.number !== target.number || returned.number !== target.number ||
-        returned.repository.toLowerCase() !== target.repository.toLowerCase()) {
+        normalizeRepositoryKey(returned.repository) !== normalizeRepositoryKey(target.repository)) {
       throw new CliRequestError('gh returned metadata for a different pull request');
     }
     const state = field('state');
@@ -257,7 +258,7 @@ async function parsePullRequestPayload(args: readonly string[], runtime: CodeFac
       throw new CliRequestError('gh returned invalid PR state');
     }
     return {
-      requirementId, repository: target.repository, number: target.number, url: field('url'),
+      requirementId, repository: normalizeRepositoryKey(returned.repository), number: target.number, url: field('url'),
       title: field('title'), baseBranch: field('baseRefName'), headBranch: field('headRefName'),
       headSha: field('headRefOid'),
       status: state === 'MERGED' ? 'merged' : state === 'CLOSED' ? 'closed' : details.isDraft ? 'draft' : 'open',

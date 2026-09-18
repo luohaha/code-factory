@@ -130,6 +130,7 @@ export interface MessageAttachment {
 export interface PullRequest {
   id: string;
   requirementId: string;
+  /** Case-insensitive GitHub repository key; normalized to lowercase on writes. */
   repository: string;
   number: number;
   url: string;
@@ -204,6 +205,7 @@ export interface CreateRequirementInput {
 
 export interface TrackPullRequestInput {
   requirementId: string;
+  /** Case-insensitive GitHub repository key; normalized to lowercase on writes. */
   repository: string;
   number: number;
   url: string;

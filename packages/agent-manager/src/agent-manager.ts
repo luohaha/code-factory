@@ -4,6 +4,7 @@ import { mkdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
 
+import { normalizeRepositoryKey } from './repository-key.js';
 import { ClaudeCodeAdapter } from './adapters/claude-code.js';
 import { CodexAdapter } from './adapters/codex.js';
 import type { AgentAdapter } from './adapters/types.js';
@@ -783,6 +784,7 @@ export class AgentManager extends EventEmitter {
   }
 
   trackPullRequest(input: TrackPullRequestInput): PullRequest {
+    input = { ...input, repository: normalizeRepositoryKey(input.repository) };
     this.requireRequirement(input.requirementId);
     if (!input.repository.trim()) throw new TypeError('repository is required');
     if (!Number.isInteger(input.number) || input.number <= 0) throw new TypeError('number must be a positive integer');
@@ -790,7 +792,7 @@ export class AgentManager extends EventEmitter {
       if (!input[field].trim()) throw new TypeError(`${field} is required`);
     }
     const previous = this.#store.listPullRequests(input.requirementId)
-      .find((item) => item.repository === input.repository && item.number === input.number);
+      .find((item) => normalizeRepositoryKey(item.repository) === input.repository && item.number === input.number);
     const now = new Date().toISOString();
     const pullRequest = this.#store.upsertPullRequest({
       id: previous?.id ?? `pr_${randomUUID()}`,
@@ -817,13 +819,16 @@ export class AgentManager extends EventEmitter {
 
   /** Registers Agent-authored PR metadata without allowing the Agent to drive GitHub lifecycle state. */
   registerAgentPullRequest(input: TrackPullRequestInput): PullRequest {
-    const existing = this.#store.listPullRequests()
-      .find((item) => item.repository === input.repository && item.number === input.number);
-    if (existing && existing.requirementId !== input.requirementId) {
+    input = { ...input, repository: normalizeRepositoryKey(input.repository) };
+    const matches = this.#store.listPullRequests()
+      .filter((item) => normalizeRepositoryKey(item.repository) === input.repository && item.number === input.number);
+    const conflicting = matches.find((item) => item.requirementId !== input.requirementId);
+    if (conflicting) {
       throw new StoreConflictError(
-        `Pull request ${input.repository}#${input.number} already belongs to requirement ${existing.requirementId}`,
+        `Pull request ${input.repository}#${input.number} already belongs to requirement ${conflicting.requirementId}`,
       );
     }
+    const existing = matches[0];
     return this.trackPullRequest(existing ? { ...input, status: existing.status } : input);
   }
 

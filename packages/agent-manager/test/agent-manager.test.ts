@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 
 import type { AgentTrigger, AgentTriggerContext, AgentTriggerMessage } from '../src/agent-trigger.ts';
 import { AgentManager } from '../src/agent-manager.ts';
@@ -1372,5 +1373,50 @@ test('scheduled PR triggers can be stopped independently while sharing one polle
     await new Promise<void>((resolve) => setImmediate(resolve));
   } finally {
     manager.close();
+  }
+});
+
+test('mixed-case PR registration preserves identity, lifecycle, and Requirement ownership', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-pr-owner-'));
+  const databasePath = join(directory, 'store.sqlite');
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(databasePath), logger: silentLogger,
+  });
+  try {
+    const owner = manager.createRequirement({ title: 'Owner', description: 'Task', provider: 'codex' });
+    const other = manager.createRequirement({ title: 'Other', description: 'Task', provider: 'codex' });
+    const initial = manager.registerAgentPullRequest({
+      requirementId: owner.id, repository: 'Acme/Widgets', number: 184,
+      url: 'https://github.com/Acme/Widgets/pull/184', title: 'Feature',
+      baseBranch: 'main', headBranch: 'feature', headSha: 'abc123', status: 'open',
+    });
+    assert.equal(initial.repository, 'acme/widgets');
+    const legacy = new DatabaseSync(databasePath);
+    try {
+      legacy.prepare('UPDATE pull_requests SET repository = ? WHERE id = ?').run('Acme/Widgets', initial.id);
+    } finally {
+      legacy.close();
+    }
+    assert.throws(() => manager.registerAgentPullRequest({
+      ...initial, requirementId: other.id, repository: 'ACME/widgets',
+    }), /already belongs to requirement/);
+    const updated = manager.registerAgentPullRequest({
+      ...initial, repository: 'ACME/widgets', headSha: 'def456', status: 'merged',
+    });
+    assert.equal(updated.id, initial.id);
+    assert.equal(updated.status, 'open');
+    assert.equal(updated.headSha, 'def456');
+    assert.throws(() => manager.registerAgentPullRequest({
+      ...updated, requirementId: other.id, repository: 'acme/WIDGETS',
+    }), /already belongs to requirement/);
+    assert.equal(manager.listPullRequests().length, 1);
+    assert.equal(manager.listPullRequests()[0]?.requirementId, owner.id);
+    const reconciled = manager.trackPullRequest({ ...updated, repository: 'ACME/WIDGETS', status: 'merged' });
+    assert.equal(reconciled.id, initial.id);
+    assert.equal(reconciled.status, 'merged');
+    assert.equal(manager.listEvents().filter((event) => event.type === 'pull_request.created').length, 1);
+  } finally {
+    manager.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 });

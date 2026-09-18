@@ -461,3 +461,20 @@ test('read failures omit ambiguous-write guidance while timer cancellation retai
     }
   }
 });
+
+test('PR URL registration stores a lowercase key from the GitHub response', async () => {
+  for (const host of ['github.com', 'GitHub.Example.com']) {
+    const requests: CapturedRequest[] = [];
+    const runtime = testRuntime(requests, [], []);
+    runtime.runGitHub = async () => JSON.stringify({
+      ...githubDetails, url: `https://${host}/Acme/Widgets/pull/184`,
+    });
+    for (const repo of ['ACME/widgets', 'acme/WIDGETS']) {
+      assert.equal(await runCodeFactoryCli([
+        'pr', 'register', '--from-github', `https://${host}/${repo}/pull/184`,
+      ], runtime), 0);
+    }
+    const expected = host === 'github.com' ? 'acme/widgets' : 'github.example.com/acme/widgets';
+    assert.deepEqual(requests.map((request) => request.body.repository), [expected, expected]);
+  }
+});
