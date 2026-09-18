@@ -1457,18 +1457,17 @@ export class AgentManager extends EventEmitter {
       const detail = item.detail === undefined
         ? undefined
         : truncateAgentTraceDetail(item.detail);
-      const trace = this.#store.appendAgentTrace({
+      const trace = {
         id: `trc_${randomUUID()}`,
         runId,
         kind: item.kind,
-        ...(item.status ? { status: item.status } : {}),
+        status: item.status ?? null,
         title: normalizedTitle,
-        ...(detail === undefined ? {} : { detail }),
-        ...(item.toolName ? { toolName: item.toolName.slice(0, 500) } : {}),
-        ...(item.toolCallId ? { toolCallId: item.toolCallId.slice(0, 500) } : {}),
-        ...(item.nativeType ? { nativeType: item.nativeType.slice(0, 200) } : {}),
-        now: new Date().toISOString(),
-      });
+        detail: detail ?? null,
+        toolName: item.toolName?.slice(0, 500) ?? null,
+        toolCallId: item.toolCallId?.slice(0, 500) ?? null,
+        nativeType: item.nativeType?.slice(0, 200) ?? null,
+      };
       this.publish({
         type: 'run.trace.appended',
         requirementId,

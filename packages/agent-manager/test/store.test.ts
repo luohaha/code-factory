@@ -7,6 +7,7 @@ import test from 'node:test';
 
 import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
 import { StoreConflictError } from '../src/store.ts';
+import type { AgentTraceEvent } from '../src/types.ts';
 
 const now = '2026-09-10T12:00:00.000Z';
 
@@ -35,7 +36,7 @@ test('a requirement is created atomically with exactly one RD session', () => {
   }
 });
 
-test('Agent trace events are persisted in Run sequence order', () => {
+test('Agent trace events are derived from the durable Manager event stream', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {
     store.createRequirement({
@@ -55,33 +56,47 @@ test('Agent trace events are persisted in Run sequence order', () => {
       taskSummary: 'Start RD session',
       now,
     });
-    const first = store.appendAgentTrace({
-      id: 'trc-1',
+    const firstEvent = store.appendEvent({
+      type: 'run.trace.appended',
+      requirementId: 'req-trace',
+      sessionId: 'ses-trace',
       runId: 'run-trace',
-      kind: 'tool_call',
-      status: 'started',
-      title: 'Run command',
-      detail: 'npm test',
-      toolName: 'shell',
-      toolCallId: 'item-1',
-      nativeType: 'item.started',
+      payload: { trace: {
+        id: 'trc-1',
+        runId: 'run-trace',
+        kind: 'tool_call',
+        status: 'started',
+        title: 'Run command',
+        detail: 'npm test',
+        toolName: 'shell',
+        toolCallId: 'item-1',
+        nativeType: 'item.started',
+      } },
       now,
     });
-    const second = store.appendAgentTrace({
-      id: 'trc-2',
+    const secondEvent = store.appendEvent({
+      type: 'run.trace.appended',
+      requirementId: 'req-trace',
+      sessionId: 'ses-trace',
       runId: 'run-trace',
-      kind: 'tool_result',
-      status: 'completed',
-      title: 'Command result',
-      detail: 'ok',
-      toolName: 'shell',
-      toolCallId: 'item-1',
-      nativeType: 'item.completed',
+      payload: { trace: {
+        id: 'trc-2',
+        runId: 'run-trace',
+        kind: 'tool_result',
+        status: 'completed',
+        title: 'Command result',
+        detail: 'ok',
+        toolName: 'shell',
+        toolCallId: 'item-1',
+        nativeType: 'item.completed',
+      } },
       now,
     });
+    const first = firstEvent.payload.trace as AgentTraceEvent;
+    const second = secondEvent.payload.trace as AgentTraceEvent;
 
-    assert.equal(first.sequence, 1);
-    assert.equal(second.sequence, 2);
+    assert.equal(first.sequence, firstEvent.id);
+    assert.equal(second.sequence, secondEvent.id);
     assert.deepEqual(store.listAgentTrace('run-trace'), [first, second]);
   } finally {
     store.close();
@@ -353,14 +368,20 @@ test('expired cancelled and done requirements purge their related domain records
       taskSummary: 'Implement old requirement',
       now: '2024-01-01T00:01:00.000Z',
     });
-    store.appendAgentTrace({
-      id: 'trc-done-expired',
+    store.appendEvent({
+      type: 'run.trace.appended',
+      requirementId: 'req-done-expired',
+      sessionId: 'ses-done-expired',
       runId: 'run-done-expired',
-      kind: 'tool_call',
-      status: 'started',
-      title: 'Run command',
-      detail: 'npm test',
-      toolName: 'shell',
+      payload: { trace: {
+        id: 'trc-done-expired',
+        runId: 'run-done-expired',
+        kind: 'tool_call',
+        status: 'started',
+        title: 'Run command',
+        detail: 'npm test',
+        toolName: 'shell',
+      } },
       now: '2024-01-01T00:01:30.000Z',
     });
     store.finishRdRun('run-done-expired', {
@@ -488,10 +509,9 @@ test('expired cancelled and done requirements purge their related domain records
         .map((row) => row.local_path),
       [join(directory, 'expired.txt')],
     );
-    assert.equal(
-      (database.prepare('SELECT COUNT(*) AS count FROM agent_trace_events').get() as { count: number }).count,
-      0,
-    );
+    assert.equal(database.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_trace_events'",
+    ).get(), undefined);
     for (const table of [
       'agent_sessions',
       'agent_runs',
@@ -915,6 +935,114 @@ test('legacy image-only attachment storage migrates to general files', () => {
     assert.equal(attachment.kind, 'file');
   } finally {
     store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('legacy Agent trace rows backfill missing Manager events before their table is removed', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-store-test-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const initial = new SqliteAgentManagerStore(databasePath);
+  initial.createRequirement({
+    requirementId: 'req-trace-migration',
+    sessionId: 'ses-trace-migration',
+    title: 'Migrate trace storage',
+    description: 'Keep the trace while removing duplicate storage',
+    provider: 'codex',
+    createdBy: 'human',
+    now,
+  });
+  initial.beginRun({
+    runId: 'run-trace-migration',
+    requirementId: 'req-trace-migration',
+    role: 'rd',
+    provider: 'codex',
+    taskSummary: 'Start RD session',
+    now,
+  });
+  initial.appendEvent({
+    type: 'run.trace.appended',
+    requirementId: 'req-trace-migration',
+    sessionId: 'ses-trace-migration',
+    runId: 'run-trace-migration',
+    payload: { trace: {
+      id: 'trc-existing',
+      runId: 'run-trace-migration',
+      kind: 'assistant_message',
+      status: 'completed',
+      title: 'Already persisted',
+    } },
+    now,
+  });
+  initial.close();
+
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(`CREATE TABLE agent_trace_events (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    status TEXT,
+    title TEXT NOT NULL,
+    detail TEXT,
+    tool_name TEXT,
+    tool_call_id TEXT,
+    native_type TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (run_id, sequence)
+  ) STRICT`);
+  legacy.prepare(`INSERT INTO agent_trace_events
+    (id, run_id, sequence, kind, status, title, detail, tool_name, tool_call_id, native_type, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    'trc-existing',
+    'run-trace-migration',
+    1,
+    'assistant_message',
+    'completed',
+    'Already persisted',
+    null,
+    null,
+    null,
+    null,
+    now,
+  );
+  legacy.prepare(`INSERT INTO agent_trace_events
+    (id, run_id, sequence, kind, status, title, detail, tool_name, tool_call_id, native_type, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    'trc-legacy',
+    'run-trace-migration',
+    2,
+    'tool_call',
+    'started',
+    'Run command',
+    'npm test',
+    'shell',
+    'item-1',
+    'item.started',
+    now,
+  );
+  legacy.close();
+
+  const migrated = new SqliteAgentManagerStore(databasePath);
+  try {
+    const traces = migrated.listAgentTrace('run-trace-migration');
+    assert.deepEqual(traces.map((trace) => trace.id), ['trc-existing', 'trc-legacy']);
+    assert.equal(traces[1]?.detail, 'npm test');
+  } finally {
+    migrated.close();
+  }
+
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    assert.equal(database.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_trace_events'",
+    ).get(), undefined);
+    assert.equal(
+      (database.prepare("SELECT COUNT(*) AS count FROM manager_events WHERE type = 'run.trace.appended'").get() as { count: number }).count,
+      2,
+    );
+  } finally {
+    database.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });

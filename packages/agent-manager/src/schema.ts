@@ -44,20 +44,6 @@ export const schemaStatements = [
     finished_at TEXT,
     CHECK ((role = 'rd' AND session_id IS NOT NULL) OR (role = 'reviewer' AND session_id IS NULL))
   ) STRICT`,
-  `CREATE TABLE IF NOT EXISTS agent_trace_events (
-    id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
-    sequence INTEGER NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('lifecycle', 'reasoning', 'assistant_message', 'tool_call', 'tool_result', 'error')),
-    status TEXT CHECK (status IN ('started', 'completed', 'failed')),
-    title TEXT NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 500),
-    detail TEXT CHECK (detail IS NULL OR length(CAST(detail AS BLOB)) <= 65536),
-    tool_name TEXT,
-    tool_call_id TEXT,
-    native_type TEXT,
-    created_at TEXT NOT NULL,
-    UNIQUE (run_id, sequence)
-  ) STRICT`,
   `CREATE TABLE IF NOT EXISTS manager_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     type TEXT NOT NULL,
@@ -173,10 +159,10 @@ export const schemaStatements = [
     ON requirements (status, updated_at DESC)`,
   `CREATE INDEX IF NOT EXISTS runs_requirement_started
     ON agent_runs (requirement_id, started_at DESC)`,
-  `CREATE INDEX IF NOT EXISTS trace_events_run_sequence
-    ON agent_trace_events (run_id, sequence)`,
   `CREATE INDEX IF NOT EXISTS events_created
     ON manager_events (id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS events_run_type_id
+    ON manager_events (run_id, type, id)`,
   `CREATE INDEX IF NOT EXISTS messages_requirement_created
     ON requirement_messages (requirement_id, created_at, id)`,
   `CREATE INDEX IF NOT EXISTS attachments_requirement_created

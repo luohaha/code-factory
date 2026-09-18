@@ -3,8 +3,6 @@ import type {
   AgentReasoningEffort,
   AgentRun,
   AgentTraceEvent,
-  AgentTraceKind,
-  AgentTraceStatus,
   AgentSession,
   ManagerEvent,
   MessageAttachment,
@@ -62,19 +60,6 @@ export interface AppendEventRecord {
   runId?: string;
   payload?: Record<string, unknown>;
   idempotencyKey?: string;
-  now: string;
-}
-
-export interface AppendAgentTraceRecord {
-  id: string;
-  runId: string;
-  kind: AgentTraceKind;
-  status?: AgentTraceStatus;
-  title: string;
-  detail?: string;
-  toolName?: string;
-  toolCallId?: string;
-  nativeType?: string;
   now: string;
 }
 
@@ -187,7 +172,6 @@ export interface AgentManagerStore {
   listSessions(): AgentSession[];
   listRuns(requirementId?: string): AgentRun[];
   getRun(id: string): AgentRun | null;
-  appendAgentTrace(input: AppendAgentTraceRecord): AgentTraceEvent;
   listAgentTrace(runId: string): AgentTraceEvent[];
   createMessageAttachment(input: CreateMessageAttachmentRecord): MessageAttachment;
   getMessageAttachment(id: string): MessageAttachment | null;
