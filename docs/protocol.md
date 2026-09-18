@@ -20,7 +20,7 @@ GET /api/review-requests?pullRequestId=<id>
 GET /api/events?after=<event-id>
 ~~~
 
-`GET /api/events` is an SSE stream that can replay events after a known event ID.
+`GET /api/events` is an SSE stream. A connection without a cursor receives only new events. Pass `after=<event-id>` to replay events after a known ID; browser reconnections may instead send the standard `Last-Event-ID` header.
 
 ## 2. Human endpoints
 
@@ -160,6 +160,8 @@ Current event types include:
 The PR Reconciler publishes GitHub state and head-SHA changes through `pull_request.updated`. PR status changes, new comments/reviews, CI failures, and merge conflicts are first stored in the Requirement conversation and then published through `message.created`. Their payload includes `source: "github"`, `pullRequestId`, and the corresponding `triggerId`: `github.pull-request.status`, `github.pull-request.comment`, `github.pull-request.ci-failure`, or `github.pull-request.conflict`. SQLite Agent Trigger receipts deduplicate external events across Agent Manager restarts.
 
 Timer messages publish `message.created` with `source: "timer"`, `triggerId: "timer"`, `timerId`, `description`, `schedule`, and `scheduledFor`. Their trigger receipt is keyed by timer ID plus occurrence time, while the separate `timer.*` events expose configuration and lifecycle changes to dashboard clients.
+
+The initial dashboard state comes from the JSON query endpoints, so its cursorless SSE connection does not replay historical events. Reconnecting SSE clients resume after the `Last-Event-ID` value supplied by the browser. Other clients can request up to 200 persisted events after an explicit `after` cursor.
 
 ## 6. Error semantics
 

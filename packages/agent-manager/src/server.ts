@@ -103,6 +103,16 @@ function fileNameHeader(request: IncomingMessage): string {
   }
 }
 
+function eventCursor(request: IncomingMessage, url: URL): number | undefined {
+  const header = request.headers['last-event-id'];
+  const raw = url.searchParams.has('after')
+    ? url.searchParams.get('after')
+    : Array.isArray(header) ? header[0] : header;
+  if (!raw) return undefined;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
 export function createAgentManagerServer(manager: AgentManager, options: AgentManagerServerOptions = {}): Server {
   const allowedOrigin = options.allowedOrigin;
   const logger = (options.logger ?? manager.logger).child({ component: 'http' });
@@ -256,9 +266,12 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           'cache-control': 'no-cache',
           connection: 'keep-alive',
         });
-        const afterId = Number(url.searchParams.get('after') ?? 0);
-        for (const event of manager.listEvents(Number.isFinite(afterId) ? afterId : 0)) {
-          response.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+        response.flushHeaders();
+        const afterId = eventCursor(request, url);
+        if (afterId !== undefined) {
+          for (const event of manager.listEvents(afterId)) {
+            response.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+          }
         }
         const listener = (event: ManagerEvent) => {
           response.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);

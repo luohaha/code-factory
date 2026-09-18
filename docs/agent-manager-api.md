@@ -72,7 +72,7 @@ URL-encode IDs used in path parameters. Requirement, Session, Run, PR, and Revie
 }
 ~~~
 
-List endpoints do not currently support pagination. A new GET /api/events connection replays at most 200 historical events.
+List endpoints do not currently support pagination. A cursorless GET /api/events connection receives only new events; a connection with a replay cursor receives at most 200 persisted events before continuing with live events.
 
 ## 3. Data models
 
@@ -758,7 +758,7 @@ Current event types and primary payloads:
 | manager.configuration.updated | changedFields, appliedFields, restartRequired, restartRequiredFields |
 | agent_models.updated | provider refresh timestamps and stale flags |
 
-Clients should store the last successfully processed event ID and pass it as after when reconnecting. A missing or non-finite after value starts replay at 0. Each connection replays at most 200 existing events before continuing with live events.
+Clients should store the last successfully processed event ID and pass it as `after` when reconnecting. EventSource reconnections can use the standard `Last-Event-ID` request header instead; when both are present, the `after` query parameter takes precedence. A connection without a valid cursor receives only events published after it connects. A connection with a valid non-negative integer cursor replays at most 200 existing events before continuing with live events.
 
 ## 9. Typical workflow
 
