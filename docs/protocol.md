@@ -131,10 +131,10 @@ code-factory-cli requirement message --requirement-id req_... --message "Use con
 Read a Requirement conversation without loading more history than needed:
 
 ~~~bash
-code-factory-cli requirement messages
-code-factory-cli requirement messages --requirement-id req_... --head 20
-code-factory-cli requirement messages --tail 20
-code-factory-cli requirement messages --page 2 --page-size 50
+code-factory-cli requirement conversation
+code-factory-cli requirement conversation --requirement-id req_... --head 20
+code-factory-cli requirement conversation --tail 20
+code-factory-cli requirement conversation --page 2 --page-size 50
 ~~~
 
 The command defaults to the injected current Requirement and may target another Requirement by ID. With no selection option it returns the complete conversation. `--head`, `--tail`, and one-based `--page` selection are mutually exclusive; bounded reads return at most 200 messages, always ordered by ascending message sequence, together with pagination metadata.

@@ -686,14 +686,14 @@ These endpoints are the transport used by `code-factory-cli` and other trusted l
 code-factory-cli pr register --help
 code-factory-cli requirement propose --help
 code-factory-cli requirement related --help
-code-factory-cli requirement messages --help
+code-factory-cli requirement conversation --help
 code-factory-cli requirement message --help
 code-factory-cli timer register --help
 code-factory-cli timer show --help
 code-factory-cli timer cancel --help
 ~~~
 
-`requirement messages` calls the Requirement message query endpoint above. It defaults to the injected `CODE_FACTORY_REQUIREMENT_ID`, accepts `--requirement-id` for a specific Requirement, and exposes complete, head, tail, or paginated reads. The timer commands call the Requirement-scoped timer endpoints above. `timer register --description "Check compiler status" --after-seconds 3600` registers a one-time wake-up; add `--repeat` for a recurring timer. `timer show` returns all timers for the current Requirement, including IDs, descriptions, and statuses. `timer cancel --id tmr_...` stops an active timer. They use the injected `CODE_FACTORY_REQUIREMENT_ID`, so the RD Agent does not need to copy its Requirement ID.
+`requirement conversation` calls the Requirement message query endpoint above. It defaults to the injected `CODE_FACTORY_REQUIREMENT_ID`, accepts `--requirement-id` for a specific Requirement, and exposes complete, head, tail, or paginated reads. The timer commands call the Requirement-scoped timer endpoints above. `timer register --description "Check compiler status" --after-seconds 3600` registers a one-time wake-up; add `--repeat` for a recurring timer. `timer show` returns all timers for the current Requirement, including IDs, descriptions, and statuses. `timer cancel --id tmr_...` stops an active timer. They use the injected `CODE_FACTORY_REQUIREMENT_ID`, so the RD Agent does not need to copy its Requirement ID.
 
 ### POST /api/agent/pull-requests
 

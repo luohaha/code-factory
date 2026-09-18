@@ -61,8 +61,9 @@ test('code-factory-cli help discovers the supported RD commands', async () => {
   assert.match(output.join(''), /timer show/);
   assert.match(output.join(''), /requirement propose/);
   assert.match(output.join(''), /requirement related/);
-  assert.match(output.join(''), /requirement messages/);
+  assert.match(output.join(''), /requirement conversation/);
   assert.match(output.join(''), /requirement message/);
+  assert.doesNotMatch(output.join(''), /^\s*requirement messages\s/m);
   assert.match(output.join(''), /CODE_FACTORY_REQUIREMENT_ID/);
 });
 
@@ -173,13 +174,13 @@ test('code-factory-cli reads complete, head, tail, and paginated Requirement con
   const errors: string[] = [];
   const runtime = testRuntime(requests, output, errors);
 
-  assert.equal(await runCodeFactoryCli(['requirement', 'messages'], runtime), 0);
+  assert.equal(await runCodeFactoryCli(['requirement', 'conversation'], runtime), 0);
   assert.equal(await runCodeFactoryCli([
-    'requirement', 'messages', '--requirement-id', 'req_parent', '--head', '5',
+    'requirement', 'conversation', '--requirement-id', 'req_parent', '--head', '5',
   ], runtime), 0);
-  assert.equal(await runCodeFactoryCli(['requirement', 'messages', '--tail', '7'], runtime), 0);
+  assert.equal(await runCodeFactoryCli(['requirement', 'conversation', '--tail', '7'], runtime), 0);
   assert.equal(await runCodeFactoryCli([
-    'requirement', 'messages', '--page', '3', '--page-size', '25',
+    'requirement', 'conversation', '--page', '3', '--page-size', '25',
   ], runtime), 0);
 
   assert.deepEqual(errors, []);
@@ -203,13 +204,13 @@ test('code-factory-cli rejects conflicting Requirement conversation selections',
   const output: string[] = [];
   const errors: string[] = [];
   const exitCode = await runCodeFactoryCli([
-    'requirement', 'messages', '--head', '5', '--page', '2',
+    'requirement', 'conversation', '--head', '5', '--page', '2',
   ], testRuntime(requests, output, errors));
 
   assert.equal(exitCode, 2);
   assert.deepEqual(requests, []);
   assert.match(errors.join(''), /mutually exclusive/);
-  assert.match(errors.join(''), /Usage: code-factory-cli requirement messages/);
+  assert.match(errors.join(''), /Usage: code-factory-cli requirement conversation/);
 });
 
 test('code-factory-cli registers, shows, and cancels RD wake-up timers', async () => {

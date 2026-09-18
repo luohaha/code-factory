@@ -41,13 +41,13 @@ RD Agents use self-describing commands instead of constructing Agent API request
 ```bash
 code-factory-cli pr register --help
 code-factory-cli requirement propose --help
-code-factory-cli requirement messages --help
+code-factory-cli requirement conversation --help
 code-factory-cli timer register --help
 code-factory-cli timer show --help
 code-factory-cli timer cancel --help
 ```
 
-`pr register` registers a newly created PR or refreshes metadata changed by the RD Agent. `requirement propose` records separate follow-up work as a linked TODO Requirement. `requirement messages` reads the current or a specified Requirement conversation completely, from its head or tail, or one page at a time. `timer register` registers a one-time wake-up by default or a recurring one with `--repeat`; `timer show` recovers timer IDs and statuses for the current Requirement; `timer cancel` stops an active timer. The commands print the API JSON response and return nonzero exit codes for invalid input, missing context, network failures, or HTTP errors.
+`pr register` registers a newly created PR or refreshes metadata changed by the RD Agent. `requirement propose` records separate follow-up work as a linked TODO Requirement. `requirement conversation` reads the current or a specified Requirement conversation completely, from its head or tail, or one page at a time. `timer register` registers a one-time wake-up by default or a recurring one with `--repeat`; `timer show` recovers timer IDs and statuses for the current Requirement; `timer cancel` stops an active timer. The commands print the API JSON response and return nonzero exit codes for invalid input, missing context, network failures, or HTTP errors.
 
 Agent Manager injects `CODE_FACTORY_API_URL`, `CODE_FACTORY_REQUIREMENT_ID`, and `CODE_FACTORY_SESSION_ID` for each RD Run. The CLI supplies those context fields to the HTTP API, so the model does not copy IDs or endpoint paths from its prompt. A workspace-private launcher is created next to the workspace database and prepended to `PATH`, which also supports the documented `node .../dist/cli.js start` development workflow.
 

@@ -11,14 +11,14 @@ const HELP = `Usage: code-factory-cli <command>
 Code Factory control-plane commands for RD Agents.
 
 Commands:
-  pr register             Register or refresh a pull request
-  requirement propose     Propose a separately tracked TODO requirement
-  requirement related     Show this Requirement's direct parent and children
-  requirement messages    Read a Requirement's conversation messages
-  requirement message     Send a message to a related Requirement's RD Agent
-  timer register          Register a one-time or recurring wake-up timer
-  timer show              Show timers registered for this Requirement
-  timer cancel            Cancel a registered wake-up timer
+  pr register              Register or refresh a pull request
+  requirement propose      Propose a separately tracked TODO requirement
+  requirement related      Show this Requirement's direct parent and children
+  requirement conversation Read a Requirement's conversation
+  requirement message      Send a message to a related Requirement's RD Agent
+  timer register           Register a one-time or recurring wake-up timer
+  timer show               Show timers registered for this Requirement
+  timer cancel             Cancel a registered wake-up timer
 
 Options:
   -v, --version           Print the installed Code Factory version
@@ -82,7 +82,7 @@ Required options:
 Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
 CODE_FACTORY_SESSION_ID.`;
 
-const REQUIREMENT_MESSAGES_HELP = `Usage: code-factory-cli requirement messages [options]
+const REQUIREMENT_CONVERSATION_HELP = `Usage: code-factory-cli requirement conversation [options]
 
 Read a Requirement's conversation messages as JSON in ascending sequence order.
 Without a selection option, the complete conversation is returned.
@@ -419,8 +419,8 @@ export async function runCodeFactoryCli(
         sourceSessionId,
         message: required(values.message as string | undefined, '--message', help),
       };
-    } else if (command === 'requirement messages') {
-      help = REQUIREMENT_MESSAGES_HELP;
+    } else if (command === 'requirement conversation') {
+      help = REQUIREMENT_CONVERSATION_HELP;
       if (writesHelp(args.slice(2))) {
         runtime.writeOut(`${help}\n`);
         return 0;

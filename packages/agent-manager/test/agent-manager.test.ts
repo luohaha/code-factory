@@ -693,7 +693,7 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
       value.includes('code-factory-cli requirement related')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('code-factory-cli requirement messages')));
+      value.includes('code-factory-cli requirement conversation')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
       value.includes('code-factory-cli requirement message')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
