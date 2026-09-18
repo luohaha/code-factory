@@ -2321,7 +2321,7 @@ function Dashboard() {
 
           <nav className="ml-1 flex h-full items-center gap-1 sm:ml-5" aria-label={t('Main navigation')}>
             <Button variant="ghost" size="sm" className={view === 'requirements' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('requirements')}><LayoutDashboard data-icon="inline-start" />{t('Requirements')}</Button>
-            <Button variant="ghost" size="sm" className={view === 'relationships' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('relationships')} aria-label={t('Relationships')} title={t('Relationships')}><Network data-icon="inline-start" /><span className="hidden lg:inline">{t('Relationships')}</span></Button>
+            <Button variant="ghost" size="sm" className={view === 'relationships' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('relationships')}><Network data-icon="inline-start" />{t('Relationships')}</Button>
             <Button variant="ghost" size="sm" className={view === 'pull_requests' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('pull_requests')}><GitPullRequest data-icon="inline-start" />PR</Button>
             <Button variant="ghost" size="sm" className={view === 'sessions' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('sessions')}><Activity data-icon="inline-start" />{t('Sessions')}</Button>
             <Button variant="ghost" size="sm" className={view === 'timers' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('timers')}><Clock3 data-icon="inline-start" />{t('Timers')}</Button>
