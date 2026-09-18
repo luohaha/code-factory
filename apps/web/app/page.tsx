@@ -1716,6 +1716,7 @@ function RequirementDetail({
               const human = item.author === 'human';
               const system = item.author === 'system';
               const reviewer = item.author === 'reviewer';
+              const relatedRd = item.author === 'rd_agent' && item.sourceRequirementId !== null;
               const attachments = item.attachments ?? [];
               if (system) {
                 return (
@@ -1734,7 +1735,7 @@ function RequirementDetail({
               }
               return (
                 <article key={item.id} className={`flex gap-3 ${human ? 'flex-row-reverse' : ''}`}>
-                  <span className={`grid size-8 shrink-0 place-items-center rounded-xl ${human ? 'bg-primary text-primary-foreground' : reviewer ? 'bg-violet-500/12 text-violet-700 dark:text-violet-300' : 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'}`}>
+                  <span className={`grid size-8 shrink-0 place-items-center rounded-xl ${human ? 'bg-primary text-primary-foreground' : reviewer ? 'bg-violet-500/12 text-violet-700 dark:text-violet-300' : relatedRd ? 'bg-amber-500/12 text-amber-700 dark:text-amber-300' : 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'}`}>
                     {human ? <UserRound className="size-3.5" /> : <Bot className="size-3.5" />}
                   </span>
                   <div className={`min-w-0 max-w-[86%] ${human ? 'text-right' : ''}`}>
