@@ -756,6 +756,42 @@ test('human and Agent messages are stored as an ordered requirement conversation
   }
 });
 
+test('Requirement conversations support bounded pages from either end', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-page',
+      sessionId: 'ses-page',
+      title: 'Paged conversation',
+      description: 'Read only the requested messages',
+      provider: 'codex',
+      createdBy: 'human',
+      now,
+    });
+    for (let index = 1; index <= 5; index += 1) {
+      store.appendMessage({
+        id: `msg-page-${index}`,
+        requirementId: 'req-page',
+        sessionId: 'ses-page',
+        author: index % 2 === 0 ? 'rd_agent' : 'human',
+        body: `Message ${index}`,
+        deliverToRd: index % 2 !== 0,
+        now: `2026-09-10T12:00:0${index}.000Z`,
+      });
+    }
+
+    const middle = store.listMessagesPage('req-page', { limit: 2, offset: 2, order: 'asc' });
+    const tail = store.listMessagesPage('req-page', { limit: 2, offset: 0, order: 'desc' });
+
+    assert.equal(middle.total, 5);
+    assert.deepEqual(middle.items.map((message) => message.sequence), [3, 4]);
+    assert.equal(tail.total, 5);
+    assert.deepEqual(tail.items.map((message) => message.sequence), [4, 5]);
+  } finally {
+    store.close();
+  }
+});
+
 test('image attachments are claimed by one requirement message', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {

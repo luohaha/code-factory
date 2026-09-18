@@ -83,6 +83,17 @@ function positiveIntegerField(body: Record<string, unknown>, name: string): numb
   return Number(value);
 }
 
+function positiveIntegerQuery(value: string | null, name: string, maximum?: number): number | undefined {
+  if (value === null) return undefined;
+  if (!/^\d+$/.test(value)) throw new TypeError(`${name} must be a positive integer`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new TypeError(`${name} must be a positive integer`);
+  if (maximum !== undefined && parsed > maximum) {
+    throw new RangeError(`${name} must be an integer from 1 to ${maximum}`);
+  }
+  return parsed;
+}
+
 function stringArrayField(body: Record<string, unknown>, name: string): string[] {
   const value = body[name];
   if (value === undefined) return [];
@@ -216,7 +227,44 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
       const messages = url.pathname.match(/^\/api\/requirements\/([^/]+)\/messages$/);
       if (request.method === 'GET' && messages) {
         const requirementId = decodeURIComponent(messages[1]!);
-        sendJson(response, 200, { items: manager.listMessages(requirementId) });
+        const head = positiveIntegerQuery(url.searchParams.get('head'), 'head', 200);
+        const tail = positiveIntegerQuery(url.searchParams.get('tail'), 'tail', 200);
+        const page = positiveIntegerQuery(url.searchParams.get('page'), 'page');
+        const pageSize = positiveIntegerQuery(url.searchParams.get('pageSize'), 'pageSize', 200);
+        const usesPages = page !== undefined || pageSize !== undefined;
+        if ([head !== undefined, tail !== undefined, usesPages].filter(Boolean).length > 1) {
+          throw new TypeError('head, tail, and page pagination are mutually exclusive');
+        }
+        if (head === undefined && tail === undefined && !usesPages) {
+          sendJson(response, 200, { items: manager.listMessages(requirementId) });
+          return;
+        }
+        const mode = head !== undefined ? 'head' : tail !== undefined ? 'tail' : 'page';
+        const selectedPage = page ?? 1;
+        const limit = head ?? tail ?? pageSize ?? 20;
+        const requestedOffset = mode === 'page' ? (selectedPage - 1) * limit : 0;
+        if (!Number.isSafeInteger(requestedOffset)) throw new RangeError('page offset is too large');
+        const result = manager.listMessagesPage(requirementId, {
+          limit,
+          offset: requestedOffset,
+          order: mode === 'tail' ? 'desc' : 'asc',
+        });
+        const offset = mode === 'tail' ? Math.max(0, result.total - limit) : requestedOffset;
+        const pagination = {
+          mode,
+          totalItems: result.total,
+          returnedItems: result.items.length,
+          offset,
+          limit,
+          hasPrevious: offset > 0 && result.total > 0,
+          hasNext: offset + result.items.length < result.total,
+          ...(mode === 'page' ? {
+            page: selectedPage,
+            pageSize: limit,
+            totalPages: Math.ceil(result.total / limit),
+          } : {}),
+        };
+        sendJson(response, 200, { items: result.items, pagination });
         return;
       }
       if (request.method === 'GET' && url.pathname === '/api/timers') {

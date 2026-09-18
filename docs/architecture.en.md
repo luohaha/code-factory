@@ -35,7 +35,7 @@ flowchart LR
   M <--> DB[(SQLite)]
   M -->|Same cwd, long-lived resume| RD[Codex / Claude Code RD]
   M -->|Short-lived, no persistent session| RV[Codex / Claude Code Reviewer]
-  RD -->|Register PR / Propose requirement / Schedule wake-up| CLI[code-factory-cli]
+  RD -->|Register PR / Read conversations / Propose requirement / Schedule wake-up| CLI[code-factory-cli]
   CLI --> API[Agent API]
   API --> M
   RV -->|GitHub inline comments| GH[GitHub PR]
@@ -54,7 +54,7 @@ Agent Manager's own settings are workspace-scoped in `~/.code-factory/workspaces
 
 Agent Manager also owns an in-memory provider model catalog. It refreshes at startup and every 24 hours, using Codex's local app-server `model/list` method and Claude's `/v1/models` endpoint when API or gateway credentials are available. Claude Code rolling aliases and environment-configured model overrides remain available when remote discovery cannot run. A failed refresh retains the last successful provider list and marks it stale; model discovery never prevents the Manager from starting or running existing Sessions.
 
-Agent Manager adds only Code Factory behavioral instructions that identify the relevant `code-factory-cli` commands. It places a private CLI launcher on the RD process's `PATH` and injects `CODE_FACTORY_API_URL`, `CODE_FACTORY_REQUIREMENT_ID`, and `CODE_FACTORY_SESSION_ID`; HTTP paths and payload schemas remain in CLI help instead of the model prompt. It does not copy or replace provider-managed instructions, Skills, plugins, or local memories.
+Agent Manager adds only Code Factory behavioral instructions that identify the relevant `code-factory-cli` commands. It places a private CLI launcher on the RD process's `PATH` and injects `CODE_FACTORY_API_URL`, `CODE_FACTORY_REQUIREMENT_ID`, and `CODE_FACTORY_SESSION_ID`; HTTP paths and payload schemas remain in CLI help instead of the model prompt. The CLI can read a complete Requirement conversation or select its head, tail, or a bounded page without loading the remaining messages. It does not copy or replace provider-managed instructions, Skills, plugins, or local memories.
 
 Context is isolated by Requirement. The first RD Run starts a new native Codex thread or Claude Code session, and later Runs resume only that Requirement's stored native ID. This preserves the Requirement's own native conversation across Runs without copying the live transcript, context window, or in-progress reasoning of the interactive agent or terminal that launched Agent Manager. It also never merges native conversation context from another Requirement. Any cross-session local memory remains an optional provider feature governed by the installed CLI and its configuration; Code Factory neither serializes it nor guarantees that every memory entry is injected.
 

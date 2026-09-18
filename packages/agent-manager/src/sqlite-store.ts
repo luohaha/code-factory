@@ -489,6 +489,27 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       .map((row) => messageFrom(row, this.listMessageAttachments(String(row.id))));
   }
 
+  listMessagesPage(
+    requirementId: string,
+    input: { limit: number; offset: number; order: 'asc' | 'desc' },
+  ) {
+    if (!this.getRequirement(requirementId)) throw new StoreNotFoundError(`Requirement ${requirementId} not found`);
+    if (!Number.isSafeInteger(input.limit) || input.limit <= 0) {
+      throw new RangeError('limit must be a positive integer');
+    }
+    if (!Number.isSafeInteger(input.offset) || input.offset < 0) {
+      throw new RangeError('offset must be a non-negative integer');
+    }
+    const count = this.#db.prepare(`SELECT COUNT(*) AS total FROM requirement_messages
+      WHERE requirement_id = ?`).get(requirementId) as Row;
+    const rows = this.#db.prepare(`SELECT * FROM requirement_messages
+      WHERE requirement_id = ? ORDER BY sequence ${input.order === 'asc' ? 'ASC' : 'DESC'}
+      LIMIT ? OFFSET ?`).all(requirementId, input.limit, input.offset) as Row[];
+    const items = rows.map((row) => messageFrom(row, this.listMessageAttachments(String(row.id))));
+    if (input.order === 'desc') items.reverse();
+    return { items, total: Number(count.total) };
+  }
+
   listPendingRdMessages(requirementId: string): RequirementMessage[] {
     const bundle = this.requireBundle(requirementId);
     return (this.#db.prepare(`SELECT * FROM requirement_messages

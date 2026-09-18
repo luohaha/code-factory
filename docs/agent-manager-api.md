@@ -49,7 +49,7 @@ The service listens only on the loopback interface by default and currently has 
 | POST | /api/requirements/:id/reply | Send a human conversation message |
 | POST | /api/requirements/:id/interrupt | Interrupt the current RD Run |
 | POST | /api/requirements/:id/confirm | Confirm Requirement completion |
-| GET | /api/requirements/:id/messages | Read the complete Requirement conversation |
+| GET | /api/requirements/:id/messages | Read a complete or bounded Requirement conversation |
 | GET | /api/timers | List Agent Timers across the workspace |
 | GET | /api/requirements/:id/timers | List Agent Timers for a Requirement |
 | POST | /api/requirements/:id/timers | Create a one-time or recurring Agent Timer |
@@ -395,6 +395,22 @@ Returns the complete Requirement conversation ordered by ascending sequence.
 
 Success: 200 OK with {"items": RequirementMessage[]}. Returns 404 Not Found for an unknown Requirement.
 
+Optional query selections avoid loading the complete conversation. The three selection modes are mutually exclusive, all results remain ordered by ascending sequence, and bounded reads allow at most 200 messages:
+
+| Parameter | Type | Meaning |
+| --- | --- | --- |
+| head | positive integer | Return the first N messages |
+| tail | positive integer | Return the last N messages |
+| page | positive integer | Return this one-based page; defaults to 1 when only pageSize is supplied |
+| pageSize | positive integer | Messages per page; defaults to 20 when only page is supplied |
+
+~~~bash
+curl 'http://127.0.0.1:4310/api/requirements/req_.../messages?tail=20'
+curl 'http://127.0.0.1:4310/api/requirements/req_.../messages?page=2&pageSize=50'
+~~~
+
+A selected response also contains `pagination` with `mode`, `totalItems`, `returnedItems`, `offset`, `limit`, `hasPrevious`, and `hasNext`. Page mode additionally includes `page`, `pageSize`, and `totalPages`. Invalid or conflicting selections return 400 Bad Request.
+
 ### GET /api/timers
 
 Returns every scheduled wake-up in the workspace, including active, completed, and cancelled records. Dashboard clients use each record's `requirementId` to show its associated Requirement.
@@ -670,13 +686,14 @@ These endpoints are the transport used by `code-factory-cli` and other trusted l
 code-factory-cli pr register --help
 code-factory-cli requirement propose --help
 code-factory-cli requirement related --help
+code-factory-cli requirement messages --help
 code-factory-cli requirement message --help
 code-factory-cli timer register --help
 code-factory-cli timer show --help
 code-factory-cli timer cancel --help
 ~~~
 
-The timer commands call the Requirement-scoped timer endpoints above. `timer register --description "Check compiler status" --after-seconds 3600` registers a one-time wake-up; add `--repeat` for a recurring timer. `timer show` returns all timers for the current Requirement, including IDs, descriptions, and statuses. `timer cancel --id tmr_...` stops an active timer. They use the injected `CODE_FACTORY_REQUIREMENT_ID`, so the RD Agent does not need to copy its Requirement ID.
+`requirement messages` calls the Requirement message query endpoint above. It defaults to the injected `CODE_FACTORY_REQUIREMENT_ID`, accepts `--requirement-id` for a specific Requirement, and exposes complete, head, tail, or paginated reads. The timer commands call the Requirement-scoped timer endpoints above. `timer register --description "Check compiler status" --after-seconds 3600` registers a one-time wake-up; add `--repeat` for a recurring timer. `timer show` returns all timers for the current Requirement, including IDs, descriptions, and statuses. `timer cancel --id tmr_...` stops an active timer. They use the injected `CODE_FACTORY_REQUIREMENT_ID`, so the RD Agent does not need to copy its Requirement ID.
 
 ### POST /api/agent/pull-requests
 

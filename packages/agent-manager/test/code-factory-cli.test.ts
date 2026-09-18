@@ -61,6 +61,7 @@ test('code-factory-cli help discovers the supported RD commands', async () => {
   assert.match(output.join(''), /timer show/);
   assert.match(output.join(''), /requirement propose/);
   assert.match(output.join(''), /requirement related/);
+  assert.match(output.join(''), /requirement messages/);
   assert.match(output.join(''), /requirement message/);
   assert.match(output.join(''), /CODE_FACTORY_REQUIREMENT_ID/);
 });
@@ -164,6 +165,51 @@ test('code-factory-cli lists related Requirements and messages a related RD Agen
       message: 'The shared contract now uses field version 2.',
     },
   }]);
+});
+
+test('code-factory-cli reads complete, head, tail, and paginated Requirement conversations', async () => {
+  const requests: CapturedRequest[] = [];
+  const output: string[] = [];
+  const errors: string[] = [];
+  const runtime = testRuntime(requests, output, errors);
+
+  assert.equal(await runCodeFactoryCli(['requirement', 'messages'], runtime), 0);
+  assert.equal(await runCodeFactoryCli([
+    'requirement', 'messages', '--requirement-id', 'req_parent', '--head', '5',
+  ], runtime), 0);
+  assert.equal(await runCodeFactoryCli(['requirement', 'messages', '--tail', '7'], runtime), 0);
+  assert.equal(await runCodeFactoryCli([
+    'requirement', 'messages', '--page', '3', '--page-size', '25',
+  ], runtime), 0);
+
+  assert.deepEqual(errors, []);
+  assert.deepEqual(requests.map(({ url, method }) => ({ url, method })), [{
+    url: 'http://127.0.0.1:4310/api/requirements/req_cli/messages',
+    method: 'GET',
+  }, {
+    url: 'http://127.0.0.1:4310/api/requirements/req_parent/messages?head=5',
+    method: 'GET',
+  }, {
+    url: 'http://127.0.0.1:4310/api/requirements/req_cli/messages?tail=7',
+    method: 'GET',
+  }, {
+    url: 'http://127.0.0.1:4310/api/requirements/req_cli/messages?page=3&pageSize=25',
+    method: 'GET',
+  }]);
+});
+
+test('code-factory-cli rejects conflicting Requirement conversation selections', async () => {
+  const requests: CapturedRequest[] = [];
+  const output: string[] = [];
+  const errors: string[] = [];
+  const exitCode = await runCodeFactoryCli([
+    'requirement', 'messages', '--head', '5', '--page', '2',
+  ], testRuntime(requests, output, errors));
+
+  assert.equal(exitCode, 2);
+  assert.deepEqual(requests, []);
+  assert.match(errors.join(''), /mutually exclusive/);
+  assert.match(errors.join(''), /Usage: code-factory-cli requirement messages/);
 });
 
 test('code-factory-cli registers, shows, and cancels RD wake-up timers', async () => {

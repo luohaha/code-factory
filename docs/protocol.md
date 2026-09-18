@@ -14,7 +14,7 @@ GET /api/requirements
 GET /api/requirements/:id
 GET /api/sessions
 GET /api/runs?requirementId=<id>
-GET /api/requirements/:id/messages
+GET /api/requirements/:id/messages[?head=N|tail=N|page=N&pageSize=N]
 GET /api/attachments/:id
 GET /api/pull-requests?requirementId=<id>
 GET /api/review-requests?pullRequestId=<id>
@@ -128,6 +128,17 @@ code-factory-cli requirement message --requirement-id req_... --message "Use con
 
 `requirement related` calls `GET /api/agent/requirements/:sourceRequirementId/related?sourceSessionId=...` and returns `{parent, children}` for the direct parent and children, including terminal records that have not yet expired. `requirement message` calls `POST /api/agent/requirements/:sourceRequirementId/related/:targetRequirementId/messages` with the injected `sourceSessionId` and the message. Agent Manager verifies that the Session owns the source Requirement and that the target is its direct parent or child. Accepted messages are stored in the target conversation with `author=rd_agent`, `sourceRequirementId` set to the sender, and `deliverToRd=true`; they start an idle target RD Session or queue behind its active Run.
 
+Read a Requirement conversation without loading more history than needed:
+
+~~~bash
+code-factory-cli requirement messages
+code-factory-cli requirement messages --requirement-id req_... --head 20
+code-factory-cli requirement messages --tail 20
+code-factory-cli requirement messages --page 2 --page-size 50
+~~~
+
+The command defaults to the injected current Requirement and may target another Requirement by ID. With no selection option it returns the complete conversation. `--head`, `--tail`, and one-based `--page` selection are mutually exclusive; bounded reads return at most 200 messages, always ordered by ascending message sequence, together with pagination metadata.
+
 Schedule or cancel a wake-up for the current Requirement:
 
 ~~~bash
@@ -141,7 +152,7 @@ The CLI uses the Requirement-scoped timer GET, POST, and DELETE endpoints with t
 
 ## 4. Message delivery
 
-`GET /api/requirements/:id/messages` returns the unified conversation. Each message contains:
+`GET /api/requirements/:id/messages` returns the unified conversation. It accepts the same `head`, `tail`, `page`, and `pageSize` selections used by the CLI; a selected response includes `pagination`, while an unselected request keeps the complete `{items}` response. Each message contains:
 
 - `sequence`: a monotonically increasing number within the Requirement;
 - `author`: `human | rd_agent | reviewer | system`;

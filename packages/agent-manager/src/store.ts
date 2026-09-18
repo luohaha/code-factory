@@ -96,6 +96,17 @@ export interface AppendAgentTriggerMessageRecord extends AppendMessageRecord {
   idempotencyKey: string;
 }
 
+export interface ListRequirementMessagesPageRecord {
+  limit: number;
+  offset: number;
+  order: 'asc' | 'desc';
+}
+
+export interface RequirementMessagesPage {
+  items: RequirementMessage[];
+  total: number;
+}
+
 export interface PullRequestObservation {
   pullRequestId: string;
   initializedAt: string;
@@ -177,6 +188,10 @@ export interface AgentManagerStore {
   /** @deprecated Use appendAgentTriggerMessage for source-neutral trigger delivery. */
   appendExternalMessage(input: AppendExternalMessageRecord): RequirementMessage | null;
   listMessages(requirementId: string): RequirementMessage[];
+  listMessagesPage(
+    requirementId: string,
+    input: ListRequirementMessagesPageRecord,
+  ): RequirementMessagesPage;
   listPendingRdMessages(requirementId: string): RequirementMessage[];
   createAgentTimer(input: CreateAgentTimerRecord): AgentTimer;
   getAgentTimer(id: string): AgentTimer | null;

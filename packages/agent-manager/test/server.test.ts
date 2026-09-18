@@ -742,6 +742,78 @@ test('RD Agent endpoints list related Requirements and deliver cross-Requirement
   }
 });
 
+test('Requirement conversation API supports head, tail, and page selections', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store,
+    runner: new WaitingRunner(),
+    logger: createLogger({ level: 'silent' }),
+  });
+  const requirement = manager.createRequirement({
+    title: 'Conversation pagination',
+    description: 'Expose bounded conversation reads',
+    provider: 'codex',
+  });
+  for (let index = 1; index <= 5; index += 1) {
+    store.appendMessage({
+      id: `msg-http-page-${index}`,
+      requirementId: requirement.id,
+      sessionId: requirement.session.id,
+      author: index % 2 === 0 ? 'rd_agent' : 'human',
+      body: `Message ${index}`,
+      deliverToRd: index % 2 !== 0,
+      now: `2026-09-10T12:00:0${index}.000Z`,
+    });
+  }
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+  const messagesUrl = `http://127.0.0.1:${port}/api/requirements/${requirement.id}/messages`;
+
+  try {
+    const headResponse = await fetch(`${messagesUrl}?head=2`);
+    const head = await headResponse.json() as {
+      items: Array<{ sequence: number }>;
+      pagination: Record<string, unknown>;
+    };
+    assert.equal(headResponse.status, 200);
+    assert.deepEqual(head.items.map((message) => message.sequence), [1, 2]);
+    assert.deepEqual(head.pagination, {
+      mode: 'head', totalItems: 5, returnedItems: 2, offset: 0, limit: 2,
+      hasPrevious: false, hasNext: true,
+    });
+
+    const tailResponse = await fetch(`${messagesUrl}?tail=2`);
+    const tail = await tailResponse.json() as typeof head;
+    assert.equal(tailResponse.status, 200);
+    assert.deepEqual(tail.items.map((message) => message.sequence), [4, 5]);
+    assert.deepEqual(tail.pagination, {
+      mode: 'tail', totalItems: 5, returnedItems: 2, offset: 3, limit: 2,
+      hasPrevious: true, hasNext: false,
+    });
+
+    const pageResponse = await fetch(`${messagesUrl}?page=2&pageSize=2`);
+    const page = await pageResponse.json() as typeof head;
+    assert.equal(pageResponse.status, 200);
+    assert.deepEqual(page.items.map((message) => message.sequence), [3, 4]);
+    assert.deepEqual(page.pagination, {
+      mode: 'page', totalItems: 5, returnedItems: 2, offset: 2, limit: 2,
+      hasPrevious: true, hasNext: true, page: 2, pageSize: 2, totalPages: 3,
+    });
+
+    const invalidResponse = await fetch(`${messagesUrl}?head=2&tail=2`);
+    assert.equal(invalidResponse.status, 400);
+    assert.match((await invalidResponse.json() as { error: string }).error, /mutually exclusive/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
+
 test('HTTP API exposes the persisted human and RD Agent conversation', async () => {
   const runner = new WaitingRunner();
   const logLines: string[] = [];

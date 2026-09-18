@@ -636,6 +636,19 @@ export class AgentManager extends EventEmitter {
     return this.#store.listMessages(requirementId);
   }
 
+  listMessagesPage(
+    requirementId: string,
+    input: { limit: number; offset: number; order: 'asc' | 'desc' },
+  ) {
+    if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 200) {
+      throw new RangeError('limit must be an integer from 1 to 200');
+    }
+    if (!Number.isSafeInteger(input.offset) || input.offset < 0) {
+      throw new RangeError('offset must be a non-negative integer');
+    }
+    return this.#store.listMessagesPage(requirementId, input);
+  }
+
   listRelatedRequirements(requirementId: string, sourceSessionId: string): RelatedRequirements {
     const source = this.requireAgentSource(requirementId, sourceSessionId);
     return {
@@ -1306,6 +1319,7 @@ export class AgentManager extends EventEmitter {
       'Immediately after you create a GitHub pull request for this requirement, run code-factory-cli pr register. Run it again only when your own push or edit changes PR metadata such as its title, branches, or head SHA.',
       'Agent Manager owns draft/open/closed/merged lifecycle synchronization through its GitHub reconciler. Never run the registration command merely to mirror a lifecycle event reported by a System message or observed on GitHub.',
       'Use code-factory-cli requirement related to inspect this Requirement\'s direct parent and children. You may coordinate with their RD Agents by sending a message with code-factory-cli requirement message; only direct parent/child targets are accepted, and the message is persisted in the target Requirement conversation.',
+      'Use code-factory-cli requirement messages to read a Requirement conversation. It defaults to this Requirement and supports a specific Requirement ID, head or tail selection, and pagination.',
       'For every long-running process or task you start—including builds, tests, deployments, data jobs, and other background work—track it to completion. While the current Run remains active, use the agent provider\'s normal wait, task-output, or monitor mechanism. Register a Code Factory timer with code-factory-cli timer register before ending the Run only when the task is guaranteed to continue independently after the Run ends, so Code Factory can wake this same Session to check its progress and result. Use code-factory-cli timer show to recover timer IDs and status, and cancel recurring timers as soon as they are no longer needed.',
       'When you discover separate follow-up work, you may propose a linked TODO requirement with code-factory-cli requirement propose.',
     ].join('\n');

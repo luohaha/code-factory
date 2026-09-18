@@ -14,6 +14,7 @@ Commands:
   pr register             Register or refresh a pull request
   requirement propose     Propose a separately tracked TODO requirement
   requirement related     Show this Requirement's direct parent and children
+  requirement messages    Read a Requirement's conversation messages
   requirement message     Send a message to a related Requirement's RD Agent
   timer register          Register a one-time or recurring wake-up timer
   timer show              Show timers registered for this Requirement
@@ -80,6 +81,22 @@ Required options:
 
 Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
 CODE_FACTORY_SESSION_ID.`;
+
+const REQUIREMENT_MESSAGES_HELP = `Usage: code-factory-cli requirement messages [options]
+
+Read a Requirement's conversation messages as JSON in ascending sequence order.
+Without a selection option, the complete conversation is returned.
+
+Optional options:
+  --requirement-id ID     Requirement to read (default: current Requirement)
+  --head COUNT            Return the first COUNT messages (1-200)
+  --tail COUNT            Return the last COUNT messages (1-200)
+  --page NUMBER           Return a one-based page (default page size: 20)
+  --page-size COUNT       Messages per page (1-200; default page: 1)
+
+--head, --tail, and page pagination are mutually exclusive.
+
+Context: CODE_FACTORY_API_URL and CODE_FACTORY_REQUIREMENT_ID.`;
 
 const TIMER_REGISTER_HELP = `Usage: code-factory-cli timer register [options]
 
@@ -261,6 +278,24 @@ function parseTimerRegistrationPayload(args: readonly string[]): Record<string, 
   };
 }
 
+function positiveIntegerOption(
+  value: string | undefined,
+  name: string,
+  help: string,
+  maximum?: number,
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (!/^\d+$/.test(value)) throw new CliUsageError(`${name} must be a positive integer`, help);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new CliUsageError(`${name} must be a positive integer`, help);
+  }
+  if (maximum !== undefined && parsed > maximum) {
+    throw new CliUsageError(`${name} must be an integer from 1 to ${maximum}`, help);
+  }
+  return parsed;
+}
+
 function errorMessage(payload: unknown, fallback: string): string {
   if (payload && typeof payload === 'object' && 'error' in payload) {
     const value = (payload as { error?: unknown }).error;
@@ -384,6 +419,44 @@ export async function runCodeFactoryCli(
         sourceSessionId,
         message: required(values.message as string | undefined, '--message', help),
       };
+    } else if (command === 'requirement messages') {
+      help = REQUIREMENT_MESSAGES_HELP;
+      if (writesHelp(args.slice(2))) {
+        runtime.writeOut(`${help}\n`);
+        return 0;
+      }
+      const values = parseOptions(args.slice(2), help, {
+        'requirement-id': { type: 'string' },
+        head: { type: 'string' },
+        tail: { type: 'string' },
+        page: { type: 'string' },
+        'page-size': { type: 'string' },
+      });
+      const requirementId = values['requirement-id'] === undefined
+        ? required(runtime.environment[CODE_FACTORY_REQUIREMENT_ID], CODE_FACTORY_REQUIREMENT_ID, help)
+        : required(values['requirement-id'] as string | undefined, '--requirement-id', help);
+      const head = positiveIntegerOption(values.head as string | undefined, '--head', help, 200);
+      const tail = positiveIntegerOption(values.tail as string | undefined, '--tail', help, 200);
+      const page = positiveIntegerOption(values.page as string | undefined, '--page', help);
+      const pageSize = positiveIntegerOption(
+        values['page-size'] as string | undefined,
+        '--page-size',
+        help,
+        200,
+      );
+      const usesPages = page !== undefined || pageSize !== undefined;
+      if ([head !== undefined, tail !== undefined, usesPages].filter(Boolean).length > 1) {
+        throw new CliUsageError('--head, --tail, and page pagination are mutually exclusive', help);
+      }
+      const query = new URLSearchParams();
+      if (head !== undefined) query.set('head', String(head));
+      if (tail !== undefined) query.set('tail', String(tail));
+      if (usesPages) {
+        query.set('page', String(page ?? 1));
+        query.set('pageSize', String(pageSize ?? 20));
+      }
+      endpoint = `/requirements/${encodeURIComponent(requirementId)}/messages${query.size > 0 ? `?${query}` : ''}`;
+      method = 'GET';
     } else if (command === 'timer register') {
       help = TIMER_REGISTER_HELP;
       if (writesHelp(args.slice(2))) {
