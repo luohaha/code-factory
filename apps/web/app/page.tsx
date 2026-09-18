@@ -109,6 +109,7 @@ import {
   countAddedMessages,
   isAwayFromConversationBottom,
   isAwayFromConversationTop,
+  upsertConversationMessage,
 } from '@/lib/conversation-scroll';
 import { formatDuration } from '@/lib/format-duration';
 import { I18nProvider, useI18n } from '@/lib/i18n';
@@ -1894,6 +1895,7 @@ function Dashboard() {
   const [messageLoading, setMessageLoading] = useState(false);
   const [messageRevision, setMessageRevision] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedIdRef = useRef<string | null>(null);
   const [query, setQuery] = useState('');
   const [searchResponse, setSearchResponse] = useState<{ query: string; items: SearchResultDto[] }>({ query: '', items: [] });
   const [searching, setSearching] = useState(false);
@@ -1908,6 +1910,10 @@ function Dashboard() {
   const [filterReferenceTime, setFilterReferenceTime] = useState(0);
 
   const client = useMemo(() => new AgentManagerClient(apiUrl), [apiUrl]);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
 
   const reload = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
@@ -2161,6 +2167,29 @@ function Dashboard() {
   async function uploadMessageAttachments(requirementId: string, files: File[]): Promise<string[]> {
     const attachments = await Promise.all(files.map((file) => client.uploadMessageAttachment(requirementId, file)));
     return attachments.map((attachment) => attachment.id);
+  }
+
+  async function replyToRequirement(
+    requirementId: string,
+    message: string,
+    attachments: File[],
+  ): Promise<void> {
+    setBusyId(requirementId);
+    setError(null);
+    try {
+      const attachmentIds = await uploadMessageAttachments(requirementId, attachments);
+      const result = await client.replyToRequirement(requirementId, message, attachmentIds);
+      if (selectedIdRef.current === requirementId) {
+        setMessages((current) => upsertConversationMessage(current, result.message));
+      }
+      void reload(false);
+    } catch (caught) {
+      const prefix = caught instanceof AgentManagerApiError && caught.status === 409 ? t('This action conflicts with the current state. Refresh and try again.') : '';
+      setError(prefix || (caught instanceof Error ? caught.message : t('Operation failed')));
+      throw caught;
+    } finally {
+      setBusyId(null);
+    }
   }
 
   async function createRequirement(input: { title: string; description: string } & AgentConfiguration) {
@@ -2490,10 +2519,9 @@ function Dashboard() {
           const attachmentIds = await uploadMessageAttachments(selectedRequirement.id, attachments);
           return await client.startRequirement(selectedRequirement.id, message, attachmentIds);
         }) : Promise.resolve()}
-        onReply={(message, attachments = []) => selectedRequirement ? runAction(selectedRequirement.id, async () => {
-          const attachmentIds = await uploadMessageAttachments(selectedRequirement.id, attachments);
-          return await client.replyToRequirement(selectedRequirement.id, message, attachmentIds);
-        }) : Promise.resolve()}
+        onReply={(message, attachments = []) => selectedRequirement
+          ? replyToRequirement(selectedRequirement.id, message, attachments)
+          : Promise.resolve()}
         onInterrupt={() => selectedRequirement ? runAction(selectedRequirement.id, () => client.interruptRequirement(selectedRequirement.id)) : Promise.resolve()}
         onConfirm={() => selectedRequirement ? runAction(selectedRequirement.id, () => client.confirmRequirement(selectedRequirement.id)) : Promise.resolve()}
         onReview={requestReview}
