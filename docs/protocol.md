@@ -14,6 +14,7 @@ GET /api/requirements
 GET /api/requirements/:id
 GET /api/sessions
 GET /api/runs?requirementId=<id>
+GET /api/runs/:id/trace
 GET /api/requirements/:id/messages
 GET /api/attachments/:id
 GET /api/pull-requests?requirementId=<id>
@@ -167,10 +168,10 @@ Current event types include:
 - `pull_request.created` / `pull_request.updated`;
 - `review_request.started`;
 - `timer.created` / `timer.fired` / `timer.cancelled`;
-- `run.started` / `run.succeeded` / `run.failed` / `run.timed_out` / `run.cancelled`;
+- `run.started` / `run.succeeded` / `run.failed` / `run.timed_out` / `run.cancelled` / `run.trace.appended`;
 - `manager.reconciled`.
 
-Mutation and lifecycle events carry the persisted resources needed for an idempotent local upsert: Requirement events carry the Requirement/session snapshot, Run events carry the Run and Requirement, message events carry the Message and Requirement, PR events carry the PullRequest, review-start and Reviewer outcome events carry ReviewRequest/Run records, Timer events carry the Timer, and configuration/model events carry their complete snapshot. Terminal Requirement events also carry affected Timers, while purge events carry the removed Requirement IDs. Clients should validate that resource ownership agrees with the event's Requirement ID, merge by resource ID and update time, and deduplicate Messages by ID/sequence. An older or incomplete payload is repaired with a resource-scoped query; short bursts may be coalesced only when their scope keys match. A workspace-wide snapshot remains an explicit initial/manual synchronization mechanism, not the default SSE response.
+Mutation and lifecycle events carry the persisted resources needed for an idempotent local upsert: Requirement events carry the Requirement/session snapshot, Run events carry the Run and Requirement, trace events carry the appended AgentTraceEvent, message events carry the Message and Requirement, PR events carry the PullRequest, review-start and Reviewer outcome events carry ReviewRequest/Run records, Timer events carry the Timer, and configuration/model events carry their complete snapshot. Terminal Requirement events also carry affected Timers, while purge events carry the removed Requirement IDs. Clients should validate that resource ownership agrees with the event's Requirement ID, merge by resource ID and update time, merge trace events by ID and per-Run sequence, and deduplicate Messages by ID/sequence. An older or incomplete payload is repaired with a resource-scoped query; short bursts may be coalesced only when their scope keys match. A workspace-wide snapshot remains an explicit initial/manual synchronization mechanism, not the default SSE response.
 
 The PR Reconciler publishes GitHub state and head-SHA changes through `pull_request.updated`. PR status changes, new comments/reviews, CI failures, and merge conflicts are first stored in the Requirement conversation and then published through `message.created`. Their payload includes `source: "github"`, `pullRequestId`, and the corresponding `triggerId`: `github.pull-request.status`, `github.pull-request.comment`, `github.pull-request.ci-failure`, or `github.pull-request.conflict`. SQLite Agent Trigger receipts deduplicate external events across Agent Manager restarts.
 

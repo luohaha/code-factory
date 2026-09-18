@@ -7,7 +7,7 @@ import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { normalizeRepositoryKey } from './repository-key.js';
 import { ClaudeCodeAdapter } from './adapters/claude-code.js';
 import { CodexAdapter } from './adapters/codex.js';
-import type { AgentAdapter } from './adapters/types.js';
+import type { AgentAdapter, NormalizedAgentTrace } from './adapters/types.js';
 import type { AgentTrigger, AgentTriggerContext, AgentTriggerMessage } from './agent-trigger.js';
 import {
   DEFAULT_AGENT_MANAGER_CONFIGURATION,
@@ -107,9 +107,24 @@ export const MIN_AGENT_TIMER_INTERVAL_SECONDS = 60;
 export const MAX_AGENT_TIMER_INTERVAL_SECONDS = 365 * 24 * 60 * 60;
 export const MAX_AGENT_TIMER_DESCRIPTION_LENGTH = 500;
 export const MAX_SEARCH_QUERY_LENGTH = 500;
+export const MAX_AGENT_TRACE_DETAIL_BYTES = 65_536;
 
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
 const REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS = DAY_MILLISECONDS;
+const AGENT_TRACE_TRUNCATION_SUFFIX = '\n… trace output truncated';
+
+function truncateAgentTraceDetail(detail: string): string {
+  if (Buffer.byteLength(detail) <= MAX_AGENT_TRACE_DETAIL_BYTES) return detail;
+  const bytes = Buffer.from(detail);
+  const prefixByteLimit = MAX_AGENT_TRACE_DETAIL_BYTES - Buffer.byteLength(AGENT_TRACE_TRUNCATION_SUFFIX);
+  let prefixEnd = prefixByteLimit;
+  while (prefixEnd > 0) {
+    const byte = bytes[prefixEnd];
+    if (byte === undefined || (byte & 0xc0) !== 0x80) break;
+    prefixEnd -= 1;
+  }
+  return `${bytes.subarray(0, prefixEnd).toString('utf8')}${AGENT_TRACE_TRUNCATION_SUFFIX}`;
+}
 
 const REVIEWER_DEVELOPER_INSTRUCTIONS = [
   'You are a short-lived GitHub pull request reviewer. Review only; do not edit code.',
@@ -633,6 +648,11 @@ export class AgentManager extends EventEmitter {
     return this.#store.listRuns(requirementId);
   }
 
+  listAgentTrace(runId: string) {
+    if (!this.#store.getRun(runId)) throw new StoreNotFoundError(`Run ${runId} not found`);
+    return this.#store.listAgentTrace(runId);
+  }
+
   listMessages(requirementId: string) {
     return this.#store.listMessages(requirementId);
   }
@@ -1029,6 +1049,7 @@ export class AgentManager extends EventEmitter {
       maxOutputBytes: this.#maxOutputBytes,
       onOutput: (line) => this.emit('output', { runId, line }),
       onEvent: (event) => {
+        this.recordAgentTraces(requirement.id, requirement.session.id, runId, event.traces);
         if (!event.message || (event.kind !== 'message' && event.kind !== 'completed')) return;
         const body = event.message.trim();
         if (body) lastReviewerMessage = body;
@@ -1175,6 +1196,7 @@ export class AgentManager extends EventEmitter {
       },
       onOutput: (line) => this.emit('output', { runId, line }),
       onEvent: (event) => {
+        this.recordAgentTraces(requirementId, started.session.id, runId, event.traces);
         if (!event.message || (event.kind !== 'message' && event.kind !== 'completed')) return;
         const body = event.message.trim();
         if (!body || body === lastAgentMessage) return;
@@ -1427,6 +1449,39 @@ export class AgentManager extends EventEmitter {
       },
     });
     return message;
+  }
+
+  private recordAgentTraces(
+    requirementId: string,
+    sessionId: string,
+    runId: string,
+    traces: NormalizedAgentTrace[] | undefined,
+  ): void {
+    for (const item of traces ?? []) {
+      const normalizedTitle = item.title.trim().slice(0, 500) || 'Agent event';
+      const detail = item.detail === undefined
+        ? undefined
+        : truncateAgentTraceDetail(item.detail);
+      const trace = this.#store.appendAgentTrace({
+        id: `trc_${randomUUID()}`,
+        runId,
+        kind: item.kind,
+        ...(item.status ? { status: item.status } : {}),
+        title: normalizedTitle,
+        ...(detail === undefined ? {} : { detail }),
+        ...(item.toolName ? { toolName: item.toolName.slice(0, 500) } : {}),
+        ...(item.toolCallId ? { toolCallId: item.toolCallId.slice(0, 500) } : {}),
+        ...(item.nativeType ? { nativeType: item.nativeType.slice(0, 200) } : {}),
+        now: new Date().toISOString(),
+      });
+      this.publish({
+        type: 'run.trace.appended',
+        requirementId,
+        sessionId,
+        runId,
+        payload: { trace },
+      });
+    }
   }
 
   private logRunOutcome(

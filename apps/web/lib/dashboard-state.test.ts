@@ -4,6 +4,7 @@ import test from 'node:test';
 import type { ManagerEventDto } from './agent-manager-client.ts';
 import {
   applyRequirementScopedUpdate,
+  mergeAgentTrace,
   mergeRefreshTargets,
   mergeVersionedSnapshot,
   refreshTargetsForManagerEvent,
@@ -11,6 +12,17 @@ import {
   upsertRequirement,
   upsertRun,
 } from './dashboard-state.ts';
+
+void test('merges trace snapshots with live events in sequence order', () => {
+  const live = [{ id: 'trace-2', sequence: 2, title: 'live result' }];
+  const snapshot = [
+    { id: 'trace-1', sequence: 1, title: 'call' },
+    { id: 'trace-2', sequence: 2, title: 'snapshot result' },
+  ];
+
+  assert.deepEqual(mergeAgentTrace(live, snapshot), snapshot);
+  assert.deepEqual(mergeAgentTrace(snapshot, live), [snapshot[0], live[0]]);
+});
 
 function managerEvent(
   type: string,

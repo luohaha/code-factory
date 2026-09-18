@@ -14,6 +14,7 @@ import {
 } from './search.js';
 import {
   type AgentManagerStore,
+  type AppendAgentTraceRecord,
   type AppendAgentTriggerMessageRecord,
   type AppendExternalMessageRecord,
   type AppendMessageRecord,
@@ -33,6 +34,7 @@ import {
 } from './store.js';
 import type {
   AgentRun,
+  AgentTraceEvent,
   AgentSession,
   ManagerEvent,
   MessageAttachment,
@@ -102,6 +104,22 @@ function runFrom(row: Row): AgentRun {
     inputToSequence: row.input_to_sequence === null ? null : Number(row.input_to_sequence),
     startedAt: String(row.started_at),
     finishedAt: row.finished_at === null ? null : String(row.finished_at),
+  };
+}
+
+function agentTraceEventFrom(row: Row): AgentTraceEvent {
+  return {
+    id: String(row.id),
+    runId: String(row.run_id),
+    sequence: Number(row.sequence),
+    kind: String(row.kind) as AgentTraceEvent['kind'],
+    status: row.status === null ? null : String(row.status) as AgentTraceEvent['status'],
+    title: String(row.title),
+    detail: row.detail === null ? null : String(row.detail),
+    toolName: row.tool_name === null ? null : String(row.tool_name),
+    toolCallId: row.tool_call_id === null ? null : String(row.tool_call_id),
+    nativeType: row.native_type === null ? null : String(row.native_type),
+    createdAt: String(row.created_at),
   };
 }
 
@@ -366,6 +384,46 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       ? this.#db.prepare('SELECT * FROM agent_runs WHERE requirement_id = ? ORDER BY started_at DESC').all(requirementId)
       : this.#db.prepare('SELECT * FROM agent_runs ORDER BY started_at DESC').all();
     return (rows as Row[]).map(runFrom);
+  }
+
+  getRun(id: string): AgentRun | null {
+    const row = this.#db.prepare('SELECT * FROM agent_runs WHERE id = ?').get(id) as Row | undefined;
+    return row ? runFrom(row) : null;
+  }
+
+  appendAgentTrace(input: AppendAgentTraceRecord): AgentTraceEvent {
+    this.#db.exec('BEGIN IMMEDIATE');
+    try {
+      if (!this.getRun(input.runId)) throw new StoreNotFoundError(`Run ${input.runId} not found`);
+      const row = this.#db.prepare('SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM agent_trace_events WHERE run_id = ?')
+        .get(input.runId) as Row;
+      const sequence = Number(row.sequence);
+      this.#db.prepare(`INSERT INTO agent_trace_events
+        (id, run_id, sequence, kind, status, title, detail, tool_name, tool_call_id, native_type, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        input.id,
+        input.runId,
+        sequence,
+        input.kind,
+        input.status ?? null,
+        input.title,
+        input.detail ?? null,
+        input.toolName ?? null,
+        input.toolCallId ?? null,
+        input.nativeType ?? null,
+        input.now,
+      );
+      this.#db.exec('COMMIT');
+      return agentTraceEventFrom(this.#db.prepare('SELECT * FROM agent_trace_events WHERE id = ?').get(input.id) as Row);
+    } catch (error) {
+      this.#db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  listAgentTrace(runId: string): AgentTraceEvent[] {
+    return (this.#db.prepare(`SELECT * FROM agent_trace_events
+      WHERE run_id = ? ORDER BY sequence ASC`).all(runId) as Row[]).map(agentTraceEventFrom);
   }
 
   createMessageAttachment(input: CreateMessageAttachmentRecord): MessageAttachment {

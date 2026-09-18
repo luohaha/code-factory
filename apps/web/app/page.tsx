@@ -1,7 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import { type SyntheticEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { memo, type RefObject, type SyntheticEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -93,6 +93,7 @@ import {
   type AgentProvider,
   type AgentReasoningEffort,
   type AgentRunDto,
+  type AgentTraceEventDto,
   type ManagerEventDto,
   type MessageAttachmentDto,
   type PullRequestDto,
@@ -117,6 +118,7 @@ import {
 import {
   applyRequirementScopedUpdate,
   managerEventInvalidatesSearch,
+  mergeAgentTrace,
   mergeVersionedSnapshot,
   mergeRefreshTargets,
   refreshTargetsForManagerEvent,
@@ -233,6 +235,15 @@ const runStatusLabel: Record<AgentRunDto['status'], TranslationKey> = {
   cancelled: 'Cancelled',
 };
 
+const traceKindLabel: Record<AgentTraceEventDto['kind'], TranslationKey> = {
+  lifecycle: 'Lifecycle',
+  reasoning: 'Reasoning',
+  assistant_message: 'Agent message',
+  tool_call: 'Tool call',
+  tool_result: 'Tool result',
+  error: 'Error',
+};
+
 const authorLabel: Record<RequirementMessageDto['author'], TranslationKey> = {
   human: 'Human',
   rd_agent: 'RD Agent',
@@ -325,7 +336,7 @@ function isWithinTimeRange(value: string, timeRange: TimeRange, now: number): bo
   return Number.isFinite(timestamp) && timestamp >= now - timeRangeMilliseconds[timeRange];
 }
 
-function MessageBody({ body, inverted = false }: { body: string; inverted?: boolean }) {
+const MessageBody = memo(function MessageBody({ body, inverted = false }: { body: string; inverted?: boolean }) {
   return (
     <div className={`message-markdown ${inverted ? 'message-markdown-inverted' : ''}`}>
       <ReactMarkdown
@@ -338,7 +349,7 @@ function MessageBody({ body, inverted = false }: { body: string; inverted?: bool
       </ReactMarkdown>
     </div>
   );
-}
+});
 
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
@@ -543,21 +554,21 @@ function SessionCard({ requirement, run, busy, onOpen, onRetry }: {
   const { t } = useI18n();
   return (
     <article className="rounded-xl border border-border/80 bg-card p-3.5">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className={`size-2 rounded-full ${stateDot[requirement.session.state]}`} />
-          <span className="font-mono text-[10px] font-semibold">REQ-{shortId(requirement.id)}</span>
+      <button type="button" className="block w-full text-left" onClick={onOpen}>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className={`size-2 rounded-full ${stateDot[requirement.session.state]}`} />
+            <span className="font-mono text-[10px] font-semibold">REQ-{shortId(requirement.id)}</span>
+          </div>
+          <Badge variant="secondary" className="h-5 max-w-40 truncate font-mono text-[9px]" title={agentConfigurationLabel(requirement)}>{agentConfigurationLabel(requirement)}</Badge>
         </div>
-        <Badge variant="secondary" className="h-5 max-w-40 truncate font-mono text-[9px]" title={agentConfigurationLabel(requirement)}>{agentConfigurationLabel(requirement)}</Badge>
-      </div>
-      <button type="button" className="mt-2.5 block w-full text-left" onClick={onOpen}>
-        <h3 className="truncate text-xs font-semibold hover:underline">{requirement.title}</h3>
+        <h3 className="mt-2.5 truncate text-xs font-semibold hover:underline">{requirement.title}</h3>
         <p className="mt-1.5 truncate font-mono text-[9px] text-muted-foreground">ses-{shortId(requirement.session.id)}</p>
+        {run ? <p className="mt-2.5 text-[10px] leading-4 text-foreground/75">{run.taskSummary} · {t(runStatusLabel[run.status])}</p> : null}
+        {requirement.session.pendingMessageCount > 0 ? (
+          <p className="mt-2 text-[10px] font-medium text-amber-600">{t('{count} external messages pending', { count: requirement.session.pendingMessageCount })}</p>
+        ) : null}
       </button>
-      {run ? <p className="mt-2.5 text-[10px] leading-4 text-foreground/75">{run.taskSummary} · {t(runStatusLabel[run.status])}</p> : null}
-      {requirement.session.pendingMessageCount > 0 ? (
-        <p className="mt-2 text-[10px] font-medium text-amber-600">{t('{count} external messages pending', { count: requirement.session.pendingMessageCount })}</p>
-      ) : null}
       {requirement.session.lastError ? (
         <Button size="xs" variant="destructive" className="mt-3 w-full" disabled={busy} onClick={onRetry}>
           {busy ? <LoaderCircle className="animate-spin" /> : <RotateCcw data-icon="inline-start" />}{t('Retry original Session')}
@@ -1204,7 +1215,7 @@ function ManagerConfigurationDialog({
   );
 }
 
-function AgentTimerDialog({
+const AgentTimerDialog = memo(function AgentTimerDialog({
   timers,
   disabled,
   busy,
@@ -1387,11 +1398,356 @@ function AgentTimerDialog({
       </DialogContent>
     </Dialog>
   );
+});
+
+// Keep draft state below RequirementDetail so each keystroke does not re-render the conversation history.
+function RequirementComposer({
+  requirement,
+  agentTimers,
+  busy,
+  inputRef,
+  onStart,
+  onReply,
+  onConfirm,
+  onCreateAgentTimer,
+  onCancelAgentTimer,
+  onSent,
+}: {
+  requirement: RequirementDto;
+  agentTimers: AgentTimerDto[];
+  busy: boolean;
+  inputRef: RefObject<HTMLTextAreaElement | null>;
+  onStart: (message?: string, attachments?: File[]) => Promise<void>;
+  onReply: (message: string, attachments?: File[]) => Promise<void>;
+  onConfirm: () => Promise<void>;
+  onCreateAgentTimer: (
+    input: { description: string; schedule: 'once' | 'recurring'; intervalSeconds: number },
+  ) => Promise<void>;
+  onCancelAgentTimer: (timerId: string) => Promise<void>;
+  onSent: () => void;
+}) {
+  const { t } = useI18n();
+  const [message, setMessage] = useState('');
+  const [draftAttachments, setDraftAttachments] = useState<DraftAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const draftAttachmentsRef = useRef<DraftAttachment[]>([]);
+  const canWrite = requirement.status !== 'cancelled';
+
+  useEffect(() => {
+    draftAttachmentsRef.current = draftAttachments;
+  }, [draftAttachments]);
+
+  useEffect(() => () => {
+    for (const attachment of draftAttachmentsRef.current) {
+      if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+    }
+  }, []);
+
+  async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
+    event.preventDefault();
+    const body = message.trim();
+    if ((!body && draftAttachments.length === 0) || !canWrite) return;
+    const attachmentFiles = draftAttachments.map((attachment) => attachment.file);
+    try {
+      if (requirement.status === 'todo') await onStart(body || undefined, attachmentFiles);
+      else await onReply(body, attachmentFiles);
+      onSent();
+      setMessage('');
+      for (const attachment of draftAttachments) {
+        if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+      }
+      setDraftAttachments([]);
+      setAttachmentError(null);
+    } catch {
+      // Keep the reply in the editor so it can be retried.
+    }
+  }
+
+  function addAttachments(files: File[]) {
+    const remaining = maxAttachmentsPerMessage - draftAttachments.length;
+    if (files.some((file) => file.size > maxAttachmentBytes)) {
+      setAttachmentError(t('Each attachment must be 20 MB or smaller.'));
+      return;
+    }
+    if (files.length > remaining) {
+      setAttachmentError(t('Each message supports up to {count} attachments.', { count: maxAttachmentsPerMessage }));
+      return;
+    }
+    setDraftAttachments((current) => [
+      ...current,
+      ...files.map((file) => ({
+        id: crypto.randomUUID(),
+        file,
+        previewUrl: previewableImageTypes.has(file.type) ? URL.createObjectURL(file) : null,
+      })),
+    ]);
+    setAttachmentError(null);
+  }
+
+  function removeAttachment(id: string) {
+    setDraftAttachments((current) => {
+      const removed = current.find((attachment) => attachment.id === id);
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+      return current.filter((attachment) => attachment.id !== id);
+    });
+    setAttachmentError(null);
+  }
+
+  return (
+    <div className="max-h-[60dvh] min-h-0 shrink-0 overflow-y-auto border-t border-border bg-card px-4 py-3 sm:px-6">
+      {requirement.status === 'waiting_confirmation' ? (
+        <div className="mb-2.5 flex items-center justify-between gap-3 rounded-xl border border-violet-500/15 bg-violet-500/7 px-3 py-2 text-[10px] text-violet-700 dark:text-violet-300">
+          <span>{t('The Agent reported completion. You can still ask follow-up questions.')}</span>
+          <Button size="xs" className="shrink-0" disabled={busy} onClick={() => void onConfirm().catch(() => undefined)}><Check data-icon="inline-start" />{t('Complete')}</Button>
+        </div>
+      ) : null}
+      <form
+        className="rounded-2xl border border-input bg-background p-2 shadow-[0_3px_16px_oklch(0.18_0.02_255/0.07)] transition focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/15"
+        onSubmit={submit}
+      >
+        {draftAttachments.length > 0 ? (
+          <div className="mb-1.5 flex gap-2 overflow-x-auto px-1 pt-1">
+            {draftAttachments.map((attachment) => (
+              <div key={attachment.id} className={`group relative h-16 shrink-0 overflow-hidden rounded-xl border border-border bg-muted ${attachment.previewUrl ? 'w-16' : 'w-48'}`}>
+                {attachment.previewUrl ? (
+                  <>
+                    {/* oxlint-disable-next-line next/no-img-element -- Blob previews cannot use the framework image optimizer. */}
+                    <img src={attachment.previewUrl} alt={attachment.file.name} className="size-full object-cover" />
+                  </>
+                ) : (
+                  <div className="flex size-full items-center gap-2.5 px-3 pr-8">
+                    <FileText className="size-5 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0">
+                      <span className="block truncate text-[10px] font-medium">{attachment.file.name}</span>
+                      <span className="mt-0.5 block text-[9px] text-muted-foreground">{formatBytes(attachment.file.size)}</span>
+                    </span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="absolute top-1 right-1 grid size-5 place-items-center rounded-full bg-black/65 text-white opacity-80 transition hover:opacity-100"
+                  aria-label={t('Remove {name}', { name: attachment.file.name })}
+                  onClick={() => removeAttachment(attachment.id)}
+                >
+                  <X className="size-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <Textarea
+          ref={inputRef}
+          aria-label={t('Reply to RD Agent')}
+          value={message}
+          onChange={(event) => setMessage(event.target.value)}
+          onPaste={(event) => {
+            const attachments = Array.from(event.clipboardData.files);
+            if (attachments.length === 0) return;
+            event.preventDefault();
+            addAttachments(attachments);
+          }}
+          onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }}
+          onDrop={(event) => {
+            if (event.dataTransfer.files.length === 0) return;
+            event.preventDefault();
+            addAttachments(Array.from(event.dataTransfer.files));
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }
+          }}
+          disabled={!canWrite || busy}
+          className="max-h-[min(9rem,20dvh)] min-h-14 resize-none border-0 bg-transparent px-2 py-1.5 text-xs shadow-none focus-visible:border-transparent focus-visible:ring-0 disabled:bg-transparent"
+          placeholder={requirement.status === 'todo'
+            ? t('Add instructions and start; paste or drop attachments…')
+            : requirement.status === 'done'
+              ? t('Reply to reactivate this completed requirement; paste or drop attachments…')
+              : requirement.session.state === 'running'
+                ? t('Send a message or attachment; it will wait for the next Run by default…')
+                : canWrite
+                  ? t('Reply to the RD Agent; paste or drop attachments…')
+                  : t('Replies are unavailable in the current state')}
+        />
+        <div className="mt-1 flex items-center justify-between gap-3 px-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <input
+              ref={attachmentInputRef}
+              type="file"
+              className="sr-only"
+              multiple
+              disabled={!canWrite || busy}
+              onChange={(event) => {
+                addAttachments(Array.from(event.currentTarget.files ?? []));
+                event.currentTarget.value = '';
+              }}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="rounded-xl text-muted-foreground"
+              disabled={!canWrite || busy || draftAttachments.length >= maxAttachmentsPerMessage}
+              aria-label={t('Add attachment')}
+              onClick={() => attachmentInputRef.current?.click()}
+            >
+              <Paperclip />
+            </Button>
+            <AgentTimerDialog
+              timers={agentTimers}
+              disabled={requirement.status === 'done' || requirement.status === 'cancelled'}
+              busy={busy}
+              onCreate={onCreateAgentTimer}
+              onCancel={onCancelAgentTimer}
+            />
+            <span className="truncate text-[9px] text-muted-foreground">{t('Enter to send · Up to 6 attachments')}</span>
+          </div>
+          <Button type="submit" size="icon-sm" className="rounded-xl" disabled={!canWrite || busy || (!message.trim() && draftAttachments.length === 0)} aria-label={t('Send reply')}>
+            {busy ? <LoaderCircle className="animate-spin" /> : <Send />}
+          </Button>
+        </div>
+      </form>
+      {attachmentError ? <p className="mt-1.5 px-1 text-[10px] text-destructive">{attachmentError}</p> : null}
+      {requirement.status === 'todo' ? (
+        <Button className="mt-2 w-full" variant="ghost" size="xs" disabled={busy} onClick={() => void onStart()}>
+          <Play data-icon="inline-start" />{t('Start without additional instructions')}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function AgentTracePanel({ runs, tracesByRun, loadedRunIds, onLoadTrace }: {
+  runs: AgentRunDto[];
+  tracesByRun: Readonly<Record<string, AgentTraceEventDto[] | undefined>>;
+  loadedRunIds: ReadonlySet<string>;
+  onLoadTrace: (runId: string) => Promise<void>;
+}) {
+  const { locale, t } = useI18n();
+  const latestRunId = runs[0]?.id ?? '';
+  const [manuallySelectedRunId, setManuallySelectedRunId] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<{ runId: string; message: string } | null>(null);
+  const requestedRunIdsRef = useRef(new Set<string>());
+  const selectedRunId = runs.some((run) => run.id === manuallySelectedRunId)
+    ? manuallySelectedRunId!
+    : latestRunId;
+
+  const requestTrace = useCallback((runId: string) => {
+    if (!runId || requestedRunIdsRef.current.has(runId)) return;
+    requestedRunIdsRef.current.add(runId);
+    setLoadError((current) => current?.runId === runId ? null : current);
+    void onLoadTrace(runId)
+      .catch((caught: unknown) => {
+        setLoadError({
+          runId,
+          message: caught instanceof Error ? caught.message : t('Failed to load Agent trace'),
+        });
+      });
+  }, [onLoadTrace, t]);
+
+  useEffect(() => {
+    if (!selectedRunId || loadedRunIds.has(selectedRunId)) return;
+    requestTrace(selectedRunId);
+  }, [loadedRunIds, requestTrace, selectedRunId]);
+
+  if (runs.length === 0) return null;
+  const selectedRun = runs.find((run) => run.id === selectedRunId) ?? runs[0]!;
+  const trace = tracesByRun[selectedRun.id] ?? [];
+  const selectedLoadError = loadError?.runId === selectedRun.id ? loadError.message : null;
+  const loading = !loadedRunIds.has(selectedRun.id) && selectedLoadError === null;
+
+  return (
+    <section className="mt-5" aria-labelledby="agent-trace">
+      <div className="mb-2.5 flex flex-wrap items-center gap-2">
+        <Terminal className="size-3.5 text-muted-foreground" />
+        <h3 id="agent-trace" className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Agent trace')}</h3>
+        <Badge variant="secondary" className="h-5 min-w-5 justify-center px-1.5 font-mono text-[9px]">{trace.length}</Badge>
+        <NativeSelect
+          size="sm"
+          className="ml-auto w-full sm:w-64"
+          value={selectedRun.id}
+          aria-label={t('Select Run trace')}
+          onChange={(event) => {
+            setManuallySelectedRunId(event.currentTarget.value);
+          }}
+        >
+          {runs.map((run, index) => (
+            <NativeSelectOption key={run.id} value={run.id}>
+              {t('Run {number} · {status} · {time}', {
+                number: runs.length - index,
+                status: t(runStatusLabel[run.status]),
+                time: formatTime(run.startedAt, locale),
+              })}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+      <div className="rounded-xl border border-border/80 bg-card">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/70 px-3.5 py-2.5 text-[9px] text-muted-foreground">
+          <span className="font-medium text-foreground">{selectedRun.taskSummary}</span>
+          <span className="font-mono">run-{shortId(selectedRun.id)}</span>
+          <span>{formatTime(selectedRun.startedAt, locale)}</span>
+          <Badge variant="outline" className="ml-auto h-5 text-[9px]">{t(runStatusLabel[selectedRun.status])}</Badge>
+        </div>
+        {loading ? (
+          <div className="flex items-center justify-center gap-2 px-4 py-8 text-[10px] text-muted-foreground">
+            <LoaderCircle className="size-3.5 animate-spin" />{t('Loading Agent trace')}
+          </div>
+        ) : selectedLoadError ? (
+          <div className="flex flex-col items-center gap-2 px-4 py-6 text-center text-[10px] text-destructive">
+            <span>{selectedLoadError}</span>
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              onClick={() => {
+                requestedRunIdsRef.current.delete(selectedRun.id);
+                requestTrace(selectedRun.id);
+              }}
+            >
+              <RotateCcw data-icon="inline-start" />{t('Retry trace')}
+            </Button>
+          </div>
+        ) : trace.length === 0 ? (
+          <div className="px-4 py-7 text-center text-[10px] text-muted-foreground">
+            {t(selectedRun.status === 'running' ? 'Waiting for Agent trace events…' : 'No trace was captured for this Run.')}
+          </div>
+        ) : (
+          <div className="max-h-96 overflow-y-auto px-3.5 py-3" aria-live="polite">
+            <ol className="space-y-3">
+              {trace.map((item) => (
+                <li key={item.id} className="relative pl-5 before:absolute before:top-5 before:bottom-[-0.75rem] before:left-[5px] before:w-px before:bg-border last:before:hidden">
+                  <span className={`absolute top-1 left-0 size-2.5 rounded-full border-2 border-card ${item.kind === 'error' || item.status === 'failed' ? 'bg-rose-500' : item.kind === 'tool_call' || item.kind === 'tool_result' ? 'bg-amber-500' : item.kind === 'reasoning' ? 'bg-violet-500' : 'bg-emerald-500'}`} />
+                  <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                    <Badge variant="outline" className="h-5 text-[9px]">{t(traceKindLabel[item.kind])}</Badge>
+                    <span className="min-w-0 flex-1 truncate text-[10px] font-semibold" title={item.title}>{item.title}</span>
+                    <span className="shrink-0 text-[9px] text-muted-foreground">{formatTime(item.createdAt, locale)}</span>
+                  </div>
+                  {item.detail ? (
+                    <pre className="mt-1.5 max-h-64 overflow-auto rounded-lg bg-muted/55 px-3 py-2 font-mono text-[10px] leading-4 whitespace-pre-wrap break-words text-foreground/80">{item.detail}</pre>
+                  ) : null}
+                  {item.toolName || item.nativeType ? (
+                    <p className="mt-1 truncate font-mono text-[8px] text-muted-foreground" title={[item.toolName, item.toolCallId, item.nativeType].filter(Boolean).join(' · ')}>
+                      {[item.toolName, item.toolCallId, item.nativeType].filter(Boolean).join(' · ')}
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+      </div>
+    </section>
+  );
 }
 
 function RequirementDetail({
   requirement,
   runs,
+  tracesByRun,
+  loadedTraceRunIds,
   messages,
   agentTimers,
   pullRequests,
@@ -1408,10 +1764,13 @@ function RequirementDetail({
   onReview,
   onCreateAgentTimer,
   onCancelAgentTimer,
+  onLoadTrace,
   apiUrl,
 }: {
   requirement: RequirementDto | null;
   runs: AgentRunDto[];
+  tracesByRun: Readonly<Record<string, AgentTraceEventDto[] | undefined>>;
+  loadedTraceRunIds: ReadonlySet<string>;
   messages: RequirementMessageDto[];
   agentTimers: AgentTimerDto[];
   pullRequests: PullRequestDto[];
@@ -1430,18 +1789,14 @@ function RequirementDetail({
     input: { description: string; schedule: 'once' | 'recurring'; intervalSeconds: number },
   ) => Promise<void>;
   onCancelAgentTimer: (timerId: string) => Promise<void>;
+  onLoadTrace: (runId: string) => Promise<void>;
   apiUrl: string;
 }) {
   const { locale, t } = useI18n();
-  const [message, setMessage] = useState('');
-  const [draftAttachments, setDraftAttachments] = useState<DraftAttachment[]>([]);
-  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [newMessages, setNewMessages] = useState<{ requirementId: string; count: number } | null>(null);
   const [scrollToBottomRequirementId, setScrollToBottomRequirementId] = useState<string | null>(null);
   const [scrollToTopRequirementId, setScrollToTopRequirementId] = useState<string | null>(null);
-  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
-  const draftAttachmentsRef = useRef<DraftAttachment[]>([]);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const followsLatestRef = useRef(true);
   const initializedRequirementIdRef = useRef<string | undefined>(undefined);
@@ -1511,68 +1866,7 @@ function RequirementDetail({
     }
   }, [messageLoading, messages, requirementId, scrollToLatest]);
 
-  useEffect(() => {
-    draftAttachmentsRef.current = draftAttachments;
-  }, [draftAttachments]);
-
-  useEffect(() => () => {
-    for (const attachment of draftAttachmentsRef.current) {
-      if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
-    }
-  }, []);
-
   if (!requirement) return <Sheet open={false} onOpenChange={onOpenChange} />;
-  const canWrite = requirement.status !== 'cancelled';
-
-  async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
-    event.preventDefault();
-    const body = message.trim();
-    if ((!body && draftAttachments.length === 0) || !canWrite) return;
-    const attachmentFiles = draftAttachments.map((attachment) => attachment.file);
-    try {
-      if (requirement!.status === 'todo') await onStart(body || undefined, attachmentFiles);
-      else await onReply(body, attachmentFiles);
-      scrollToLatest();
-      setMessage('');
-      for (const attachment of draftAttachments) {
-        if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
-      }
-      setDraftAttachments([]);
-      setAttachmentError(null);
-    } catch {
-      // Keep the reply in the editor so it can be retried.
-    }
-  }
-
-  function addAttachments(files: File[]) {
-    const remaining = maxAttachmentsPerMessage - draftAttachments.length;
-    if (files.some((file) => file.size > maxAttachmentBytes)) {
-      setAttachmentError(t('Each attachment must be 20 MB or smaller.'));
-      return;
-    }
-    if (files.length > remaining) {
-      setAttachmentError(t('Each message supports up to {count} attachments.', { count: maxAttachmentsPerMessage }));
-      return;
-    }
-    setDraftAttachments((current) => [
-      ...current,
-      ...files.map((file) => ({
-        id: crypto.randomUUID(),
-        file,
-        previewUrl: previewableImageTypes.has(file.type) ? URL.createObjectURL(file) : null,
-      })),
-    ]);
-    setAttachmentError(null);
-  }
-
-  function removeAttachment(id: string) {
-    setDraftAttachments((current) => {
-      const removed = current.find((attachment) => attachment.id === id);
-      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
-      return current.filter((attachment) => attachment.id !== id);
-    });
-    setAttachmentError(null);
-  }
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -1668,6 +1962,13 @@ function RequirementDetail({
                 <div className="col-span-2 min-w-0 sm:col-span-1"><dt className="sr-only">{t('Native Session')}</dt><dd className="truncate" title={requirement.session.nativeSessionId ?? undefined}>{t('Native: {id}', { id: requirement.session.nativeSessionId ? shortId(requirement.session.nativeSessionId) : t('Not created') })}</dd></div>
               </dl>
             </section>
+
+            <AgentTracePanel
+              runs={runs}
+              tracesByRun={tracesByRun}
+              loadedRunIds={loadedTraceRunIds}
+              onLoadTrace={onLoadTrace}
+            />
 
             {pullRequests.length > 0 ? (
               <section className="mt-5" aria-labelledby="linked-pull-requests">
@@ -1777,127 +2078,18 @@ function RequirementDetail({
           </div>
         </ScrollArea>
 
-        <div className="max-h-[60dvh] min-h-0 shrink-0 overflow-y-auto border-t border-border bg-card px-4 py-3 sm:px-6">
-          {requirement.status === 'waiting_confirmation' ? (
-            <div className="mb-2.5 flex items-center justify-between gap-3 rounded-xl border border-violet-500/15 bg-violet-500/7 px-3 py-2 text-[10px] text-violet-700 dark:text-violet-300">
-              <span>{t('The Agent reported completion. You can still ask follow-up questions.')}</span>
-              <Button size="xs" className="shrink-0" disabled={busy} onClick={() => void onConfirm().catch(() => undefined)}><Check data-icon="inline-start" />{t('Complete')}</Button>
-            </div>
-          ) : null}
-          <form
-            className="rounded-2xl border border-input bg-background p-2 shadow-[0_3px_16px_oklch(0.18_0.02_255/0.07)] transition focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/15"
-            onSubmit={submit}
-          >
-            {draftAttachments.length > 0 ? (
-              <div className="mb-1.5 flex gap-2 overflow-x-auto px-1 pt-1">
-                {draftAttachments.map((attachment) => (
-                  <div key={attachment.id} className={`group relative h-16 shrink-0 overflow-hidden rounded-xl border border-border bg-muted ${attachment.previewUrl ? 'w-16' : 'w-48'}`}>
-                    {attachment.previewUrl ? (
-                      <>
-                        {/* oxlint-disable-next-line next/no-img-element -- Blob previews cannot use the framework image optimizer. */}
-                        <img src={attachment.previewUrl} alt={attachment.file.name} className="size-full object-cover" />
-                      </>
-                    ) : (
-                      <div className="flex size-full items-center gap-2.5 px-3 pr-8">
-                        <FileText className="size-5 shrink-0 text-muted-foreground" />
-                        <span className="min-w-0">
-                          <span className="block truncate text-[10px] font-medium">{attachment.file.name}</span>
-                          <span className="mt-0.5 block text-[9px] text-muted-foreground">{formatBytes(attachment.file.size)}</span>
-                        </span>
-                      </div>
-                    )}
-                    <button
-                      type="button"
-                      className="absolute top-1 right-1 grid size-5 place-items-center rounded-full bg-black/65 text-white opacity-80 transition hover:opacity-100"
-                      aria-label={t('Remove {name}', { name: attachment.file.name })}
-                      onClick={() => removeAttachment(attachment.id)}
-                    >
-                      <X className="size-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            <Textarea
-              ref={messageInputRef}
-              aria-label={t('Reply to RD Agent')}
-              value={message}
-              onChange={(event) => setMessage(event.target.value)}
-              onPaste={(event) => {
-                const attachments = Array.from(event.clipboardData.files);
-                if (attachments.length === 0) return;
-                event.preventDefault();
-                addAttachments(attachments);
-              }}
-              onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }}
-              onDrop={(event) => {
-                if (event.dataTransfer.files.length === 0) return;
-                event.preventDefault();
-                addAttachments(Array.from(event.dataTransfer.files));
-              }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  event.currentTarget.form?.requestSubmit();
-                }
-              }}
-              disabled={!canWrite || busy}
-              className="max-h-[min(9rem,20dvh)] min-h-14 resize-none border-0 bg-transparent px-2 py-1.5 text-xs shadow-none focus-visible:border-transparent focus-visible:ring-0 disabled:bg-transparent"
-              placeholder={requirement.status === 'todo'
-                ? t('Add instructions and start; paste or drop attachments…')
-                : requirement.status === 'done'
-                  ? t('Reply to reactivate this completed requirement; paste or drop attachments…')
-                  : requirement.session.state === 'running'
-                    ? t('Send a message or attachment; it will wait for the next Run by default…')
-                    : canWrite
-                      ? t('Reply to the RD Agent; paste or drop attachments…')
-                      : t('Replies are unavailable in the current state')}
-            />
-            <div className="mt-1 flex items-center justify-between gap-3 px-1">
-              <div className="flex min-w-0 items-center gap-2">
-                <input
-                  ref={attachmentInputRef}
-                  type="file"
-                  className="sr-only"
-                  multiple
-                  disabled={!canWrite || busy}
-                  onChange={(event) => {
-                    addAttachments(Array.from(event.currentTarget.files ?? []));
-                    event.currentTarget.value = '';
-                  }}
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className="rounded-xl text-muted-foreground"
-                  disabled={!canWrite || busy || draftAttachments.length >= maxAttachmentsPerMessage}
-                  aria-label={t('Add attachment')}
-                  onClick={() => attachmentInputRef.current?.click()}
-                >
-                  <Paperclip />
-                </Button>
-                <AgentTimerDialog
-                  timers={agentTimers}
-                  disabled={requirement.status === 'done' || requirement.status === 'cancelled'}
-                  busy={busy}
-                  onCreate={onCreateAgentTimer}
-                  onCancel={onCancelAgentTimer}
-                />
-                <span className="truncate text-[9px] text-muted-foreground">{t('Enter to send · Up to 6 attachments')}</span>
-              </div>
-              <Button type="submit" size="icon-sm" className="rounded-xl" disabled={!canWrite || busy || (!message.trim() && draftAttachments.length === 0)} aria-label={t('Send reply')}>
-                {busy ? <LoaderCircle className="animate-spin" /> : <Send />}
-              </Button>
-            </div>
-          </form>
-          {attachmentError ? <p className="mt-1.5 px-1 text-[10px] text-destructive">{attachmentError}</p> : null}
-          {requirement.status === 'todo' ? (
-            <Button className="mt-2 w-full" variant="ghost" size="xs" disabled={busy} onClick={() => void onStart()}>
-              <Play data-icon="inline-start" />{t('Start without additional instructions')}
-            </Button>
-          ) : null}
-        </div>
+        <RequirementComposer
+          requirement={requirement}
+          agentTimers={agentTimers}
+          busy={busy}
+          inputRef={messageInputRef}
+          onStart={onStart}
+          onReply={onReply}
+          onConfirm={onConfirm}
+          onCreateAgentTimer={onCreateAgentTimer}
+          onCancelAgentTimer={onCancelAgentTimer}
+          onSent={scrollToLatest}
+        />
       </SheetContent>
     </Sheet>
   );
@@ -1915,6 +2107,8 @@ function Dashboard() {
   const [modelCatalog, setModelCatalog] = useState<AgentModelCatalogDto | null>(null);
   const [requirements, setRequirements] = useState<RequirementDto[]>([]);
   const [runs, setRuns] = useState<AgentRunDto[]>([]);
+  const [agentTraces, setAgentTraces] = useState<Record<string, AgentTraceEventDto[] | undefined>>({});
+  const [loadedTraceRunIds, setLoadedTraceRunIds] = useState<Set<string>>(() => new Set());
   const [pullRequests, setPullRequests] = useState<PullRequestDto[]>([]);
   const [reviewRequests, setReviewRequests] = useState<ReviewRequestDto[]>([]);
   const [conversation, setConversation] = useState<{
@@ -1945,6 +2139,19 @@ function Dashboard() {
   const [filterReferenceTime, setFilterReferenceTime] = useState(0);
 
   const client = useMemo(() => new AgentManagerClient(apiUrl), [apiUrl]);
+
+  const loadAgentTrace = useCallback(async (runId: string) => {
+    const items = await client.listAgentTrace(runId);
+    setAgentTraces((current) => ({
+      ...current,
+      [runId]: mergeAgentTrace(current[runId] ?? [], items),
+    }));
+    setLoadedTraceRunIds((current) => {
+      const next = new Set(current);
+      next.add(runId);
+      return next;
+    });
+  }, [client]);
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
@@ -2234,6 +2441,17 @@ function Dashboard() {
       && (!event.requirementId || payload.run.requirementId === event.requirementId)
       && !removedRequirementIdsRef.current.has(payload.run.requirementId)) {
       setRuns((current) => upsertRun(current, payload.run!));
+    }
+    if (!removesRequirement
+      && event.type === 'run.trace.appended'
+      && payload.trace
+      && payload.trace.runId === event.runId
+      && event.requirementId
+      && !removedRequirementIdsRef.current.has(event.requirementId)) {
+      setAgentTraces((current) => ({
+        ...current,
+        [payload.trace!.runId]: mergeAgentTrace(current[payload.trace!.runId] ?? [], [payload.trace!]),
+      }));
     }
     if (!removesRequirement
       && payload.pullRequest
@@ -3024,6 +3242,8 @@ function Dashboard() {
         key={selectedRequirement?.id ?? 'closed'}
         requirement={selectedRequirement}
         runs={selectedRuns}
+        tracesByRun={agentTraces}
+        loadedTraceRunIds={loadedTraceRunIds}
         messages={selectedMessages}
         agentTimers={agentTimers.filter((timer) => timer.requirementId === selectedId)}
         pullRequests={selectedPullRequests}
@@ -3063,6 +3283,7 @@ function Dashboard() {
         onReview={requestReview}
         onCreateAgentTimer={createAgentTimer}
         onCancelAgentTimer={cancelAgentTimer}
+        onLoadTrace={loadAgentTrace}
       />
 
       <div className="fixed right-4 bottom-4 hidden items-center gap-2 rounded-lg border border-border bg-card/95 px-3 py-2 text-[10px] text-muted-foreground shadow-lg backdrop-blur sm:flex">
