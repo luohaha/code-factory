@@ -61,6 +61,8 @@ Upload a file as the raw binary request body to the `attachments` endpoint, then
 
 If RD is running, `reply` still returns `202`. `queued=true` means the message was appended to the Requirement conversation and will be handled after the current Run; an active Session is not a conflict. The response includes the persisted message and the latest Requirement with its RD Session so clients can update the affected conversation and card without a workspace-wide refresh.
 
+`start` also returns the latest Requirement, active Run (when present), and optional persisted input message. A PR review request returns its newly persisted ReviewRequest and Reviewer Run. Timer create/cancel, completion confirmation, Requirement creation, configuration updates, and attachment uploads already return the resource they changed. Dashboard clients should render these operation responses immediately; none of these mutation paths requires waiting for an unrelated workspace query.
+
 Request a PR review:
 
 ~~~http
@@ -158,11 +160,13 @@ Current event types include:
 - `run.started` / `run.succeeded` / `run.failed` / `run.timed_out` / `run.cancelled`;
 - `manager.reconciled`.
 
+Mutation and lifecycle events carry the persisted resources needed for an idempotent local upsert: Requirement events carry the Requirement/session snapshot, Run events carry the Run and Requirement, message events carry the Message and Requirement, PR events carry the PullRequest, review-start and Reviewer outcome events carry ReviewRequest/Run records, Timer events carry the Timer, and configuration/model events carry their complete snapshot. Terminal Requirement events also carry affected Timers, while purge events carry the removed Requirement IDs. Clients should validate that resource ownership agrees with the event's Requirement ID, merge by resource ID and update time, and deduplicate Messages by ID/sequence. An older or incomplete payload is repaired with a resource-scoped query; short bursts may be coalesced only when their scope keys match. A workspace-wide snapshot remains an explicit initial/manual synchronization mechanism, not the default SSE response.
+
 The PR Reconciler publishes GitHub state and head-SHA changes through `pull_request.updated`. PR status changes, new comments/reviews, CI failures, and merge conflicts are first stored in the Requirement conversation and then published through `message.created`. Their payload includes `source: "github"`, `pullRequestId`, and the corresponding `triggerId`: `github.pull-request.status`, `github.pull-request.comment`, `github.pull-request.ci-failure`, or `github.pull-request.conflict`. SQLite Agent Trigger receipts deduplicate external events across Agent Manager restarts.
 
 Timer messages publish `message.created` with `source: "timer"`, `triggerId: "timer"`, `timerId`, `description`, `schedule`, and `scheduledFor`. Their trigger receipt is keyed by timer ID plus occurrence time, while the separate `timer.*` events expose configuration and lifecycle changes to dashboard clients.
 
-The initial dashboard state comes from the JSON query endpoints, so its cursorless SSE connection does not replay historical events. Reconnecting SSE clients resume after the `Last-Event-ID` value supplied by the browser. Other clients can request up to 200 persisted events after an explicit `after` cursor.
+The initial dashboard state comes from the JSON query endpoints, so its cursorless SSE connection does not replay historical events. If an event arrives while that snapshot is in flight, clients must preserve the newer resource version and any deletion tombstone when applying the older response. Reconnecting SSE clients resume after the `Last-Event-ID` value supplied by the browser. Other clients can request up to 200 persisted events after an explicit `after` cursor. The message sequence and RD delivery cursor semantics are unchanged by client-side coalescing.
 
 ## 6. Error semantics
 

@@ -96,6 +96,7 @@ import {
   type MessageAttachmentDto,
   type PullRequestDto,
   type PullRequestStatus,
+  type RequirementActionAcceptedDto,
   type RequirementDto,
   type RequirementMessageDto,
   type RequirementStatus,
@@ -111,7 +112,22 @@ import {
   isAwayFromConversationTop,
   upsertConversationMessage,
 } from '@/lib/conversation-scroll';
-import { replaceRequirementRuns, upsertRequirement } from '@/lib/dashboard-state';
+import {
+  managerEventInvalidatesSearch,
+  mergeVersionedSnapshot,
+  mergeRefreshTargets,
+  refreshTargetsForManagerEvent,
+  replacePullRequestReviews,
+  replaceRequirementPullRequests,
+  replaceRequirementRuns,
+  replaceRequirementTimers,
+  upsertAgentTimer,
+  upsertPullRequest,
+  upsertRequirement,
+  upsertReviewRequest,
+  upsertRun,
+  type DashboardRefreshTarget,
+} from '@/lib/dashboard-state';
 import { formatDuration } from '@/lib/format-duration';
 import { I18nProvider, useI18n } from '@/lib/i18n';
 import { useTheme } from '@/lib/theme';
@@ -1883,6 +1899,7 @@ function Dashboard() {
   const { theme, setTheme } = useTheme();
   const [view, setView] = useState<DashboardView>('requirements');
   const [apiUrl, setApiUrl] = useState(DEFAULT_AGENT_MANAGER_URL);
+  const [apiUrlReady, setApiUrlReady] = useState(false);
   const [connection, setConnection] = useState<ConnectionState>('connecting');
   const [workspace, setWorkspace] = useState<WorkspaceDto | null>(null);
   const [configuration, setConfiguration] = useState<AgentManagerConfigurationSnapshot | null>(null);
@@ -1891,20 +1908,28 @@ function Dashboard() {
   const [runs, setRuns] = useState<AgentRunDto[]>([]);
   const [pullRequests, setPullRequests] = useState<PullRequestDto[]>([]);
   const [reviewRequests, setReviewRequests] = useState<ReviewRequestDto[]>([]);
-  const [messages, setMessages] = useState<RequirementMessageDto[]>([]);
+  const [conversation, setConversation] = useState<{
+    requirementId: string | null;
+    items: RequirementMessageDto[];
+  }>({ requirementId: null, items: [] });
   const [agentTimers, setAgentTimers] = useState<AgentTimerDto[]>([]);
   const [messageLoading, setMessageLoading] = useState(false);
-  const [messageRevision, setMessageRevision] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedIdRef = useRef<string | null>(null);
+  const pendingRefreshTargetsRef = useRef<DashboardRefreshTarget[]>([]);
+  const refreshTimerRef = useRef<number | null>(null);
+  const eventRevisionRef = useRef(0);
+  const removedRequirementIdsRef = useRef(new Set<string>());
   const [query, setQuery] = useState('');
   const [searchResponse, setSearchResponse] = useState<{ query: string; items: SearchResultDto[] }>({ query: '', items: [] });
+  const [searchRevision, setSearchRevision] = useState(0);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [provider, setProvider] = useState<'all' | AgentProvider>('all');
   const [timeRange, setTimeRange] = useState<TimeRange>('7d');
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [interruptingRequirementIds, setInterruptingRequirementIds] = useState<Set<string>>(() => new Set());
   const [busyPullRequestId, setBusyPullRequestId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
@@ -1916,7 +1941,14 @@ function Dashboard() {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
 
+  const markSynced = useCallback(() => {
+    const syncedAt = new Date();
+    setLastSynced(syncedAt);
+    setFilterReferenceTime(syncedAt.getTime());
+  }, []);
+
   const reload = useCallback(async (showLoading = false) => {
+    const eventRevision = eventRevisionRef.current;
     if (showLoading) setLoading(true);
     try {
       const [nextWorkspace, nextConfiguration, nextModelCatalog, nextRequirements, nextRuns, nextPullRequests, nextReviewRequests, nextAgentTimers] = await Promise.all([
@@ -1932,55 +1964,252 @@ function Dashboard() {
       setWorkspace(nextWorkspace);
       setConfiguration(nextConfiguration);
       setModelCatalog(nextModelCatalog);
-      setRequirements(nextRequirements);
-      setRuns(nextRuns);
-      setPullRequests(nextPullRequests);
-      setReviewRequests(nextReviewRequests);
-      setAgentTimers(nextAgentTimers);
+      const receivedEventsDuringRequest = eventRevisionRef.current !== eventRevision;
+      const removedRequirementIds = removedRequirementIdsRef.current;
+      setRequirements((current) => {
+        const snapshot = nextRequirements.filter((item) => !removedRequirementIds.has(item.id));
+        return receivedEventsDuringRequest
+          ? mergeVersionedSnapshot(snapshot, current, upsertRequirement)
+          : snapshot;
+      });
+      setRuns((current) => receivedEventsDuringRequest
+        ? mergeVersionedSnapshot(nextRuns, current, upsertRun)
+          .filter((run) => !removedRequirementIds.has(run.requirementId))
+        : nextRuns);
+      setPullRequests((current) => receivedEventsDuringRequest
+        ? mergeVersionedSnapshot(nextPullRequests, current, upsertPullRequest)
+          .filter((pullRequest) => !removedRequirementIds.has(pullRequest.requirementId))
+        : nextPullRequests);
+      setReviewRequests((current) => receivedEventsDuringRequest
+        ? mergeVersionedSnapshot(nextReviewRequests, current, upsertReviewRequest)
+        : nextReviewRequests);
+      setAgentTimers((current) => receivedEventsDuringRequest
+        ? mergeVersionedSnapshot(nextAgentTimers, current, upsertAgentTimer)
+          .filter((agentTimer) => !removedRequirementIds.has(agentTimer.requirementId))
+        : nextAgentTimers);
       setConnection('online');
       setError(null);
-      const syncedAt = new Date();
-      setLastSynced(syncedAt);
-      setFilterReferenceTime(syncedAt.getTime());
+      markSynced();
     } catch (caught) {
       setConnection('offline');
       setError(caught instanceof Error ? caught.message : t('Unable to connect to Agent Manager'));
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, [client, t]);
+  }, [client, markSynced, t]);
 
-  const reloadRequirementState = useCallback(async (
-    requirementId: string,
-    includeRuns = false,
-  ) => {
+  const refreshTargets = useCallback(async (targets: readonly DashboardRefreshTarget[]) => {
+    if (targets.some((target) => target.scope === 'workspace')) {
+      await reload(false);
+      return;
+    }
     try {
-      const [nextRequirement, nextRuns] = await Promise.all([
-        client.getRequirement(requirementId),
-        includeRuns ? client.listRuns(requirementId) : Promise.resolve(null),
-      ]);
-      setRequirements((current) => upsertRequirement(current, nextRequirement));
-      if (nextRuns) {
-        setRuns((current) => replaceRequirementRuns(current, requirementId, nextRuns));
-      }
+      await Promise.all(targets.map(async (target) => {
+        const refreshRevision = eventRevisionRef.current;
+        switch (target.scope) {
+          case 'workspace':
+            return;
+          case 'requirements':
+            setRequirements(await client.listRequirements());
+            return;
+          case 'requirement': {
+            try {
+              const [requirement, requirementRuns] = await Promise.all([
+                client.getRequirement(target.requirementId),
+                target.includeRuns ? client.listRuns(target.requirementId) : Promise.resolve(null),
+              ]);
+              setRequirements((current) => {
+                const existing = current.find((item) => item.id === target.requirementId);
+                const accepted = existing && eventRevisionRef.current !== refreshRevision
+                  ? upsertRequirement([requirement], existing)[0] ?? requirement
+                  : requirement;
+                return upsertRequirement(current, accepted);
+              });
+              if (requirementRuns) {
+                setRuns((current) => {
+                  const accepted = eventRevisionRef.current !== refreshRevision
+                    ? current.filter((run) => run.requirementId === target.requirementId)
+                      .reduce((merged, run) => upsertRun(merged, run), requirementRuns)
+                    : requirementRuns;
+                  return replaceRequirementRuns(current, target.requirementId, accepted);
+                });
+              }
+            } catch (caught) {
+              if (!(caught instanceof AgentManagerApiError) || caught.status !== 404) throw caught;
+              setRequirements((current) => current.filter((item) => item.id !== target.requirementId));
+              setRuns((current) => current.filter((run) => run.requirementId !== target.requirementId));
+            }
+            return;
+          }
+          case 'messages':
+            if (selectedIdRef.current === target.requirementId) {
+              const items = (await client.listMessages(target.requirementId))
+                .filter((message) => message.requirementId === target.requirementId);
+              if (selectedIdRef.current === target.requirementId) {
+                setConversation((current) => ({
+                  requirementId: target.requirementId,
+                  items: current.requirementId === target.requirementId
+                    ? current.items.reduce(
+                        (merged, message) => upsertConversationMessage(merged, message),
+                        items,
+                      )
+                    : items,
+                }));
+              }
+            }
+            return;
+          case 'pull_requests': {
+            const items = await client.listPullRequests(target.requirementId);
+            setPullRequests((current) => {
+              const accepted = eventRevisionRef.current !== refreshRevision
+                ? current.filter((pullRequest) => pullRequest.requirementId === target.requirementId)
+                  .reduce((merged, pullRequest) => upsertPullRequest(merged, pullRequest), items)
+                : items;
+              return replaceRequirementPullRequests(current, target.requirementId, accepted);
+            });
+            return;
+          }
+          case 'review_requests': {
+            const items = await client.listReviewRequests(target.pullRequestId);
+            if (target.pullRequestId) {
+              setReviewRequests((current) => {
+                const accepted = eventRevisionRef.current !== refreshRevision
+                  ? current.filter((review) => review.pullRequestId === target.pullRequestId)
+                    .reduce((merged, review) => upsertReviewRequest(merged, review), items)
+                  : items;
+                return replacePullRequestReviews(current, target.pullRequestId!, accepted);
+              });
+            } else {
+              setReviewRequests((current) => eventRevisionRef.current !== refreshRevision
+                ? current.reduce((merged, review) => upsertReviewRequest(merged, review), items)
+                : items);
+            }
+            return;
+          }
+          case 'timers': {
+            const items = await client.listAgentTimers(target.requirementId);
+            setAgentTimers((current) => {
+              const accepted = eventRevisionRef.current !== refreshRevision
+                ? current.filter((timer) => timer.requirementId === target.requirementId)
+                  .reduce((merged, timer) => upsertAgentTimer(merged, timer), items)
+                : items;
+              return replaceRequirementTimers(current, target.requirementId, accepted);
+            });
+            return;
+          }
+          case 'configuration':
+            setConfiguration(await client.getConfiguration());
+            return;
+          case 'models':
+            setModelCatalog(await client.listAgentModels());
+        }
+      }));
       setConnection('online');
       setError(null);
-      const syncedAt = new Date();
-      setLastSynced(syncedAt);
-      setFilterReferenceTime(syncedAt.getTime());
+      markSynced();
     } catch (caught) {
-      if (caught instanceof AgentManagerApiError && caught.status === 404) {
-        setRequirements((current) => current.filter((item) => item.id !== requirementId));
-        if (includeRuns) {
-          setRuns((current) => current.filter((run) => run.requirementId !== requirementId));
-        }
-        setConnection('online');
-        return;
-      }
       setConnection('offline');
       setError(caught instanceof Error ? caught.message : t('Unable to connect to Agent Manager'));
     }
-  }, [client, t]);
+  }, [client, markSynced, reload, t]);
+
+  const enqueueRefreshTargets = useCallback((targets: readonly DashboardRefreshTarget[]) => {
+    if (targets.length === 0) return;
+    pendingRefreshTargetsRef.current = mergeRefreshTargets(pendingRefreshTargetsRef.current, targets);
+    if (refreshTimerRef.current !== null) return;
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = null;
+      const pending = pendingRefreshTargetsRef.current;
+      pendingRefreshTargetsRef.current = [];
+      void refreshTargets(pending);
+    }, 50);
+  }, [refreshTargets]);
+
+  const removeRequirementState = useCallback((requirementIds: readonly string[]) => {
+    if (requirementIds.length === 0) return;
+    const removed = new Set(requirementIds);
+    for (const requirementId of requirementIds) removedRequirementIdsRef.current.add(requirementId);
+    setRequirements((current) => current.filter((item) => !removed.has(item.id)));
+    setRuns((current) => current.filter((run) => !removed.has(run.requirementId)));
+    setPullRequests((current) => current.filter((pullRequest) => !removed.has(pullRequest.requirementId)));
+    setAgentTimers((current) => current.filter((timer) => !removed.has(timer.requirementId)));
+    setConversation((current) => current.requirementId && removed.has(current.requirementId)
+      ? { requirementId: null, items: [] }
+      : current);
+    setInterruptingRequirementIds((current) => {
+      const next = new Set(current);
+      for (const requirementId of requirementIds) next.delete(requirementId);
+      return next;
+    });
+    if (selectedIdRef.current && removed.has(selectedIdRef.current)) setSelectedId(null);
+  }, []);
+
+  const applyManagerEvent = useCallback((event: ManagerEventDto) => {
+    eventRevisionRef.current += 1;
+    const payload = event.payload;
+    const removesRequirement = event.type === 'requirement.deleted'
+      || event.type === 'requirements.purged';
+    if (event.type === 'requirement.deleted' && event.requirementId) {
+      removeRequirementState([event.requirementId]);
+    } else if (event.type === 'requirements.purged' && Array.isArray(payload.requirementIds)) {
+      removeRequirementState(payload.requirementIds);
+    } else if (payload.requirement
+      && (!event.requirementId || payload.requirement.id === event.requirementId)) {
+      removedRequirementIdsRef.current.delete(payload.requirement.id);
+      setRequirements((current) => upsertRequirement(current, payload.requirement!));
+    }
+
+    if (!removesRequirement
+      && payload.run
+      && (!event.requirementId || payload.run.requirementId === event.requirementId)) {
+      setRuns((current) => upsertRun(current, payload.run!));
+    }
+    if (!removesRequirement
+      && payload.pullRequest
+      && (!event.requirementId || payload.pullRequest.requirementId === event.requirementId)) {
+      setPullRequests((current) => upsertPullRequest(current, payload.pullRequest!));
+    }
+    if (!removesRequirement
+      && payload.reviewRequest
+      && payload.pullRequest?.id === payload.reviewRequest.pullRequestId
+      && (!event.requirementId || payload.pullRequest.requirementId === event.requirementId)) {
+      setReviewRequests((current) => upsertReviewRequest(current, payload.reviewRequest!));
+    }
+    if (!removesRequirement
+      && payload.timer
+      && (!event.requirementId || payload.timer.requirementId === event.requirementId)) {
+      setAgentTimers((current) => upsertAgentTimer(current, payload.timer!));
+    }
+    if (!removesRequirement && payload.timers && event.requirementId) {
+      setAgentTimers((current) => replaceRequirementTimers(current, event.requirementId!, payload.timers!));
+    }
+    if (!removesRequirement
+      && payload.message
+      && payload.message.requirementId === event.requirementId
+      && event.requirementId === selectedIdRef.current) {
+      setConversation((current) => current.requirementId === event.requirementId
+        ? { ...current, items: upsertConversationMessage(current.items, payload.message!) }
+        : current);
+    }
+    if (payload.configuration) setConfiguration(payload.configuration);
+    if (payload.modelCatalog) setModelCatalog(payload.modelCatalog);
+    if (event.requirementId
+      && event.payload.role === 'rd'
+      && ['run.succeeded', 'run.failed', 'run.timed_out', 'run.cancelled'].includes(event.type)) {
+      setInterruptingRequirementIds((current) => {
+        if (!current.has(event.requirementId!)) return current;
+        const next = new Set(current);
+        next.delete(event.requirementId!);
+        return next;
+      });
+    }
+
+    if (managerEventInvalidatesSearch(event)) setSearchRevision((value) => value + 1);
+    enqueueRefreshTargets(refreshTargetsForManagerEvent(event));
+    setConnection('online');
+    setError(null);
+    markSynced();
+  }, [enqueueRefreshTargets, markSynced, removeRequirementState]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1994,7 +2223,9 @@ function Dashboard() {
         if (saved) {
           window.localStorage.removeItem('code-factory.agent-manager-url');
         }
+        setApiUrl(normalizeManagerUrl(isEmbeddedDashboard ? location.origin : DEFAULT_AGENT_MANAGER_URL));
       }
+      setApiUrlReady(true);
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
@@ -2012,28 +2243,21 @@ function Dashboard() {
   }, []);
 
   useEffect(() => {
+    if (!apiUrlReady) return;
     const timer = window.setTimeout(() => void reload(true), 0);
     const disconnect = client.connectEvents({
       onOpen: () => setConnection('online'),
       onError: () => setConnection((current) => current === 'online' ? 'reconnecting' : 'offline'),
-      onEvent: (event: ManagerEventDto) => {
-        if (event.type === 'message.created' && event.requirementId) {
-          setMessageRevision((value) => value + 1);
-          void reloadRequirementState(event.requirementId);
-          return;
-        }
-        if (event.type === 'run.started' && event.requirementId) {
-          void reloadRequirementState(event.requirementId, true);
-          return;
-        }
-        void reload(false);
-      },
+      onEvent: applyManagerEvent,
     });
     return () => {
       window.clearTimeout(timer);
+      if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = null;
+      pendingRefreshTargetsRef.current = [];
       disconnect();
     };
-  }, [client, reload, reloadRequirementState]);
+  }, [apiUrlReady, applyManagerEvent, client, reload]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -2041,7 +2265,20 @@ function Dashboard() {
     const timer = window.setTimeout(() => {
       setMessageLoading(true);
       client.listMessages(selectedId)
-        .then((items) => { if (!cancelled) setMessages(items); })
+        .then((received) => {
+          const items = received.filter((message) => message.requirementId === selectedId);
+          if (!cancelled) {
+            setConversation((current) => ({
+              requirementId: selectedId,
+              items: current.requirementId === selectedId
+                ? current.items.reduce(
+                    (merged, message) => upsertConversationMessage(merged, message),
+                    items,
+                  )
+                : items,
+            }));
+          }
+        })
         .catch((caught: unknown) => { if (!cancelled) setError(caught instanceof Error ? caught.message : t('Failed to load messages')); })
         .finally(() => { if (!cancelled) setMessageLoading(false); });
     }, 0);
@@ -2049,7 +2286,7 @@ function Dashboard() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [client, messageRevision, selectedId, t]);
+  }, [client, selectedId, t]);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -2080,11 +2317,14 @@ function Dashboard() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [client, lastSynced, query, t, view]);
+  }, [client, query, searchRevision, t, view]);
 
   const selectedRequirement = requirements.find((item) => item.id === selectedId) ?? null;
   const selectedRuns = runs.filter((run) => run.requirementId === selectedId);
   const selectedPullRequests = pullRequests.filter((pullRequest) => pullRequest.requirementId === selectedId);
+  const selectedMessages = conversation.requirementId === selectedId ? conversation.items : [];
+  const selectedMessageLoading = selectedId !== null
+    && (messageLoading || conversation.requirementId !== selectedId);
   const normalizedQuery = query.trim();
   const searchResults = useMemo(
     () => searchResponse.query === normalizedQuery ? searchResponse.items : [],
@@ -2163,13 +2403,33 @@ function Dashboard() {
     });
   }, [agentTimers, filterReferenceTime, provider, query, requirementsById, timeRange]);
 
-  async function runAction(requirementId: string, action: () => Promise<unknown>): Promise<void> {
+  function applyRequirementAction(result: RequirementActionAcceptedDto): void {
+    if (result.requirement.id !== result.requirementId) return;
+    setRequirements((current) => upsertRequirement(current, result.requirement));
+    if (result.run?.requirementId === result.requirementId) {
+      setRuns((current) => upsertRun(current, result.run!));
+    }
+    if (result.message?.requirementId === result.requirementId
+      && selectedIdRef.current === result.requirementId) {
+      setConversation((current) => current.requirementId === result.requirementId
+        ? { ...current, items: upsertConversationMessage(current.items, result.message!) }
+        : current);
+      setSearchRevision((value) => value + 1);
+    }
+  }
+
+  async function runAction<T>(
+    requirementId: string,
+    action: () => Promise<T>,
+    apply?: (result: T) => void,
+  ): Promise<T> {
     setBusyId(requirementId);
     setError(null);
     try {
-      await action();
-      await reload(false);
-      setMessageRevision((value) => value + 1);
+      const result = await action();
+      apply?.(result);
+      markSynced();
+      return result;
     } catch (caught) {
       const prefix = caught instanceof AgentManagerApiError && caught.status === 409 ? t('This action conflicts with the current state. Refresh and try again.') : '';
       setError(prefix || (caught instanceof Error ? caught.message : t('Operation failed')));
@@ -2183,8 +2443,19 @@ function Dashboard() {
     setBusyPullRequestId(pullRequestId);
     setError(null);
     try {
-      await client.requestReview(pullRequestId, configuration);
-      await reload(false);
+      const result = await client.requestReview(pullRequestId, configuration);
+      const owningRequirementId = pullRequests.find((item) => item.id === pullRequestId)?.requirementId;
+      const reviewRequest = result.reviewRequest;
+      const run = result.run;
+      if (reviewRequest?.pullRequestId === pullRequestId) {
+        setReviewRequests((current) => upsertReviewRequest(current, reviewRequest));
+      }
+      if (run
+        && run.id === reviewRequest?.runId
+        && (!owningRequirementId || run.requirementId === owningRequirementId)) {
+        setRuns((current) => upsertRun(current, run));
+      }
+      markSynced();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t('Failed to request a review'));
       throw caught;
@@ -2197,12 +2468,20 @@ function Dashboard() {
     input: { description: string; schedule: 'once' | 'recurring'; intervalSeconds: number },
   ): Promise<void> {
     if (!selectedId) return;
-    await runAction(selectedId, () => client.createAgentTimer(selectedId, input));
+    await runAction(
+      selectedId,
+      () => client.createAgentTimer(selectedId, input),
+      (timer) => setAgentTimers((current) => upsertAgentTimer(current, timer)),
+    );
   }
 
   async function cancelAgentTimer(timerId: string): Promise<void> {
     if (!selectedId) return;
-    await runAction(selectedId, () => client.cancelAgentTimer(selectedId, timerId));
+    await runAction(
+      selectedId,
+      () => client.cancelAgentTimer(selectedId, timerId),
+      (timer) => setAgentTimers((current) => upsertAgentTimer(current, timer)),
+    );
   }
 
   async function uploadMessageAttachments(requirementId: string, files: File[]): Promise<string[]> {
@@ -2222,8 +2501,12 @@ function Dashboard() {
       const result = await client.replyToRequirement(requirementId, message, attachmentIds);
       setRequirements((current) => upsertRequirement(current, result.requirement));
       if (selectedIdRef.current === requirementId) {
-        setMessages((current) => upsertConversationMessage(current, result.message));
+        setConversation((current) => current.requirementId === requirementId
+          ? { ...current, items: upsertConversationMessage(current.items, result.message) }
+          : current);
       }
+      setSearchRevision((value) => value + 1);
+      markSynced();
     } catch (caught) {
       const prefix = caught instanceof AgentManagerApiError && caught.status === 409 ? t('This action conflicts with the current state. Refresh and try again.') : '';
       setError(prefix || (caught instanceof Error ? caught.message : t('Operation failed')));
@@ -2233,11 +2516,27 @@ function Dashboard() {
     }
   }
 
+  async function interruptRequirement(requirementId: string): Promise<void> {
+    setInterruptingRequirementIds((current) => new Set(current).add(requirementId));
+    try {
+      await runAction(requirementId, () => client.interruptRequirement(requirementId));
+    } catch (caught) {
+      setInterruptingRequirementIds((current) => {
+        const next = new Set(current);
+        next.delete(requirementId);
+        return next;
+      });
+      throw caught;
+    }
+  }
+
   async function createRequirement(input: { title: string; description: string } & AgentConfiguration) {
     setError(null);
     try {
       const created = await client.createRequirement(input);
-      await reload(false);
+      setRequirements((current) => upsertRequirement(current, created));
+      setSearchRevision((value) => value + 1);
+      markSynced();
       setSelectedId(created.id);
       setView('requirements');
     } catch (caught) {
@@ -2260,6 +2559,7 @@ function Dashboard() {
   function connect(url: string) {
     window.localStorage.setItem('code-factory.agent-manager-url', url);
     setApiUrl(url);
+    setApiUrlReady(true);
     setConnection('connecting');
     setError(null);
   }
@@ -2431,10 +2731,19 @@ function Dashboard() {
                         busy={busyId === item.id}
                         onOpen={() => setSelectedId(item.id)}
                         onStart={() => setSelectedId(item.id)}
-                        onDelete={() => void runAction(item.id, () => client.deleteRequirement(item.id)).then(() => {
-                          if (selectedId === item.id) setSelectedId(null);
-                        }).catch(() => undefined)}
-                        onConfirm={() => void runAction(item.id, () => client.confirmRequirement(item.id)).catch(() => undefined)}
+                        onDelete={() => void runAction(
+                          item.id,
+                          () => client.deleteRequirement(item.id),
+                          () => {
+                            removeRequirementState([item.id]);
+                            setSearchRevision((value) => value + 1);
+                          },
+                        ).catch(() => undefined)}
+                        onConfirm={() => void runAction(
+                          item.id,
+                          () => client.confirmRequirement(item.id),
+                          (requirement) => setRequirements((current) => upsertRequirement(current, requirement)),
+                        ).catch(() => undefined)}
                       />
                     ))}
                     {items.length === 0 ? <div className="grid min-h-24 place-items-center rounded-xl border border-dashed border-border text-[10px] text-muted-foreground">{loading ? t('Loading…') : t('No requirements')}</div> : null}
@@ -2530,7 +2839,11 @@ function Dashboard() {
                         run={latestRun(item.id, runs)}
                         busy={busyId === item.id}
                         onOpen={() => setSelectedId(item.id)}
-                        onRetry={() => void runAction(item.id, () => client.retryRequirement(item.id)).catch(() => undefined)}
+                        onRetry={() => void runAction(
+                          item.id,
+                          () => client.retryRequirement(item.id),
+                          applyRequirementAction,
+                        ).catch(() => undefined)}
                       />
                     ))}
                     {items.length === 0 ? <div className="grid min-h-24 place-items-center rounded-xl border border-dashed border-border text-[10px] text-muted-foreground">{t('No Sessions')}</div> : null}
@@ -2546,25 +2859,37 @@ function Dashboard() {
         key={selectedRequirement?.id ?? 'closed'}
         requirement={selectedRequirement}
         runs={selectedRuns}
-        messages={messages}
+        messages={selectedMessages}
         agentTimers={agentTimers.filter((timer) => timer.requirementId === selectedId)}
         pullRequests={selectedPullRequests}
         reviewRequests={reviewRequests}
         modelCatalog={modelCatalog}
-        messageLoading={messageLoading}
-        busy={selectedRequirement ? busyId === selectedRequirement.id : false}
+        messageLoading={selectedMessageLoading}
+        busy={selectedRequirement
+          ? busyId === selectedRequirement.id || interruptingRequirementIds.has(selectedRequirement.id)
+          : false}
         busyPullRequestId={busyPullRequestId}
         apiUrl={apiUrl}
         onOpenChange={(open) => { if (!open) setSelectedId(null); }}
-        onStart={(message, attachments = []) => selectedRequirement ? runAction(selectedRequirement.id, async () => {
-          const attachmentIds = await uploadMessageAttachments(selectedRequirement.id, attachments);
-          return await client.startRequirement(selectedRequirement.id, message, attachmentIds);
-        }) : Promise.resolve()}
+        onStart={(message, attachments = []) => selectedRequirement ? runAction(
+          selectedRequirement.id,
+          async () => {
+            const attachmentIds = await uploadMessageAttachments(selectedRequirement.id, attachments);
+            return await client.startRequirement(selectedRequirement.id, message, attachmentIds);
+          },
+          applyRequirementAction,
+        ).then(() => undefined) : Promise.resolve()}
         onReply={(message, attachments = []) => selectedRequirement
           ? replyToRequirement(selectedRequirement.id, message, attachments)
           : Promise.resolve()}
-        onInterrupt={() => selectedRequirement ? runAction(selectedRequirement.id, () => client.interruptRequirement(selectedRequirement.id)) : Promise.resolve()}
-        onConfirm={() => selectedRequirement ? runAction(selectedRequirement.id, () => client.confirmRequirement(selectedRequirement.id)) : Promise.resolve()}
+        onInterrupt={() => selectedRequirement
+          ? interruptRequirement(selectedRequirement.id)
+          : Promise.resolve()}
+        onConfirm={() => selectedRequirement ? runAction(
+          selectedRequirement.id,
+          () => client.confirmRequirement(selectedRequirement.id),
+          (requirement) => setRequirements((current) => upsertRequirement(current, requirement)),
+        ).then(() => undefined) : Promise.resolve()}
         onReview={requestReview}
         onCreateAgentTimer={createAgentTimer}
         onCancelAgentTimer={cancelAgentTimer}

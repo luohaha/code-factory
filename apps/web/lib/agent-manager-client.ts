@@ -110,8 +110,21 @@ export interface ManagerEventDto {
   requirementId: string | null;
   sessionId: string | null;
   runId: string | null;
-  payload: Record<string, unknown>;
+  payload: ManagerEventPayloadDto;
   createdAt: string;
+}
+
+export interface ManagerEventPayloadDto extends Record<string, unknown> {
+  requirement?: RequirementDto | null;
+  requirementIds?: string[];
+  run?: AgentRunDto | null;
+  message?: RequirementMessageDto | null;
+  pullRequest?: PullRequestDto | null;
+  reviewRequest?: ReviewRequestDto | null;
+  timer?: AgentTimerDto | null;
+  timers?: AgentTimerDto[];
+  configuration?: AgentManagerConfigurationSnapshot;
+  modelCatalog?: AgentModelCatalogDto;
 }
 
 export interface RequirementMessageDto {
@@ -193,6 +206,15 @@ export interface SearchResultDto {
   fullTextScore: number;
   vectorScore: number;
   updatedAt: string;
+}
+
+export interface RequirementActionAcceptedDto {
+  accepted: true;
+  requirementId: string;
+  action: 'start';
+  requirement: RequirementDto;
+  run: AgentRunDto | null;
+  message: RequirementMessageDto | null;
 }
 
 export const DEFAULT_AGENT_MANAGER_URL = 'http://127.0.0.1:4310';
@@ -292,13 +314,21 @@ export class AgentManagerClient {
     );
   }
 
-  async listPullRequests(): Promise<PullRequestDto[]> {
-    const response = await this.request<{ items: PullRequestDto[] }>('/api/pull-requests');
+  async listPullRequests(requirementId?: string): Promise<PullRequestDto[]> {
+    const response = await this.request<{ items: PullRequestDto[] }>(
+      requirementId
+        ? `/api/pull-requests?${new URLSearchParams({ requirementId }).toString()}`
+        : '/api/pull-requests',
+    );
     return response.items;
   }
 
-  async listReviewRequests(): Promise<ReviewRequestDto[]> {
-    const response = await this.request<{ items: ReviewRequestDto[] }>('/api/review-requests');
+  async listReviewRequests(pullRequestId?: string): Promise<ReviewRequestDto[]> {
+    const response = await this.request<{ items: ReviewRequestDto[] }>(
+      pullRequestId
+        ? `/api/review-requests?${new URLSearchParams({ pullRequestId }).toString()}`
+        : '/api/review-requests',
+    );
     return response.items;
   }
 
@@ -310,7 +340,7 @@ export class AgentManagerClient {
     return this.request(`/api/requirements/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
 
-  startRequirement(id: string, message?: string, attachmentIds: string[] = []): Promise<{ accepted: true }> {
+  startRequirement(id: string, message?: string, attachmentIds: string[] = []): Promise<RequirementActionAcceptedDto> {
     return this.action(id, 'start', {
       ...(message ? { message } : {}),
       ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
@@ -357,7 +387,11 @@ export class AgentManagerClient {
     return `${this.baseUrl}/api/attachments/${encodeURIComponent(id)}`;
   }
 
-  requestReview(id: string, configuration: AgentConfiguration): Promise<{ accepted: true }> {
+  requestReview(id: string, configuration: AgentConfiguration): Promise<{
+    accepted: true;
+    reviewRequest: ReviewRequestDto | null;
+    run: AgentRunDto | null;
+  }> {
     return this.request(`/api/pull-requests/${encodeURIComponent(id)}/review-requests`, {
       method: 'POST',
       body: JSON.stringify(configuration),
@@ -368,7 +402,7 @@ export class AgentManagerClient {
     return this.action(id, 'confirm', {});
   }
 
-  retryRequirement(id: string): Promise<{ accepted: true }> {
+  retryRequirement(id: string): Promise<RequirementActionAcceptedDto> {
     return this.action(id, 'start', { message: 'Continue the previously failed task. Inspect the current repository state first, then finish the remaining work and run the necessary tests.' });
   }
 

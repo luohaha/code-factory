@@ -115,6 +115,7 @@ Code Factory is licensed under the [Apache License 2.0](LICENSE).
 - [Headless Agent Runner](docs/agent-runners.md)
 - [Agent Manager HTTP API Reference](docs/agent-manager-api.md)
 - [HTTP and event protocol](docs/protocol.md)
+- [Dashboard perceived-latency audit](docs/dashboard-latency-audit.md)
 - [Development roadmap](docs/roadmap.md)
 - [Release guide](docs/releasing.md)
 

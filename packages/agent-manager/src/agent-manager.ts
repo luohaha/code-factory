@@ -199,6 +199,7 @@ export class AgentManager extends EventEmitter {
         this.publish({
           type: 'agent_models.updated',
           payload: {
+            modelCatalog: snapshot,
             providers: snapshot.providers.map((provider) => ({
               provider: provider.provider,
               refreshedAt: provider.refreshedAt,
@@ -300,6 +301,7 @@ export class AgentManager extends EventEmitter {
     this.publish({
       type: 'manager.configuration.updated',
       payload: {
+        configuration: snapshot,
         changedFields,
         appliedFields,
         restartRequired: snapshot.restartRequired,
@@ -456,7 +458,11 @@ export class AgentManager extends EventEmitter {
       if (result.requirements.length > 0) {
         this.publish({
           type: 'requirements.purged',
-          payload: { cancelledCount, doneCount },
+          payload: {
+            requirementIds: result.requirements.map((requirement) => requirement.id),
+            cancelledCount,
+            doneCount,
+          },
         });
         this.logger.info('Expired requirements purged', {
           cancelledCount,
@@ -557,6 +563,7 @@ export class AgentManager extends EventEmitter {
       requirementId,
       sessionId,
       payload: {
+        requirement,
         provider: input.provider,
         model: model ?? null,
         reasoningEffort: input.reasoningEffort ?? null,
@@ -602,11 +609,12 @@ export class AgentManager extends EventEmitter {
       new Date().toISOString(),
     );
     this.#timerAgentTrigger.refresh();
+    const timers = this.#store.listAgentTimers(id);
     this.publish({
       type: 'requirement.deleted',
       requirementId: id,
       sessionId: requirement.session.id,
-      payload: {},
+      payload: { requirement, timers },
     });
     this.logger.info('Requirement deleted', {
       requirementId: id,
@@ -895,7 +903,7 @@ export class AgentManager extends EventEmitter {
     const runId = `run_${randomUUID()}`;
     const reviewRequestId = `rev_${randomUUID()}`;
     const model = options.model?.trim() || undefined;
-    this.#store.beginReviewRequest({
+    const started = this.#store.beginReviewRequest({
       id: reviewRequestId,
       runId,
       pullRequestId,
@@ -913,6 +921,9 @@ export class AgentManager extends EventEmitter {
       sessionId: requirement.session.id,
       runId,
       payload: {
+        pullRequest: started.pullRequest,
+        reviewRequest: started.reviewRequest,
+        run: started.run,
         reviewRequestId,
         pullRequestId,
         provider: options.provider,
@@ -1000,7 +1011,15 @@ export class AgentManager extends EventEmitter {
       new Date().toISOString(),
     );
     this.#timerAgentTrigger.refresh();
-    this.publish({ type: 'requirement.completed', requirementId, sessionId: current.session.id, payload: {} });
+    this.publish({
+      type: 'requirement.completed',
+      requirementId,
+      sessionId: current.session.id,
+      payload: {
+        requirement: current,
+        timers: this.#store.listAgentTimers(requirementId),
+      },
+    });
     this.logger.info('Requirement completed', { requirementId, sessionId: current.session.id });
     this.sweepImmediateTerminalRequirement('done');
     return current;
@@ -1040,6 +1059,8 @@ export class AgentManager extends EventEmitter {
       sessionId: started.session.id,
       runId,
       payload: {
+        requirement: { ...started.requirement, session: started.session },
+        run: started.run,
         role: 'rd',
         provider: requirement.provider,
         model: requirement.model,
@@ -1170,6 +1191,7 @@ export class AgentManager extends EventEmitter {
       payload: {
         ...(input.metadata ?? {}),
         message,
+        requirement: this.#store.getRequirement(message.requirementId),
         source: trigger.source,
         triggerId: trigger.id,
       },
@@ -1270,12 +1292,23 @@ export class AgentManager extends EventEmitter {
     role: 'rd' | 'reviewer',
     outcome: RunOutcome,
   ): void {
+    const reviewRequest = role === 'reviewer'
+      ? this.#store.listReviewRequests().find((review) => review.runId === runId) ?? null
+      : null;
     this.publish({
       type: `run.${outcome.status}`,
       requirementId,
       sessionId,
       runId,
       payload: {
+        requirement: this.#store.getRequirement(requirementId),
+        run: this.#store.listRuns(requirementId).find((run) => run.id === runId) ?? null,
+        ...(reviewRequest
+          ? {
+              reviewRequest,
+              pullRequest: this.#store.getPullRequest(reviewRequest.pullRequestId),
+            }
+          : {}),
         role,
         exitCode: outcome.exitCode,
         nativeSessionId: outcome.nativeSessionId,
@@ -1304,7 +1337,10 @@ export class AgentManager extends EventEmitter {
       requirementId: message.requirementId,
       sessionId: message.sessionId,
       ...(message.runId ? { runId: message.runId } : {}),
-      payload: { message },
+      payload: {
+        message,
+        requirement: this.#store.getRequirement(message.requirementId),
+      },
     });
     return message;
   }

@@ -728,6 +728,17 @@ test('HTTP API exposes the persisted human and RD Agent conversation', async () 
       body: JSON.stringify({ message: 'Please start with a regression test.', attachmentIds: [uploaded.id, uploadedFile.id] }),
     });
     assert.equal(startResponse.status, 202);
+    const acceptedStart = await startResponse.json() as {
+      requirement: { id: string; session: { state: string } };
+      run: { requirementId: string; status: string } | null;
+      message: { requirementId: string; body: string } | null;
+    };
+    assert.equal(acceptedStart.requirement.id, created.id);
+    assert.equal(acceptedStart.requirement.session.state, 'running');
+    assert.equal(acceptedStart.run?.requirementId, created.id);
+    assert.equal(acceptedStart.run?.status, 'running');
+    assert.equal(acceptedStart.message?.requirementId, created.id);
+    assert.equal(acceptedStart.message?.body, 'Please start with a regression test.');
     assert.ok(runner.request?.invocation.args.includes('gpt-5.6'));
     assert.ok(runner.request?.invocation.args.includes('model_reasoning_effort="xhigh"'));
     assert.ok(runner.request?.invocation.args.includes(uploaded.localPath));
@@ -796,6 +807,14 @@ test('HTTP API exposes the persisted human and RD Agent conversation', async () 
       body: JSON.stringify({ provider: 'codex', model: 'gpt-5.5', reasoningEffort: 'max' }),
     });
     assert.equal(reviewResponse.status, 202);
+    const acceptedReview = await reviewResponse.json() as {
+      reviewRequest: { pullRequestId: string; status: string } | null;
+      run: { role: string; status: string } | null;
+    };
+    assert.equal(acceptedReview.reviewRequest?.pullRequestId, pullRequest.id);
+    assert.equal(acceptedReview.reviewRequest?.status, 'running');
+    assert.equal(acceptedReview.run?.role, 'reviewer');
+    assert.equal(acceptedReview.run?.status, 'running');
     assert.ok(runner.request?.invocation.args.includes('gpt-5.5'));
     assert.ok(runner.request?.invocation.args.includes('model_reasoning_effort="max"'));
     const persistedReview = manager.listReviewRequests(pullRequest.id)[0];
