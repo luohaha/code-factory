@@ -35,6 +35,59 @@ test('a requirement is created atomically with exactly one RD session', () => {
   }
 });
 
+test('Agent trace events are persisted in Run sequence order', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-trace',
+      sessionId: 'ses-trace',
+      title: 'Trace tools',
+      description: 'Keep detailed execution events',
+      provider: 'codex',
+      createdBy: 'human',
+      now,
+    });
+    store.beginRun({
+      runId: 'run-trace',
+      requirementId: 'req-trace',
+      role: 'rd',
+      provider: 'codex',
+      taskSummary: 'Start RD session',
+      now,
+    });
+    const first = store.appendAgentTrace({
+      id: 'trc-1',
+      runId: 'run-trace',
+      kind: 'tool_call',
+      status: 'started',
+      title: 'Run command',
+      detail: 'npm test',
+      toolName: 'shell',
+      toolCallId: 'item-1',
+      nativeType: 'item.started',
+      now,
+    });
+    const second = store.appendAgentTrace({
+      id: 'trc-2',
+      runId: 'run-trace',
+      kind: 'tool_result',
+      status: 'completed',
+      title: 'Command result',
+      detail: 'ok',
+      toolName: 'shell',
+      toolCallId: 'item-1',
+      nativeType: 'item.completed',
+      now,
+    });
+
+    assert.equal(first.sequence, 1);
+    assert.equal(second.sequence, 2);
+    assert.deepEqual(store.listAgentTrace('run-trace'), [first, second]);
+  } finally {
+    store.close();
+  }
+});
+
 test('hybrid search indexes requirements, conversations, and pull request metadata', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {
@@ -300,6 +353,16 @@ test('expired cancelled and done requirements purge their related domain records
       taskSummary: 'Implement old requirement',
       now: '2024-01-01T00:01:00.000Z',
     });
+    store.appendAgentTrace({
+      id: 'trc-done-expired',
+      runId: 'run-done-expired',
+      kind: 'tool_call',
+      status: 'started',
+      title: 'Run command',
+      detail: 'npm test',
+      toolName: 'shell',
+      now: '2024-01-01T00:01:30.000Z',
+    });
     store.finishRdRun('run-done-expired', {
       status: 'succeeded',
       exitCode: 0,
@@ -405,6 +468,7 @@ test('expired cancelled and done requirements purge their related domain records
     assert.equal(store.getMessageAttachment('att-cancelled-expired'), null);
     assert.equal(store.getAgentTimer('tmr-cancelled-expired'), null);
     assert.deepEqual(store.listRuns('req-done-expired'), []);
+    assert.deepEqual(store.listAgentTrace('run-done-expired'), []);
     assert.deepEqual(store.listReviewRequests(), []);
     assert.equal(store.listEvents(0).some((event) => event.requirementId === 'req-cancelled-expired'), false);
     assert.equal(store.getRequirement('req-cancelled-recent')?.status, 'cancelled');
@@ -423,6 +487,10 @@ test('expired cancelled and done requirements purge their related domain records
       (database.prepare('SELECT local_path FROM pending_attachment_deletions').all() as Array<{ local_path: string }>)
         .map((row) => row.local_path),
       [join(directory, 'expired.txt')],
+    );
+    assert.equal(
+      (database.prepare('SELECT COUNT(*) AS count FROM agent_trace_events').get() as { count: number }).count,
+      0,
     );
     for (const table of [
       'agent_sessions',

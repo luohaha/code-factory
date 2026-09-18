@@ -1,4 +1,9 @@
-import type { AgentProvider, AgentReasoningEffort } from '../types.js';
+import type {
+  AgentProvider,
+  AgentReasoningEffort,
+  AgentTraceKind,
+  AgentTraceStatus,
+} from '../types.js';
 
 export interface AgentInvocation {
   command: string;
@@ -10,7 +15,18 @@ export interface NormalizedAgentEvent {
   kind: 'session_started' | 'message' | 'completed' | 'error' | 'other';
   nativeSessionId?: string;
   message?: string;
+  traces?: NormalizedAgentTrace[];
   raw: Record<string, unknown>;
+}
+
+export interface NormalizedAgentTrace {
+  kind: AgentTraceKind;
+  status?: AgentTraceStatus;
+  title: string;
+  detail?: string;
+  toolName?: string;
+  toolCallId?: string;
+  nativeType?: string;
 }
 
 export interface RdInvocationInput {

@@ -1,3 +1,5 @@
+import { MANAGER_EVENT_TYPES } from './manager-event-types.ts';
+
 export type AgentProvider = 'codex' | 'claude-code';
 export type AgentReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export interface AgentConfiguration {
@@ -76,6 +78,20 @@ export interface AgentRunDto {
   finishedAt: string | null;
 }
 
+export interface AgentTraceEventDto {
+  id: string;
+  runId: string;
+  sequence: number;
+  kind: 'lifecycle' | 'reasoning' | 'assistant_message' | 'tool_call' | 'tool_result' | 'error';
+  status: 'started' | 'completed' | 'failed' | null;
+  title: string;
+  detail: string | null;
+  toolName: string | null;
+  toolCallId: string | null;
+  nativeType: string | null;
+  createdAt: string;
+}
+
 export interface WorkspaceDto {
   root: string;
   databasePath: string;
@@ -118,6 +134,7 @@ export interface ManagerEventPayloadDto extends Record<string, unknown> {
   requirement?: RequirementDto | null;
   requirementIds?: string[];
   run?: AgentRunDto | null;
+  trace?: AgentTraceEventDto | null;
   message?: RequirementMessageDto | null;
   pullRequest?: PullRequestDto | null;
   reviewRequest?: ReviewRequestDto | null;
@@ -282,6 +299,13 @@ export class AgentManagerClient {
     return response.items;
   }
 
+  async listAgentTrace(runId: string): Promise<AgentTraceEventDto[]> {
+    const response = await this.request<{ items: AgentTraceEventDto[] }>(
+      `/api/runs/${encodeURIComponent(runId)}/trace`,
+    );
+    return response.items;
+  }
+
   async listMessages(requirementId: string): Promise<RequirementMessageDto[]> {
     const response = await this.request<{ items: RequirementMessageDto[] }>(
       `/api/requirements/${encodeURIComponent(requirementId)}/messages`,
@@ -413,27 +437,6 @@ export class AgentManagerClient {
     onError: () => void;
   }): () => void {
     const source = new EventSource(`${this.baseUrl}/api/events`);
-    const types = [
-      'requirement.created',
-      'requirement.deleted',
-      'requirement.completed',
-      'requirements.purged',
-      'run.started',
-      'run.succeeded',
-      'run.failed',
-      'run.timed_out',
-      'run.cancelled',
-      'message.created',
-      'pull_request.created',
-      'pull_request.updated',
-      'review_request.started',
-      'timer.created',
-      'timer.fired',
-      'timer.cancelled',
-      'manager.reconciled',
-      'manager.configuration.updated',
-      'agent_models.updated',
-    ];
     const listener = (raw: Event) => {
       try {
         const event = raw as MessageEvent<string>;
@@ -442,11 +445,11 @@ export class AgentManagerClient {
         // Ignore malformed event payloads; the next valid event or manual refresh repairs state.
       }
     };
-    for (const type of types) source.addEventListener(type, listener);
+    for (const type of MANAGER_EVENT_TYPES) source.addEventListener(type, listener);
     source.onopen = callbacks.onOpen;
     source.onerror = callbacks.onError;
     return () => {
-      for (const type of types) source.removeEventListener(type, listener);
+      for (const type of MANAGER_EVENT_TYPES) source.removeEventListener(type, listener);
       source.close();
     };
   }

@@ -82,6 +82,67 @@ test('adapters normalize native session identifiers', () => {
   assert.equal(claude?.nativeSessionId, 'claude-1');
 });
 
+test('Codex normalizes commands, results, reasoning, and Agent messages into trace events', () => {
+  const adapter = new CodexAdapter();
+  const started = adapter.parseLine(JSON.stringify({
+    type: 'item.started',
+    item: { id: 'item-1', type: 'command_execution', command: 'npm test', status: 'in_progress' },
+  }));
+  const completed = adapter.parseLine(JSON.stringify({
+    type: 'item.completed',
+    item: { id: 'item-1', type: 'command_execution', command: 'npm test', aggregated_output: 'ok', exit_code: 0 },
+  }));
+  const reasoning = adapter.parseLine(JSON.stringify({
+    type: 'item.completed',
+    item: { id: 'item-2', type: 'reasoning', text: 'Inspect the failing test first.' },
+  }));
+  const message = adapter.parseLine(JSON.stringify({
+    type: 'item.completed',
+    item: { id: 'item-3', type: 'agent_message', text: 'The fix is ready.' },
+  }));
+
+  assert.deepEqual(started?.traces?.[0], {
+    kind: 'tool_call',
+    status: 'started',
+    title: 'Run command',
+    detail: 'npm test',
+    toolName: 'shell',
+    toolCallId: 'item-1',
+    nativeType: 'item.started',
+  });
+  assert.equal(completed?.traces?.[0]?.kind, 'tool_result');
+  assert.match(completed?.traces?.[0]?.detail ?? '', /ok/);
+  assert.equal(reasoning?.kind, 'other');
+  assert.equal(reasoning?.traces?.[0]?.kind, 'reasoning');
+  assert.equal(message?.kind, 'message');
+  assert.equal(message?.message, 'The fix is ready.');
+  assert.equal(message?.traces?.[0]?.kind, 'assistant_message');
+});
+
+test('Claude Code normalizes tool use and tool results into correlated trace events', () => {
+  const adapter = new ClaudeCodeAdapter();
+  const call = adapter.parseLine(JSON.stringify({
+    type: 'assistant',
+    message: {
+      content: [
+        { type: 'thinking', thinking: 'Check the repository.' },
+        { type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'git status' } },
+      ],
+    },
+  }));
+  const result = adapter.parseLine(JSON.stringify({
+    type: 'user',
+    message: { content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'clean' }] },
+  }));
+
+  assert.deepEqual(call?.traces?.map((trace) => trace.kind), ['reasoning', 'tool_call']);
+  assert.equal(call?.traces?.[1]?.toolName, 'Bash');
+  assert.equal(call?.traces?.[1]?.toolCallId, 'tool-1');
+  assert.equal(result?.traces?.[0]?.kind, 'tool_result');
+  assert.equal(result?.traces?.[0]?.toolCallId, 'tool-1');
+  assert.equal(result?.traces?.[0]?.detail, 'clean');
+});
+
 test('RD adapters inject manager guidance as developer or appended system instructions', () => {
   const codex = new CodexAdapter().buildRdInvocation({
     prompt: 'implement it',

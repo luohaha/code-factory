@@ -57,6 +57,15 @@ export function upsertRun<
   );
 }
 
+export function mergeAgentTrace<T extends { id: string; sequence: number }>(
+  current: readonly T[],
+  incoming: readonly T[],
+): T[] {
+  const merged = new Map(current.map((item) => [item.id, item]));
+  for (const item of incoming) merged.set(item.id, item);
+  return [...merged.values()].sort((left, right) => left.sequence - right.sequence);
+}
+
 export function replaceRequirementRuns<
   T extends { id: string; requirementId: string; startedAt: string; finishedAt?: string | null },
 >(runs: readonly T[], requirementId: string, requirementRuns: readonly T[]): T[] {
