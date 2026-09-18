@@ -24,6 +24,7 @@ import {
   MessagesSquare,
   MessageSquareReply,
   Moon,
+  Network,
   Paperclip,
   Play,
   Plus,
@@ -113,13 +114,15 @@ import {
 } from '@/lib/conversation-scroll';
 import { replaceRequirementRuns, upsertRequirement } from '@/lib/dashboard-state';
 import { formatDuration } from '@/lib/format-duration';
+import { summarizeRequirementRelations } from '@/lib/requirement-tree';
 import { I18nProvider, useI18n } from '@/lib/i18n';
 import { useTheme } from '@/lib/theme';
 import type { TranslationKey } from '@/locales/zh-CN';
+import { RequirementTreeView } from '@/components/requirement-tree-view';
 
 type ConnectionState = 'connecting' | 'online' | 'reconnecting' | 'offline';
 type TimeRange = '1d' | '7d' | '30d' | '90d' | 'all';
-type DashboardView = 'requirements' | 'pull_requests' | 'sessions' | 'timers';
+type DashboardView = 'requirements' | 'relationships' | 'pull_requests' | 'sessions' | 'timers';
 
 const timeRangeOptions: Array<{ value: TimeRange; label: TranslationKey }> = [
   { value: '1d', label: 'Last 24 hours' },
@@ -2117,6 +2120,10 @@ function Dashboard() {
         && isWithinTimeRange(requirement.createdAt, timeRange, filterReferenceTime);
     });
   }, [filterReferenceTime, matchingRequirementIds, normalizedQuery, provider, requirements, timeRange]);
+  const filteredRequirementIds = useMemo(
+    () => new Set(filteredRequirements.map((requirement) => requirement.id)),
+    [filteredRequirements],
+  );
 
   const filteredSessions = useMemo(() => {
     return requirements.filter((requirement) => {
@@ -2136,6 +2143,10 @@ function Dashboard() {
 
   const requirementsById = useMemo(
     () => new Map(requirements.map((requirement) => [requirement.id, requirement])),
+    [requirements],
+  );
+  const relationshipSummary = useMemo(
+    () => summarizeRequirementRelations(requirements),
     [requirements],
   );
 
@@ -2277,9 +2288,12 @@ function Dashboard() {
   const workspaceLabel = workspace?.root ?? t('Workspace not connected');
   const viewTitle: TranslationKey = view === 'requirements'
     ? 'Requirement workflow'
+    : view === 'relationships' ? 'Requirement relationships'
     : view === 'pull_requests' ? 'Pull Requests' : view === 'sessions' ? 'RD Agent Sessions' : 'Scheduled wake-ups';
   const viewDescription: TranslationKey = view === 'requirements'
     ? 'The requirement conversation is the RD Agent message stream; messages remain available while it runs'
+    : view === 'relationships'
+      ? 'Trace each follow-up Requirement back to the work that created it'
     : view === 'pull_requests'
       ? 'A human can select Codex or Claude to run a one-off review on an Open PR'
       : view === 'sessions'
@@ -2290,6 +2304,7 @@ function Dashboard() {
     : 'Search requirements, conversations, or PRs';
   const boardLabel: TranslationKey = view === 'requirements'
     ? 'Requirement board'
+    : view === 'relationships' ? 'Requirement relationship tree'
     : view === 'pull_requests' ? 'Pull Request board' : view === 'sessions' ? 'Agent Session board' : 'Timer board';
 
   return (
@@ -2306,6 +2321,7 @@ function Dashboard() {
 
           <nav className="ml-1 flex h-full items-center gap-1 sm:ml-5" aria-label={t('Main navigation')}>
             <Button variant="ghost" size="sm" className={view === 'requirements' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('requirements')}><LayoutDashboard data-icon="inline-start" />{t('Requirements')}</Button>
+            <Button variant="ghost" size="sm" className={view === 'relationships' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('relationships')} aria-label={t('Relationships')} title={t('Relationships')}><Network data-icon="inline-start" /><span className="hidden lg:inline">{t('Relationships')}</span></Button>
             <Button variant="ghost" size="sm" className={view === 'pull_requests' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('pull_requests')}><GitPullRequest data-icon="inline-start" />PR</Button>
             <Button variant="ghost" size="sm" className={view === 'sessions' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('sessions')}><Activity data-icon="inline-start" />{t('Sessions')}</Button>
             <Button variant="ghost" size="sm" className={view === 'timers' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('timers')}><Clock3 data-icon="inline-start" />{t('Timers')}</Button>
@@ -2349,7 +2365,13 @@ function Dashboard() {
           </div>
 
           <div className="flex flex-wrap items-center gap-5 text-xs">
-            {view === 'timers' ? (
+            {view === 'relationships' ? (
+              <>
+                <div><span className="mr-1.5 text-lg font-semibold tabular-nums">{relationshipSummary.roots}</span><span className="text-muted-foreground">{t('Roots')}</span></div>
+                <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-sky-600">{relationshipSummary.linked}</span><span className="text-muted-foreground">{t('Linked')}</span></div>
+                <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-violet-600">{relationshipSummary.levels}</span><span className="text-muted-foreground">{t('Levels')}</span></div>
+              </>
+            ) : view === 'timers' ? (
               <>
                 <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-emerald-600">{activeTimers.length}</span><span className="text-muted-foreground">{t('Active')}</span></div>
                 <div><span className="mr-1.5 text-lg font-semibold tabular-nums">{oneTimeTimers}</span><span className="text-muted-foreground">{t('One time')}</span></div>
@@ -2446,6 +2468,14 @@ function Dashboard() {
               );
             })}
           </div>
+        ) : view === 'relationships' ? (
+          <RequirementTreeView
+            requirements={requirements}
+            visibleRequirementIds={filteredRequirementIds}
+            loading={loading}
+            filtered={normalizedQuery.length > 0 || provider !== 'all' || timeRange !== 'all'}
+            onOpen={setSelectedId}
+          />
         ) : view === 'pull_requests' ? (
           <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-4 gap-4 p-4 lg:p-5">
             {pullRequestColumns.map((column) => {
