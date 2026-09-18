@@ -792,6 +792,29 @@ test('Requirement conversations support bounded pages from either end', () => {
   }
 });
 
+test('bounded Requirement conversation queries use the sequence index without temporary sorting', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-message-index-'));
+  const databasePath = join(directory, 'manager.sqlite');
+  try {
+    const store = new SqliteAgentManagerStore(databasePath);
+    store.close();
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      for (const order of ['ASC', 'DESC']) {
+        const plan = database.prepare(`EXPLAIN QUERY PLAN SELECT * FROM requirement_messages
+          WHERE requirement_id = ? ORDER BY sequence ${order} LIMIT ? OFFSET ?`)
+          .all('req-plan', 20, 0) as Array<{ detail: string }>;
+        assert.ok(plan.some((step) => step.detail.includes('messages_requirement_sequence')));
+        assert.ok(plan.every((step) => !step.detail.includes('USE TEMP B-TREE')));
+      }
+    } finally {
+      database.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('image attachments are claimed by one requirement message', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {

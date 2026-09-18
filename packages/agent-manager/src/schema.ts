@@ -181,6 +181,8 @@ export const schemaStatements = [
 
 /** Indexes that depend on columns added by legacy-schema migration. */
 export const postMigrationSchemaStatements = [
+  `CREATE UNIQUE INDEX IF NOT EXISTS messages_requirement_sequence
+    ON requirement_messages (requirement_id, sequence)`,
   `CREATE INDEX IF NOT EXISTS requirements_parent_updated
     ON requirements (parent_requirement_id, updated_at DESC)`,
 ] as const;

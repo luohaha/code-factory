@@ -1067,8 +1067,6 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
           .run(messages.length, requirementId);
       }
     }
-    this.#db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS messages_requirement_sequence
-      ON requirement_messages (requirement_id, sequence)`);
   }
 
   private initializeFullTextSearch(): boolean {
