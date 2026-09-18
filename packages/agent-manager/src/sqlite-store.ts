@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 
-import { schemaStatements } from './schema.js';
+import { postMigrationSchemaStatements, schemaStatements } from './schema.js';
 import {
   SEARCH_EMBEDDING_VERSION,
   createSearchEmbedding,
@@ -218,6 +218,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     this.#db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
     for (const statement of schemaStatements) this.#db.exec(statement);
     this.migrateLegacySchema();
+    for (const statement of postMigrationSchemaStatements) this.#db.exec(statement);
     this.#ftsAvailable = this.initializeFullTextSearch();
     this.backfillSearchDocuments();
     this.#db.exec('PRAGMA optimize;');

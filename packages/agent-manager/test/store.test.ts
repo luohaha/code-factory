@@ -882,6 +882,13 @@ test('legacy databases add nullable model and reasoning configuration columns', 
       assert.ok(columns.some((column) => column.name === 'model'), `${table} should contain model`);
       assert.ok(columns.some((column) => column.name === 'reasoning_effort'), `${table} should contain reasoning_effort`);
     }
+    const parentIndexColumns = migrated.prepare('PRAGMA index_info(requirements_parent_updated)').all() as Array<{
+      name: string;
+    }>;
+    assert.deepEqual(
+      parentIndexColumns.map((column) => column.name),
+      ['parent_requirement_id', 'updated_at'],
+    );
   } finally {
     migrated.close();
     rmSync(directory, { recursive: true, force: true });
