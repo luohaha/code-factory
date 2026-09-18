@@ -18,6 +18,27 @@ import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
 import type { RunOutcome } from '../src/types.ts';
 import { CODE_FACTORY_VERSION } from '../src/version.ts';
 
+async function readServerSentEvent(response: Response): Promise<Record<string, unknown>> {
+  assert.ok(response.body);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (!buffer.includes('\n\n')) {
+      const chunk = await reader.read();
+      assert.equal(chunk.done, false);
+      buffer += decoder.decode(chunk.value, { stream: true });
+    }
+  } finally {
+    await reader.cancel();
+  }
+  const data = buffer.split('\n\n', 1)[0]!
+    .split('\n')
+    .find((line) => line.startsWith('data: '));
+  assert.ok(data);
+  return JSON.parse(data.slice('data: '.length)) as Record<string, unknown>;
+}
+
 class WaitingRunner implements AgentProcessRunner {
   request: ProcessRunRequest | null = null;
 
@@ -92,6 +113,51 @@ test('HTTP API exposes the cached provider model catalog', async () => {
     await manager.close();
   }
   assert.equal(stopped, true);
+});
+
+test('SSE sends only live events initially and resumes from query or Last-Event-ID cursors', async () => {
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    logger: createLogger({ level: 'silent' }),
+  });
+  const historical = manager.createRequirement({
+    title: 'Historical requirement',
+    description: 'Created before the SSE connection',
+    provider: 'codex',
+  });
+  const historicalEvent = manager.listEvents().at(-1)!;
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+  const eventsUrl = `http://127.0.0.1:${port}/api/events`;
+
+  try {
+    const initialResponse = await fetch(eventsUrl);
+    assert.equal(initialResponse.status, 200);
+    const live = manager.createRequirement({
+      title: 'Live requirement',
+      description: 'Created after the SSE connection',
+      provider: 'codex',
+    });
+    const initialEvent = await readServerSentEvent(initialResponse);
+    assert.equal(initialEvent.requirementId, live.id);
+    assert.notEqual(initialEvent.requirementId, historical.id);
+
+    const queryReplay = await readServerSentEvent(await fetch(`${eventsUrl}?after=${historicalEvent.id}`));
+    assert.equal(queryReplay.requirementId, live.id);
+
+    const headerReplay = await readServerSentEvent(await fetch(eventsUrl, {
+      headers: { 'Last-Event-ID': String(historicalEvent.id) },
+    }));
+    assert.equal(headerReplay.requirementId, live.id);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
 });
 
 test('HTTP API exposes validated hybrid search', async () => {
