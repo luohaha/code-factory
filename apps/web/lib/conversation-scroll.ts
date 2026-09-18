@@ -45,3 +45,46 @@ export function upsertConversationMessage<T extends { id: string; sequence: numb
     message,
   ].sort((left, right) => left.sequence - right.sequence);
 }
+
+export interface RequirementConversation<T> {
+  requirementId: string | null;
+  items: T[];
+}
+
+export function mergeSelectedConversationMessage<
+  T extends { id: string; sequence: number; requirementId: string },
+>(
+  conversation: RequirementConversation<T>,
+  selectedRequirementId: string | null,
+  message: T,
+): RequirementConversation<T> {
+  if (!selectedRequirementId || message.requirementId !== selectedRequirementId) {
+    return conversation;
+  }
+  return {
+    requirementId: selectedRequirementId,
+    items: upsertConversationMessage(
+      conversation.requirementId === selectedRequirementId ? conversation.items : [],
+      message,
+    ),
+  };
+}
+
+export function mergeConversationSnapshot<
+  T extends { id: string; sequence: number; requirementId: string },
+>(
+  conversation: RequirementConversation<T>,
+  requirementId: string,
+  snapshot: readonly T[],
+): RequirementConversation<T> {
+  const scopedSnapshot = snapshot.filter((message) => message.requirementId === requirementId);
+  return {
+    requirementId,
+    items: conversation.requirementId === requirementId
+      ? conversation.items.reduce(
+          (messages, message) => upsertConversationMessage(messages, message),
+          scopedSnapshot,
+        )
+      : [...scopedSnapshot],
+  };
+}

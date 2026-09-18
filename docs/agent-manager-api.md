@@ -371,7 +371,7 @@ Success: 200 OK with {"items": Requirement[]}.
 
 ### GET /api/requirements/:id
 
-Returns one Requirement with its current RD Session. Returns 404 Not Found for an unknown Requirement. Dashboard clients use this endpoint to synchronize one affected Requirement after an SSE event without reloading unrelated workspace resources.
+Returns one Requirement with its current RD Session. Returns 404 Not Found for an unknown Requirement. This endpoint is the compatibility fallback for clients that receive an older SSE payload without the affected Requirement snapshot; current events carry persisted resources directly.
 
 ### GET /api/sessions
 
@@ -499,11 +499,26 @@ Success: 202 Accepted
 {
   "accepted": true,
   "requirementId": "req_...",
-  "action": "start"
+  "action": "start",
+  "requirement": {
+    "id": "req_...",
+    "status": "doing",
+    "session": { "state": "running" }
+  },
+  "run": {
+    "id": "run_...",
+    "requirementId": "req_...",
+    "status": "running"
+  },
+  "message": {
+    "id": "msg_...",
+    "requirementId": "req_...",
+    "sequence": 1
+  }
 }
 ~~~
 
-Acceptance does not mean the background Run has completed. If the Session is already running, the endpoint still returns 202; optional input is queued for the next Run and no second concurrent RD Run is started. Track completion through SSE or the Run and Session query endpoints.
+requirement is the persisted Requirement/Session state after acceptance. run is the active RD Run, or null if no Run is active. message is the persisted optional input, or null when the request supplied neither text nor attachments. These fields let clients render acceptance without waiting for unrelated workspace queries. Acceptance does not mean the background Run has completed. If the Session is already running, the endpoint still returns 202; optional input is queued for the next Run and no second concurrent RD Run is started. Track completion through SSE or the Run and Session query endpoints.
 
 Returns 404 for an unknown Requirement and 409 Conflict for a done or cancelled Requirement.
 
@@ -629,13 +644,23 @@ Success: 202 Accepted
 {
   "accepted": true,
   "pullRequestId": "pr_...",
+  "reviewRequest": {
+    "id": "rev_...",
+    "pullRequestId": "pr_...",
+    "status": "running"
+  },
+  "run": {
+    "id": "run_...",
+    "role": "reviewer",
+    "status": "running"
+  },
   "provider": "claude-code",
   "model": "claude-opus-4-6",
   "reasoningEffort": "high"
 }
 ~~~
 
-The Reviewer runs in the background. The request does not wait for completion. Returns 404 for an unknown PR and 409 when the PR is not Open or already has an active review.
+reviewRequest and run are the persisted records created before acceptance. The Reviewer runs in the background, and the request does not wait for completion. Returns 404 for an unknown PR and 409 when the PR is not Open or already has an active review.
 
 ## 7. RD Agent endpoints
 
@@ -759,7 +784,7 @@ curl -N 'http://127.0.0.1:4310/api/events?after=41'
 ~~~text
 id: 42
 event: message.created
-data: {"id":42,"type":"message.created","requirementId":"req_...","sessionId":"ses_...","runId":null,"payload":{"message":{"id":"msg_..."}},"createdAt":"2026-09-11T02:30:00.000Z"}
+data: {"id":42,"type":"message.created","requirementId":"req_...","sessionId":"ses_...","runId":null,"payload":{"message":{"id":"msg_..."},"requirement":{"id":"req_...","session":{"state":"running"}}},"createdAt":"2026-09-11T02:30:00.000Z"}
 
 ~~~
 
@@ -781,27 +806,27 @@ Current event types and primary payloads:
 
 | Event | Payload |
 | --- | --- |
-| requirement.created | provider, createdBy |
-| requirement.deleted | empty object |
-| requirement.completed | empty object |
-| requirements.purged | cancelledCount, doneCount |
-| message.created | message |
+| requirement.created | requirement, provider, createdBy |
+| requirement.deleted | terminal requirement and its timers |
+| requirement.completed | updated requirement and its timers |
+| requirements.purged | requirementIds, cancelledCount, doneCount |
+| message.created | message and latest requirement/session snapshot; trigger metadata when applicable |
 | pull_request.created | pullRequest |
 | pull_request.updated | pullRequest |
-| review_request.started | reviewRequestId, pullRequestId, provider, targetHeadSha |
+| review_request.started | pullRequest, reviewRequest, run, reviewRequestId, pullRequestId, provider, targetHeadSha |
 | timer.created | timer |
 | timer.fired | timer, scheduledFor |
 | timer.cancelled | timer |
-| run.started | RD role, provider, resumed, and input message range |
-| run.succeeded | role, exitCode, nativeSessionId, finalMessage, error |
+| run.started | requirement, run, RD role, provider, resumed, and input message range |
+| run.succeeded | requirement, run, optional reviewRequest and pullRequest, role, exitCode, nativeSessionId, finalMessage, error |
 | run.failed | same as run.succeeded |
 | run.timed_out | same as run.succeeded |
 | run.cancelled | same as run.succeeded |
 | manager.reconciled | runIds and requirementIds repaired at startup |
-| manager.configuration.updated | changedFields, appliedFields, restartRequired, restartRequiredFields |
-| agent_models.updated | provider refresh timestamps and stale flags |
+| manager.configuration.updated | configuration snapshot, changedFields, appliedFields, restartRequired, restartRequiredFields |
+| agent_models.updated | modelCatalog plus provider refresh timestamps and stale flags |
 
-Clients should store the last successfully processed event ID and pass it as `after` when reconnecting. EventSource reconnections can use the standard `Last-Event-ID` request header instead; when both are present, the `after` query parameter takes precedence. A connection without a valid cursor receives only events published after it connects. A connection with a valid non-negative integer cursor replays at most 200 existing events before continuing with live events.
+Resource-bearing payloads are persisted before publication. Clients may idempotently upsert them by resource ID and resource update time instead of reloading the workspace. A client talking to an older server may use the event identifiers to refresh only the affected Requirement, Run, PR, ReviewRequest, or Timer. Clients should store the last successfully processed event ID and pass it as `after` when reconnecting. EventSource reconnections can use the standard `Last-Event-ID` request header instead; when both are present, the `after` query parameter takes precedence. A connection without a valid cursor receives only events published after it connects. A connection with a valid non-negative integer cursor replays at most 200 existing events before continuing with live events.
 
 ## 9. Typical workflow
 

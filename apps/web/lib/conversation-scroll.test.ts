@@ -7,6 +7,8 @@ import {
   isAwayFromConversationBottom,
   isAwayFromConversationTop,
   isNearConversationBottom,
+  mergeConversationSnapshot,
+  mergeSelectedConversationMessage,
   upsertConversationMessage,
 } from './conversation-scroll.ts';
 
@@ -114,5 +116,74 @@ void test('reconciles an echoed reply with the same message received over SSE', 
       { id: 'message-1', sequence: 1, body: 'first' },
       { id: 'message-2', sequence: 2, body: 'persisted' },
     ],
+  );
+});
+
+void test('keeps a selected Requirement message received while its conversation is loading', () => {
+  const loadingConversation = {
+    requirementId: 'requirement-2',
+    items: [{
+      id: 'message-2',
+      requirementId: 'requirement-2',
+      sequence: 1,
+      body: 'previous conversation',
+    }],
+  };
+  const liveMessage = {
+    id: 'message-1-live',
+    requirementId: 'requirement-1',
+    sequence: 2,
+    body: 'arrived over SSE',
+  };
+
+  const afterEvent = mergeSelectedConversationMessage(
+    loadingConversation,
+    'requirement-1',
+    liveMessage,
+  );
+  assert.deepEqual(afterEvent, {
+    requirementId: 'requirement-1',
+    items: [liveMessage],
+  });
+
+  assert.deepEqual(
+    mergeConversationSnapshot(afterEvent, 'requirement-1', [{
+      id: 'message-1-old',
+      requirementId: 'requirement-1',
+      sequence: 1,
+      body: 'captured before the SSE append',
+    }]),
+    {
+      requirementId: 'requirement-1',
+      items: [
+        {
+          id: 'message-1-old',
+          requirementId: 'requirement-1',
+          sequence: 1,
+          body: 'captured before the SSE append',
+        },
+        liveMessage,
+      ],
+    },
+  );
+});
+
+void test('does not merge a message from another Requirement into the selected conversation', () => {
+  const conversation = {
+    requirementId: 'requirement-1',
+    items: [{
+      id: 'message-1',
+      requirementId: 'requirement-1',
+      sequence: 1,
+    }],
+  };
+
+  assert.equal(
+    mergeSelectedConversationMessage(conversation, 'requirement-1', {
+      id: 'message-2',
+      requirementId: 'requirement-2',
+      sequence: 2,
+    }),
+    conversation,
   );
 });

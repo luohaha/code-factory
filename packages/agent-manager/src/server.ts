@@ -397,9 +397,15 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           ...(prompt ? { prompt } : {}),
         })
           .catch((error: unknown) => logger.error('Reviewer run failed unexpectedly', { pullRequestId, error }));
+        const acceptedReview = manager.listReviewRequests(pullRequestId)[0];
+        const acceptedRun = acceptedReview
+          ? manager.listRuns().find((run) => run.id === acceptedReview.runId) ?? null
+          : null;
         sendJson(response, 202, {
           accepted: true,
           pullRequestId,
+          reviewRequest: acceptedReview ?? null,
+          run: acceptedRun,
           provider,
           model: model ?? null,
           reasoningEffort: reasoningEffort ?? null,
@@ -441,7 +447,21 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         const attachmentIds = stringArrayField(body, 'attachmentIds');
         void manager.runRequirement(requirementId, message, attachmentIds)
           .catch((error: unknown) => logger.error('RD run failed unexpectedly', { requirementId, error }));
-        sendJson(response, 202, { accepted: true, requirementId, action: name });
+        const current = manager.getRequirement(requirementId);
+        if (!current) throw new StoreNotFoundError(`Requirement ${requirementId} not found`);
+        const run = manager.listRuns(requirementId)
+          .find((item) => item.role === 'rd' && item.status === 'running') ?? null;
+        const persistedMessage = message?.trim() || attachmentIds.length > 0
+          ? manager.listMessages(requirementId).at(-1) ?? null
+          : null;
+        sendJson(response, 202, {
+          accepted: true,
+          requirementId,
+          action: name,
+          requirement: current,
+          run,
+          message: persistedMessage,
+        });
         return;
       }
 

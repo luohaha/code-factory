@@ -119,6 +119,13 @@ test('runtime configuration starts and stops PR reconciliation without restartin
 
     const enabled = manager.updateConfiguration({ pullRequestReconcileIntervalSeconds: 1 });
     assert.equal(enabled.restartRequired, false);
+    const configurationEvent = manager.listEvents().find((event) =>
+      event.type === 'manager.configuration.updated');
+    assert.equal(
+      (configurationEvent?.payload.configuration as { values?: { pullRequestReconcileIntervalSeconds?: number } })
+        ?.values?.pullRequestReconcileIntervalSeconds,
+      1,
+    );
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(githubClient.inspectionCount, 1);
 
@@ -252,7 +259,11 @@ test('runtime retention configuration immediately purges expired requirements an
     assert.equal(existsSync(retryAttachmentPath), true);
     assert.deepEqual(store.listPendingAttachmentDeletions(), [retryAttachmentPath]);
     const purgeEvent = manager.listEvents().filter((event) => event.type === 'requirements.purged').at(-1);
-    assert.deepEqual(purgeEvent?.payload, { cancelledCount: 1, doneCount: 1 });
+    assert.deepEqual(purgeEvent?.payload, {
+      requirementIds: ['req-cancelled-expired', 'req-done-expired'],
+      cancelledCount: 1,
+      doneCount: 1,
+    });
 
     rmSync(retryAttachmentPath, { recursive: true, force: true });
     manager.updateConfiguration({ cancelledRequirementRetentionDays: 7 });
@@ -297,8 +308,8 @@ test('zero-day retention purges requirements as cancellation and completion beco
     assert.deepEqual(
       manager.listEvents().filter((event) => event.type === 'requirements.purged').map((event) => event.payload),
       [
-        { cancelledCount: 1, doneCount: 0 },
-        { cancelledCount: 0, doneCount: 1 },
+        { requirementIds: [cancelled.id], cancelledCount: 1, doneCount: 0 },
+        { requirementIds: [done.id], cancelledCount: 0, doneCount: 1 },
       ],
     );
   } finally {
@@ -457,7 +468,9 @@ test('Agent Manager removes a TODO requirement from active lists and publishes a
     assert.equal(event?.type, 'requirement.deleted');
     assert.equal(event?.requirementId, requirement.id);
     assert.equal(event?.sessionId, requirement.session.id);
-    assert.deepEqual(event?.payload, {});
+    assert.equal((event?.payload.requirement as { id?: string; status?: string })?.id, requirement.id);
+    assert.equal((event?.payload.requirement as { status?: string })?.status, 'cancelled');
+    assert.deepEqual(event?.payload.timers, []);
   } finally {
     await manager.close();
   }
@@ -478,12 +491,18 @@ test('Agent Manager includes a human start message in the initial RD Run', async
     assert.match(runner.requests[0]?.invocation.input ?? '', /Start here\./);
     assert.equal(manager.listRuns(requirement.id)[0]?.inputFromSequence, 1);
     assert.equal(manager.listRuns(requirement.id)[0]?.inputToSequence, 1);
+    const startedEvent = manager.listEvents().find((event) => event.type === 'run.started');
+    assert.equal((startedEvent?.payload.requirement as { session?: { state?: string } })?.session?.state, 'running');
+    assert.equal((startedEvent?.payload.run as { status?: string })?.status, 'running');
 
     runner.resolvers[0]?.({
       status: 'succeeded', exitCode: 0, nativeSessionId: 'native-thread-1', finalMessage: 'ready', error: null,
     });
     await execution;
     assert.equal(manager.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, 1);
+    const succeededEvent = manager.listEvents().find((event) => event.type === 'run.succeeded');
+    assert.equal((succeededEvent?.payload.requirement as { status?: string })?.status, 'waiting_confirmation');
+    assert.equal((succeededEvent?.payload.run as { status?: string })?.status, 'succeeded');
   } finally {
     manager.close();
   }
@@ -851,6 +870,8 @@ test('the native Timer Agent Trigger wakes an idle RD session with timer context
       event.type === 'message.created' && event.payload.timerId === 'tmr-due');
     assert.equal(messageEvent?.payload.triggerId, TIMER_AGENT_TRIGGER_ID);
     assert.equal(messageEvent?.payload.source, 'timer');
+    assert.equal((messageEvent?.payload.message as { requirementId?: string })?.requirementId, requirement.id);
+    assert.equal((messageEvent?.payload.requirement as { id?: string })?.id, requirement.id);
     assert.equal(store.getAgentTimer('tmr-due')?.status, 'completed');
     assert.ok(manager.listEvents().some((event) => event.type === 'timer.fired'));
 
@@ -1043,12 +1064,21 @@ test('a human-requested PR review writes to the requirement conversation and wak
     assert.equal(reviewRequest?.targetHeadSha, 'abc123def456');
     assert.equal(reviewRequest?.model, 'claude-opus-4-6');
     assert.equal(reviewRequest?.reasoningEffort, 'high');
+    const reviewStartedEvent = manager.listEvents().find((event) => event.type === 'review_request.started');
+    assert.equal((reviewStartedEvent?.payload.pullRequest as { id?: string })?.id, pullRequest.id);
+    assert.equal((reviewStartedEvent?.payload.reviewRequest as { id?: string })?.id, reviewRequest?.id);
+    assert.equal((reviewStartedEvent?.payload.run as { id?: string; status?: string })?.status, 'running');
     runner.requests[0]?.onEvent?.({ kind: 'message', message: 'Found one issue: comment URL', raw: {} });
     runner.resolvers[0]?.({
       status: 'succeeded', exitCode: 0, nativeSessionId: null, finalMessage: 'reviewed', error: null,
     });
     await reviewExecution;
     await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const reviewSucceededEvent = manager.listEvents().find((event) =>
+      event.type === 'run.succeeded' && event.runId === reviewRequest?.runId);
+    assert.equal((reviewSucceededEvent?.payload.reviewRequest as { status?: string })?.status, 'succeeded');
+    assert.equal((reviewSucceededEvent?.payload.run as { status?: string })?.status, 'succeeded');
 
     const reviewerMessage = manager.listMessages(requirement.id).at(-1);
     assert.equal(reviewerMessage?.author, 'reviewer');
