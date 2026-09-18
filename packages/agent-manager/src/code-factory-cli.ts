@@ -13,6 +13,8 @@ Code Factory control-plane commands for RD Agents.
 Commands:
   pr register             Register or refresh a pull request
   requirement propose     Propose a separately tracked TODO requirement
+  requirement related     Show this Requirement's direct parent and children
+  requirement message     Send a message to a related Requirement's RD Agent
   timer register          Register a one-time or recurring wake-up timer
   timer show              Show timers registered for this Requirement
   timer cancel            Cancel a registered wake-up timer
@@ -54,6 +56,27 @@ Optional options:
   --provider codex|claude-code
   --model MODEL
   --reasoning-effort low|medium|high|xhigh|max
+
+Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
+CODE_FACTORY_SESSION_ID.`;
+
+const REQUIREMENT_RELATED_HELP = `Usage: code-factory-cli requirement related
+
+Show this Requirement's direct parent and child Requirements, including their
+current status and RD Session state.
+
+Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
+CODE_FACTORY_SESSION_ID.`;
+
+const REQUIREMENT_MESSAGE_HELP = `Usage: code-factory-cli requirement message [options]
+
+Send a message to a direct parent or child Requirement's RD Agent. The message
+is persisted in the target Requirement conversation and starts or queues its RD
+Agent. A completed target is reactivated; a cancelled target is rejected.
+
+Required options:
+  --requirement-id ID     Direct parent or child Requirement ID
+  --message TEXT          Message for the related Requirement's RD Agent
 
 Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
 CODE_FACTORY_SESSION_ID.`;
@@ -312,6 +335,55 @@ export async function runCodeFactoryCli(
       }
       endpoint = '/agent/requirements';
       body = parseRequirementPayload(args.slice(2), runtime.environment);
+    } else if (command === 'requirement related') {
+      help = REQUIREMENT_RELATED_HELP;
+      if (writesHelp(args.slice(2))) {
+        runtime.writeOut(`${help}\n`);
+        return 0;
+      }
+      parseOptions(args.slice(2), help, {});
+      const requirementId = required(
+        runtime.environment[CODE_FACTORY_REQUIREMENT_ID],
+        CODE_FACTORY_REQUIREMENT_ID,
+        help,
+      );
+      const sessionId = required(
+        runtime.environment[CODE_FACTORY_SESSION_ID],
+        CODE_FACTORY_SESSION_ID,
+        help,
+      );
+      endpoint = `/agent/requirements/${encodeURIComponent(requirementId)}/related?sourceSessionId=${encodeURIComponent(sessionId)}`;
+      method = 'GET';
+    } else if (command === 'requirement message') {
+      help = REQUIREMENT_MESSAGE_HELP;
+      if (writesHelp(args.slice(2))) {
+        runtime.writeOut(`${help}\n`);
+        return 0;
+      }
+      const values = parseOptions(args.slice(2), help, {
+        'requirement-id': { type: 'string' },
+        message: { type: 'string' },
+      });
+      const sourceRequirementId = required(
+        runtime.environment[CODE_FACTORY_REQUIREMENT_ID],
+        CODE_FACTORY_REQUIREMENT_ID,
+        help,
+      );
+      const sourceSessionId = required(
+        runtime.environment[CODE_FACTORY_SESSION_ID],
+        CODE_FACTORY_SESSION_ID,
+        help,
+      );
+      const targetRequirementId = required(
+        values['requirement-id'] as string | undefined,
+        '--requirement-id',
+        help,
+      );
+      endpoint = `/agent/requirements/${encodeURIComponent(sourceRequirementId)}/related/${encodeURIComponent(targetRequirementId)}/messages`;
+      body = {
+        sourceSessionId,
+        message: required(values.message as string | undefined, '--message', help),
+      };
     } else if (command === 'timer register') {
       help = TIMER_REGISTER_HELP;
       if (writesHelp(args.slice(2))) {

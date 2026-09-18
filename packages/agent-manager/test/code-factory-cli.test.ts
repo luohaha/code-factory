@@ -60,6 +60,8 @@ test('code-factory-cli help discovers the supported RD commands', async () => {
   assert.match(output.join(''), /timer register/);
   assert.match(output.join(''), /timer show/);
   assert.match(output.join(''), /requirement propose/);
+  assert.match(output.join(''), /requirement related/);
+  assert.match(output.join(''), /requirement message/);
   assert.match(output.join(''), /CODE_FACTORY_REQUIREMENT_ID/);
 });
 
@@ -132,6 +134,36 @@ test('code-factory-cli proposes a Requirement using injected Session context', a
     provider: 'codex',
     reasoningEffort: 'high',
   });
+});
+
+test('code-factory-cli lists related Requirements and messages a related RD Agent', async () => {
+  const requests: CapturedRequest[] = [];
+  const output: string[] = [];
+  const errors: string[] = [];
+  const runtime = testRuntime(requests, output, errors);
+
+  const relatedExitCode = await runCodeFactoryCli(['requirement', 'related'], runtime);
+  const messageExitCode = await runCodeFactoryCli([
+    'requirement', 'message',
+    '--requirement-id', 'req_parent',
+    '--message', 'The shared contract now uses field version 2.',
+  ], runtime);
+
+  assert.equal(relatedExitCode, 0);
+  assert.equal(messageExitCode, 0);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(requests, [{
+    url: 'http://127.0.0.1:4310/api/agent/requirements/req_cli/related?sourceSessionId=ses_cli',
+    method: 'GET',
+    body: {},
+  }, {
+    url: 'http://127.0.0.1:4310/api/agent/requirements/req_cli/related/req_parent/messages',
+    method: 'POST',
+    body: {
+      sourceSessionId: 'ses_cli',
+      message: 'The shared contract now uses field version 2.',
+    },
+  }]);
 });
 
 test('code-factory-cli registers, shows, and cancels RD wake-up timers', async () => {

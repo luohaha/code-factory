@@ -1718,7 +1718,10 @@ function RequirementDetail({
                   </span>
                   <div className={`min-w-0 max-w-[86%] ${human ? 'text-right' : ''}`}>
                     <div className={`flex items-center gap-2 ${human ? 'justify-end' : ''}`}>
-                      <span className="text-[10px] font-semibold">{t(authorLabel[item.author])}</span>
+                      <span className="text-[10px] font-semibold">
+                        {t(authorLabel[item.author])}
+                        {item.sourceRequirementId ? ` · REQ-${shortId(item.sourceRequirementId)}` : ''}
+                      </span>
                       <span className="text-[9px] text-muted-foreground">{formatTime(item.createdAt, locale)}</span>
                     </div>
                     <div className={`mt-1.5 rounded-2xl px-3.5 py-2.5 text-left text-xs leading-5 break-words shadow-[0_1px_2px_oklch(0.18_0.02_255/0.04)] ${human ? 'rounded-tr-md bg-primary text-primary-foreground' : reviewer ? 'rounded-tl-md border border-violet-500/15 bg-violet-500/7' : 'rounded-tl-md border border-border/80 bg-card'}`}>

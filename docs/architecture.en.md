@@ -81,6 +81,7 @@ Every headless RD and Reviewer invocation skips interactive approval and CLI san
 - `createdBy`: `human | rd_agent`;
 - an agent-proposed Requirement records `parentRequirementId` and `sourceSessionId`;
 - an agent proposal is created as TODO and does not start automatically, preventing uncontrolled recursive work.
+- the proposing Requirement and its direct child can discover each other and exchange explicit, durable RD messages without sharing native agent-session context.
 
 ### AgentSession
 
@@ -121,7 +122,7 @@ The system does not maintain a separate RD message-queue table. `requirement_mes
 | --- | --- | --- |
 | Human | Yes | Yes |
 | Reviewer | Yes | Yes |
-| RD Agent | Yes | No |
+| RD Agent | Yes | No for its own output; yes when explicitly sent from a directly related Requirement |
 | System | Yes | Depends on the event |
 
 Each message has a monotonically increasing `sequence` and a `deliverToRd` flag. When an RD Run starts, it captures the pending external-message range as `inputFromSequence..inputToSequence`:
@@ -131,8 +132,8 @@ Each message has a monotonically increasing `sequence` and a `deliverToRd` flag.
 3. If external messages remain, Agent Manager automatically resumes the same RD Session.
 4. Multiple messages are delivered together in order during the next Run.
 5. A failed or interrupted Run does not advance the cursor, so retrying or corrective resumption cannot lose messages. Only messages arriving after the interrupted Run started trigger its automatic replacement.
-6. RD output is never delivered back to the RD Agent as normal next-turn input.
-7. A human reply to a DONE Requirement reactivates it as DOING, clears its completion timestamp, and starts a new Run in the same long-lived RD Session. CANCELLED Requirements remain terminal.
+6. A Requirement's own RD output is never delivered back to that RD Agent as normal next-turn input. An explicit message from a directly related Requirement is external input and is delivered to the target RD Agent.
+7. A human reply or related-Agent message to a DONE Requirement reactivates it as DOING, clears its completion timestamp, and starts a new Run in the same long-lived RD Session. CANCELLED Requirements remain terminal.
 
 Only when the native session is lost and must be recovered may Agent Manager rebuild context from a compact conversation summary. Normal execution never replays all previous RD output.
 

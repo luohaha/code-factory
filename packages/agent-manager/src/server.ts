@@ -330,6 +330,41 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         return;
       }
 
+      const agentRelatedRequirements = url.pathname.match(
+        /^\/api\/agent\/requirements\/([^/]+)\/related$/,
+      );
+      if (request.method === 'GET' && agentRelatedRequirements) {
+        const requirementId = decodeURIComponent(agentRelatedRequirements[1]!);
+        const sourceSessionId = url.searchParams.get('sourceSessionId')?.trim();
+        if (!sourceSessionId) throw new TypeError('sourceSessionId must be a non-empty string');
+        sendJson(response, 200, manager.listRelatedRequirements(requirementId, sourceSessionId));
+        return;
+      }
+
+      const agentRelatedMessages = url.pathname.match(
+        /^\/api\/agent\/requirements\/([^/]+)\/related\/([^/]+)\/messages$/,
+      );
+      if (request.method === 'POST' && agentRelatedMessages) {
+        const sourceRequirementId = decodeURIComponent(agentRelatedMessages[1]!);
+        const targetRequirementId = decodeURIComponent(agentRelatedMessages[2]!);
+        const body = await readJson(request);
+        const result = manager.postRelatedRequirementMessage(
+          sourceRequirementId,
+          stringField(body, 'sourceSessionId', true)!,
+          targetRequirementId,
+          stringField(body, 'message', true)!,
+        );
+        sendJson(response, 202, {
+          accepted: true,
+          sourceRequirementId,
+          targetRequirementId,
+          queued: result.queued,
+          message: result.message,
+          requirement: result.requirement,
+        });
+        return;
+      }
+
       if (request.method === 'POST' && url.pathname === '/api/agent/pull-requests') {
         const body = await readJson(request);
         const item = manager.registerAgentPullRequest({

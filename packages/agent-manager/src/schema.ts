@@ -59,6 +59,7 @@ export const schemaStatements = [
     requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
     session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
     run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+    source_requirement_id TEXT REFERENCES requirements(id) ON DELETE SET NULL,
     author TEXT NOT NULL CHECK (author IN ('human', 'rd_agent', 'reviewer', 'system')),
     body TEXT NOT NULL,
     sequence INTEGER NOT NULL DEFAULT 0,

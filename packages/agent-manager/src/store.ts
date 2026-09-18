@@ -67,6 +67,7 @@ export interface AppendMessageRecord {
   requirementId: string;
   sessionId: string;
   runId?: string;
+  sourceRequirementId?: string;
   author: MessageAuthor;
   body: string;
   attachmentIds?: string[];
@@ -165,6 +166,7 @@ export interface AgentManagerStore {
   createRequirement(input: CreateRequirementRecord): RequirementWithSession;
   getRequirement(id: string): RequirementWithSession | null;
   listRequirements(): RequirementWithSession[];
+  listChildRequirements(parentRequirementId: string): RequirementWithSession[];
   search(query: string, limit?: number): SearchResult[];
   listSessions(): AgentSession[];
   listRuns(requirementId?: string): AgentRun[];

@@ -136,6 +136,7 @@ function messageFrom(row: Row, attachments: MessageAttachment[] = []): Requireme
     requirementId: String(row.requirement_id),
     sessionId: String(row.session_id),
     runId: row.run_id === null ? null : String(row.run_id),
+    sourceRequirementId: row.source_requirement_id === null ? null : String(row.source_requirement_id),
     author: String(row.author) as RequirementMessage['author'],
     body: String(row.body),
     attachments,
@@ -281,6 +282,19 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     return rows.map((row) => ({ ...requirementFrom(row), session: sessionFrom(row, 's_') }));
   }
 
+  listChildRequirements(parentRequirementId: string): RequirementWithSession[] {
+    const rows = this.#db.prepare(`SELECT
+      r.*, s.id AS s_id, s.requirement_id AS s_requirement_id, s.provider AS s_provider,
+      s.native_session_id AS s_native_session_id, s.state AS s_state, s.last_error AS s_last_error,
+      s.last_consumed_message_sequence AS s_last_consumed_message_sequence,
+      (SELECT COUNT(*) FROM requirement_messages m WHERE m.requirement_id = r.id
+        AND m.deliver_to_rd = 1 AND m.sequence > s.last_consumed_message_sequence) AS s_pending_message_count,
+      s.created_at AS s_created_at, s.updated_at AS s_updated_at
+      FROM requirements r JOIN agent_sessions s ON s.requirement_id = r.id
+      WHERE r.parent_requirement_id = ? ORDER BY r.updated_at DESC`).all(parentRequirementId) as Row[];
+    return rows.map((row) => ({ ...requirementFrom(row), session: sessionFrom(row, 's_') }));
+  }
+
   search(query: string, limit = 50): SearchResult[] {
     const trimmed = query.trim();
     if (!trimmed) return [];
@@ -394,9 +408,9 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       const next = this.#db.prepare(`SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence
         FROM requirement_messages WHERE requirement_id = ?`).get(input.requirementId) as Row;
       this.#db.prepare(`INSERT INTO requirement_messages
-        (id, requirement_id, session_id, run_id, author, body, sequence, deliver_to_rd, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(input.id, input.requirementId, input.sessionId, input.runId ?? null, input.author,
+        (id, requirement_id, session_id, run_id, source_requirement_id, author, body, sequence, deliver_to_rd, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(input.id, input.requirementId, input.sessionId, input.runId ?? null, input.sourceRequirementId ?? null, input.author,
           body, Number(next.sequence), (input.deliverToRd ?? (input.author === 'human' || input.author === 'reviewer')) ? 1 : 0, input.now);
       this.upsertSearchDocument({
         kind: 'message',
@@ -404,7 +418,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
         requirementId: input.requirementId,
         title: `Message ${Number(next.sequence)} (${input.author})`,
         body,
-        keywords: `${input.id} ${input.requirementId} ${input.sessionId} ${input.author}`,
+        keywords: `${input.id} ${input.requirementId} ${input.sessionId} ${input.sourceRequirementId ?? ''} ${input.author}`,
         updatedAt: input.now,
       });
       for (const attachmentId of attachmentIds) {
@@ -958,6 +972,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     ensureColumn('agent_runs', 'input_from_sequence', 'INTEGER');
     ensureColumn('agent_runs', 'input_to_sequence', 'INTEGER');
     const sequenceAdded = ensureColumn('requirement_messages', 'sequence', 'INTEGER NOT NULL DEFAULT 0');
+    ensureColumn('requirement_messages', 'source_requirement_id', 'TEXT REFERENCES requirements(id) ON DELETE SET NULL');
     ensureColumn('requirement_messages', 'deliver_to_rd', 'INTEGER NOT NULL DEFAULT 0 CHECK (deliver_to_rd IN (0, 1))');
     ensureColumn('review_requests', 'model', 'TEXT');
     ensureColumn('review_requests', 'reasoning_effort', "TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max'))");

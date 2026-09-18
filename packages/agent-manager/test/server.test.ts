@@ -645,6 +645,103 @@ test('HTTP reply reactivates a completed requirement', async () => {
   }
 });
 
+test('RD Agent endpoints list related Requirements and deliver cross-Requirement messages', async () => {
+  const runner = new WaitingRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    logger: createLogger({ level: 'silent' }),
+  });
+  const parent = manager.createRequirement({
+    title: 'Parent API contract',
+    description: 'Coordinate related work',
+    provider: 'codex',
+  });
+  const child = manager.createRequirement({
+    title: 'Child API implementation',
+    description: 'Implement the child work',
+    provider: 'codex',
+    createdBy: 'rd_agent',
+    parentRequirementId: parent.id,
+    sourceSessionId: parent.session.id,
+  });
+  const unrelated = manager.createRequirement({
+    title: 'Unrelated API work',
+    description: 'Remain isolated',
+    provider: 'codex',
+  });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const relatedResponse = await fetch(
+      `${baseUrl}/api/agent/requirements/${child.id}/related?sourceSessionId=${child.session.id}`,
+    );
+    assert.equal(relatedResponse.status, 200);
+    const related = await relatedResponse.json() as {
+      parent: { id: string } | null;
+      children: Array<{ id: string }>;
+    };
+    assert.equal(related.parent?.id, parent.id);
+    assert.deepEqual(related.children, []);
+
+    const messageResponse = await fetch(
+      `${baseUrl}/api/agent/requirements/${child.id}/related/${parent.id}/messages`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sourceSessionId: child.session.id,
+          message: 'Please consume contract version 2.',
+        }),
+      },
+    );
+    assert.equal(messageResponse.status, 202);
+    const delivered = await messageResponse.json() as {
+      accepted: boolean;
+      sourceRequirementId: string;
+      targetRequirementId: string;
+      queued: boolean;
+      message: { author: string; sourceRequirementId: string; body: string };
+    };
+    assert.equal(delivered.accepted, true);
+    assert.equal(delivered.sourceRequirementId, child.id);
+    assert.equal(delivered.targetRequirementId, parent.id);
+    assert.equal(delivered.queued, false);
+    assert.equal(delivered.message.author, 'rd_agent');
+    assert.equal(delivered.message.sourceRequirementId, child.id);
+    assert.equal(delivered.message.body, 'Please consume contract version 2.');
+
+    const conversationResponse = await fetch(`${baseUrl}/api/requirements/${parent.id}/messages`);
+    const conversation = await conversationResponse.json() as {
+      items: Array<{ sourceRequirementId: string | null; body: string }>;
+    };
+    assert.equal(conversation.items.length, 1);
+    assert.equal(conversation.items[0]?.sourceRequirementId, child.id);
+    assert.equal(conversation.items[0]?.body, 'Please consume contract version 2.');
+    assert.match(runner.request?.invocation.input ?? '', /Related RD Agent from Child API implementation/);
+
+    const unrelatedResponse = await fetch(
+      `${baseUrl}/api/agent/requirements/${child.id}/related/${unrelated.id}/messages`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sourceSessionId: child.session.id, message: 'Must fail.' }),
+      },
+    );
+    assert.equal(unrelatedResponse.status, 409);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
+
 test('HTTP API exposes the persisted human and RD Agent conversation', async () => {
   const runner = new WaitingRunner();
   const logLines: string[] = [];

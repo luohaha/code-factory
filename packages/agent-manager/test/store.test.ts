@@ -733,6 +733,7 @@ test('human and Agent messages are stored as an ordered requirement conversation
       id: 'msg-2',
       requirementId: 'req-1',
       sessionId: 'ses-1',
+      sourceRequirementId: 'req-1',
       author: 'rd_agent',
       body: 'The regression test is now passing.',
       deliverToRd: false,
@@ -740,6 +741,7 @@ test('human and Agent messages are stored as an ordered requirement conversation
     });
     const messages = store.listMessages('req-1');
     assert.deepEqual(messages.map((message) => message.sequence), [1, 2]);
+    assert.equal(messages[1]?.sourceRequirementId, 'req-1');
     assert.deepEqual(store.listPendingRdMessages('req-1').map((message) => message.author), ['human']);
     store.beginRun({
       runId: 'run-1', requirementId: 'req-1', role: 'rd', provider: 'codex', taskSummary: 'start',
@@ -880,6 +882,40 @@ test('legacy databases add nullable model and reasoning configuration columns', 
       assert.ok(columns.some((column) => column.name === 'model'), `${table} should contain model`);
       assert.ok(columns.some((column) => column.name === 'reasoning_effort'), `${table} should contain reasoning_effort`);
     }
+  } finally {
+    migrated.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('legacy requirement messages add related Requirement provenance', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-message-source-test-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const initial = new SqliteAgentManagerStore(databasePath);
+  initial.close();
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(`
+    DROP TABLE requirement_messages;
+    CREATE TABLE requirement_messages (
+      id TEXT PRIMARY KEY,
+      requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+      run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+      author TEXT NOT NULL CHECK (author IN ('human', 'rd_agent', 'reviewer', 'system')),
+      body TEXT NOT NULL,
+      sequence INTEGER NOT NULL DEFAULT 0,
+      deliver_to_rd INTEGER NOT NULL DEFAULT 0 CHECK (deliver_to_rd IN (0, 1)),
+      created_at TEXT NOT NULL
+    ) STRICT;
+  `);
+  legacy.close();
+
+  const migratedStore = new SqliteAgentManagerStore(databasePath);
+  migratedStore.close();
+  const migrated = new DatabaseSync(databasePath);
+  try {
+    const columns = migrated.prepare('PRAGMA table_info(requirement_messages)').all() as Array<{ name: string }>;
+    assert.ok(columns.some((column) => column.name === 'source_requirement_id'));
   } finally {
     migrated.close();
     rmSync(directory, { recursive: true, force: true });

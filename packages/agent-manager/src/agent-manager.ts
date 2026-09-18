@@ -57,6 +57,7 @@ import type {
   ManagerEvent,
   MessageAttachment,
   PullRequest,
+  RelatedRequirements,
   RequirementMessage,
   RequirementWithSession,
   ReviewRequest,
@@ -627,6 +628,14 @@ export class AgentManager extends EventEmitter {
     return this.#store.listMessages(requirementId);
   }
 
+  listRelatedRequirements(requirementId: string, sourceSessionId: string): RelatedRequirements {
+    const source = this.requireAgentSource(requirementId, sourceSessionId);
+    return {
+      parent: source.parentRequirementId ? this.#store.getRequirement(source.parentRequirementId) : null,
+      children: this.#store.listChildRequirements(source.id),
+    };
+  }
+
   listAgentTimers(requirementId?: string): AgentTimer[] {
     if (requirementId) this.requireRequirement(requirementId);
     return this.#store.listAgentTimers(requirementId);
@@ -865,6 +874,57 @@ export class AgentManager extends EventEmitter {
       });
     }
     return { message, queued, requirement: this.requireRequirement(requirementId) };
+  }
+
+  postRelatedRequirementMessage(
+    sourceRequirementId: string,
+    sourceSessionId: string,
+    targetRequirementId: string,
+    body: string,
+  ): { message: RequirementMessage; queued: boolean; requirement: RequirementWithSession } {
+    const source = this.requireAgentSource(sourceRequirementId, sourceSessionId);
+    const target = this.requireRequirement(targetRequirementId);
+    const isDirectRelation = source.parentRequirementId === target.id
+      || target.parentRequirementId === source.id;
+    if (!isDirectRelation) {
+      throw new StoreConflictError(
+        `Requirement ${targetRequirementId} is not a parent or child of ${sourceRequirementId}`,
+      );
+    }
+    if (target.status === 'cancelled') {
+      throw new StoreConflictError(`Requirement ${targetRequirementId} is already cancelled`);
+    }
+    const message = this.appendMessage({
+      requirementId: target.id,
+      sessionId: target.session.id,
+      sourceRequirementId: source.id,
+      author: 'rd_agent',
+      body,
+      deliverToRd: true,
+    });
+    const current = target.status === 'done'
+      ? this.#store.transitionRequirement(target.id, ['done'], 'doing', new Date().toISOString())
+      : target;
+    if (target.status === 'done') {
+      this.logger.info('Requirement reactivated by related RD Agent message', {
+        requirementId: target.id,
+        sessionId: target.session.id,
+        sourceRequirementId: source.id,
+      });
+    }
+    const queued = current.session.state === 'running';
+    if (!queued) {
+      void this.startRdRun(target.id).catch((error: unknown) => {
+        this.logger.error('RD run failed unexpectedly', { requirementId: target.id, error });
+      });
+    }
+    this.logger.info('Related RD Agent message delivered', {
+      sourceRequirementId: source.id,
+      targetRequirementId: target.id,
+      messageId: message.id,
+      queued,
+    });
+    return { message, queued, requirement: this.requireRequirement(target.id) };
   }
 
   interruptRdRun(requirementId: string): { runId: string } {
@@ -1184,7 +1244,16 @@ export class AgentManager extends EventEmitter {
     isResume: boolean,
   ): string {
     const incoming = messages.map((message) => {
-      const author = message.author === 'human' ? 'Human' : message.author === 'reviewer' ? 'Reviewer' : 'System';
+      const sourceRequirement = message.sourceRequirementId
+        ? this.#store.getRequirement(message.sourceRequirementId)
+        : null;
+      const author = message.author === 'human'
+        ? 'Human'
+        : message.author === 'reviewer'
+          ? 'Reviewer'
+          : message.author === 'rd_agent' && message.sourceRequirementId
+            ? `Related RD Agent from ${sourceRequirement?.title ?? 'deleted Requirement'} (${message.sourceRequirementId})`
+            : 'System';
       const attachments = message.attachments.map((attachment, index) =>
         `- Attachment ${index + 1} "${attachment.fileName}": ${attachment.localPath} (${attachment.mediaType}, ${attachment.byteSize} bytes)`).join('\n');
       return [
@@ -1214,6 +1283,7 @@ export class AgentManager extends EventEmitter {
       'Use code-factory-cli for Code Factory control-plane actions. Run code-factory-cli --help or code-factory-cli <command> --help for usage; do not call the underlying HTTP endpoints directly.',
       'Immediately after you create a GitHub pull request for this requirement, run code-factory-cli pr register. Run it again only when your own push or edit changes PR metadata such as its title, branches, or head SHA.',
       'Agent Manager owns draft/open/closed/merged lifecycle synchronization through its GitHub reconciler. Never run the registration command merely to mirror a lifecycle event reported by a System message or observed on GitHub.',
+      'Use code-factory-cli requirement related to inspect this Requirement\'s direct parent and children. You may coordinate with their RD Agents by sending a message with code-factory-cli requirement message; only direct parent/child targets are accepted, and the message is persisted in the target Requirement conversation.',
       'For every long-running process or task you start—including builds, tests, deployments, data jobs, and other background work—track it to completion. While the current Run remains active, use the agent provider\'s normal wait, task-output, or monitor mechanism. Register a Code Factory timer with code-factory-cli timer register before ending the Run only when the task is guaranteed to continue independently after the Run ends, so Code Factory can wake this same Session to check its progress and result. Use code-factory-cli timer show to recover timer IDs and status, and cancel recurring timers as soon as they are no longer needed.',
       'When you discover separate follow-up work, you may propose a linked TODO requirement with code-factory-cli requirement propose.',
     ].join('\n');
@@ -1236,6 +1306,14 @@ export class AgentManager extends EventEmitter {
     const value = this.#store.getRequirement(id);
     if (!value) throw new StoreNotFoundError(`Requirement ${id} not found`);
     return value;
+  }
+
+  private requireAgentSource(requirementId: string, sourceSessionId: string): RequirementWithSession {
+    const requirement = this.requireRequirement(requirementId);
+    if (requirement.session.id !== sourceSessionId) {
+      throw new TypeError('sourceSessionId must belong to source Requirement');
+    }
+    return requirement;
   }
 
   private requirePullRequest(id: string): PullRequest {
@@ -1289,6 +1367,7 @@ export class AgentManager extends EventEmitter {
     requirementId: string;
     sessionId: string;
     runId?: string;
+    sourceRequirementId?: string;
     author: 'human' | 'rd_agent' | 'reviewer' | 'system';
     body: string;
     attachmentIds?: string[];
