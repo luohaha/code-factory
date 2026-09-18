@@ -178,3 +178,9 @@ export const schemaStatements = [
   `CREATE INDEX IF NOT EXISTS search_documents_requirement_updated
     ON search_documents (requirement_id, updated_at DESC)`,
 ] as const;
+
+/** Indexes that depend on columns added by legacy-schema migration. */
+export const postMigrationSchemaStatements = [
+  `CREATE INDEX IF NOT EXISTS requirements_parent_updated
+    ON requirements (parent_requirement_id, updated_at DESC)`,
+] as const;
