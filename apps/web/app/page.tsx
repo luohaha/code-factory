@@ -1,7 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import { type SyntheticEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { memo, type RefObject, type SyntheticEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -325,7 +325,7 @@ function isWithinTimeRange(value: string, timeRange: TimeRange, now: number): bo
   return Number.isFinite(timestamp) && timestamp >= now - timeRangeMilliseconds[timeRange];
 }
 
-function MessageBody({ body, inverted = false }: { body: string; inverted?: boolean }) {
+const MessageBody = memo(function MessageBody({ body, inverted = false }: { body: string; inverted?: boolean }) {
   return (
     <div className={`message-markdown ${inverted ? 'message-markdown-inverted' : ''}`}>
       <ReactMarkdown
@@ -338,7 +338,7 @@ function MessageBody({ body, inverted = false }: { body: string; inverted?: bool
       </ReactMarkdown>
     </div>
   );
-}
+});
 
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
@@ -1204,7 +1204,7 @@ function ManagerConfigurationDialog({
   );
 }
 
-function AgentTimerDialog({
+const AgentTimerDialog = memo(function AgentTimerDialog({
   timers,
   disabled,
   busy,
@@ -1387,6 +1387,225 @@ function AgentTimerDialog({
       </DialogContent>
     </Dialog>
   );
+});
+
+// Keep draft state below RequirementDetail so each keystroke does not re-render the conversation history.
+function RequirementComposer({
+  requirement,
+  agentTimers,
+  busy,
+  inputRef,
+  onStart,
+  onReply,
+  onConfirm,
+  onCreateAgentTimer,
+  onCancelAgentTimer,
+  onSent,
+}: {
+  requirement: RequirementDto;
+  agentTimers: AgentTimerDto[];
+  busy: boolean;
+  inputRef: RefObject<HTMLTextAreaElement | null>;
+  onStart: (message?: string, attachments?: File[]) => Promise<void>;
+  onReply: (message: string, attachments?: File[]) => Promise<void>;
+  onConfirm: () => Promise<void>;
+  onCreateAgentTimer: (
+    input: { description: string; schedule: 'once' | 'recurring'; intervalSeconds: number },
+  ) => Promise<void>;
+  onCancelAgentTimer: (timerId: string) => Promise<void>;
+  onSent: () => void;
+}) {
+  const { t } = useI18n();
+  const [message, setMessage] = useState('');
+  const [draftAttachments, setDraftAttachments] = useState<DraftAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const draftAttachmentsRef = useRef<DraftAttachment[]>([]);
+  const canWrite = requirement.status !== 'cancelled';
+
+  useEffect(() => {
+    draftAttachmentsRef.current = draftAttachments;
+  }, [draftAttachments]);
+
+  useEffect(() => () => {
+    for (const attachment of draftAttachmentsRef.current) {
+      if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+    }
+  }, []);
+
+  async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
+    event.preventDefault();
+    const body = message.trim();
+    if ((!body && draftAttachments.length === 0) || !canWrite) return;
+    const attachmentFiles = draftAttachments.map((attachment) => attachment.file);
+    try {
+      if (requirement.status === 'todo') await onStart(body || undefined, attachmentFiles);
+      else await onReply(body, attachmentFiles);
+      onSent();
+      setMessage('');
+      for (const attachment of draftAttachments) {
+        if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+      }
+      setDraftAttachments([]);
+      setAttachmentError(null);
+    } catch {
+      // Keep the reply in the editor so it can be retried.
+    }
+  }
+
+  function addAttachments(files: File[]) {
+    const remaining = maxAttachmentsPerMessage - draftAttachments.length;
+    if (files.some((file) => file.size > maxAttachmentBytes)) {
+      setAttachmentError(t('Each attachment must be 20 MB or smaller.'));
+      return;
+    }
+    if (files.length > remaining) {
+      setAttachmentError(t('Each message supports up to {count} attachments.', { count: maxAttachmentsPerMessage }));
+      return;
+    }
+    setDraftAttachments((current) => [
+      ...current,
+      ...files.map((file) => ({
+        id: crypto.randomUUID(),
+        file,
+        previewUrl: previewableImageTypes.has(file.type) ? URL.createObjectURL(file) : null,
+      })),
+    ]);
+    setAttachmentError(null);
+  }
+
+  function removeAttachment(id: string) {
+    setDraftAttachments((current) => {
+      const removed = current.find((attachment) => attachment.id === id);
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+      return current.filter((attachment) => attachment.id !== id);
+    });
+    setAttachmentError(null);
+  }
+
+  return (
+    <div className="max-h-[60dvh] min-h-0 shrink-0 overflow-y-auto border-t border-border bg-card px-4 py-3 sm:px-6">
+      {requirement.status === 'waiting_confirmation' ? (
+        <div className="mb-2.5 flex items-center justify-between gap-3 rounded-xl border border-violet-500/15 bg-violet-500/7 px-3 py-2 text-[10px] text-violet-700 dark:text-violet-300">
+          <span>{t('The Agent reported completion. You can still ask follow-up questions.')}</span>
+          <Button size="xs" className="shrink-0" disabled={busy} onClick={() => void onConfirm().catch(() => undefined)}><Check data-icon="inline-start" />{t('Complete')}</Button>
+        </div>
+      ) : null}
+      <form
+        className="rounded-2xl border border-input bg-background p-2 shadow-[0_3px_16px_oklch(0.18_0.02_255/0.07)] transition focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/15"
+        onSubmit={submit}
+      >
+        {draftAttachments.length > 0 ? (
+          <div className="mb-1.5 flex gap-2 overflow-x-auto px-1 pt-1">
+            {draftAttachments.map((attachment) => (
+              <div key={attachment.id} className={`group relative h-16 shrink-0 overflow-hidden rounded-xl border border-border bg-muted ${attachment.previewUrl ? 'w-16' : 'w-48'}`}>
+                {attachment.previewUrl ? (
+                  <>
+                    {/* oxlint-disable-next-line next/no-img-element -- Blob previews cannot use the framework image optimizer. */}
+                    <img src={attachment.previewUrl} alt={attachment.file.name} className="size-full object-cover" />
+                  </>
+                ) : (
+                  <div className="flex size-full items-center gap-2.5 px-3 pr-8">
+                    <FileText className="size-5 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0">
+                      <span className="block truncate text-[10px] font-medium">{attachment.file.name}</span>
+                      <span className="mt-0.5 block text-[9px] text-muted-foreground">{formatBytes(attachment.file.size)}</span>
+                    </span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="absolute top-1 right-1 grid size-5 place-items-center rounded-full bg-black/65 text-white opacity-80 transition hover:opacity-100"
+                  aria-label={t('Remove {name}', { name: attachment.file.name })}
+                  onClick={() => removeAttachment(attachment.id)}
+                >
+                  <X className="size-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <Textarea
+          ref={inputRef}
+          aria-label={t('Reply to RD Agent')}
+          value={message}
+          onChange={(event) => setMessage(event.target.value)}
+          onPaste={(event) => {
+            const attachments = Array.from(event.clipboardData.files);
+            if (attachments.length === 0) return;
+            event.preventDefault();
+            addAttachments(attachments);
+          }}
+          onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }}
+          onDrop={(event) => {
+            if (event.dataTransfer.files.length === 0) return;
+            event.preventDefault();
+            addAttachments(Array.from(event.dataTransfer.files));
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }
+          }}
+          disabled={!canWrite || busy}
+          className="max-h-[min(9rem,20dvh)] min-h-14 resize-none border-0 bg-transparent px-2 py-1.5 text-xs shadow-none focus-visible:border-transparent focus-visible:ring-0 disabled:bg-transparent"
+          placeholder={requirement.status === 'todo'
+            ? t('Add instructions and start; paste or drop attachments…')
+            : requirement.status === 'done'
+              ? t('Reply to reactivate this completed requirement; paste or drop attachments…')
+              : requirement.session.state === 'running'
+                ? t('Send a message or attachment; it will wait for the next Run by default…')
+                : canWrite
+                  ? t('Reply to the RD Agent; paste or drop attachments…')
+                  : t('Replies are unavailable in the current state')}
+        />
+        <div className="mt-1 flex items-center justify-between gap-3 px-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <input
+              ref={attachmentInputRef}
+              type="file"
+              className="sr-only"
+              multiple
+              disabled={!canWrite || busy}
+              onChange={(event) => {
+                addAttachments(Array.from(event.currentTarget.files ?? []));
+                event.currentTarget.value = '';
+              }}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="rounded-xl text-muted-foreground"
+              disabled={!canWrite || busy || draftAttachments.length >= maxAttachmentsPerMessage}
+              aria-label={t('Add attachment')}
+              onClick={() => attachmentInputRef.current?.click()}
+            >
+              <Paperclip />
+            </Button>
+            <AgentTimerDialog
+              timers={agentTimers}
+              disabled={requirement.status === 'done' || requirement.status === 'cancelled'}
+              busy={busy}
+              onCreate={onCreateAgentTimer}
+              onCancel={onCancelAgentTimer}
+            />
+            <span className="truncate text-[9px] text-muted-foreground">{t('Enter to send · Up to 6 attachments')}</span>
+          </div>
+          <Button type="submit" size="icon-sm" className="rounded-xl" disabled={!canWrite || busy || (!message.trim() && draftAttachments.length === 0)} aria-label={t('Send reply')}>
+            {busy ? <LoaderCircle className="animate-spin" /> : <Send />}
+          </Button>
+        </div>
+      </form>
+      {attachmentError ? <p className="mt-1.5 px-1 text-[10px] text-destructive">{attachmentError}</p> : null}
+      {requirement.status === 'todo' ? (
+        <Button className="mt-2 w-full" variant="ghost" size="xs" disabled={busy} onClick={() => void onStart()}>
+          <Play data-icon="inline-start" />{t('Start without additional instructions')}
+        </Button>
+      ) : null}
+    </div>
+  );
 }
 
 function RequirementDetail({
@@ -1433,15 +1652,10 @@ function RequirementDetail({
   apiUrl: string;
 }) {
   const { locale, t } = useI18n();
-  const [message, setMessage] = useState('');
-  const [draftAttachments, setDraftAttachments] = useState<DraftAttachment[]>([]);
-  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [newMessages, setNewMessages] = useState<{ requirementId: string; count: number } | null>(null);
   const [scrollToBottomRequirementId, setScrollToBottomRequirementId] = useState<string | null>(null);
   const [scrollToTopRequirementId, setScrollToTopRequirementId] = useState<string | null>(null);
-  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
-  const draftAttachmentsRef = useRef<DraftAttachment[]>([]);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const followsLatestRef = useRef(true);
   const initializedRequirementIdRef = useRef<string | undefined>(undefined);
@@ -1511,68 +1725,7 @@ function RequirementDetail({
     }
   }, [messageLoading, messages, requirementId, scrollToLatest]);
 
-  useEffect(() => {
-    draftAttachmentsRef.current = draftAttachments;
-  }, [draftAttachments]);
-
-  useEffect(() => () => {
-    for (const attachment of draftAttachmentsRef.current) {
-      if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
-    }
-  }, []);
-
   if (!requirement) return <Sheet open={false} onOpenChange={onOpenChange} />;
-  const canWrite = requirement.status !== 'cancelled';
-
-  async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
-    event.preventDefault();
-    const body = message.trim();
-    if ((!body && draftAttachments.length === 0) || !canWrite) return;
-    const attachmentFiles = draftAttachments.map((attachment) => attachment.file);
-    try {
-      if (requirement!.status === 'todo') await onStart(body || undefined, attachmentFiles);
-      else await onReply(body, attachmentFiles);
-      scrollToLatest();
-      setMessage('');
-      for (const attachment of draftAttachments) {
-        if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
-      }
-      setDraftAttachments([]);
-      setAttachmentError(null);
-    } catch {
-      // Keep the reply in the editor so it can be retried.
-    }
-  }
-
-  function addAttachments(files: File[]) {
-    const remaining = maxAttachmentsPerMessage - draftAttachments.length;
-    if (files.some((file) => file.size > maxAttachmentBytes)) {
-      setAttachmentError(t('Each attachment must be 20 MB or smaller.'));
-      return;
-    }
-    if (files.length > remaining) {
-      setAttachmentError(t('Each message supports up to {count} attachments.', { count: maxAttachmentsPerMessage }));
-      return;
-    }
-    setDraftAttachments((current) => [
-      ...current,
-      ...files.map((file) => ({
-        id: crypto.randomUUID(),
-        file,
-        previewUrl: previewableImageTypes.has(file.type) ? URL.createObjectURL(file) : null,
-      })),
-    ]);
-    setAttachmentError(null);
-  }
-
-  function removeAttachment(id: string) {
-    setDraftAttachments((current) => {
-      const removed = current.find((attachment) => attachment.id === id);
-      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
-      return current.filter((attachment) => attachment.id !== id);
-    });
-    setAttachmentError(null);
-  }
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -1777,127 +1930,18 @@ function RequirementDetail({
           </div>
         </ScrollArea>
 
-        <div className="max-h-[60dvh] min-h-0 shrink-0 overflow-y-auto border-t border-border bg-card px-4 py-3 sm:px-6">
-          {requirement.status === 'waiting_confirmation' ? (
-            <div className="mb-2.5 flex items-center justify-between gap-3 rounded-xl border border-violet-500/15 bg-violet-500/7 px-3 py-2 text-[10px] text-violet-700 dark:text-violet-300">
-              <span>{t('The Agent reported completion. You can still ask follow-up questions.')}</span>
-              <Button size="xs" className="shrink-0" disabled={busy} onClick={() => void onConfirm().catch(() => undefined)}><Check data-icon="inline-start" />{t('Complete')}</Button>
-            </div>
-          ) : null}
-          <form
-            className="rounded-2xl border border-input bg-background p-2 shadow-[0_3px_16px_oklch(0.18_0.02_255/0.07)] transition focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/15"
-            onSubmit={submit}
-          >
-            {draftAttachments.length > 0 ? (
-              <div className="mb-1.5 flex gap-2 overflow-x-auto px-1 pt-1">
-                {draftAttachments.map((attachment) => (
-                  <div key={attachment.id} className={`group relative h-16 shrink-0 overflow-hidden rounded-xl border border-border bg-muted ${attachment.previewUrl ? 'w-16' : 'w-48'}`}>
-                    {attachment.previewUrl ? (
-                      <>
-                        {/* oxlint-disable-next-line next/no-img-element -- Blob previews cannot use the framework image optimizer. */}
-                        <img src={attachment.previewUrl} alt={attachment.file.name} className="size-full object-cover" />
-                      </>
-                    ) : (
-                      <div className="flex size-full items-center gap-2.5 px-3 pr-8">
-                        <FileText className="size-5 shrink-0 text-muted-foreground" />
-                        <span className="min-w-0">
-                          <span className="block truncate text-[10px] font-medium">{attachment.file.name}</span>
-                          <span className="mt-0.5 block text-[9px] text-muted-foreground">{formatBytes(attachment.file.size)}</span>
-                        </span>
-                      </div>
-                    )}
-                    <button
-                      type="button"
-                      className="absolute top-1 right-1 grid size-5 place-items-center rounded-full bg-black/65 text-white opacity-80 transition hover:opacity-100"
-                      aria-label={t('Remove {name}', { name: attachment.file.name })}
-                      onClick={() => removeAttachment(attachment.id)}
-                    >
-                      <X className="size-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            <Textarea
-              ref={messageInputRef}
-              aria-label={t('Reply to RD Agent')}
-              value={message}
-              onChange={(event) => setMessage(event.target.value)}
-              onPaste={(event) => {
-                const attachments = Array.from(event.clipboardData.files);
-                if (attachments.length === 0) return;
-                event.preventDefault();
-                addAttachments(attachments);
-              }}
-              onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }}
-              onDrop={(event) => {
-                if (event.dataTransfer.files.length === 0) return;
-                event.preventDefault();
-                addAttachments(Array.from(event.dataTransfer.files));
-              }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  event.currentTarget.form?.requestSubmit();
-                }
-              }}
-              disabled={!canWrite || busy}
-              className="max-h-[min(9rem,20dvh)] min-h-14 resize-none border-0 bg-transparent px-2 py-1.5 text-xs shadow-none focus-visible:border-transparent focus-visible:ring-0 disabled:bg-transparent"
-              placeholder={requirement.status === 'todo'
-                ? t('Add instructions and start; paste or drop attachments…')
-                : requirement.status === 'done'
-                  ? t('Reply to reactivate this completed requirement; paste or drop attachments…')
-                  : requirement.session.state === 'running'
-                    ? t('Send a message or attachment; it will wait for the next Run by default…')
-                    : canWrite
-                      ? t('Reply to the RD Agent; paste or drop attachments…')
-                      : t('Replies are unavailable in the current state')}
-            />
-            <div className="mt-1 flex items-center justify-between gap-3 px-1">
-              <div className="flex min-w-0 items-center gap-2">
-                <input
-                  ref={attachmentInputRef}
-                  type="file"
-                  className="sr-only"
-                  multiple
-                  disabled={!canWrite || busy}
-                  onChange={(event) => {
-                    addAttachments(Array.from(event.currentTarget.files ?? []));
-                    event.currentTarget.value = '';
-                  }}
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className="rounded-xl text-muted-foreground"
-                  disabled={!canWrite || busy || draftAttachments.length >= maxAttachmentsPerMessage}
-                  aria-label={t('Add attachment')}
-                  onClick={() => attachmentInputRef.current?.click()}
-                >
-                  <Paperclip />
-                </Button>
-                <AgentTimerDialog
-                  timers={agentTimers}
-                  disabled={requirement.status === 'done' || requirement.status === 'cancelled'}
-                  busy={busy}
-                  onCreate={onCreateAgentTimer}
-                  onCancel={onCancelAgentTimer}
-                />
-                <span className="truncate text-[9px] text-muted-foreground">{t('Enter to send · Up to 6 attachments')}</span>
-              </div>
-              <Button type="submit" size="icon-sm" className="rounded-xl" disabled={!canWrite || busy || (!message.trim() && draftAttachments.length === 0)} aria-label={t('Send reply')}>
-                {busy ? <LoaderCircle className="animate-spin" /> : <Send />}
-              </Button>
-            </div>
-          </form>
-          {attachmentError ? <p className="mt-1.5 px-1 text-[10px] text-destructive">{attachmentError}</p> : null}
-          {requirement.status === 'todo' ? (
-            <Button className="mt-2 w-full" variant="ghost" size="xs" disabled={busy} onClick={() => void onStart()}>
-              <Play data-icon="inline-start" />{t('Start without additional instructions')}
-            </Button>
-          ) : null}
-        </div>
+        <RequirementComposer
+          requirement={requirement}
+          agentTimers={agentTimers}
+          busy={busy}
+          inputRef={messageInputRef}
+          onStart={onStart}
+          onReply={onReply}
+          onConfirm={onConfirm}
+          onCreateAgentTimer={onCreateAgentTimer}
+          onCancelAgentTimer={onCancelAgentTimer}
+          onSent={scrollToLatest}
+        />
       </SheetContent>
     </Sheet>
   );
