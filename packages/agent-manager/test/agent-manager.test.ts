@@ -686,24 +686,14 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
       value.includes('reuse or create a Requirement-specific worktree')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
       value.includes('Preserve pre-existing changes')));
-    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('pr register --from-github <PR-URL>')));
-    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('requirement propose')));
-    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('requirement related')));
-    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('requirement message')));
-    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('timer register')));
-    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('Track started tasks to completion')));
-    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes("provider wait/monitor tools")));
-    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('only for work guaranteed to continue independently afterward')));
-    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('timer show')));
+    for (const capability of [
+      'register PRs', 'propose separate TODO follow-ups', 'inspect direct parent/child requirements',
+      'message their RD Agents', 'manage wake-up timers', 'code-factory-cli --help',
+      'Track started tasks to completion', 'provider wait/monitor tools',
+      'only for work guaranteed to continue independently afterward', 'cancel unneeded recurring timers',
+    ]) {
+      assert.ok(runner.requests[0]?.invocation.args.some((value) => value.includes(capability)));
+    }
     assert.ok(runner.requests[0]?.invocation.args.every((value) =>
       !value.includes('/agent/pull-requests') && !value.includes('/agent/requirements')));
     assert.ok(runner.requests[0]?.invocation.args.every((value) =>
