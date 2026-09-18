@@ -6,7 +6,7 @@ import { basename, delimiter, dirname, join, resolve } from 'node:path';
 
 import { ClaudeCodeAdapter } from './adapters/claude-code.js';
 import { CodexAdapter } from './adapters/codex.js';
-import type { AgentAdapter } from './adapters/types.js';
+import type { AgentAdapter, NormalizedAgentTrace } from './adapters/types.js';
 import type { AgentTrigger, AgentTriggerContext, AgentTriggerMessage } from './agent-trigger.js';
 import {
   DEFAULT_AGENT_MANAGER_CONFIGURATION,
@@ -106,6 +106,7 @@ export const MIN_AGENT_TIMER_INTERVAL_SECONDS = 60;
 export const MAX_AGENT_TIMER_INTERVAL_SECONDS = 365 * 24 * 60 * 60;
 export const MAX_AGENT_TIMER_DESCRIPTION_LENGTH = 500;
 export const MAX_SEARCH_QUERY_LENGTH = 500;
+export const MAX_AGENT_TRACE_DETAIL_LENGTH = 65_536;
 
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
 const REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS = DAY_MILLISECONDS;
@@ -632,6 +633,11 @@ export class AgentManager extends EventEmitter {
     return this.#store.listRuns(requirementId);
   }
 
+  listAgentTrace(runId: string) {
+    if (!this.#store.getRun(runId)) throw new StoreNotFoundError(`Run ${runId} not found`);
+    return this.#store.listAgentTrace(runId);
+  }
+
   listMessages(requirementId: string) {
     return this.#store.listMessages(requirementId);
   }
@@ -1024,6 +1030,7 @@ export class AgentManager extends EventEmitter {
       maxOutputBytes: this.#maxOutputBytes,
       onOutput: (line) => this.emit('output', { runId, line }),
       onEvent: (event) => {
+        this.recordAgentTraces(requirement.id, requirement.session.id, runId, event.traces);
         if (!event.message || (event.kind !== 'message' && event.kind !== 'completed')) return;
         const body = event.message.trim();
         if (body) lastReviewerMessage = body;
@@ -1170,6 +1177,7 @@ export class AgentManager extends EventEmitter {
       },
       onOutput: (line) => this.emit('output', { runId, line }),
       onEvent: (event) => {
+        this.recordAgentTraces(requirementId, started.session.id, runId, event.traces);
         if (!event.message || (event.kind !== 'message' && event.kind !== 'completed')) return;
         const body = event.message.trim();
         if (!body || body === lastAgentMessage) return;
@@ -1422,6 +1430,41 @@ export class AgentManager extends EventEmitter {
       },
     });
     return message;
+  }
+
+  private recordAgentTraces(
+    requirementId: string,
+    sessionId: string,
+    runId: string,
+    traces: NormalizedAgentTrace[] | undefined,
+  ): void {
+    for (const item of traces ?? []) {
+      const normalizedTitle = item.title.trim().slice(0, 500) || 'Agent event';
+      const detail = item.detail === undefined
+        ? undefined
+        : item.detail.length <= MAX_AGENT_TRACE_DETAIL_LENGTH
+          ? item.detail
+          : `${item.detail.slice(0, MAX_AGENT_TRACE_DETAIL_LENGTH - 25)}\n… trace output truncated`;
+      const trace = this.#store.appendAgentTrace({
+        id: `trc_${randomUUID()}`,
+        runId,
+        kind: item.kind,
+        ...(item.status ? { status: item.status } : {}),
+        title: normalizedTitle,
+        ...(detail === undefined ? {} : { detail }),
+        ...(item.toolName ? { toolName: item.toolName.slice(0, 500) } : {}),
+        ...(item.toolCallId ? { toolCallId: item.toolCallId.slice(0, 500) } : {}),
+        ...(item.nativeType ? { nativeType: item.nativeType.slice(0, 200) } : {}),
+        now: new Date().toISOString(),
+      });
+      this.publish({
+        type: 'run.trace.appended',
+        requirementId,
+        sessionId,
+        runId,
+        payload: { trace },
+      });
+    }
   }
 
   private logRunOutcome(

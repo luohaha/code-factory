@@ -76,6 +76,20 @@ export interface AgentRunDto {
   finishedAt: string | null;
 }
 
+export interface AgentTraceEventDto {
+  id: string;
+  runId: string;
+  sequence: number;
+  kind: 'lifecycle' | 'reasoning' | 'assistant_message' | 'tool_call' | 'tool_result' | 'error';
+  status: 'started' | 'completed' | 'failed' | null;
+  title: string;
+  detail: string | null;
+  toolName: string | null;
+  toolCallId: string | null;
+  nativeType: string | null;
+  createdAt: string;
+}
+
 export interface WorkspaceDto {
   root: string;
   databasePath: string;
@@ -118,6 +132,7 @@ export interface ManagerEventPayloadDto extends Record<string, unknown> {
   requirement?: RequirementDto | null;
   requirementIds?: string[];
   run?: AgentRunDto | null;
+  trace?: AgentTraceEventDto | null;
   message?: RequirementMessageDto | null;
   pullRequest?: PullRequestDto | null;
   reviewRequest?: ReviewRequestDto | null;
@@ -278,6 +293,13 @@ export class AgentManagerClient {
       requirementId
         ? `/api/runs?${new URLSearchParams({ requirementId }).toString()}`
         : '/api/runs',
+    );
+    return response.items;
+  }
+
+  async listAgentTrace(runId: string): Promise<AgentTraceEventDto[]> {
+    const response = await this.request<{ items: AgentTraceEventDto[] }>(
+      `/api/runs/${encodeURIComponent(runId)}/trace`,
     );
     return response.items;
   }

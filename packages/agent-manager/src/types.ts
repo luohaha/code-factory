@@ -17,6 +17,8 @@ export type SessionState =
 
 export type RunRole = 'rd' | 'reviewer';
 export type RunStatus = 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
+export type AgentTraceKind = 'lifecycle' | 'reasoning' | 'assistant_message' | 'tool_call' | 'tool_result' | 'error';
+export type AgentTraceStatus = 'started' | 'completed' | 'failed';
 export type MessageAuthor = 'human' | 'rd_agent' | 'reviewer' | 'system';
 export type RequirementCreator = 'human' | 'rd_agent';
 export type PullRequestStatus = 'draft' | 'open' | 'closed' | 'merged';
@@ -89,6 +91,20 @@ export interface AgentRun {
   inputToSequence: number | null;
   startedAt: string;
   finishedAt: string | null;
+}
+
+export interface AgentTraceEvent {
+  id: string;
+  runId: string;
+  sequence: number;
+  kind: AgentTraceKind;
+  status: AgentTraceStatus | null;
+  title: string;
+  detail: string | null;
+  toolName: string | null;
+  toolCallId: string | null;
+  nativeType: string | null;
+  createdAt: string;
 }
 
 export interface ManagerEvent {

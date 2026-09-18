@@ -58,6 +58,7 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/attachments/:id | Read or download an attachment |
 | GET | /api/sessions | List RD Sessions |
 | GET | /api/runs | List RD and Reviewer Runs |
+| GET | /api/runs/:id/trace | Read the normalized execution trace for one Run |
 | GET | /api/pull-requests | List registered Pull Requests |
 | POST | /api/pull-requests/:id/review-requests | Request a PR review |
 | GET | /api/review-requests | List Review Requests |
@@ -148,7 +149,27 @@ interface AgentRun {
 
 inputFromSequence and inputToSequence record the Requirement-message range captured by an RD Run. Both are null for Reviewer Runs.
 
-### 3.4 RequirementMessage
+### 3.4 AgentTraceEvent
+
+~~~ts
+interface AgentTraceEvent {
+  id: string;                         // trc_<uuid>
+  runId: string;
+  sequence: number;                   // monotonic within the Run
+  kind: 'lifecycle' | 'reasoning' | 'assistant_message' | 'tool_call' | 'tool_result' | 'error';
+  status: 'started' | 'completed' | 'failed' | null;
+  title: string;
+  detail: string | null;              // normalized Provider detail, capped at 64 KiB
+  toolName: string | null;
+  toolCallId: string | null;
+  nativeType: string | null;          // Provider event type for diagnostics
+  createdAt: string;
+}
+~~~
+
+Trace events preserve Provider-emitted progress such as reasoning summaries, tool calls, command output, tool results, Agent messages, and lifecycle/errors. They contain normalized fields rather than exposing the Provider's private JSON schema directly.
+
+### 3.5 RequirementMessage
 
 ~~~ts
 interface RequirementMessage {
@@ -179,7 +200,7 @@ interface MessageAttachment {
 
 sequence increases monotonically within a Requirement. deliverToRd=true means RD must consume the message. A Requirement's own RD output is never delivered back to itself. Messages explicitly sent by a directly related RD Agent have author=rd_agent, identify the sender through sourceRequirementId, and use deliverToRd=true in the target conversation.
 
-### 3.5 PullRequest
+### 3.6 PullRequest
 
 ~~~ts
 interface PullRequest {
@@ -200,7 +221,7 @@ interface PullRequest {
 
 repository + number is the idempotency key for a PR.
 
-### 3.6 ReviewRequest
+### 3.7 ReviewRequest
 
 ~~~ts
 interface ReviewRequest {
@@ -221,7 +242,7 @@ interface ReviewRequest {
 
 Agent Manager captures targetHeadSha when a review starts, so the ReviewRequest records the revision it represents. A timed-out Reviewer has AgentRun.status=timed_out and normalized ReviewRequest.status=failed.
 
-### 3.7 Agent model catalog
+### 3.8 Agent model catalog
 
 ~~~ts
 interface AgentModelCatalog {
@@ -241,7 +262,7 @@ interface AgentModelCatalog {
 
 `stale=true` means the latest provider refresh failed or has not completed. Previously discovered values, or provider-safe fallbacks, remain in `models`.
 
-### 3.8 AgentTimer
+### 3.9 AgentTimer
 
 ~~~ts
 interface AgentTimer {
@@ -256,7 +277,7 @@ interface AgentTimer {
   createdAt: string;
 An active timer always has `nextFireAt`. A one-time timer becomes completed after delivery. A recurring timer remains active and advances to its next future occurrence until it is cancelled or its Requirement becomes done or cancelled. `AgentTimer` is the persisted configuration resource; the built-in `timer` Agent Trigger executes due timers through the shared trigger-delivery framework.
 
-### 3.9 SearchResult
+### 3.10 SearchResult
 
 ~~~ts
 interface SearchResult {
@@ -388,6 +409,12 @@ Optional query parameters:
 | requirementId | string | Return only Runs for this Requirement |
 
 Success: 200 OK with {"items": AgentRun[]}. An unknown requirementId returns an empty array.
+
+### GET /api/runs/:id/trace
+
+Returns one Run's trace in ascending sequence order. Trace capture is available for new Runs; Runs created before this feature may return an empty list.
+
+Success: 200 OK with `{"items": AgentTraceEvent[]}`. Returns 404 Not Found for an unknown Run.
 
 ### GET /api/requirements/:id/messages
 

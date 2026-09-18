@@ -93,6 +93,7 @@ import {
   type AgentProvider,
   type AgentReasoningEffort,
   type AgentRunDto,
+  type AgentTraceEventDto,
   type ManagerEventDto,
   type MessageAttachmentDto,
   type PullRequestDto,
@@ -117,6 +118,7 @@ import {
 import {
   applyRequirementScopedUpdate,
   managerEventInvalidatesSearch,
+  mergeAgentTrace,
   mergeVersionedSnapshot,
   mergeRefreshTargets,
   refreshTargetsForManagerEvent,
@@ -231,6 +233,15 @@ const runStatusLabel: Record<AgentRunDto['status'], TranslationKey> = {
   failed: 'Failed',
   timed_out: 'Timed out',
   cancelled: 'Cancelled',
+};
+
+const traceKindLabel: Record<AgentTraceEventDto['kind'], TranslationKey> = {
+  lifecycle: 'Lifecycle',
+  reasoning: 'Reasoning',
+  assistant_message: 'Agent message',
+  tool_call: 'Tool call',
+  tool_result: 'Tool result',
+  error: 'Error',
 };
 
 const authorLabel: Record<RequirementMessageDto['author'], TranslationKey> = {
@@ -543,21 +554,21 @@ function SessionCard({ requirement, run, busy, onOpen, onRetry }: {
   const { t } = useI18n();
   return (
     <article className="rounded-xl border border-border/80 bg-card p-3.5">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className={`size-2 rounded-full ${stateDot[requirement.session.state]}`} />
-          <span className="font-mono text-[10px] font-semibold">REQ-{shortId(requirement.id)}</span>
+      <button type="button" className="block w-full text-left" onClick={onOpen}>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className={`size-2 rounded-full ${stateDot[requirement.session.state]}`} />
+            <span className="font-mono text-[10px] font-semibold">REQ-{shortId(requirement.id)}</span>
+          </div>
+          <Badge variant="secondary" className="h-5 max-w-40 truncate font-mono text-[9px]" title={agentConfigurationLabel(requirement)}>{agentConfigurationLabel(requirement)}</Badge>
         </div>
-        <Badge variant="secondary" className="h-5 max-w-40 truncate font-mono text-[9px]" title={agentConfigurationLabel(requirement)}>{agentConfigurationLabel(requirement)}</Badge>
-      </div>
-      <button type="button" className="mt-2.5 block w-full text-left" onClick={onOpen}>
-        <h3 className="truncate text-xs font-semibold hover:underline">{requirement.title}</h3>
+        <h3 className="mt-2.5 truncate text-xs font-semibold hover:underline">{requirement.title}</h3>
         <p className="mt-1.5 truncate font-mono text-[9px] text-muted-foreground">ses-{shortId(requirement.session.id)}</p>
+        {run ? <p className="mt-2.5 text-[10px] leading-4 text-foreground/75">{run.taskSummary} · {t(runStatusLabel[run.status])}</p> : null}
+        {requirement.session.pendingMessageCount > 0 ? (
+          <p className="mt-2 text-[10px] font-medium text-amber-600">{t('{count} external messages pending', { count: requirement.session.pendingMessageCount })}</p>
+        ) : null}
       </button>
-      {run ? <p className="mt-2.5 text-[10px] leading-4 text-foreground/75">{run.taskSummary} · {t(runStatusLabel[run.status])}</p> : null}
-      {requirement.session.pendingMessageCount > 0 ? (
-        <p className="mt-2 text-[10px] font-medium text-amber-600">{t('{count} external messages pending', { count: requirement.session.pendingMessageCount })}</p>
-      ) : null}
       {requirement.session.lastError ? (
         <Button size="xs" variant="destructive" className="mt-3 w-full" disabled={busy} onClick={onRetry}>
           {busy ? <LoaderCircle className="animate-spin" /> : <RotateCcw data-icon="inline-start" />}{t('Retry original Session')}
@@ -1389,9 +1400,133 @@ function AgentTimerDialog({
   );
 }
 
+function AgentTracePanel({ runs, tracesByRun, loadedRunIds, onLoadTrace }: {
+  runs: AgentRunDto[];
+  tracesByRun: Readonly<Record<string, AgentTraceEventDto[] | undefined>>;
+  loadedRunIds: ReadonlySet<string>;
+  onLoadTrace: (runId: string) => Promise<void>;
+}) {
+  const { locale, t } = useI18n();
+  const latestRunId = runs[0]?.id ?? '';
+  const [manuallySelectedRunId, setManuallySelectedRunId] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<{ runId: string; message: string } | null>(null);
+  const requestedRunIdsRef = useRef(new Set<string>());
+  const selectedRunId = runs.some((run) => run.id === manuallySelectedRunId)
+    ? manuallySelectedRunId!
+    : latestRunId;
+
+  useEffect(() => {
+    if (!selectedRunId || loadedRunIds.has(selectedRunId) || requestedRunIdsRef.current.has(selectedRunId)) return;
+    let cancelled = false;
+    requestedRunIdsRef.current.add(selectedRunId);
+    void onLoadTrace(selectedRunId)
+      .catch((caught: unknown) => {
+        if (!cancelled) {
+          setLoadError({
+            runId: selectedRunId,
+            message: caught instanceof Error ? caught.message : t('Failed to load Agent trace'),
+          });
+        }
+      });
+    return () => { cancelled = true; };
+  }, [loadedRunIds, onLoadTrace, selectedRunId, t]);
+
+  if (runs.length === 0) return null;
+  const selectedRun = runs.find((run) => run.id === selectedRunId) ?? runs[0]!;
+  const trace = tracesByRun[selectedRun.id] ?? [];
+  const selectedLoadError = loadError?.runId === selectedRun.id ? loadError.message : null;
+  const loading = !loadedRunIds.has(selectedRun.id) && selectedLoadError === null;
+
+  return (
+    <section className="mt-5" aria-labelledby="agent-trace">
+      <div className="mb-2.5 flex flex-wrap items-center gap-2">
+        <Terminal className="size-3.5 text-muted-foreground" />
+        <h3 id="agent-trace" className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Agent trace')}</h3>
+        <Badge variant="secondary" className="h-5 min-w-5 justify-center px-1.5 font-mono text-[9px]">{trace.length}</Badge>
+        <NativeSelect
+          size="sm"
+          className="ml-auto w-full sm:w-64"
+          value={selectedRun.id}
+          aria-label={t('Select Run trace')}
+          onChange={(event) => {
+            setManuallySelectedRunId(event.currentTarget.value);
+          }}
+        >
+          {runs.map((run, index) => (
+            <NativeSelectOption key={run.id} value={run.id}>
+              {t('Run {number} · {status} · {time}', {
+                number: runs.length - index,
+                status: t(runStatusLabel[run.status]),
+                time: formatTime(run.startedAt, locale),
+              })}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+      <div className="rounded-xl border border-border/80 bg-card">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/70 px-3.5 py-2.5 text-[9px] text-muted-foreground">
+          <span className="font-medium text-foreground">{selectedRun.taskSummary}</span>
+          <span className="font-mono">run-{shortId(selectedRun.id)}</span>
+          <span>{formatTime(selectedRun.startedAt, locale)}</span>
+          <Badge variant="outline" className="ml-auto h-5 text-[9px]">{t(runStatusLabel[selectedRun.status])}</Badge>
+        </div>
+        {loading ? (
+          <div className="flex items-center justify-center gap-2 px-4 py-8 text-[10px] text-muted-foreground">
+            <LoaderCircle className="size-3.5 animate-spin" />{t('Loading Agent trace')}
+          </div>
+        ) : selectedLoadError ? (
+          <div className="flex flex-col items-center gap-2 px-4 py-6 text-center text-[10px] text-destructive">
+            <span>{selectedLoadError}</span>
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              onClick={() => {
+                requestedRunIdsRef.current.delete(selectedRun.id);
+                setLoadError(null);
+              }}
+            >
+              <RotateCcw data-icon="inline-start" />{t('Retry trace')}
+            </Button>
+          </div>
+        ) : trace.length === 0 ? (
+          <div className="px-4 py-7 text-center text-[10px] text-muted-foreground">
+            {t(selectedRun.status === 'running' ? 'Waiting for Agent trace events…' : 'No trace was captured for this Run.')}
+          </div>
+        ) : (
+          <div className="max-h-96 overflow-y-auto px-3.5 py-3" aria-live="polite">
+            <ol className="space-y-3">
+              {trace.map((item) => (
+                <li key={item.id} className="relative pl-5 before:absolute before:top-5 before:bottom-[-0.75rem] before:left-[5px] before:w-px before:bg-border last:before:hidden">
+                  <span className={`absolute top-1 left-0 size-2.5 rounded-full border-2 border-card ${item.kind === 'error' || item.status === 'failed' ? 'bg-rose-500' : item.kind === 'tool_call' || item.kind === 'tool_result' ? 'bg-amber-500' : item.kind === 'reasoning' ? 'bg-violet-500' : 'bg-emerald-500'}`} />
+                  <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                    <Badge variant="outline" className="h-5 text-[9px]">{t(traceKindLabel[item.kind])}</Badge>
+                    <span className="min-w-0 flex-1 truncate text-[10px] font-semibold" title={item.title}>{item.title}</span>
+                    <span className="shrink-0 text-[9px] text-muted-foreground">{formatTime(item.createdAt, locale)}</span>
+                  </div>
+                  {item.detail ? (
+                    <pre className="mt-1.5 max-h-64 overflow-auto rounded-lg bg-muted/55 px-3 py-2 font-mono text-[10px] leading-4 whitespace-pre-wrap break-words text-foreground/80">{item.detail}</pre>
+                  ) : null}
+                  {item.toolName || item.nativeType ? (
+                    <p className="mt-1 truncate font-mono text-[8px] text-muted-foreground" title={[item.toolName, item.toolCallId, item.nativeType].filter(Boolean).join(' · ')}>
+                      {[item.toolName, item.toolCallId, item.nativeType].filter(Boolean).join(' · ')}
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function RequirementDetail({
   requirement,
   runs,
+  tracesByRun,
+  loadedTraceRunIds,
   messages,
   agentTimers,
   pullRequests,
@@ -1408,10 +1543,13 @@ function RequirementDetail({
   onReview,
   onCreateAgentTimer,
   onCancelAgentTimer,
+  onLoadTrace,
   apiUrl,
 }: {
   requirement: RequirementDto | null;
   runs: AgentRunDto[];
+  tracesByRun: Readonly<Record<string, AgentTraceEventDto[] | undefined>>;
+  loadedTraceRunIds: ReadonlySet<string>;
   messages: RequirementMessageDto[];
   agentTimers: AgentTimerDto[];
   pullRequests: PullRequestDto[];
@@ -1430,6 +1568,7 @@ function RequirementDetail({
     input: { description: string; schedule: 'once' | 'recurring'; intervalSeconds: number },
   ) => Promise<void>;
   onCancelAgentTimer: (timerId: string) => Promise<void>;
+  onLoadTrace: (runId: string) => Promise<void>;
   apiUrl: string;
 }) {
   const { locale, t } = useI18n();
@@ -1668,6 +1807,13 @@ function RequirementDetail({
                 <div className="col-span-2 min-w-0 sm:col-span-1"><dt className="sr-only">{t('Native Session')}</dt><dd className="truncate" title={requirement.session.nativeSessionId ?? undefined}>{t('Native: {id}', { id: requirement.session.nativeSessionId ? shortId(requirement.session.nativeSessionId) : t('Not created') })}</dd></div>
               </dl>
             </section>
+
+            <AgentTracePanel
+              runs={runs}
+              tracesByRun={tracesByRun}
+              loadedRunIds={loadedTraceRunIds}
+              onLoadTrace={onLoadTrace}
+            />
 
             {pullRequests.length > 0 ? (
               <section className="mt-5" aria-labelledby="linked-pull-requests">
@@ -1915,6 +2061,8 @@ function Dashboard() {
   const [modelCatalog, setModelCatalog] = useState<AgentModelCatalogDto | null>(null);
   const [requirements, setRequirements] = useState<RequirementDto[]>([]);
   const [runs, setRuns] = useState<AgentRunDto[]>([]);
+  const [agentTraces, setAgentTraces] = useState<Record<string, AgentTraceEventDto[] | undefined>>({});
+  const [loadedTraceRunIds, setLoadedTraceRunIds] = useState<Set<string>>(() => new Set());
   const [pullRequests, setPullRequests] = useState<PullRequestDto[]>([]);
   const [reviewRequests, setReviewRequests] = useState<ReviewRequestDto[]>([]);
   const [conversation, setConversation] = useState<{
@@ -1945,6 +2093,19 @@ function Dashboard() {
   const [filterReferenceTime, setFilterReferenceTime] = useState(0);
 
   const client = useMemo(() => new AgentManagerClient(apiUrl), [apiUrl]);
+
+  const loadAgentTrace = useCallback(async (runId: string) => {
+    const items = await client.listAgentTrace(runId);
+    setAgentTraces((current) => ({
+      ...current,
+      [runId]: mergeAgentTrace(current[runId] ?? [], items),
+    }));
+    setLoadedTraceRunIds((current) => {
+      const next = new Set(current);
+      next.add(runId);
+      return next;
+    });
+  }, [client]);
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
@@ -2234,6 +2395,17 @@ function Dashboard() {
       && (!event.requirementId || payload.run.requirementId === event.requirementId)
       && !removedRequirementIdsRef.current.has(payload.run.requirementId)) {
       setRuns((current) => upsertRun(current, payload.run!));
+    }
+    if (!removesRequirement
+      && event.type === 'run.trace.appended'
+      && payload.trace
+      && payload.trace.runId === event.runId
+      && event.requirementId
+      && !removedRequirementIdsRef.current.has(event.requirementId)) {
+      setAgentTraces((current) => ({
+        ...current,
+        [payload.trace!.runId]: mergeAgentTrace(current[payload.trace!.runId] ?? [], [payload.trace!]),
+      }));
     }
     if (!removesRequirement
       && payload.pullRequest
@@ -3024,6 +3196,8 @@ function Dashboard() {
         key={selectedRequirement?.id ?? 'closed'}
         requirement={selectedRequirement}
         runs={selectedRuns}
+        tracesByRun={agentTraces}
+        loadedTraceRunIds={loadedTraceRunIds}
         messages={selectedMessages}
         agentTimers={agentTimers.filter((timer) => timer.requirementId === selectedId)}
         pullRequests={selectedPullRequests}
@@ -3063,6 +3237,7 @@ function Dashboard() {
         onReview={requestReview}
         onCreateAgentTimer={createAgentTimer}
         onCancelAgentTimer={cancelAgentTimer}
+        onLoadTrace={loadAgentTrace}
       />
 
       <div className="fixed right-4 bottom-4 hidden items-center gap-2 rounded-lg border border-border bg-card/95 px-3 py-2 text-[10px] text-muted-foreground shadow-lg backdrop-blur sm:flex">

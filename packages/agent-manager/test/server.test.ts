@@ -827,7 +827,7 @@ test('HTTP API exposes the persisted human and RD Agent conversation', async () 
     assert.equal(startResponse.status, 202);
     const acceptedStart = await startResponse.json() as {
       requirement: { id: string; session: { state: string } };
-      run: { requirementId: string; status: string } | null;
+      run: { id: string; requirementId: string; status: string } | null;
       message: { requirementId: string; body: string } | null;
     };
     assert.equal(acceptedStart.requirement.id, created.id);
@@ -842,7 +842,30 @@ test('HTTP API exposes the persisted human and RD Agent conversation', async () 
     assert.ok(!runner.request?.invocation.args.includes(uploadedFile.localPath));
     assert.match(runner.request?.invocation.input ?? '', /failure screenshot\.png/);
     assert.match(runner.request?.invocation.input ?? '', /debug notes\.txt/);
-    runner.request?.onEvent?.({ kind: 'message', message: 'I added the regression test.', raw: {} });
+    runner.request?.onEvent?.({
+      kind: 'message',
+      message: 'I added the regression test.',
+      traces: [{
+        kind: 'tool_call',
+        status: 'started',
+        title: 'Run command',
+        detail: 'npm test',
+        toolName: 'shell',
+        toolCallId: 'item-1',
+        nativeType: 'item.started',
+      }],
+      raw: {},
+    });
+
+    const traceResponse = await fetch(`${baseUrl}/api/runs/${acceptedStart.run?.id}/trace`);
+    assert.equal(traceResponse.status, 200);
+    const traceBody = await traceResponse.json() as { items: Array<{ kind: string; detail: string; sequence: number }> };
+    assert.deepEqual(traceBody.items.map((item) => ({ kind: item.kind, detail: item.detail, sequence: item.sequence })), [
+      { kind: 'tool_call', detail: 'npm test', sequence: 1 },
+    ]);
+
+    const missingTraceResponse = await fetch(`${baseUrl}/api/runs/missing-run/trace`);
+    assert.equal(missingTraceResponse.status, 404);
 
     const queuedResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/reply`, {
       method: 'POST',
