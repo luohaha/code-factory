@@ -240,14 +240,22 @@ export class AgentManagerClient {
     return response.items;
   }
 
+  getRequirement(id: string): Promise<RequirementDto> {
+    return this.request(`/api/requirements/${encodeURIComponent(id)}`);
+  }
+
   async search(query: string, limit = 100): Promise<SearchResultDto[]> {
     const parameters = new URLSearchParams({ q: query, limit: String(limit) });
     const response = await this.request<{ items: SearchResultDto[] }>(`/api/search?${parameters.toString()}`);
     return response.items;
   }
 
-  async listRuns(): Promise<AgentRunDto[]> {
-    const response = await this.request<{ items: AgentRunDto[] }>('/api/runs');
+  async listRuns(requirementId?: string): Promise<AgentRunDto[]> {
+    const response = await this.request<{ items: AgentRunDto[] }>(
+      requirementId
+        ? `/api/runs?${new URLSearchParams({ requirementId }).toString()}`
+        : '/api/runs',
+    );
     return response.items;
   }
 
@@ -313,7 +321,12 @@ export class AgentManagerClient {
     id: string,
     message: string,
     attachmentIds: string[] = [],
-  ): Promise<{ accepted: true; queued: boolean; message: RequirementMessageDto }> {
+  ): Promise<{
+    accepted: true;
+    queued: boolean;
+    message: RequirementMessageDto;
+    requirement: RequirementDto;
+  }> {
     return this.action(id, 'reply', { message, attachmentIds });
   }
 

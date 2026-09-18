@@ -836,7 +836,7 @@ export class AgentManager extends EventEmitter {
     requirementId: string,
     body: string,
     attachmentIds: string[] = [],
-  ): { message: RequirementMessage; queued: boolean } {
+  ): { message: RequirementMessage; queued: boolean; requirement: RequirementWithSession } {
     const requirement = this.requireRequirement(requirementId);
     if (requirement.status === 'cancelled') {
       throw new StoreConflictError(`Requirement ${requirementId} is already ${requirement.status}`);
@@ -864,7 +864,7 @@ export class AgentManager extends EventEmitter {
         this.logger.error('RD run failed unexpectedly', { requirementId, error });
       });
     }
-    return { message, queued };
+    return { message, queued, requirement: this.requireRequirement(requirementId) };
   }
 
   interruptRdRun(requirementId: string): { runId: string } {

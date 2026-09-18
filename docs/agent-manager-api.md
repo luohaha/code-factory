@@ -42,6 +42,7 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/agent-models | Read cached Codex and Claude Code model options |
 | GET | /api/search | Hybrid-search Requirements, conversations, and Pull Requests |
 | GET | /api/requirements | List Requirements with their RD Sessions |
+| GET | /api/requirements/:id | Read one Requirement with its RD Session |
 | POST | /api/requirements | Create a Requirement and RD Session |
 | DELETE | /api/requirements/:id | Remove a TODO Requirement |
 | POST | /api/requirements/:id/start | Start or retry a Requirement |
@@ -365,6 +366,10 @@ Returns every non-cancelled Requirement, including its AgentSession.
 
 Success: 200 OK with {"items": Requirement[]}.
 
+### GET /api/requirements/:id
+
+Returns one Requirement with its current RD Session. Returns 404 Not Found for an unknown Requirement. Dashboard clients use this endpoint to synchronize one affected Requirement after an SSE event without reloading unrelated workspace resources.
+
 ### GET /api/sessions
 
 Returns all RD Sessions.
@@ -530,11 +535,19 @@ Success: 202 Accepted
     "sequence": 3,
     "deliverToRd": true,
     "createdAt": "2026-09-11T02:30:00.000Z"
+  },
+  "requirement": {
+    "id": "req_...",
+    "status": "doing",
+    "session": {
+      "state": "running",
+      "pendingMessageCount": 1
+    }
   }
 }
 ~~~
 
-message may be empty when attachmentIds is non-empty. queued reports whether the RD Session was running when the message arrived. A reply that reactivates a done Requirement reports queued=false because it starts a new Run immediately. The reply endpoint never interrupts a Run. Empty text and attachments return 400. An unknown Requirement returns 404. A cancelled Requirement returns 409.
+message may be empty when attachmentIds is non-empty. requirement is the latest Requirement and RD Session snapshot after accepting the reply. queued reports whether the RD Session was running when the message arrived. A reply that reactivates a done Requirement reports queued=false because it starts a new Run immediately. The reply endpoint never interrupts a Run. Empty text and attachments return 400. An unknown Requirement returns 404. A cancelled Requirement returns 409.
 
 ### POST /api/requirements/:id/interrupt
 

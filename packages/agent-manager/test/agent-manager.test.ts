@@ -541,6 +541,8 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
     assert.equal(runner.requests[1]?.workspaceRoot, manager.workspaceRoot);
     const queued = manager.postHumanMessage(first.id, 'add another test');
     assert.equal(queued.queued, true);
+    assert.equal(queued.requirement.session.state, 'running');
+    assert.equal(queued.requirement.session.pendingMessageCount, 1);
     assert.equal(runner.requests.length, 2);
 
     runner.requests[0]?.onNativeSession?.('native-thread-1');
@@ -624,6 +626,9 @@ test('a human reply reactivates a completed requirement in its original RD sessi
     const reply = manager.postHumanMessage(requirement.id, 'Please add one more regression test.');
     assert.equal(reply.queued, false);
     assert.equal(reply.message.deliverToRd, true);
+    assert.equal(reply.requirement.status, 'doing');
+    assert.equal(reply.requirement.session.state, 'running');
+    assert.equal(reply.requirement.completedAt, null);
     assert.equal(runner.requests.length, 2);
     assert.ok(runner.requests[1]?.invocation.args.includes('resume'));
     assert.ok(runner.requests[1]?.invocation.args.includes('native-thread-1'));
