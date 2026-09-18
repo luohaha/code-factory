@@ -72,6 +72,11 @@ function pullRequestStatusField(value: unknown): PullRequestStatus {
   return value;
 }
 
+function agentTimerScheduleField(value: unknown): 'once' | 'recurring' {
+  if (value !== 'once' && value !== 'recurring') throw new TypeError('schedule must be once or recurring');
+  return value;
+}
+
 function positiveIntegerField(body: Record<string, unknown>, name: string): number {
   const value = body[name];
   if (!Number.isInteger(value) || Number(value) <= 0) throw new TypeError(`${name} must be a positive integer`);
@@ -96,6 +101,16 @@ function fileNameHeader(request: IncomingMessage): string {
   } catch {
     throw new TypeError('x-file-name must be URI encoded');
   }
+}
+
+function eventCursor(request: IncomingMessage, url: URL): number | undefined {
+  const header = request.headers['last-event-id'];
+  const raw = url.searchParams.has('after')
+    ? url.searchParams.get('after')
+    : Array.isArray(header) ? header[0] : header;
+  if (!raw) return undefined;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 export function createAgentManagerServer(manager: AgentManager, options: AgentManagerServerOptions = {}): Server {
@@ -156,6 +171,12 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         sendJson(response, 200, manager.updateConfiguration(patch));
         return;
       }
+      if (request.method === 'GET' && url.pathname === '/api/search') {
+        const rawLimit = url.searchParams.get('limit');
+        const limit = rawLimit === null ? 50 : Number(rawLimit);
+        sendJson(response, 200, { items: manager.search(url.searchParams.get('q') ?? '', limit) });
+        return;
+      }
       if (request.method === 'GET' && url.pathname === '/api/requirements') {
         sendJson(response, 200, { items: manager.listRequirements() });
         return;
@@ -198,6 +219,36 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         sendJson(response, 200, { items: manager.listMessages(requirementId) });
         return;
       }
+      if (request.method === 'GET' && url.pathname === '/api/timers') {
+        sendJson(response, 200, { items: manager.listAgentTimers() });
+        return;
+      }
+      const agentTimers = url.pathname.match(/^\/api\/requirements\/([^/]+)\/timers$/);
+      if (request.method === 'GET' && agentTimers) {
+        const requirementId = decodeURIComponent(agentTimers[1]!);
+        sendJson(response, 200, { items: manager.listAgentTimers(requirementId) });
+        return;
+      }
+      if (request.method === 'POST' && agentTimers) {
+        const requirementId = decodeURIComponent(agentTimers[1]!);
+        const body = await readJson(request);
+        const item = manager.createAgentTimer(requirementId, {
+          description: stringField(body, 'description', true)!,
+          schedule: agentTimerScheduleField(body.schedule),
+          intervalSeconds: positiveIntegerField(body, 'intervalSeconds'),
+        });
+        sendJson(response, 201, item);
+        return;
+      }
+      const agentTimer = url.pathname.match(
+        /^\/api\/requirements\/([^/]+)\/timers\/([^/]+)$/,
+      );
+      if (request.method === 'DELETE' && agentTimer) {
+        const requirementId = decodeURIComponent(agentTimer[1]!);
+        const timerId = decodeURIComponent(agentTimer[2]!);
+        sendJson(response, 200, manager.cancelAgentTimer(timerId, requirementId));
+        return;
+      }
       const attachmentUpload = url.pathname.match(/^\/api\/requirements\/([^/]+)\/attachments$/);
       if (request.method === 'POST' && attachmentUpload) {
         const requirementId = decodeURIComponent(attachmentUpload[1]!);
@@ -215,9 +266,12 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           'cache-control': 'no-cache',
           connection: 'keep-alive',
         });
-        const afterId = Number(url.searchParams.get('after') ?? 0);
-        for (const event of manager.listEvents(Number.isFinite(afterId) ? afterId : 0)) {
-          response.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+        response.flushHeaders();
+        const afterId = eventCursor(request, url);
+        if (afterId !== undefined) {
+          for (const event of manager.listEvents(afterId)) {
+            response.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+          }
         }
         const listener = (event: ManagerEvent) => {
           response.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
@@ -242,6 +296,13 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
       }
 
       const requirement = url.pathname.match(/^\/api\/requirements\/([^/]+)$/);
+      if (request.method === 'GET' && requirement) {
+        const requirementId = decodeURIComponent(requirement[1]!);
+        const item = manager.getRequirement(requirementId);
+        if (!item) throw new StoreNotFoundError(`Requirement ${requirementId} not found`);
+        sendJson(response, 200, item);
+        return;
+      }
       if (request.method === 'DELETE' && requirement) {
         manager.deleteRequirement(decodeURIComponent(requirement[1]!));
         response.writeHead(204).end();
@@ -266,6 +327,41 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           parentRequirementId: stringField(body, 'parentRequirementId') ?? source.requirementId,
         });
         sendJson(response, 201, item);
+        return;
+      }
+
+      const agentRelatedRequirements = url.pathname.match(
+        /^\/api\/agent\/requirements\/([^/]+)\/related$/,
+      );
+      if (request.method === 'GET' && agentRelatedRequirements) {
+        const requirementId = decodeURIComponent(agentRelatedRequirements[1]!);
+        const sourceSessionId = url.searchParams.get('sourceSessionId')?.trim();
+        if (!sourceSessionId) throw new TypeError('sourceSessionId must be a non-empty string');
+        sendJson(response, 200, manager.listRelatedRequirements(requirementId, sourceSessionId));
+        return;
+      }
+
+      const agentRelatedMessages = url.pathname.match(
+        /^\/api\/agent\/requirements\/([^/]+)\/related\/([^/]+)\/messages$/,
+      );
+      if (request.method === 'POST' && agentRelatedMessages) {
+        const sourceRequirementId = decodeURIComponent(agentRelatedMessages[1]!);
+        const targetRequirementId = decodeURIComponent(agentRelatedMessages[2]!);
+        const body = await readJson(request);
+        const result = manager.postRelatedRequirementMessage(
+          sourceRequirementId,
+          stringField(body, 'sourceSessionId', true)!,
+          targetRequirementId,
+          stringField(body, 'message', true)!,
+        );
+        sendJson(response, 202, {
+          accepted: true,
+          sourceRequirementId,
+          targetRequirementId,
+          queued: result.queued,
+          message: result.message,
+          requirement: result.requirement,
+        });
         return;
       }
 
@@ -301,9 +397,15 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           ...(prompt ? { prompt } : {}),
         })
           .catch((error: unknown) => logger.error('Reviewer run failed unexpectedly', { pullRequestId, error }));
+        const acceptedReview = manager.listReviewRequests(pullRequestId)[0];
+        const acceptedRun = acceptedReview
+          ? manager.listRuns().find((run) => run.id === acceptedReview.runId) ?? null
+          : null;
         sendJson(response, 202, {
           accepted: true,
           pullRequestId,
+          reviewRequest: acceptedReview ?? null,
+          run: acceptedRun,
           provider,
           model: model ?? null,
           reasoningEffort: reasoningEffort ?? null,
@@ -331,14 +433,35 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
             stringField(body, 'message') ?? '',
             stringArrayField(body, 'attachmentIds'),
           );
-          sendJson(response, 202, { accepted: true, requirementId, action: name, queued: result.queued, message: result.message });
+          sendJson(response, 202, {
+            accepted: true,
+            requirementId,
+            action: name,
+            queued: result.queued,
+            message: result.message,
+            requirement: result.requirement,
+          });
           return;
         }
         const message = stringField(body, 'message');
         const attachmentIds = stringArrayField(body, 'attachmentIds');
         void manager.runRequirement(requirementId, message, attachmentIds)
           .catch((error: unknown) => logger.error('RD run failed unexpectedly', { requirementId, error }));
-        sendJson(response, 202, { accepted: true, requirementId, action: name });
+        const current = manager.getRequirement(requirementId);
+        if (!current) throw new StoreNotFoundError(`Requirement ${requirementId} not found`);
+        const run = manager.listRuns(requirementId)
+          .find((item) => item.role === 'rd' && item.status === 'running') ?? null;
+        const persistedMessage = message?.trim() || attachmentIds.length > 0
+          ? manager.listMessages(requirementId).at(-1) ?? null
+          : null;
+        sendJson(response, 202, {
+          accepted: true,
+          requirementId,
+          action: name,
+          requirement: current,
+          run,
+          message: persistedMessage,
+        });
         return;
       }
 

@@ -21,7 +21,11 @@ export interface PullRequestReconcilerOptions {
   isClosed(): boolean;
 }
 
-/** Polls each tracked PR once and shares its snapshot with independent PR triggers. */
+/**
+ * Polls PRs whose last persisted status is Draft or Open and shares each
+ * snapshot with independent PR triggers. A snapshot may move an eligible PR
+ * to Closed or Merged; after that terminal transition it is no longer polled.
+ */
 export class PullRequestReconciler {
   readonly #store: AgentManagerStore;
   readonly #githubClient: GitHubClient;

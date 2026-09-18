@@ -39,10 +39,14 @@ test('daemon state parsing rejects malformed or incomplete state', () => {
       nextRestartAt: null,
       dashboardUrl: 'http://127.0.0.1:4310/',
       apiUrl: 'http://127.0.0.1:4310/api',
+      startupError: null,
       lastExitCode: 1,
       lastExitSignal: null,
     };
     writeFileSync(stateFile, JSON.stringify(state));
+    assert.deepEqual(readDaemonState(stateFile), state);
+
+    writeFileSync(stateFile, JSON.stringify({ ...state, startupError: undefined }));
     assert.deepEqual(readDaemonState(stateFile), state);
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -86,6 +90,7 @@ test('concurrent daemon starts replace stale metadata and converge on one discov
     nextRestartAt: null,
     dashboardUrl: null,
     apiUrl: null,
+    startupError: null,
     lastExitCode: null,
     lastExitSignal: null,
   } satisfies DaemonState));
@@ -125,6 +130,80 @@ test('concurrent daemon starts replace stale metadata and converge on one discov
     const remainingSupervisorPid = remainingState?.supervisorPid ?? supervisorPid;
     if (remainingManagerPid !== null && isProcessAlive(remainingManagerPid)) process.kill(remainingManagerPid, 'SIGKILL');
     if (remainingSupervisorPid !== null && isProcessAlive(remainingSupervisorPid)) process.kill(remainingSupervisorPid, 'SIGKILL');
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('daemon start reports an occupied port without entering a restart loop', { timeout: 15_000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-daemon-port-conflict-'));
+  const workspace = join(directory, 'workspace');
+  const fakeHome = join(directory, 'home');
+  const env = {
+    ...process.env,
+    HOME: fakeHome,
+    USERPROFILE: fakeHome,
+  };
+  mkdirSync(workspace, { recursive: true });
+  const paths = defaultDaemonPaths(workspace, fakeHome);
+  const blocker = createServer();
+  await new Promise<void>((resolveListen, reject) => {
+    blocker.once('error', reject);
+    blocker.listen(0, '127.0.0.1', resolveListen);
+  });
+  const address = blocker.address();
+  assert.ok(address && typeof address === 'object');
+  const port = address.port;
+  let supervisorPid: number | null = null;
+  let blockerClosed = false;
+
+  try {
+    const startedAt = Date.now();
+    const result = runCli(
+      ['start', '--daemon', '--port', String(port), '--pr-reconcile-interval', '0', '--log-level', 'silent'],
+      workspace,
+      env,
+      10_000,
+    );
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /EADDRINUSE: address already in use/);
+    assert.ok(Date.now() - startedAt < 5_000, `port conflict took ${Date.now() - startedAt}ms to report`);
+
+    const state = readDaemonState(paths.stateFile);
+    assert.equal(state?.status, 'failed');
+    assert.match(state?.startupError ?? '', /EADDRINUSE: address already in use/);
+    assert.equal(state?.restartCount, 0);
+    assert.equal(state?.managerPid, null);
+    supervisorPid = state?.supervisorPid ?? null;
+    if (supervisorPid !== null) await waitForProcessToExit(supervisorPid);
+
+    const daemonLog = readFileSync(paths.logFile, 'utf8');
+    assert.match(daemonLog, /Daemon supervisor failed/);
+    assert.doesNotMatch(daemonLog, /Agent Manager restart scheduled/);
+
+    await new Promise<void>((resolveClose, reject) => blocker.close((error) => (
+      error ? reject(error) : resolveClose()
+    )));
+    blockerClosed = true;
+    const retry = runCli(
+      ['start', '--daemon', '--port', String(port), '--pr-reconcile-interval', '0', '--log-level', 'silent'],
+      workspace,
+      env,
+    );
+    assert.equal(retry.status, 0, retry.stderr);
+    assert.match(retry.stdout, /daemon started/);
+    const stopped = runCli(['stop'], workspace, env, 20_000);
+    assert.equal(stopped.status, 0, stopped.stderr);
+  } finally {
+    if (!blockerClosed) {
+      await new Promise<void>((resolveClose, reject) => blocker.close((error) => (
+        error ? reject(error) : resolveClose()
+      )));
+    }
+    if (existsSync(paths.stateFile) && readDaemonState(paths.stateFile)?.status === 'running') {
+      runCli(['stop'], workspace, env, 20_000);
+    }
+    if (supervisorPid !== null && isProcessAlive(supervisorPid)) process.kill(supervisorPid, 'SIGKILL');
     rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -307,4 +386,13 @@ async function waitForState(
     await new Promise<void>((resolveWait) => setTimeout(resolveWait, 50));
   }
   throw new Error(`Daemon state did not reach the expected value: ${stateFile}`);
+}
+
+async function waitForProcessToExit(pid: number, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return;
+    await new Promise<void>((resolveWait) => setTimeout(resolveWait, 50));
+  }
+  throw new Error(`Process ${pid} did not exit`);
 }

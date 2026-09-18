@@ -10,19 +10,20 @@ The system has three first-class domain entities:
 - `AgentSession`: the long-lived RD session uniquely bound to a Requirement;
 - `PullRequest`: a GitHub pull request produced by a Requirement. One Requirement may have multiple PRs.
 
-`AgentRun`, `RequirementMessage`, and `ReviewRequest` are execution and interaction records. They are not long-lived agents that require scheduling.
+`AgentRun`, `RequirementMessage`, `ReviewRequest`, and `AgentTimer` are execution and interaction records. They are not long-lived agents that require allocation from a pool.
 
 ~~~mermaid
 erDiagram
   Requirement ||--|| AgentSession : owns
   Requirement ||--o{ RequirementMessage : contains
   Requirement ||--o{ PullRequest : produces
+  Requirement ||--o{ AgentTimer : schedules
   AgentSession ||--o{ AgentRun : resumes
   PullRequest ||--o{ ReviewRequest : receives
   ReviewRequest ||--|| AgentRun : executes
 ~~~
 
-Agent Manager is not a scheduler. There is no agent pool and no “waiting for scheduling” state. An RD AgentSession is created and permanently bound when its Requirement is created.
+Agent Manager is not an agent scheduler. There is no agent pool and no “waiting for scheduling” state. An RD AgentSession is created and permanently bound when its Requirement is created. Agent Timers are persisted configurations executed by the built-in `timer` Agent Trigger; they add a conversation message to an already bound Session and do not allocate Agents or queue execution capacity.
 
 ## 2. Runtime Boundary
 
@@ -34,11 +35,13 @@ flowchart LR
   M <--> DB[(SQLite)]
   M -->|Same cwd, long-lived resume| RD[Codex / Claude Code RD]
   M -->|Short-lived, no persistent session| RV[Codex / Claude Code Reviewer]
-  RD -->|Register PR / Propose requirement| CLI[code-factory-cli]
+  RD -->|Register PR / Propose requirement / Schedule wake-up| CLI[code-factory-cli]
   CLI --> API[Agent API]
   API --> M
   RV -->|GitHub inline comments| GH[GitHub PR]
   GH -->|Poll status, comments, reviews, CI, conflicts| T[PR Agent Triggers]
+  DB -->|Due timers| ST[Timer Agent Trigger]
+  ST -->|System message: timer ID + description| M
   T -->|Normalized messages| M
   RV -->|Reviewer message| M
 ~~~
@@ -47,7 +50,7 @@ At startup, Agent Manager fixes the workspace to `realpath(process.cwd())`. Ever
 
 Before opening its application database or HTTP listener, Agent Manager takes an exclusive process-lifetime lock under the canonical workspace's default data directory. Foreground and daemon-managed processes use the same lock, so a second Manager cannot bypass workspace ownership by selecting a different port, configuration file, or database. A live daemon supervisor also reserves the workspace between Manager restart attempts. The operating system releases the underlying SQLite lock if the Manager process crashes.
 
-Agent Manager's own settings are workspace-scoped in `~/.code-factory/workspaces/<workspace-hash>/config.json` by default. The CLI loads this file before constructing storage, logging, HTTP, and trigger services. Existing command-line flags remain process-local overrides, and `--config PATH` selects another file. File-backed desired values and effective startup values are kept separate so a later API update cannot persist unrelated CLI arguments, environment values, or resolved paths. The API and dashboard can atomically update the file. PR reconciliation intervals and log levels are reconfigured in the running process; HTTP binding, CORS, storage paths, startup browser behavior, and log rotation are marked as requiring a restart.
+Agent Manager's own settings are workspace-scoped in `~/.code-factory/workspaces/<workspace-hash>/config.json` by default. The CLI loads this file before constructing storage, logging, HTTP, and trigger services. Existing command-line flags remain process-local overrides, and `--config PATH` selects another file. File-backed desired values and effective startup values are kept separate so a later API update cannot persist unrelated CLI arguments, environment values, or resolved paths. The API and dashboard can atomically update the file. PR reconciliation intervals, terminal Requirement retention periods, and log levels are reconfigured in the running process; HTTP binding, CORS, storage paths, startup browser behavior, and log rotation are marked as requiring a restart.
 
 Agent Manager also owns an in-memory provider model catalog. It refreshes at startup and every 24 hours, using Codex's local app-server `model/list` method and Claude's `/v1/models` endpoint when API or gateway credentials are available. Claude Code rolling aliases and environment-configured model overrides remain available when remote discovery cannot run. A failed refresh retains the last successful provider list and marks it stale; model discovery never prevents the Manager from starting or running existing Sessions.
 
@@ -64,7 +67,7 @@ npx --package @luoyixin/code-factory code-factory-agent-manager start
 
 All agents launched by that process initially use `~/starrocks` as their working directory. Before changing code, an RD Agent is instructed to create or reuse a Git worktree dedicated to its Requirement and perform the work there. Agent Manager does not currently provision or enforce that isolation.
 
-Agent Manager may run in the foreground or beneath its workspace-scoped daemon supervisor. `start --daemon` detaches the supervisor, which starts Agent Manager with the original CLI options and waits for a readiness message emitted only after the HTTP listener is active. An unexpected Manager exit is restarted indefinitely with capped exponential backoff. `stop` terminates the supervisor and Manager intentionally, while `restart` reuses a running daemon's stored options unless replacements are supplied. `daemon.json`, `daemon.lock`, `daemon.guard.sqlite`, and `logs/daemon.log` live beside the workspace database under `~/.code-factory/workspaces/<workspace-hash>/`. The persistent SQLite guard provides process-lifetime supervisor ownership; only its current owner may replace or remove the PID metadata and daemon state. This is application-level process supervision, not operating-system service installation or boot-time activation.
+Agent Manager may run in the foreground or beneath its workspace-scoped daemon supervisor. `start --daemon` detaches the supervisor, which starts Agent Manager with the original CLI options and waits for a readiness message emitted only after the HTTP listener is active. A startup error emitted before readiness is persisted in daemon state and returned directly to the starting CLI instead of being retried. An unexpected exit after readiness is restarted indefinitely with capped exponential backoff. `stop` terminates the supervisor and Manager intentionally, while `restart` reuses a running daemon's stored options unless replacements are supplied. `daemon.json`, `daemon.lock`, `daemon.guard.sqlite`, and `logs/daemon.log` live beside the workspace database under `~/.code-factory/workspaces/<workspace-hash>/`. The persistent SQLite guard provides process-lifetime supervisor ownership; only its current owner may replace or remove the PID metadata and daemon state. This is application-level process supervision, not operating-system service installation or boot-time activation.
 
 Every headless RD and Reviewer invocation skips interactive approval and CLI sandbox checks. It therefore inherits the launching user's full filesystem, network, and command-execution permissions. Agent Manager must only be started in a trusted workspace. Reviewers remain behaviorally read-only through their task instructions; this is not an operating-system security boundary.
 
@@ -78,6 +81,7 @@ Every headless RD and Reviewer invocation skips interactive approval and CLI san
 - `createdBy`: `human | rd_agent`;
 - an agent-proposed Requirement records `parentRequirementId` and `sourceSessionId`;
 - an agent proposal is created as TODO and does not start automatically, preventing uncontrolled recursive work.
+- the proposing Requirement and its direct child can discover each other and exchange explicit, durable RD messages without sharing native agent-session context.
 
 ### AgentSession
 
@@ -103,6 +107,13 @@ Every headless RD and Reviewer invocation skips interactive approval and CLI san
 - owns one short-lived Reviewer AgentRun and never creates an AgentSession;
 - allows at most one active ReviewRequest per PR.
 
+### AgentTimer
+
+- belongs to one Requirement, carries a required follow-up description, and uses `once | recurring` as its schedule pattern;
+- stores a whole-second interval from 60 through 31536000, the next occurrence, and the last fired timestamp;
+- follows `active | completed | cancelled`; a one-time occurrence completes automatically, while a recurring occurrence advances to its next future time;
+- survives Agent Manager restarts and is cancelled automatically when its Requirement becomes DONE or CANCELLED.
+
 ## 4. The Requirement Conversation Is the RD Message Stream
 
 The system does not maintain a separate RD message-queue table. `requirement_messages` is the single source of truth for both display and delivery:
@@ -111,7 +122,7 @@ The system does not maintain a separate RD message-queue table. `requirement_mes
 | --- | --- | --- |
 | Human | Yes | Yes |
 | Reviewer | Yes | Yes |
-| RD Agent | Yes | No |
+| RD Agent | Yes | No for its own output; yes when explicitly sent from a directly related Requirement |
 | System | Yes | Depends on the event |
 
 Each message has a monotonically increasing `sequence` and a `deliverToRd` flag. When an RD Run starts, it captures the pending external-message range as `inputFromSequence..inputToSequence`:
@@ -121,7 +132,8 @@ Each message has a monotonically increasing `sequence` and a `deliverToRd` flag.
 3. If external messages remain, Agent Manager automatically resumes the same RD Session.
 4. Multiple messages are delivered together in order during the next Run.
 5. A failed or interrupted Run does not advance the cursor, so retrying or corrective resumption cannot lose messages. Only messages arriving after the interrupted Run started trigger its automatic replacement.
-6. RD output is never delivered back to the RD Agent as normal next-turn input.
+6. A Requirement's own RD output is never delivered back to that RD Agent as normal next-turn input. An explicit message from a directly related Requirement is external input and is delivered to the target RD Agent.
+7. A human reply or related-Agent message to a DONE Requirement reactivates it as DOING, clears its completion timestamp, and starts a new Run in the same long-lived RD Session. CANCELLED Requirements remain terminal.
 
 Only when the native session is lost and must be recovered may Agent Manager rebuild context from a compact conversation summary. Normal execution never replays all previous RD output.
 
@@ -148,9 +160,17 @@ If the PR head SHA changes, previous reviews remain historical results for the o
 
 Trigger lifecycle is explicit through `startAgentTrigger()` and `stopAgentTrigger()`. Once stopped, a trigger's delivery context is invalidated. Receipts refer to Requirements rather than Pull Requests, so a future trigger such as a Slack-thread listener does not need GitHub-shaped persistence.
 
+### Timer Trigger
+
+`timer` is a built-in persistent Agent Trigger. Humans create `AgentTimer` resources from the Requirement chat composer or HTTP API. An RD Agent tracks every long-running process or task it starts to completion, using the provider's normal wait, task-output, or monitor mechanism while the current Run remains active. It uses `code-factory-cli timer register --description DESCRIPTION` before ending the Run only when the task is guaranteed to continue independently after the Run ends and the Session needs to wake later to inspect it. Every due occurrence delivers exactly one System message with the timer ID, schedule, and description through the normal Requirement message stream. Recurring messages also include the command needed to cancel the timer. The existing delivery rules then resume an idle Session or queue the message behind its active Run.
+
+Each occurrence is deduplicated by the timer ID plus its scheduled timestamp. Delivery happens before the stored timer advances, so a process exit in between is retried safely after restart. A delayed recurring timer produces one wake-up and advances directly to its next future occurrence rather than replaying every missed interval. `timer show` lets the RD Agent recover the IDs, descriptions, and statuses of timers scoped to its Requirement. `timer cancel` and the dashboard stop an active timer; Requirement completion or cancellation stops all remaining timers automatically.
+
 ### PR Reconciliation Triggers
 
-Agent Manager polls each tracked Draft/Open PR through the authenticated local `gh` CLI every 30 seconds by default. The reconciler fetches one snapshot per PR and shares it with four independently registered triggers:
+Agent Manager polls through the authenticated local `gh` CLI every 30 seconds by default. Poll eligibility comes from Code Factory's last persisted PR state: registered Draft and Open PRs are polled, while Closed and Merged PRs are skipped. This allows a snapshot to discover and persist a Draft-to-Open transition as well as transitions to Draft, Closed, or Merged. After a terminal transition, the PR is excluded from subsequent polls and later state, comment, review, or check changes are not observed.
+
+For each eligible PR, the GitHub client runs `gh pr view` for lifecycle, metadata, comments, reviews, checks, and mergeability, plus a paginated `gh api` request for inline review comments. The reconciler combines those results into one snapshot and shares it with four independently registered triggers:
 
 - `github.pull-request.status` observes Draft/Open/Closed/Merged lifecycle changes;
 - `github.pull-request.comment` observes general PR comments, submitted reviews, and inline review comments;
@@ -168,10 +188,9 @@ GitHub and the PR reconciler exclusively advance PR lifecycle state. The RD Agen
 Requirement:
 
 ~~~text
-TODO → DOING → WAITING_CONFIRMATION → DONE
-  └─ Delete ─→ CANCELLED (hidden from active lists)
-          ↑              │
-          └─ New input ──┘
+TODO ─Start→ DOING ─success→ WAITING_CONFIRMATION ─confirm→ DONE
+TODO ─Delete→ CANCELLED (hidden from active lists)
+DONE ─Human reply→ DOING
 ~~~
 
 RD AgentSession:
@@ -180,6 +199,7 @@ RD AgentSession:
 IDLE → RUNNING → WAITING_HUMAN → RUNNING
           └────────→ FAILED → RUNNING
 WAITING_HUMAN → COMPLETED
+COMPLETED ─Human reply→ RUNNING
 ~~~
 
 Pull Request:
@@ -208,26 +228,34 @@ The first implementation uses Node.js `node:sqlite`:
 
 - Foreign keys, WAL mode, and a busy timeout are enabled.
 - Requirement and AgentSession are created atomically.
+- A daily retention sweep deletes expired CANCELLED and DONE Requirements. Defaults are 7 and 365 days respectively, measured from the terminal transition's `updatedAt`; configuration updates apply immediately and trigger a sweep, and a zero-day policy also sweeps when a Requirement enters the matching terminal state. A Requirement with any running Run is deferred so an in-flight Reviewer can persist and deliver its result; completing that Run immediately retries a zero-day purge.
+- Expiry deletes the Requirement inside one SQLite transaction. Before foreign-key cascades remove its AgentSession, Runs, messages, attachment metadata, PRs, PR observations, ReviewRequests, trigger receipts, and related ManagerEvents, the transaction records attachment paths as pending-deletion tombstones; surviving child Requirements have parent and source-Session references cleared. Attachment files are removed after commit, and failed or interrupted file deletions remain discoverable for retry on the next sweep.
 - One-to-one relationships, message ordering, and active-Run constraints are enforced by SQLite.
+- Requirement text, conversation messages, and Pull Request metadata are copied into a unified search-document table as part of their owning Store writes. Full-text scores and persisted local word/character n-gram embeddings are combined at query time; an FTS5 trigram index accelerates and refines full-text ranking when the Node.js SQLite build includes FTS5, with deterministic in-process matching as the portable fallback. Existing records are backfilled idempotently when the Store opens.
 - The application depends on the business-level `AgentManagerStore` interface, allowing a later PostgreSQL implementation without changing domain workflows.
 - Configuration is validated before use and replaced atomically with file mode `0600`; it is operational state rather than a domain entity stored in SQLite.
 
 ## 9. Web Dashboard
 
-The Web application contains three boards:
+The Web application contains four boards:
 
 - Requirement: `TODO / DOING / Waiting for confirmation / DONE`;
 - Pull Request: `DRAFT / OPEN / CLOSED / MERGED`;
-- RD Session: `Idle / Running / Waiting for human / Failed / Completed`.
+- RD Session: `Idle / Running / Waiting for human / Failed / Completed`;
+- Timer: `Active / Completed / Cancelled`.
 
-Requirement details form a Jira-like work surface containing the description, linked PRs, Run information, and a unified Human/RD/Reviewer/System conversation. A TODO card's Start action opens this work surface and focuses the message composer, allowing optional instructions and attachments to be captured as input to the initial Run; the work surface also offers an explicit start-without-instructions action. TODO cards offer an adjacent Delete action; deletion requires confirmation and is no longer available after execution starts. The input remains available while RD is running, and pending external-message counts appear on Requirement and Session cards.
+Requirement details form a Jira-like work surface containing the description, linked PRs, Run information, and a unified Human/RD/Reviewer/System conversation. A TODO card's Start action opens this work surface and focuses the message composer, allowing optional instructions and attachments to be captured as input to the initial Run; the work surface also offers an explicit start-without-instructions action. TODO cards offer an adjacent Delete action; deletion requires confirmation and is no longer available after execution starts. The input remains available while RD is running, and pending external-message counts appear on Requirement and Session cards. A clock control beside the chat attachment button creates and cancels one-time or recurring scheduled wake-ups using minute, hour, or day intervals.
 
 The dashboard supports English and Simplified Chinese. The header language switcher applies the locale immediately and persists the choice in browser storage; a visitor without a saved preference defaults to the browser language. Requirement and Reviewer forms select models from the current provider catalog and retain the CLI-default option. The configuration dialog updates the workspace configuration and distinguishes immediately applied settings from restart-required settings.
 
-Requirement, Pull Request, and RD Session boards share a creation-time filter. It defaults to the last 7 days and also offers the last 24 hours, 30 days, 90 days, and all time.
+Dashboard synchronization is resource-scoped after initial load. Mutation responses and persisted SSE payloads are merged by resource ID and update time; Messages are additionally ordered and deduplicated by their Requirement-local sequence. Compatibility refreshes for incomplete events are routed only to the affected Requirement, Runs, PRs, ReviewRequests, or Timers and coalesced by that scope. A full workspace snapshot is reserved for initial connection and explicit manual refresh. SSE replay and newer local state win over an older in-flight snapshot, and ownership checks prevent a payload from entering another Requirement's conversation.
+
+All four boards share a time-range filter. It defaults to the last 7 days and also offers the last 24 hours, 30 days, 90 days, and all time. Requirement, Pull Request, and RD Session boards filter by creation time; the Timer board retains active timers by their upcoming occurrence and filters history by its latest update.
+
+Their shared search box calls the Agent Manager hybrid-search endpoint. A match in a Requirement or any of its conversation messages exposes that Requirement and RD Session; a matching Pull Request title or metadata exposes the PR and its Requirement. Requirement cards show the highest-ranked match source and excerpt so conversation-only matches are explainable.
 
 Running `npx --package @luoyixin/code-factory code-factory-agent-manager start` serves the API, SSE stream, and bundled Web dashboard from the same port and writes the local URL to the log file in the workspace data directory. No separate Web deployment is required.
 
 ## 10. Current Boundary
 
-The Reviewer is instructed to use the GitHub CLI/API to publish inline comments, but structured verification that every expected comment was posted is not implemented yet. The Agent Trigger extension API is code-level; dynamic trigger discovery/configuration and a Slack trigger are not implemented. Reconciliation currently uses local `gh` polling; GitHub webhook synchronization, stale-review indicators after head-SHA changes, access tokens, and Manager-enforced worktree isolation remain future work. The daemon supervisor recovers an exited Agent Manager process, but it does not register itself with systemd, launchd, or Windows Service Control Manager and therefore does not provide machine-reboot recovery.
+The Reviewer is instructed to use the GitHub CLI/API to publish inline comments, but structured verification that every expected comment was posted is not implemented yet. The native Timer Agent Trigger is configurable, while the general Agent Trigger extension API remains code-level; dynamic third-party trigger discovery/configuration and a Slack trigger are not implemented. Reconciliation currently uses local `gh` polling; GitHub webhook synchronization, stale-review indicators after head-SHA changes, access tokens, and Manager-enforced worktree isolation remain future work. The daemon supervisor recovers an exited Agent Manager process, but it does not register itself with systemd, launchd, or Windows Service Control Manager and therefore does not provide machine-reboot recovery.

@@ -12,7 +12,7 @@ Agent Manager listens on 127.0.0.1:4310 by default. Its API base URL is:
 http://127.0.0.1:4310/api
 ~~~
 
-By default, Agent Manager uses the authenticated local GitHub CLI every 30 seconds to synchronize state, comments, reviews, inline review comments, CI failures, and merge conflicts for Draft and Open PRs. Change `pullRequestReconcileIntervalSeconds` through the configuration API or dashboard; use `0` to disable polling. The compatible `--pr-reconcile-interval SECONDS` option overrides the file for the launched process only. Reconciliation messages are exposed and delivered through the Requirement conversation and SSE endpoints documented here.
+By default, Agent Manager uses the authenticated local GitHub CLI every 30 seconds to synchronize state, comments, reviews, inline review comments, CI failures, and merge conflicts. It polls registered PRs whose last stored state is Draft or Open, so it can discover Draft-to-Open transitions as well as transitions to Closed or Merged. Once a terminal state is persisted, later polls skip the PR. Change `pullRequestReconcileIntervalSeconds` through the configuration API or dashboard; use `0` to disable polling. The compatible `--pr-reconcile-interval SECONDS` option overrides the file for the launched process only. Reconciliation messages are exposed and delivered through the Requirement conversation and SSE endpoints documented here.
 
 Check the service and bound workspace first:
 
@@ -40,7 +40,9 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/configuration | Read desired Agent Manager configuration and restart status |
 | PATCH | /api/configuration | Validate, persist, and apply configuration changes |
 | GET | /api/agent-models | Read cached Codex and Claude Code model options |
+| GET | /api/search | Hybrid-search Requirements, conversations, and Pull Requests |
 | GET | /api/requirements | List Requirements with their RD Sessions |
+| GET | /api/requirements/:id | Read one Requirement with its RD Session |
 | POST | /api/requirements | Create a Requirement and RD Session |
 | DELETE | /api/requirements/:id | Remove a TODO Requirement |
 | POST | /api/requirements/:id/start | Start or retry a Requirement |
@@ -48,6 +50,10 @@ The service listens only on the loopback interface by default and currently has 
 | POST | /api/requirements/:id/interrupt | Interrupt the current RD Run |
 | POST | /api/requirements/:id/confirm | Confirm Requirement completion |
 | GET | /api/requirements/:id/messages | Read the complete Requirement conversation |
+| GET | /api/timers | List Agent Timers across the workspace |
+| GET | /api/requirements/:id/timers | List Agent Timers for a Requirement |
+| POST | /api/requirements/:id/timers | Create a one-time or recurring Agent Timer |
+| DELETE | /api/requirements/:id/timers/:timerId | Cancel an active Agent Timer |
 | POST | /api/requirements/:id/attachments | Upload a conversation attachment |
 | GET | /api/attachments/:id | Read or download an attachment |
 | GET | /api/sessions | List RD Sessions |
@@ -58,6 +64,8 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/events | Subscribe to the resumable SSE stream |
 | POST | /api/agent/pull-requests | Register or update a PR from an RD Agent |
 | POST | /api/agent/requirements | Propose a follow-up Requirement from an RD Agent |
+| GET | /api/agent/requirements/:id/related | List a source Requirement's direct parent and children |
+| POST | /api/agent/requirements/:id/related/:targetId/messages | Message a directly related Requirement's RD Agent |
 
 URL-encode IDs used in path parameters. Requirement, Session, Run, PR, and ReviewRequest lists are ordered with the most recently updated or created items first. Messages and events are ordered by ascending sequence number. List responses use:
 
@@ -67,7 +75,7 @@ URL-encode IDs used in path parameters. Requirement, Session, Run, PR, and Revie
 }
 ~~~
 
-List endpoints do not currently support pagination. A new GET /api/events connection replays at most 200 historical events.
+List endpoints do not currently support pagination. A cursorless GET /api/events connection receives only new events; a connection with a replay cursor receives at most 200 persisted events before continuing with live events.
 
 ## 3. Data models
 
@@ -148,6 +156,7 @@ interface RequirementMessage {
   requirementId: string;
   sessionId: string;
   runId: string | null;
+  sourceRequirementId: string | null; // sender for a related RD Agent message
   author: 'human' | 'rd_agent' | 'reviewer' | 'system';
   body: string;
   attachments: MessageAttachment[];
@@ -168,7 +177,7 @@ interface MessageAttachment {
 }
 ~~~
 
-sequence increases monotonically within a Requirement. deliverToRd=true means RD must consume the message. RD output is never delivered back to itself.
+sequence increases monotonically within a Requirement. deliverToRd=true means RD must consume the message. A Requirement's own RD output is never delivered back to itself. Messages explicitly sent by a directly related RD Agent have author=rd_agent, identify the sender through sourceRequirementId, and use deliverToRd=true in the target conversation.
 
 ### 3.5 PullRequest
 
@@ -232,6 +241,39 @@ interface AgentModelCatalog {
 
 `stale=true` means the latest provider refresh failed or has not completed. Previously discovered values, or provider-safe fallbacks, remain in `models`.
 
+### 3.8 AgentTimer
+
+~~~ts
+interface AgentTimer {
+  id: string;                         // tmr_<uuid>
+  requirementId: string;
+  description: string;                // follow-up delivered to the RD Agent
+  schedule: 'once' | 'recurring';
+  intervalSeconds: number;
+  status: 'active' | 'completed' | 'cancelled';
+  nextFireAt: string | null;
+  lastFiredAt: string | null;
+  createdAt: string;
+An active timer always has `nextFireAt`. A one-time timer becomes completed after delivery. A recurring timer remains active and advances to its next future occurrence until it is cancelled or its Requirement becomes done or cancelled. `AgentTimer` is the persisted configuration resource; the built-in `timer` Agent Trigger executes due timers through the shared trigger-delivery framework.
+
+### 3.9 SearchResult
+
+~~~ts
+interface SearchResult {
+  kind: 'requirement' | 'message' | 'pull_request';
+  sourceId: string;
+  requirementId: string;
+  title: string;
+  excerpt: string;
+  score: number;             // blended full-text and vector score
+  fullTextScore: number;
+  vectorScore: number;
+  updatedAt: string;
+}
+~~~
+
+Search results are document-level matches. `requirementId` lets clients group a matching conversation message or Pull Request under its owning Requirement.
+
 ## 4. Query endpoints
 
 ### GET /api/health
@@ -276,6 +318,8 @@ Returns the configuration file path, file-backed desired values, and any fields 
     "openDashboard": false,
     "databasePath": null,
     "pullRequestReconcileIntervalSeconds": 30,
+    "cancelledRequirementRetentionDays": 7,
+    "doneRequirementRetentionDays": 365,
     "logLevel": "info",
     "logFilePath": null,
     "logMaxSize": "20m",
@@ -288,7 +332,7 @@ Returns the configuration file path, file-backed desired values, and any fields 
 
 ### PATCH /api/configuration
 
-Accepts any subset of `values`. The patch is merged into the file-backed desired values and the complete validated document is atomically written; unrelated launch-only overrides are never persisted. `pullRequestReconcileIntervalSeconds` and `logLevel` apply immediately. All other fields are persisted, returned in `restartRequiredFields`, and apply on restart.
+Accepts any subset of `values`. The patch is merged into the file-backed desired values and the complete validated document is atomically written; unrelated launch-only overrides are never persisted. `pullRequestReconcileIntervalSeconds`, `cancelledRequirementRetentionDays`, `doneRequirementRetentionDays`, and `logLevel` apply immediately. All other fields are persisted, returned in `restartRequiredFields`, and apply on restart.
 
 ~~~bash
 curl -X PATCH http://127.0.0.1:4310/api/configuration \
@@ -296,7 +340,7 @@ curl -X PATCH http://127.0.0.1:4310/api/configuration \
   -d '{"pullRequestReconcileIntervalSeconds":10,"logLevel":"debug"}'
 ~~~
 
-`port` must be an integer from 1 to 65535. The reconcile interval must be an integer from 0 to 2147483 seconds, the largest whole-second delay supported by Node.js timers. `logLevel` accepts `debug`, `info`, `warn`, `error`, or `silent`. Paths and origins accept a non-empty string or `null`; a null database or log path selects its workspace default, while a null origin disables CORS. Unknown fields return 400 Bad Request.
+`port` must be an integer from 1 to 65535. The reconcile interval must be an integer from 0 to 2147483 seconds, the largest whole-second delay supported by Node.js timers. Each Requirement retention value must be an integer from 0 to 36500 days; `0` deletes matching Requirements as they become terminal. Updating either retention value triggers a scan immediately, in addition to the startup and daily scans. A terminal Requirement with any running Run is deferred; a zero-day purge is retried immediately when that Run finishes. Requirement-linked domain records are deleted in one transaction; pending attachment-file deletions are persisted as tombstones and retried until the file is absent. `logLevel` accepts `debug`, `info`, `warn`, `error`, or `silent`. Paths and origins accept a non-empty string or `null`; a null database or log path selects its workspace default, while a null origin disables CORS. Unknown fields return 400 Bad Request.
 
 ### GET /api/agent-models
 
@@ -304,11 +348,30 @@ Returns the in-memory provider model catalog. Agent Manager refreshes it at star
 
 Success: 200 OK with `AgentModelCatalog`.
 
+### GET /api/search
+
+Searches non-cancelled Requirements, complete Requirement conversations, and registered Pull Request titles and metadata. Ranking combines full-text matching with cosine similarity over locally generated word and character n-gram vectors. When the Node.js SQLite build includes FTS5, its trigram rank also contributes; deterministic in-process full-text matching keeps the endpoint available on builds without FTS5. Indexing and search are local and do not require an external embedding service. Existing SQLite records are indexed automatically when Agent Manager starts.
+
+| Parameter | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| q | string | yes | Non-empty query of at most 500 characters |
+| limit | integer | no | Result count from 1 to 200; defaults to 50 |
+
+~~~bash
+curl 'http://127.0.0.1:4310/api/search?q=database%20deadlock&limit=20'
+~~~
+
+Success: 200 OK with `{"items": SearchResult[]}` ordered by descending hybrid score. At most two hits of each kind are returned per Requirement so a long conversation cannot crowd every other result out. Invalid queries return 400 Bad Request.
+
 ### GET /api/requirements
 
 Returns every non-cancelled Requirement, including its AgentSession.
 
 Success: 200 OK with {"items": Requirement[]}.
+
+### GET /api/requirements/:id
+
+Returns one Requirement with its current RD Session. Returns 404 Not Found for an unknown Requirement. This endpoint is the compatibility fallback for clients that receive an older SSE payload without the affected Requirement snapshot; current events carry persisted resources directly.
 
 ### GET /api/sessions
 
@@ -331,6 +394,18 @@ Success: 200 OK with {"items": AgentRun[]}. An unknown requirementId returns an 
 Returns the complete Requirement conversation ordered by ascending sequence.
 
 Success: 200 OK with {"items": RequirementMessage[]}. Returns 404 Not Found for an unknown Requirement.
+
+### GET /api/timers
+
+Returns every scheduled wake-up in the workspace, including active, completed, and cancelled records. Dashboard clients use each record's `requirementId` to show its associated Requirement.
+
+Success: 200 OK with {"items": AgentTimer[]}.
+
+### GET /api/requirements/:id/timers
+
+Returns every scheduled wake-up for the Requirement, including completed and cancelled history.
+
+Success: 200 OK with {"items": AgentTimer[]}. Returns 404 Not Found for an unknown Requirement.
 
 ### POST /api/requirements/:id/attachments
 
@@ -401,7 +476,7 @@ Success: 201 Created with the new Requirement. Its initial status is todo and it
 
 ### DELETE /api/requirements/:id
 
-Removes a Requirement that is still in `todo` from active lists by marking it `cancelled` and archiving its Session. The underlying record is retained for auditability. A Requirement cannot be deleted after execution starts.
+Removes a Requirement that is still in `todo` from active lists by marking it `cancelled` and archiving its Session. The underlying records remain until the cancelled-Requirement retention period expires (7 days by default), then are deleted together. A Requirement cannot be deleted after execution starts.
 
 Success: `204 No Content`. Returns `404 Not Found` for an unknown Requirement and `409 Conflict` unless the Requirement is still `todo`.
 
@@ -424,17 +499,32 @@ Success: 202 Accepted
 {
   "accepted": true,
   "requirementId": "req_...",
-  "action": "start"
+  "action": "start",
+  "requirement": {
+    "id": "req_...",
+    "status": "doing",
+    "session": { "state": "running" }
+  },
+  "run": {
+    "id": "run_...",
+    "requirementId": "req_...",
+    "status": "running"
+  },
+  "message": {
+    "id": "msg_...",
+    "requirementId": "req_...",
+    "sequence": 1
+  }
 }
 ~~~
 
-Acceptance does not mean the background Run has completed. If the Session is already running, the endpoint still returns 202; optional input is queued for the next Run and no second concurrent RD Run is started. Track completion through SSE or the Run and Session query endpoints.
+requirement is the persisted Requirement/Session state after acceptance. run is the active RD Run, or null if no Run is active. message is the persisted optional input, or null when the request supplied neither text nor attachments. These fields let clients render acceptance without waiting for unrelated workspace queries. Acceptance does not mean the background Run has completed. If the Session is already running, the endpoint still returns 202; optional input is queued for the next Run and no second concurrent RD Run is started. Track completion through SSE or the Run and Session query endpoints.
 
 Returns 404 for an unknown Requirement and 409 Conflict for a done or cancelled Requirement.
 
 ### POST /api/requirements/:id/reply
 
-Appends a human message to the Requirement conversation. An idle Session automatically starts an RD Run. A running Session always queues the message without interruption. Call the interrupt endpoint separately to stop the current Run.
+Appends a human message to the Requirement conversation. An idle Session automatically starts an RD Run. A running Session always queues the message without interruption. Replying to a done Requirement changes it back to doing, clears completedAt, and starts a new Run in the original RD Session. Call the interrupt endpoint separately to stop the current Run.
 
 Request body:
 
@@ -463,11 +553,19 @@ Success: 202 Accepted
     "sequence": 3,
     "deliverToRd": true,
     "createdAt": "2026-09-11T02:30:00.000Z"
+  },
+  "requirement": {
+    "id": "req_...",
+    "status": "doing",
+    "session": {
+      "state": "running",
+      "pendingMessageCount": 1
+    }
   }
 }
 ~~~
 
-message may be empty when attachmentIds is non-empty. queued reports whether the RD Session was running when the message arrived. The reply endpoint never interrupts a Run. Empty text and attachments return 400. An unknown Requirement returns 404. A done or cancelled Requirement returns 409.
+message may be empty when attachmentIds is non-empty. requirement is the latest Requirement and RD Session snapshot after accepting the reply. queued reports whether the RD Session was running when the message arrived. A reply that reactivates a done Requirement reports queued=false because it starts a new Run immediately. The reply endpoint never interrupts a Run. Empty text and attachments return 400. An unknown Requirement returns 404. A cancelled Requirement returns 409.
 
 ### POST /api/requirements/:id/interrupt
 
@@ -495,6 +593,24 @@ curl -X POST http://127.0.0.1:4310/api/requirements/req_.../confirm \
 ~~~
 
 Success: 200 OK with the updated Requirement. Returns 404 for an unknown Requirement or 409 when its status is not waiting_confirmation.
+
+### POST /api/requirements/:id/timers
+
+Creates a persistent timer for an active Requirement. The first occurrence is the requested interval after creation. Each occurrence appends a System message containing the timer ID, schedule, and description; an idle RD Session starts immediately and a running Session queues the message for its next Run. Recurring messages also tell the RD Agent how to cancel the timer when the follow-up is complete.
+
+~~~json
+{
+  "description": "Check compiler status",
+  "schedule": "recurring",
+  "intervalSeconds": 3600
+}
+~~~
+
+`description` is required after trimming and must contain 1 through 500 characters. `schedule` must be `once` or `recurring`. `intervalSeconds` must be a whole number from 60 through 31536000. Success: 201 Created with the AgentTimer. Returns 404 for an unknown Requirement and 409 for a done or cancelled Requirement.
+
+### DELETE /api/requirements/:id/timers/:timerId
+
+Cancels an active Agent Timer owned by the Requirement. Success: 200 OK with the cancelled AgentTimer. Returns 404 when either ID is unknown or the timer belongs to another Requirement, and 409 when the timer is already completed or cancelled.
 
 ## 6. Pull Request review
 
@@ -528,13 +644,23 @@ Success: 202 Accepted
 {
   "accepted": true,
   "pullRequestId": "pr_...",
+  "reviewRequest": {
+    "id": "rev_...",
+    "pullRequestId": "pr_...",
+    "status": "running"
+  },
+  "run": {
+    "id": "run_...",
+    "role": "reviewer",
+    "status": "running"
+  },
   "provider": "claude-code",
   "model": "claude-opus-4-6",
   "reasoningEffort": "high"
 }
 ~~~
 
-The Reviewer runs in the background. The request does not wait for completion. Returns 404 for an unknown PR and 409 when the PR is not Open or already has an active review.
+reviewRequest and run are the persisted records created before acceptance. The Reviewer runs in the background, and the request does not wait for completion. Returns 404 for an unknown PR and 409 when the PR is not Open or already has an active review.
 
 ## 7. RD Agent endpoints
 
@@ -543,7 +669,14 @@ These endpoints are the transport used by `code-factory-cli` and other trusted l
 ~~~bash
 code-factory-cli pr register --help
 code-factory-cli requirement propose --help
+code-factory-cli requirement related --help
+code-factory-cli requirement message --help
+code-factory-cli timer register --help
+code-factory-cli timer show --help
+code-factory-cli timer cancel --help
 ~~~
+
+The timer commands call the Requirement-scoped timer endpoints above. `timer register --description "Check compiler status" --after-seconds 3600` registers a one-time wake-up; add `--repeat` for a recurring timer. `timer show` returns all timers for the current Requirement, including IDs, descriptions, and statuses. `timer cancel --id tmr_...` stops an active timer. They use the injected `CODE_FACTORY_REQUIREMENT_ID`, so the RD Agent does not need to copy its Requirement ID.
 
 ### POST /api/agent/pull-requests
 
@@ -613,6 +746,31 @@ curl -X POST http://127.0.0.1:4310/api/agent/requirements \
 
 Success: 201 Created with the new Requirement and createdBy=rd_agent. Returns 404 for an unknown source Session and 400 when parentRequirementId does not match or another field is invalid.
 
+### GET /api/agent/requirements/:sourceRequirementId/related
+
+Returns the source Requirement's direct parent and children as `{ "parent": Requirement | null, "children": Requirement[] }`, including terminal records that have not yet expired. The required `sourceSessionId` query parameter must identify the source Requirement's RD Session.
+
+The CLI supplies both values from its injected context:
+
+~~~bash
+code-factory-cli requirement related
+~~~
+
+Success: 200 OK. Returns 404 for an unknown source Requirement and 400 when the Session does not belong to it.
+
+### POST /api/agent/requirements/:sourceRequirementId/related/:targetRequirementId/messages
+
+Persists an RD Agent message in a direct parent or child Requirement and starts or queues the target RD Session.
+
+~~~json
+{
+  "sourceSessionId": "ses_...",
+  "message": "Use contract version 2 for the shared implementation."
+}
+~~~
+
+Success: 202 Accepted with `accepted`, source and target IDs, `queued`, the persisted `message`, and the current target `requirement`. The message has `author=rd_agent`, `sourceRequirementId` equal to the source, and `deliverToRd=true`. A DONE target is reactivated in its original Session. Returns 400 for invalid input or mismatched source Session, 404 for an unknown source or target, and 409 for an unrelated or CANCELLED target.
+
 ## 8. SSE event stream
 
 ### GET /api/events
@@ -626,7 +784,7 @@ curl -N 'http://127.0.0.1:4310/api/events?after=41'
 ~~~text
 id: 42
 event: message.created
-data: {"id":42,"type":"message.created","requirementId":"req_...","sessionId":"ses_...","runId":null,"payload":{"message":{"id":"msg_..."}},"createdAt":"2026-09-11T02:30:00.000Z"}
+data: {"id":42,"type":"message.created","requirementId":"req_...","sessionId":"ses_...","runId":null,"payload":{"message":{"id":"msg_..."},"requirement":{"id":"req_...","session":{"state":"running"}}},"createdAt":"2026-09-11T02:30:00.000Z"}
 
 ~~~
 
@@ -648,23 +806,27 @@ Current event types and primary payloads:
 
 | Event | Payload |
 | --- | --- |
-| requirement.created | provider, createdBy |
-| requirement.deleted | empty object |
-| requirement.completed | empty object |
-| message.created | message |
+| requirement.created | requirement, provider, createdBy |
+| requirement.deleted | terminal requirement and its timers |
+| requirement.completed | updated requirement and its timers |
+| requirements.purged | requirementIds, cancelledCount, doneCount |
+| message.created | message and latest requirement/session snapshot; trigger metadata when applicable |
 | pull_request.created | pullRequest |
 | pull_request.updated | pullRequest |
-| review_request.started | reviewRequestId, pullRequestId, provider, targetHeadSha |
-| run.started | RD role, provider, resumed, and input message range |
-| run.succeeded | role, exitCode, nativeSessionId, finalMessage, error |
+| review_request.started | pullRequest, reviewRequest, run, reviewRequestId, pullRequestId, provider, targetHeadSha |
+| timer.created | timer |
+| timer.fired | timer, scheduledFor |
+| timer.cancelled | timer |
+| run.started | requirement, run, RD role, provider, resumed, and input message range |
+| run.succeeded | requirement, run, optional reviewRequest and pullRequest, role, exitCode, nativeSessionId, finalMessage, error |
 | run.failed | same as run.succeeded |
 | run.timed_out | same as run.succeeded |
 | run.cancelled | same as run.succeeded |
 | manager.reconciled | runIds and requirementIds repaired at startup |
-| manager.configuration.updated | changedFields, appliedFields, restartRequired, restartRequiredFields |
-| agent_models.updated | provider refresh timestamps and stale flags |
+| manager.configuration.updated | configuration snapshot, changedFields, appliedFields, restartRequired, restartRequiredFields |
+| agent_models.updated | modelCatalog plus provider refresh timestamps and stale flags |
 
-Clients should store the last successfully processed event ID and pass it as after when reconnecting. A missing or non-finite after value starts replay at 0. Each connection replays at most 200 existing events before continuing with live events.
+Resource-bearing payloads are persisted before publication. Clients may idempotently upsert them by resource ID and resource update time instead of reloading the workspace. A client talking to an older server may use the event identifiers to refresh only the affected Requirement, Run, PR, ReviewRequest, or Timer. Clients should store the last successfully processed event ID and pass it as `after` when reconnecting. EventSource reconnections can use the standard `Last-Event-ID` request header instead; when both are present, the `after` query parameter takes precedence. A connection without a valid cursor receives only events published after it connects. A connection with a valid non-negative integer cursor replays at most 200 existing events before continuing with live events.
 
 ## 9. Typical workflow
 

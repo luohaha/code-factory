@@ -18,6 +18,27 @@ import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
 import type { RunOutcome } from '../src/types.ts';
 import { CODE_FACTORY_VERSION } from '../src/version.ts';
 
+async function readServerSentEvent(response: Response): Promise<Record<string, unknown>> {
+  assert.ok(response.body);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (!buffer.includes('\n\n')) {
+      const chunk = await reader.read();
+      assert.equal(chunk.done, false);
+      buffer += decoder.decode(chunk.value, { stream: true });
+    }
+  } finally {
+    await reader.cancel();
+  }
+  const data = buffer.split('\n\n', 1)[0]!
+    .split('\n')
+    .find((line) => line.startsWith('data: '));
+  assert.ok(data);
+  return JSON.parse(data.slice('data: '.length)) as Record<string, unknown>;
+}
+
 class WaitingRunner implements AgentProcessRunner {
   request: ProcessRunRequest | null = null;
 
@@ -94,6 +115,85 @@ test('HTTP API exposes the cached provider model catalog', async () => {
   assert.equal(stopped, true);
 });
 
+test('SSE sends only live events initially and resumes from query or Last-Event-ID cursors', async () => {
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    logger: createLogger({ level: 'silent' }),
+  });
+  const historical = manager.createRequirement({
+    title: 'Historical requirement',
+    description: 'Created before the SSE connection',
+    provider: 'codex',
+  });
+  const historicalEvent = manager.listEvents().at(-1)!;
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+  const eventsUrl = `http://127.0.0.1:${port}/api/events`;
+
+  try {
+    const initialResponse = await fetch(eventsUrl);
+    assert.equal(initialResponse.status, 200);
+    const live = manager.createRequirement({
+      title: 'Live requirement',
+      description: 'Created after the SSE connection',
+      provider: 'codex',
+    });
+    const initialEvent = await readServerSentEvent(initialResponse);
+    assert.equal(initialEvent.requirementId, live.id);
+    assert.notEqual(initialEvent.requirementId, historical.id);
+
+    const queryReplay = await readServerSentEvent(await fetch(`${eventsUrl}?after=${historicalEvent.id}`));
+    assert.equal(queryReplay.requirementId, live.id);
+
+    const headerReplay = await readServerSentEvent(await fetch(eventsUrl, {
+      headers: { 'Last-Event-ID': String(historicalEvent.id) },
+    }));
+    assert.equal(headerReplay.requirementId, live.id);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
+
+test('HTTP API exposes validated hybrid search', async () => {
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    logger: createLogger({ level: 'silent' }),
+  });
+  const requirement = manager.createRequirement({
+    title: 'Improve Chinese search',
+    description: 'Index requirement conversations with SQLite',
+    provider: 'codex',
+  });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/search?q=${encodeURIComponent('SQLite conversations')}&limit=10`);
+    assert.equal(response.status, 200);
+    const body = await response.json() as { items: Array<{ requirementId: string; kind: string }> };
+    assert.ok(body.items.some((item) => item.requirementId === requirement.id && item.kind === 'requirement'));
+
+    const missingQuery = await fetch(`http://127.0.0.1:${port}/api/search`);
+    assert.equal(missingQuery.status, 400);
+    const invalidLimit = await fetch(`http://127.0.0.1:${port}/api/search?q=test&limit=0`);
+    assert.equal(invalidLimit.status, 400);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
+
 test('HTTP API reports its version and reads, validates, persists, and applies configuration', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-config-api-'));
   const configurationFilePath = join(directory, 'config.json');
@@ -134,7 +234,14 @@ test('HTTP API reports its version and reads, validates, persists, and applies c
     assert.equal(initialResponse.status, 200);
     const initial = await initialResponse.json() as {
       path: string;
-      values: { host: string; port: number; openDashboard: boolean; databasePath: string | null };
+      values: {
+        host: string;
+        port: number;
+        openDashboard: boolean;
+        databasePath: string | null;
+        cancelledRequirementRetentionDays: number;
+        doneRequirementRetentionDays: number;
+      };
       restartRequired: boolean;
     };
     assert.equal(initial.path, configurationFilePath);
@@ -142,16 +249,30 @@ test('HTTP API reports its version and reads, validates, persists, and applies c
     assert.equal(initial.values.port, 4310);
     assert.equal(initial.values.openDashboard, false);
     assert.equal(initial.values.databasePath, null);
+    assert.equal(initial.values.cancelledRequirementRetentionDays, 7);
+    assert.equal(initial.values.doneRequirementRetentionDays, 365);
     assert.equal(initial.restartRequired, false);
 
     const updateResponse = await fetch(`${baseUrl}/api/configuration`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ logLevel: 'warn' }),
+      body: JSON.stringify({
+        logLevel: 'warn',
+        cancelledRequirementRetentionDays: 14,
+        doneRequirementRetentionDays: 730,
+      }),
     });
     assert.equal(updateResponse.status, 200);
     const updated = await updateResponse.json() as {
-      values: { host: string; port: number; openDashboard: boolean; databasePath: string | null; logLevel: string };
+      values: {
+        host: string;
+        port: number;
+        openDashboard: boolean;
+        databasePath: string | null;
+        cancelledRequirementRetentionDays: number;
+        doneRequirementRetentionDays: number;
+        logLevel: string;
+      };
       restartRequired: boolean;
       restartRequiredFields: string[];
     };
@@ -159,6 +280,8 @@ test('HTTP API reports its version and reads, validates, persists, and applies c
     assert.equal(updated.values.port, 4310);
     assert.equal(updated.values.openDashboard, false);
     assert.equal(updated.values.databasePath, null);
+    assert.equal(updated.values.cancelledRequirementRetentionDays, 14);
+    assert.equal(updated.values.doneRequirementRetentionDays, 730);
     assert.equal(updated.values.logLevel, 'warn');
     assert.equal(updated.restartRequired, false);
     assert.deepEqual(updated.restartRequiredFields, []);
@@ -219,6 +342,105 @@ test('HTTP API rejects unsupported reasoning effort values', async () => {
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     manager.close();
+  }
+});
+
+test('HTTP API creates, lists, validates, and cancels Agent Timers', async () => {
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    logger: createLogger({ level: 'silent' }),
+  });
+  const requirement = manager.createRequirement({
+    title: 'Long build',
+    description: 'Wake the RD Agent after the compiler finishes',
+    provider: 'codex',
+  });
+  const otherRequirement = manager.createRequirement({
+    title: 'Other work',
+    description: 'Keep trigger ownership scoped',
+    provider: 'codex',
+  });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const collectionUrl = `${baseUrl}/api/requirements/${requirement.id}/timers`;
+
+  try {
+    const missingDescription = await fetch(collectionUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ schedule: 'once', intervalSeconds: 60 }),
+    });
+    assert.equal(missingDescription.status, 400);
+
+    const invalid = await fetch(collectionUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ description: 'Check compiler status', schedule: 'recurring', intervalSeconds: 30 }),
+    });
+    assert.equal(invalid.status, 400);
+
+    const createdResponse = await fetch(collectionUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ description: 'Check compiler status', schedule: 'recurring', intervalSeconds: 3_600 }),
+    });
+    assert.equal(createdResponse.status, 201);
+    const created = await createdResponse.json() as {
+      id: string;
+      requirementId: string;
+      description: string;
+      schedule: string;
+      status: string;
+      nextFireAt: string | null;
+    };
+    assert.equal(created.requirementId, requirement.id);
+    assert.equal(created.description, 'Check compiler status');
+    assert.equal(created.schedule, 'recurring');
+    assert.equal(created.status, 'active');
+    assert.ok(created.nextFireAt);
+
+    const otherCreatedResponse = await fetch(
+      `${baseUrl}/api/requirements/${otherRequirement.id}/timers`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ description: 'Check other work', schedule: 'once', intervalSeconds: 7_200 }),
+      },
+    );
+    assert.equal(otherCreatedResponse.status, 201);
+    const otherCreated = await otherCreatedResponse.json() as { id: string };
+
+    const listResponse = await fetch(collectionUrl);
+    assert.equal(listResponse.status, 200);
+    assert.deepEqual((await listResponse.json() as { items: Array<{ id: string }> }).items.map((item) => item.id), [created.id]);
+
+    const globalListResponse = await fetch(`${baseUrl}/api/timers`);
+    assert.equal(globalListResponse.status, 200);
+    assert.deepEqual(
+      (await globalListResponse.json() as { items: Array<{ id: string }> }).items.map((item) => item.id).sort(),
+      [created.id, otherCreated.id].sort(),
+    );
+
+    const wrongRequirement = await fetch(
+      `${baseUrl}/api/requirements/${otherRequirement.id}/timers/${created.id}`,
+      { method: 'DELETE' },
+    );
+    assert.equal(wrongRequirement.status, 404);
+
+    const cancelledResponse = await fetch(`${collectionUrl}/${created.id}`, { method: 'DELETE' });
+    assert.equal(cancelledResponse.status, 200);
+    assert.equal((await cancelledResponse.json() as { status: string }).status, 'cancelled');
+    const repeatedCancel = await fetch(`${collectionUrl}/${created.id}`, { method: 'DELETE' });
+    assert.equal(repeatedCancel.status, 409);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
   }
 });
 
@@ -296,6 +518,11 @@ test('HTTP reply queues by default and the interrupt action resumes the RD Agent
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ title: 'Correct course', description: 'Initial task', provider: 'codex' }),
     }).then((response) => response.json()) as { id: string };
+    const detailResponse = await fetch(`${baseUrl}/api/requirements/${created.id}`);
+    assert.equal(detailResponse.status, 200);
+    assert.equal((await detailResponse.json() as { id: string }).id, created.id);
+    const missingDetailResponse = await fetch(`${baseUrl}/api/requirements/req_missing`);
+    assert.equal(missingDetailResponse.status, 404);
     await fetch(`${baseUrl}/api/requirements/${created.id}/start`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -308,8 +535,14 @@ test('HTTP reply queues by default and the interrupt action resumes the RD Agent
       body: JSON.stringify({ message: 'Use this corrected direction.' }),
     });
     assert.equal(response.status, 202);
-    const body = await response.json() as { queued: boolean };
+    const body = await response.json() as {
+      queued: boolean;
+      requirement: { id: string; session: { state: string; pendingMessageCount: number } };
+    };
     assert.equal(body.queued, true);
+    assert.equal(body.requirement.id, created.id);
+    assert.equal(body.requirement.session.state, 'running');
+    assert.equal(body.requirement.session.pendingMessageCount, 1);
     assert.equal(runner.requests[0]?.signal?.aborted, false);
 
     const interruptResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/interrupt`, {
@@ -340,6 +573,172 @@ test('HTTP reply queues by default and the interrupt action resumes the RD Agent
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     manager.close();
+  }
+});
+
+test('HTTP reply reactivates a completed requirement', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new WaitingRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store,
+    runner,
+    logger: createLogger({ level: 'silent' }),
+  });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const requirement = manager.createRequirement({
+      title: 'Reactivate completed work',
+      description: 'A follow-up reply should resume the RD session',
+      provider: 'codex',
+    });
+    store.beginRun({
+      runId: 'run-completed',
+      requirementId: requirement.id,
+      role: 'rd',
+      provider: 'codex',
+      taskSummary: 'Complete the initial work',
+      now: '2026-09-15T00:00:00.000Z',
+    });
+    store.finishRdRun('run-completed', {
+      status: 'succeeded',
+      exitCode: 0,
+      nativeSessionId: 'native-thread-1',
+      finalMessage: 'ready',
+      error: null,
+    }, '2026-09-15T00:01:00.000Z');
+    manager.confirmRequirement(requirement.id);
+
+    const response = await fetch(`${baseUrl}/api/requirements/${requirement.id}/reply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'Reopen this and cover the edge case.' }),
+    });
+    assert.equal(response.status, 202);
+    const body = await response.json() as {
+      queued: boolean;
+      message: { body: string };
+      requirement: { status: string; completedAt: string | null; session: { state: string } };
+    };
+    assert.equal(body.queued, false);
+    assert.equal(body.message.body, 'Reopen this and cover the edge case.');
+    assert.equal(body.requirement.status, 'doing');
+    assert.equal(body.requirement.session.state, 'running');
+    assert.equal(body.requirement.completedAt, null);
+
+    const reactivated = manager.getRequirement(requirement.id);
+    assert.equal(reactivated?.status, 'doing');
+    assert.equal(reactivated?.session.state, 'running');
+    assert.equal(reactivated?.completedAt, null);
+    assert.match(runner.request?.invocation.input ?? '', /Reopen this and cover the edge case\./);
+    assert.ok(runner.request?.invocation.args.includes('native-thread-1'));
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
+
+test('RD Agent endpoints list related Requirements and deliver cross-Requirement messages', async () => {
+  const runner = new WaitingRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    logger: createLogger({ level: 'silent' }),
+  });
+  const parent = manager.createRequirement({
+    title: 'Parent API contract',
+    description: 'Coordinate related work',
+    provider: 'codex',
+  });
+  const child = manager.createRequirement({
+    title: 'Child API implementation',
+    description: 'Implement the child work',
+    provider: 'codex',
+    createdBy: 'rd_agent',
+    parentRequirementId: parent.id,
+    sourceSessionId: parent.session.id,
+  });
+  const unrelated = manager.createRequirement({
+    title: 'Unrelated API work',
+    description: 'Remain isolated',
+    provider: 'codex',
+  });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    const relatedResponse = await fetch(
+      `${baseUrl}/api/agent/requirements/${child.id}/related?sourceSessionId=${child.session.id}`,
+    );
+    assert.equal(relatedResponse.status, 200);
+    const related = await relatedResponse.json() as {
+      parent: { id: string } | null;
+      children: Array<{ id: string }>;
+    };
+    assert.equal(related.parent?.id, parent.id);
+    assert.deepEqual(related.children, []);
+
+    const messageResponse = await fetch(
+      `${baseUrl}/api/agent/requirements/${child.id}/related/${parent.id}/messages`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sourceSessionId: child.session.id,
+          message: 'Please consume contract version 2.',
+        }),
+      },
+    );
+    assert.equal(messageResponse.status, 202);
+    const delivered = await messageResponse.json() as {
+      accepted: boolean;
+      sourceRequirementId: string;
+      targetRequirementId: string;
+      queued: boolean;
+      message: { author: string; sourceRequirementId: string; body: string };
+    };
+    assert.equal(delivered.accepted, true);
+    assert.equal(delivered.sourceRequirementId, child.id);
+    assert.equal(delivered.targetRequirementId, parent.id);
+    assert.equal(delivered.queued, false);
+    assert.equal(delivered.message.author, 'rd_agent');
+    assert.equal(delivered.message.sourceRequirementId, child.id);
+    assert.equal(delivered.message.body, 'Please consume contract version 2.');
+
+    const conversationResponse = await fetch(`${baseUrl}/api/requirements/${parent.id}/messages`);
+    const conversation = await conversationResponse.json() as {
+      items: Array<{ sourceRequirementId: string | null; body: string }>;
+    };
+    assert.equal(conversation.items.length, 1);
+    assert.equal(conversation.items[0]?.sourceRequirementId, child.id);
+    assert.equal(conversation.items[0]?.body, 'Please consume contract version 2.');
+    assert.match(runner.request?.invocation.input ?? '', /Related RD Agent from Child API implementation/);
+
+    const unrelatedResponse = await fetch(
+      `${baseUrl}/api/agent/requirements/${child.id}/related/${unrelated.id}/messages`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sourceSessionId: child.session.id, message: 'Must fail.' }),
+      },
+    );
+    assert.equal(unrelatedResponse.status, 409);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
   }
 });
 
@@ -426,6 +825,17 @@ test('HTTP API exposes the persisted human and RD Agent conversation', async () 
       body: JSON.stringify({ message: 'Please start with a regression test.', attachmentIds: [uploaded.id, uploadedFile.id] }),
     });
     assert.equal(startResponse.status, 202);
+    const acceptedStart = await startResponse.json() as {
+      requirement: { id: string; session: { state: string } };
+      run: { requirementId: string; status: string } | null;
+      message: { requirementId: string; body: string } | null;
+    };
+    assert.equal(acceptedStart.requirement.id, created.id);
+    assert.equal(acceptedStart.requirement.session.state, 'running');
+    assert.equal(acceptedStart.run?.requirementId, created.id);
+    assert.equal(acceptedStart.run?.status, 'running');
+    assert.equal(acceptedStart.message?.requirementId, created.id);
+    assert.equal(acceptedStart.message?.body, 'Please start with a regression test.');
     assert.ok(runner.request?.invocation.args.includes('gpt-5.6'));
     assert.ok(runner.request?.invocation.args.includes('model_reasoning_effort="xhigh"'));
     assert.ok(runner.request?.invocation.args.includes(uploaded.localPath));
@@ -494,6 +904,14 @@ test('HTTP API exposes the persisted human and RD Agent conversation', async () 
       body: JSON.stringify({ provider: 'codex', model: 'gpt-5.5', reasoningEffort: 'max' }),
     });
     assert.equal(reviewResponse.status, 202);
+    const acceptedReview = await reviewResponse.json() as {
+      reviewRequest: { pullRequestId: string; status: string } | null;
+      run: { role: string; status: string } | null;
+    };
+    assert.equal(acceptedReview.reviewRequest?.pullRequestId, pullRequest.id);
+    assert.equal(acceptedReview.reviewRequest?.status, 'running');
+    assert.equal(acceptedReview.run?.role, 'reviewer');
+    assert.equal(acceptedReview.run?.status, 'running');
     assert.ok(runner.request?.invocation.args.includes('gpt-5.5'));
     assert.ok(runner.request?.invocation.args.includes('model_reasoning_effort="max"'));
     const persistedReview = manager.listReviewRequests(pullRequest.id)[0];

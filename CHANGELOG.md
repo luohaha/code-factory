@@ -6,9 +6,71 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-09-18
+
+### Added
+
+- Added parent-child Requirement relationships, cross-Requirement agent messaging through the API and CLI, and a dashboard relationship tree.
+- Added a conversation control for returning directly to the latest message.
+
+### Changed
+
+- Reduced dashboard synchronization latency with scoped reads and updates, and indexed Requirement parent lookups.
+
+### Fixed
+
+- Displayed persisted RD replies promptly and refreshed reply state without waiting for a full dashboard reload.
+- Prevented new SSE connections from replaying stale event history.
+- Preserved newer scoped dashboard and conversation updates when concurrent requests complete out of order.
+
+## [0.1.5] - 2026-09-17
+
+### Fixed
+
+- Continued reconciling Draft pull requests so transitions to Open are persisted and delivered to their Requirements.
+- Kept long timer descriptions and scheduling forms contained within timer dialogs without hiding cancellation controls.
+
+## [0.1.4] - 2026-09-17
+
+### Added
+
+- Added configurable retention periods for cancelled and completed Requirements, with safe automatic cleanup of related records and retryable attachment deletion.
+- Added timer detail views from both the Timer board and a Requirement's scheduled wake-up list.
+
+### Changed
+
+- Made Timer board cards and active scheduled wake-up rows more compact for faster scanning.
+
+## [0.1.3] - 2026-09-16
+
+### Added
+
+- Added hybrid workspace search across requirements, conversation messages, and pull request metadata using SQLite full-text and vector indexes.
+- Added persistent one-time and recurring Agent timers, with API, CLI, dashboard, restart recovery, and durable Requirement delivery support.
+
+### Fixed
+
+- Kept workspace search available when the local SQLite build does not include FTS5.
+
+## [0.1.2] - 2026-09-15
+
+### Added
+
+- Allowed human replies to reactivate completed requirements in their original RD sessions.
+
+### Changed
+
+- Treated RD run timeouts as inactivity windows that renew while the agent produces output.
+- Renamed the running RD action from Interrupt to Steering in the English and Simplified Chinese dashboard.
+- Clarified how headless agents inherit their working directory, environment, instructions, skills, plugins, and provider-managed context.
+
 ### Fixed
 
 - Made simultaneous daemon start commands safely replace stale supervisor metadata and converge on one owner instead of intermittently reporting an early-exit or workspace-conflict error.
+- Reported daemon startup failures immediately instead of retrying deterministic failures until the startup command timed out.
+- Collected optional instructions and attachments before starting a requirement's initial RD run.
+- Preserved the reader's conversation position when new messages arrive, with shortcuts to new messages and requirement details.
+- Limited GitHub reconciliation polling to registered pull requests whose persisted status is Open.
 
 ## [0.1.1] - 2026-09-15
 

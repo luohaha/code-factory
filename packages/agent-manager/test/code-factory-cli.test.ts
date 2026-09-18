@@ -17,16 +17,23 @@ import { CODE_FACTORY_VERSION } from '../src/version.ts';
 
 interface CapturedRequest {
   url: string;
+  method: string;
   body: Record<string, unknown>;
 }
 
 function testRuntime(requests: CapturedRequest[], output: string[], errors: string[]): CodeFactoryCliRuntime {
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url;
-    assert.equal(init?.method, 'POST');
-    assert.equal(typeof init?.body, 'string');
-    requests.push({ url, body: JSON.parse(init.body as string) as Record<string, unknown> });
-    return new Response(JSON.stringify({ ok: true }), {
+    const method = init?.method ?? 'GET';
+    assert.ok(init?.signal, 'all control-plane requests have a timeout signal');
+    if (method === 'GET' || method === 'DELETE') assert.equal(init?.body, undefined);
+    const body = typeof init?.body === 'string'
+      ? JSON.parse(init.body) as Record<string, unknown>
+      : {};
+    requests.push({ url, method, body });
+    return new Response(JSON.stringify(method === 'GET'
+      ? { items: [{ id: 'tmr-123', description: 'Check compiler status', status: 'active' }] }
+      : { ok: true }), {
       status: 201,
       headers: { 'content-type': 'application/json' },
     });
@@ -55,7 +62,11 @@ test('code-factory-cli help discovers the supported RD commands', async () => {
 
   assert.equal(exitCode, 0);
   assert.match(output.join(''), /pr register/);
+  assert.match(output.join(''), /timer register/);
+  assert.match(output.join(''), /timer show/);
   assert.match(output.join(''), /requirement propose/);
+  assert.match(output.join(''), /requirement related/);
+  assert.match(output.join(''), /requirement message/);
   assert.match(output.join(''), /CODE_FACTORY_REQUIREMENT_ID/);
 });
 
@@ -90,6 +101,7 @@ test('code-factory-cli registers a PR using injected Requirement context', async
   assert.equal(exitCode, 0);
   assert.deepEqual(errors, []);
   assert.equal(requests[0]?.url, 'http://127.0.0.1:4310/api/agent/pull-requests');
+  assert.equal(requests[0]?.method, 'POST');
   assert.deepEqual(requests[0]?.body, {
     requirementId: 'req_cli',
     repository: 'acme/widgets',
@@ -129,6 +141,71 @@ test('code-factory-cli proposes a Requirement using injected Session context', a
   });
 });
 
+test('code-factory-cli lists related Requirements and messages a related RD Agent', async () => {
+  const requests: CapturedRequest[] = [];
+  const output: string[] = [];
+  const errors: string[] = [];
+  const runtime = testRuntime(requests, output, errors);
+
+  const relatedExitCode = await runCodeFactoryCli(['requirement', 'related'], runtime);
+  const messageExitCode = await runCodeFactoryCli([
+    'requirement', 'message',
+    '--requirement-id', 'req_parent',
+    '--message', 'The shared contract now uses field version 2.',
+  ], runtime);
+
+  assert.equal(relatedExitCode, 0);
+  assert.equal(messageExitCode, 0);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(requests, [{
+    url: 'http://127.0.0.1:4310/api/agent/requirements/req_cli/related?sourceSessionId=ses_cli',
+    method: 'GET',
+    body: {},
+  }, {
+    url: 'http://127.0.0.1:4310/api/agent/requirements/req_cli/related/req_parent/messages',
+    method: 'POST',
+    body: {
+      sourceSessionId: 'ses_cli',
+      message: 'The shared contract now uses field version 2.',
+    },
+  }]);
+});
+
+test('code-factory-cli registers, shows, and cancels RD wake-up timers', async () => {
+  const requests: CapturedRequest[] = [];
+  const output: string[] = [];
+  const errors: string[] = [];
+  const runtime = testRuntime(requests, output, errors);
+
+  const registerExitCode = await runCodeFactoryCli([
+    'timer', 'register', '--description', 'Check compiler status', '--after-seconds', '3600', '--repeat',
+  ], runtime);
+  const showExitCode = await runCodeFactoryCli(['timer', 'show'], runtime);
+  const cancelExitCode = await runCodeFactoryCli([
+    'timer', 'cancel', '--id', 'tmr-123',
+  ], runtime);
+
+  assert.equal(registerExitCode, 0);
+  assert.equal(showExitCode, 0);
+  assert.equal(cancelExitCode, 0);
+  assert.deepEqual(errors, []);
+  assert.match(output.join(''), /"id":"tmr-123"/);
+  assert.match(output.join(''), /"description":"Check compiler status"/);
+  assert.deepEqual(requests, [{
+    url: 'http://127.0.0.1:4310/api/requirements/req_cli/timers',
+    method: 'POST',
+    body: { description: 'Check compiler status', schedule: 'recurring', intervalSeconds: 3_600 },
+  }, {
+    url: 'http://127.0.0.1:4310/api/requirements/req_cli/timers',
+    method: 'GET',
+    body: {},
+  }, {
+    url: 'http://127.0.0.1:4310/api/requirements/req_cli/timers/tmr-123',
+    method: 'DELETE',
+    body: {},
+  }]);
+});
+
 test('code-factory-cli rejects invalid command input without sending a request', async () => {
   const requests: CapturedRequest[] = [];
   const output: string[] = [];
@@ -141,6 +218,20 @@ test('code-factory-cli rejects invalid command input without sending a request',
   assert.deepEqual(requests, []);
   assert.match(errors.join(''), /--number must be a positive integer/);
   assert.match(errors.join(''), /Usage: code-factory-cli pr register/);
+});
+
+test('code-factory-cli requires a timer description without sending a request', async () => {
+  const requests: CapturedRequest[] = [];
+  const output: string[] = [];
+  const errors: string[] = [];
+  const exitCode = await runCodeFactoryCli([
+    'timer', 'register', '--after-seconds', '3600',
+  ], testRuntime(requests, output, errors));
+
+  assert.equal(exitCode, 2);
+  assert.deepEqual(requests, []);
+  assert.match(errors.join(''), /--description is required/);
+  assert.match(errors.join(''), /Usage: code-factory-cli timer register/);
 });
 
 test('private launcher makes code-factory-cli resolvable through PATH', {
@@ -344,4 +435,29 @@ test('request timeout aborts a pending write and explains the ambiguous outcome'
   assert.equal(await runCodeFactoryCli(['requirement', 'propose', '--title', 'Next', '--description', 'Task'], runtime), 1);
   assert.equal(calls, 1);
   assert.match(errors.join(''), /timed out.*write may have succeeded.*before retrying/);
+});
+
+test('read failures omit ambiguous-write guidance while timer cancellation retains it', async () => {
+  for (const args of [
+    ['timer', 'show'],
+    ['requirement', 'related'],
+    ['timer', 'cancel', '--id', 'tmr-123'],
+  ]) {
+    for (const failure of ['timeout', 'invalid-json', 'invalid-object']) {
+      const errors: string[] = [];
+      const runtime = testRuntime([], [], errors);
+      let calls = 0;
+      runtime.fetch = async (_input, init) => {
+        calls += 1;
+        assert.ok(init?.signal);
+        assert.equal(init?.body, undefined);
+        if (failure === 'timeout') throw new DOMException('Timed out', 'TimeoutError');
+        return new Response(failure === 'invalid-json' ? '<html>Error</html>' : 'null');
+      };
+      assert.equal(await runCodeFactoryCli(args, runtime), 1);
+      assert.equal(calls, 1);
+      if (args[1] === 'cancel') assert.match(errors.join(''), /write may have succeeded/);
+      else assert.doesNotMatch(errors.join(''), /write may have succeeded/);
+    }
+  }
 });

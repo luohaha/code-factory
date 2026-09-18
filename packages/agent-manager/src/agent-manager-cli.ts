@@ -48,8 +48,7 @@ try {
   }
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
-  if (error instanceof WorkspaceAlreadyRunningError
-    && isDaemonChildProcess()) {
+  if (isDaemonChildProcess()) {
     process.send?.({ type: 'code-factory-agent-manager-startup-failed', message });
   }
   process.stderr.write(`Agent Manager: ${message}\n`);

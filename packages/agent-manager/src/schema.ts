@@ -59,6 +59,7 @@ export const schemaStatements = [
     requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
     session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
     run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+    source_requirement_id TEXT REFERENCES requirements(id) ON DELETE SET NULL,
     author TEXT NOT NULL CHECK (author IN ('human', 'rd_agent', 'reviewer', 'system')),
     body TEXT NOT NULL,
     sequence INTEGER NOT NULL DEFAULT 0,
@@ -74,6 +75,10 @@ export const schemaStatements = [
     media_type TEXT NOT NULL,
     byte_size INTEGER NOT NULL CHECK (byte_size > 0),
     local_path TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+  ) STRICT`,
+  `CREATE TABLE IF NOT EXISTS pending_attachment_deletions (
+    local_path TEXT PRIMARY KEY,
     created_at TEXT NOT NULL
   ) STRICT`,
   `CREATE TABLE IF NOT EXISTS pull_requests (
@@ -104,6 +109,19 @@ export const schemaStatements = [
     created_at TEXT NOT NULL,
     PRIMARY KEY (trigger_id, idempotency_key)
   ) STRICT`,
+  `CREATE TABLE IF NOT EXISTS agent_timers (
+    id TEXT PRIMARY KEY,
+    requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+    description TEXT NOT NULL CHECK (length(trim(description)) BETWEEN 1 AND 500),
+    schedule TEXT NOT NULL CHECK (schedule IN ('once', 'recurring')),
+    interval_seconds INTEGER NOT NULL CHECK (interval_seconds > 0),
+    status TEXT NOT NULL CHECK (status IN ('active', 'completed', 'cancelled')),
+    next_fire_at TEXT,
+    last_fired_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK ((status = 'active' AND next_fire_at IS NOT NULL) OR (status != 'active' AND next_fire_at IS NULL))
+  ) STRICT`,
   `CREATE TABLE IF NOT EXISTS review_requests (
     id TEXT PRIMARY KEY,
     pull_request_id TEXT NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
@@ -117,6 +135,19 @@ export const schemaStatements = [
     error TEXT,
     created_at TEXT NOT NULL,
     finished_at TEXT
+  ) STRICT`,
+  `CREATE TABLE IF NOT EXISTS search_documents (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('requirement', 'message', 'pull_request')),
+    source_id TEXT NOT NULL,
+    requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    keywords TEXT NOT NULL,
+    embedding BLOB NOT NULL,
+    embedding_version INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (kind, source_id)
   ) STRICT`,
   `DROP INDEX IF EXISTS one_active_rd_run_per_workspace`,
   `CREATE UNIQUE INDEX IF NOT EXISTS one_active_rd_run_per_session
@@ -138,6 +169,18 @@ export const schemaStatements = [
     ON pull_requests (requirement_id, updated_at DESC)`,
   `CREATE INDEX IF NOT EXISTS agent_trigger_receipts_requirement
     ON agent_trigger_receipts (requirement_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS agent_timers_due
+    ON agent_timers (status, next_fire_at)`,
+  `CREATE INDEX IF NOT EXISTS agent_timers_requirement
+    ON agent_timers (requirement_id, created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS review_requests_pull_request_created
     ON review_requests (pull_request_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS search_documents_requirement_updated
+    ON search_documents (requirement_id, updated_at DESC)`,
+] as const;
+
+/** Indexes that depend on columns added by legacy-schema migration. */
+export const postMigrationSchemaStatements = [
+  `CREATE INDEX IF NOT EXISTS requirements_parent_updated
+    ON requirements (parent_requirement_id, updated_at DESC)`,
 ] as const;

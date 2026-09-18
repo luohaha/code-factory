@@ -35,6 +35,99 @@ test('a requirement is created atomically with exactly one RD session', () => {
   }
 });
 
+test('hybrid search indexes requirements, conversations, and pull request metadata', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-search',
+      sessionId: 'ses-search',
+      title: 'Secure user access',
+      description: 'Build authentication middleware for protected routes',
+      provider: 'codex',
+      createdBy: 'human',
+      now,
+    });
+    store.appendMessage({
+      id: 'msg-search',
+      requirementId: 'req-search',
+      sessionId: 'ses-search',
+      author: 'human',
+      body: 'The database deadlock only happens during retry.',
+      deliverToRd: true,
+      now,
+    });
+    store.upsertPullRequest({
+      id: 'pr-search',
+      requirementId: 'req-search',
+      repository: 'acme/repo',
+      number: 42,
+      url: 'https://github.com/acme/repo/pull/42',
+      title: 'Prevent duplicate refresh tokens',
+      baseBranch: 'main',
+      headBranch: 'secure-refresh',
+      headSha: 'abc123',
+      status: 'open',
+      now,
+    });
+
+    assert.equal(store.search('protected routes')[0]?.kind, 'requirement');
+    assert.equal(store.search('database deadlock')[0]?.sourceId, 'msg-search');
+    const pullRequestMatch = store.search('duplicate refresh tokens')[0];
+    assert.equal(pullRequestMatch?.sourceId, 'pr-search');
+    assert.match(pullRequestMatch?.excerpt ?? '', /duplicate refresh tokens/i);
+    assert.ok(store.search('authenticating').some((result) =>
+      result.requirementId === 'req-search' && result.fullTextScore === 0 && result.vectorScore >= 0.2));
+    assert.ok(store.search('ses-search').some((result) => result.requirementId === 'req-search'));
+
+    store.upsertPullRequest({
+      id: 'ignored-on-update',
+      requirementId: 'req-search',
+      repository: 'acme/repo',
+      number: 42,
+      url: 'https://github.com/acme/repo/pull/42',
+      title: 'Rotate encrypted credential marker',
+      baseBranch: 'main',
+      headBranch: 'secure-refresh',
+      headSha: 'def456',
+      status: 'open',
+      now: '2026-09-10T12:01:00.000Z',
+    });
+    assert.equal(store.search('encrypted credential marker')[0]?.sourceId, 'pr-search');
+  } finally {
+    store.close();
+  }
+});
+
+test('search backfills existing records and hides cancelled requirements', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-search-backfill-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const initial = new SqliteAgentManagerStore(databasePath);
+  initial.createRequirement({
+    requirementId: 'req-backfill',
+    sessionId: 'ses-backfill',
+    title: '搜索历史记录',
+    description: '保留旧数据库里的需求内容',
+    provider: 'codex',
+    createdBy: 'human',
+    now,
+  });
+  initial.close();
+
+  const database = new DatabaseSync(databasePath);
+  database.prepare('DELETE FROM search_documents WHERE source_id = ?').run('req-backfill');
+  database.close();
+
+  const migrated = new SqliteAgentManagerStore(databasePath);
+  try {
+    assert.equal(migrated.search('旧数据库')[0]?.requirementId, 'req-backfill');
+    migrated.transitionRequirement('req-backfill', ['todo'], 'cancelled', now);
+    assert.deepEqual(migrated.search('旧数据库'), []);
+  } finally {
+    migrated.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('cancelling a TODO requirement hides it, archives its session, and preserves its records', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {
@@ -57,6 +150,15 @@ test('cancelling a TODO requirement hides it, archives its session, and preserve
       localPath: '/tmp/att-delete-notes.txt',
       now,
     });
+    store.createAgentTimer({
+      id: 'tmr-delete',
+      requirementId: 'req-delete',
+      description: 'Check discarded work',
+      schedule: 'recurring',
+      intervalSeconds: 3_600,
+      nextFireAt: '2026-09-10T13:00:00.000Z',
+      now,
+    });
 
     const cancelled = store.transitionRequirement('req-delete', ['todo'], 'cancelled', now);
 
@@ -64,6 +166,8 @@ test('cancelling a TODO requirement hides it, archives its session, and preserve
     assert.equal(cancelled.session.state, 'completed');
     assert.equal(store.listRequirements().length, 0);
     assert.equal(store.getMessageAttachment('att-delete')?.requirementId, 'req-delete');
+    assert.equal(store.getAgentTimer('tmr-delete')?.status, 'cancelled');
+    assert.equal(store.getAgentTimer('tmr-delete')?.nextFireAt, null);
     assert.throws(
       () => store.transitionRequirement('req-delete', ['todo'], 'cancelled', now),
       StoreConflictError,
@@ -92,6 +196,332 @@ test('cancelling a TODO requirement hides it, archives its session, and preserve
       StoreConflictError,
     );
     assert.equal(store.getRequirement('req-started')?.status, 'doing');
+  } finally {
+    store.close();
+  }
+});
+
+test('expired cancelled and done requirements purge their related domain records in one transaction', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-retention-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const store = new SqliteAgentManagerStore(databasePath);
+  try {
+    store.createRequirement({
+      requirementId: 'req-cancelled-expired',
+      sessionId: 'ses-cancelled-expired',
+      title: 'Expired cancellation',
+      description: 'Delete this requirement and its records',
+      provider: 'codex',
+      createdBy: 'human',
+      now: '2026-08-01T00:00:00.000Z',
+    });
+    store.createMessageAttachment({
+      id: 'att-cancelled-expired',
+      requirementId: 'req-cancelled-expired',
+      fileName: 'expired.txt',
+      kind: 'file',
+      mediaType: 'text/plain',
+      byteSize: 7,
+      localPath: join(directory, 'expired.txt'),
+      now: '2026-08-01T00:00:00.000Z',
+    });
+    store.appendMessage({
+      id: 'msg-cancelled-expired',
+      requirementId: 'req-cancelled-expired',
+      sessionId: 'ses-cancelled-expired',
+      author: 'human',
+      body: 'No longer needed',
+      attachmentIds: ['att-cancelled-expired'],
+      deliverToRd: true,
+      now: '2026-08-01T00:01:00.000Z',
+    });
+    const cancelledPullRequest = store.upsertPullRequest({
+      id: 'pr-cancelled-expired',
+      requirementId: 'req-cancelled-expired',
+      repository: 'acme/repo',
+      number: 10,
+      url: 'https://github.com/acme/repo/pull/10',
+      title: 'Cancelled work',
+      baseBranch: 'main',
+      headBranch: 'cancelled',
+      headSha: 'cancelled-sha',
+      status: 'closed',
+      now: '2026-08-01T00:02:00.000Z',
+    });
+    store.ensurePullRequestObservation(cancelledPullRequest.id, '2026-08-01T00:02:00.000Z');
+    store.appendEvent({
+      type: 'test.cancelled',
+      requirementId: 'req-cancelled-expired',
+      sessionId: 'ses-cancelled-expired',
+      now: '2026-08-01T00:03:00.000Z',
+    });
+    store.createAgentTimer({
+      id: 'tmr-cancelled-expired',
+      requirementId: 'req-cancelled-expired',
+      description: 'Wake expired work',
+      schedule: 'once',
+      intervalSeconds: 3_600,
+      nextFireAt: '2026-08-01T01:03:00.000Z',
+      now: '2026-08-01T00:03:00.000Z',
+    });
+    store.transitionRequirement(
+      'req-cancelled-expired',
+      ['todo'],
+      'cancelled',
+      '2026-08-01T00:04:00.000Z',
+    );
+
+    store.createRequirement({
+      requirementId: 'req-child',
+      sessionId: 'ses-child',
+      title: 'Surviving follow-up',
+      description: 'Keep this requirement without dangling source references',
+      provider: 'codex',
+      createdBy: 'rd_agent',
+      parentRequirementId: 'req-cancelled-expired',
+      sourceSessionId: 'ses-cancelled-expired',
+      now: '2026-09-09T00:00:00.000Z',
+    });
+
+    store.createRequirement({
+      requirementId: 'req-done-expired',
+      sessionId: 'ses-done-expired',
+      title: 'Expired completion',
+      description: 'Delete completed work and review data',
+      provider: 'claude-code',
+      createdBy: 'human',
+      now: '2024-01-01T00:00:00.000Z',
+    });
+    store.beginRun({
+      runId: 'run-done-expired',
+      requirementId: 'req-done-expired',
+      role: 'rd',
+      provider: 'claude-code',
+      taskSummary: 'Implement old requirement',
+      now: '2024-01-01T00:01:00.000Z',
+    });
+    store.finishRdRun('run-done-expired', {
+      status: 'succeeded',
+      exitCode: 0,
+      nativeSessionId: 'native-done-expired',
+      finalMessage: 'done',
+      error: null,
+    }, '2024-01-01T00:02:00.000Z');
+    const donePullRequest = store.upsertPullRequest({
+      id: 'pr-done-expired',
+      requirementId: 'req-done-expired',
+      repository: 'acme/repo',
+      number: 11,
+      url: 'https://github.com/acme/repo/pull/11',
+      title: 'Completed work',
+      baseBranch: 'main',
+      headBranch: 'done',
+      headSha: 'done-sha',
+      status: 'open',
+      now: '2024-01-01T00:03:00.000Z',
+    });
+    store.ensurePullRequestObservation(donePullRequest.id, '2024-01-01T00:03:00.000Z');
+    store.beginReviewRequest({
+      id: 'review-done-expired',
+      runId: 'review-run-done-expired',
+      pullRequestId: donePullRequest.id,
+      requirementId: 'req-done-expired',
+      provider: 'codex',
+      targetHeadSha: donePullRequest.headSha,
+      taskSummary: 'Review old requirement',
+      now: '2024-01-01T00:04:00.000Z',
+    });
+    store.finishReviewRequest('review-done-expired', {
+      status: 'succeeded',
+      exitCode: 0,
+      nativeSessionId: null,
+      finalMessage: 'reviewed',
+      error: null,
+    }, '2024-01-01T00:05:00.000Z');
+    store.appendAgentTriggerMessage({
+      id: 'msg-done-expired',
+      triggerId: 'test-trigger',
+      idempotencyKey: 'done-expired-event',
+      requirementId: 'req-done-expired',
+      sessionId: 'ses-done-expired',
+      author: 'system',
+      body: 'Old external event',
+      deliverToRd: false,
+      now: '2024-01-01T00:06:00.000Z',
+    });
+    store.transitionRequirement(
+      'req-done-expired',
+      ['waiting_confirmation'],
+      'done',
+      '2024-01-01T00:07:00.000Z',
+    );
+
+    store.createRequirement({
+      requirementId: 'req-cancelled-recent',
+      sessionId: 'ses-cancelled-recent',
+      title: 'Recent cancellation',
+      description: 'Retain this requirement',
+      provider: 'codex',
+      createdBy: 'human',
+      now: '2026-09-09T00:00:00.000Z',
+    });
+    store.transitionRequirement(
+      'req-cancelled-recent',
+      ['todo'],
+      'cancelled',
+      '2026-09-09T00:01:00.000Z',
+    );
+    store.createRequirement({
+      requirementId: 'req-done-recent',
+      sessionId: 'ses-done-recent',
+      title: 'Recent completion',
+      description: 'Retain this requirement',
+      provider: 'codex',
+      createdBy: 'human',
+      now: '2026-01-01T00:00:00.000Z',
+    });
+    store.transitionRequirement(
+      'req-done-recent',
+      ['todo'],
+      'done',
+      '2026-01-01T00:01:00.000Z',
+    );
+
+    const purged = store.purgeExpiredRequirements({
+      cancelledBefore: '2026-09-03T00:00:00.000Z',
+      doneBefore: '2025-09-10T00:00:00.000Z',
+      now: '2026-09-10T00:00:00.000Z',
+    });
+
+    assert.deepEqual(purged.requirements, [
+      { id: 'req-done-expired', status: 'done' },
+      { id: 'req-cancelled-expired', status: 'cancelled' },
+    ]);
+    assert.deepEqual(store.listPendingAttachmentDeletions(), [join(directory, 'expired.txt')]);
+    assert.equal(store.getRequirement('req-cancelled-expired'), null);
+    assert.equal(store.getRequirement('req-done-expired'), null);
+    assert.equal(store.getPullRequest('pr-cancelled-expired'), null);
+    assert.equal(store.getPullRequest('pr-done-expired'), null);
+    assert.equal(store.getMessageAttachment('att-cancelled-expired'), null);
+    assert.equal(store.getAgentTimer('tmr-cancelled-expired'), null);
+    assert.deepEqual(store.listRuns('req-done-expired'), []);
+    assert.deepEqual(store.listReviewRequests(), []);
+    assert.equal(store.listEvents(0).some((event) => event.requirementId === 'req-cancelled-expired'), false);
+    assert.equal(store.getRequirement('req-cancelled-recent')?.status, 'cancelled');
+    assert.equal(store.getRequirement('req-done-recent')?.status, 'done');
+    assert.equal(store.getRequirement('req-child')?.parentRequirementId, null);
+    assert.equal(store.getRequirement('req-child')?.sourceSessionId, null);
+    assert.equal(store.listSessions().some((session) => session.id === 'ses-cancelled-expired'), false);
+    assert.equal(store.listSessions().some((session) => session.id === 'ses-done-expired'), false);
+  } finally {
+    store.close();
+  }
+
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    assert.deepEqual(
+      (database.prepare('SELECT local_path FROM pending_attachment_deletions').all() as Array<{ local_path: string }>)
+        .map((row) => row.local_path),
+      [join(directory, 'expired.txt')],
+    );
+    for (const table of [
+      'agent_sessions',
+      'agent_runs',
+      'manager_events',
+      'requirement_messages',
+      'message_attachments',
+      'pull_requests',
+      'pull_request_observations',
+      'agent_trigger_receipts',
+      'agent_timers',
+      'review_requests',
+    ]) {
+      const row = database.prepare(`SELECT COUNT(*) AS count FROM ${table}
+        WHERE ${table === 'pull_request_observations'
+          ? "pull_request_id IN ('pr-cancelled-expired', 'pr-done-expired')"
+          : table === 'review_requests'
+            ? "id = 'review-done-expired'"
+            : table === 'agent_trigger_receipts'
+              ? "requirement_id = 'req-done-expired'"
+              : table === 'manager_events'
+                ? "requirement_id IN ('req-cancelled-expired', 'req-done-expired')"
+                : "requirement_id IN ('req-cancelled-expired', 'req-done-expired')"}`).get() as { count: number };
+      assert.equal(row.count, 0, `${table} should not retain expired requirement data`);
+    }
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('an expired requirement with a running reviewer is retained until the run finishes', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-review-running',
+      sessionId: 'ses-review-running',
+      title: 'Completed work under review',
+      description: 'Do not delete the reviewer state while its process is active',
+      provider: 'codex',
+      createdBy: 'human',
+      now: '2024-01-01T00:00:00.000Z',
+    });
+    store.transitionRequirement(
+      'req-review-running',
+      ['todo'],
+      'done',
+      '2024-01-01T00:01:00.000Z',
+    );
+    const pullRequest = store.upsertPullRequest({
+      id: 'pr-review-running',
+      requirementId: 'req-review-running',
+      repository: 'acme/repo',
+      number: 12,
+      url: 'https://github.com/acme/repo/pull/12',
+      title: 'Still reviewing',
+      baseBranch: 'main',
+      headBranch: 'review-running',
+      headSha: 'review-running-sha',
+      status: 'open',
+      now: '2026-09-10T00:00:00.000Z',
+    });
+    store.beginReviewRequest({
+      id: 'review-running',
+      runId: 'review-run-running',
+      pullRequestId: pullRequest.id,
+      requirementId: 'req-review-running',
+      provider: 'codex',
+      targetHeadSha: pullRequest.headSha,
+      taskSummary: 'Review before retention cleanup',
+      now: '2026-09-10T00:01:00.000Z',
+    });
+
+    const deferred = store.purgeExpiredRequirements({
+      cancelledBefore: '2026-09-10T00:02:00.000Z',
+      doneBefore: '2026-09-10T00:02:00.000Z',
+      now: '2026-09-10T00:02:00.000Z',
+    });
+
+    assert.deepEqual(deferred.requirements, []);
+    assert.equal(store.getRequirement('req-review-running')?.status, 'done');
+    assert.equal(store.listReviewRequests()[0]?.status, 'running');
+    store.finishReviewRequest('review-running', {
+      status: 'succeeded',
+      exitCode: 0,
+      nativeSessionId: null,
+      finalMessage: 'reviewed',
+      error: null,
+    }, '2026-09-10T00:03:00.000Z');
+
+    const purged = store.purgeExpiredRequirements({
+      cancelledBefore: '2026-09-10T00:04:00.000Z',
+      doneBefore: '2026-09-10T00:04:00.000Z',
+      now: '2026-09-10T00:04:00.000Z',
+    });
+
+    assert.deepEqual(purged.requirements, [{ id: 'req-review-running', status: 'done' }]);
+    assert.equal(store.getRequirement('req-review-running'), null);
+    assert.deepEqual(store.listReviewRequests(), []);
   } finally {
     store.close();
   }
@@ -166,10 +596,21 @@ test('successful RD run waits for confirmation and human confirmation completes 
     assert.equal(awaiting.status, 'waiting_confirmation');
     assert.equal(awaiting.session.state, 'waiting_human');
     assert.equal(awaiting.session.nativeSessionId, 'native-1');
+    store.createAgentTimer({
+      id: 'tmr-complete',
+      requirementId: 'req-1',
+      description: 'Check completed work',
+      schedule: 'recurring',
+      intervalSeconds: 3_600,
+      nextFireAt: '2026-09-10T13:01:00.000Z',
+      now: '2026-09-10T12:01:00.000Z',
+    });
 
     const done = store.transitionRequirement('req-1', ['waiting_confirmation'], 'done', '2026-09-10T12:02:00.000Z');
     assert.equal(done.status, 'done');
     assert.equal(done.session.state, 'completed');
+    assert.equal(store.getAgentTimer('tmr-complete')?.status, 'cancelled');
+    assert.equal(store.getAgentTimer('tmr-complete')?.nextFireAt, null);
   } finally {
     store.close();
   }
@@ -292,6 +733,7 @@ test('human and Agent messages are stored as an ordered requirement conversation
       id: 'msg-2',
       requirementId: 'req-1',
       sessionId: 'ses-1',
+      sourceRequirementId: 'req-1',
       author: 'rd_agent',
       body: 'The regression test is now passing.',
       deliverToRd: false,
@@ -299,6 +741,7 @@ test('human and Agent messages are stored as an ordered requirement conversation
     });
     const messages = store.listMessages('req-1');
     assert.deepEqual(messages.map((message) => message.sequence), [1, 2]);
+    assert.equal(messages[1]?.sourceRequirementId, 'req-1');
     assert.deepEqual(store.listPendingRdMessages('req-1').map((message) => message.author), ['human']);
     store.beginRun({
       runId: 'run-1', requirementId: 'req-1', role: 'rd', provider: 'codex', taskSummary: 'start',
@@ -439,6 +882,47 @@ test('legacy databases add nullable model and reasoning configuration columns', 
       assert.ok(columns.some((column) => column.name === 'model'), `${table} should contain model`);
       assert.ok(columns.some((column) => column.name === 'reasoning_effort'), `${table} should contain reasoning_effort`);
     }
+    const parentIndexColumns = migrated.prepare('PRAGMA index_info(requirements_parent_updated)').all() as Array<{
+      name: string;
+    }>;
+    assert.deepEqual(
+      parentIndexColumns.map((column) => column.name),
+      ['parent_requirement_id', 'updated_at'],
+    );
+  } finally {
+    migrated.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('legacy requirement messages add related Requirement provenance', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-message-source-test-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const initial = new SqliteAgentManagerStore(databasePath);
+  initial.close();
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(`
+    DROP TABLE requirement_messages;
+    CREATE TABLE requirement_messages (
+      id TEXT PRIMARY KEY,
+      requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+      run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+      author TEXT NOT NULL CHECK (author IN ('human', 'rd_agent', 'reviewer', 'system')),
+      body TEXT NOT NULL,
+      sequence INTEGER NOT NULL DEFAULT 0,
+      deliver_to_rd INTEGER NOT NULL DEFAULT 0 CHECK (deliver_to_rd IN (0, 1)),
+      created_at TEXT NOT NULL
+    ) STRICT;
+  `);
+  legacy.close();
+
+  const migratedStore = new SqliteAgentManagerStore(databasePath);
+  migratedStore.close();
+  const migrated = new DatabaseSync(databasePath);
+  try {
+    const columns = migrated.prepare('PRAGMA table_info(requirement_messages)').all() as Array<{ name: string }>;
+    assert.ok(columns.some((column) => column.name === 'source_requirement_id'));
   } finally {
     migrated.close();
     rmSync(directory, { recursive: true, force: true });
@@ -531,6 +1015,78 @@ test('legacy GitHub event receipts migrate to split triggers without replaying d
   } finally {
     migrated.close();
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Agent Timers persist descriptions, advance, complete, and cancel atomically', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-scheduled',
+      sessionId: 'ses-scheduled',
+      title: 'Wait for a build',
+      description: 'Wake the Agent later',
+      provider: 'codex',
+      createdBy: 'human',
+      now,
+    });
+    const recurring = store.createAgentTimer({
+      id: 'tmr-recurring',
+      requirementId: 'req-scheduled',
+      description: 'Check compiler status',
+      schedule: 'recurring',
+      intervalSeconds: 3_600,
+      nextFireAt: '2026-09-10T13:00:00.000Z',
+      now,
+    });
+    assert.equal(recurring.status, 'active');
+    assert.equal(recurring.description, 'Check compiler status');
+    assert.equal(recurring.lastFiredAt, null);
+
+    const advanced = store.completeAgentTimerOccurrence({
+      id: recurring.id,
+      expectedNextFireAt: recurring.nextFireAt!,
+      nextFireAt: '2026-09-10T14:00:00.000Z',
+      now: '2026-09-10T13:00:01.000Z',
+    });
+    assert.equal(advanced?.status, 'active');
+    assert.equal(advanced?.lastFiredAt, '2026-09-10T13:00:01.000Z');
+    assert.equal(store.completeAgentTimerOccurrence({
+      id: recurring.id,
+      expectedNextFireAt: recurring.nextFireAt!,
+      now: '2026-09-10T13:00:02.000Z',
+    }), null);
+
+    const once = store.createAgentTimer({
+      id: 'tmr-once',
+      requirementId: 'req-scheduled',
+      description: 'Check generated artifacts',
+      schedule: 'once',
+      intervalSeconds: 60,
+      nextFireAt: '2026-09-10T12:01:00.000Z',
+      now,
+    });
+    const completed = store.completeAgentTimerOccurrence({
+      id: once.id,
+      expectedNextFireAt: once.nextFireAt!,
+      now: '2026-09-10T12:01:00.000Z',
+    });
+    assert.equal(completed?.status, 'completed');
+    assert.equal(completed?.nextFireAt, null);
+
+    const cancelled = store.cancelAgentTimer(recurring.id, '2026-09-10T13:10:00.000Z');
+    assert.equal(cancelled.status, 'cancelled');
+    assert.equal(cancelled.nextFireAt, null);
+    assert.throws(
+      () => store.cancelAgentTimer(recurring.id, '2026-09-10T13:11:00.000Z'),
+      StoreConflictError,
+    );
+    assert.deepEqual(
+      store.listAgentTimers('req-scheduled').map((timer) => timer.id).sort(),
+      ['tmr-once', 'tmr-recurring'],
+    );
+  } finally {
+    store.close();
   }
 });
 

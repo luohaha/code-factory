@@ -2,7 +2,15 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 
-import { schemaStatements } from './schema.js';
+import { postMigrationSchemaStatements, schemaStatements } from './schema.js';
+import {
+  SEARCH_EMBEDDING_VERSION,
+  createSearchEmbedding,
+  fullTextQuery,
+  localFullTextScore,
+  searchEmbeddingSimilarity,
+  searchExcerpt,
+} from './search.js';
 import {
   type AgentManagerStore,
   type AppendAgentTriggerMessageRecord,
@@ -11,8 +19,12 @@ import {
   type AppendEventRecord,
   type BeginReviewRequestRecord,
   type BeginRunRecord,
+  type CompleteAgentTimerOccurrenceRecord,
+  type CreateAgentTimerRecord,
   type CreateMessageAttachmentRecord,
   type CreateRequirementRecord,
+  type PurgeExpiredRequirementsRecord,
+  type PurgeExpiredRequirementsResult,
   type PullRequestObservation,
   type UpsertPullRequestRecord,
   StoreConflictError,
@@ -27,6 +39,9 @@ import type {
   RequirementMessage,
   PullRequest,
   ReviewRequest,
+  AgentTimer,
+  SearchDocumentKind,
+  SearchResult,
   RequirementStatus,
   RequirementWithSession,
   RunOutcome,
@@ -121,6 +136,7 @@ function messageFrom(row: Row, attachments: MessageAttachment[] = []): Requireme
     requirementId: String(row.requirement_id),
     sessionId: String(row.session_id),
     runId: row.run_id === null ? null : String(row.run_id),
+    sourceRequirementId: row.source_requirement_id === null ? null : String(row.source_requirement_id),
     author: String(row.author) as RequirementMessage['author'],
     body: String(row.body),
     attachments,
@@ -177,8 +193,24 @@ function reviewRequestFrom(row: Row): ReviewRequest {
   };
 }
 
+function agentTimerFrom(row: Row): AgentTimer {
+  return {
+    id: String(row.id),
+    requirementId: String(row.requirement_id),
+    description: String(row.description),
+    schedule: String(row.schedule) as AgentTimer['schedule'],
+    intervalSeconds: Number(row.interval_seconds),
+    status: String(row.status) as AgentTimer['status'],
+    nextFireAt: row.next_fire_at === null ? null : String(row.next_fire_at),
+    lastFiredAt: row.last_fired_at === null ? null : String(row.last_fired_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
 export class SqliteAgentManagerStore implements AgentManagerStore {
   readonly #db: DatabaseSync;
+  readonly #ftsAvailable: boolean;
 
   constructor(databasePath: string) {
     if (databasePath !== ':memory:') mkdirSync(dirname(databasePath), { recursive: true });
@@ -186,6 +218,9 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     this.#db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
     for (const statement of schemaStatements) this.#db.exec(statement);
     this.migrateLegacySchema();
+    for (const statement of postMigrationSchemaStatements) this.#db.exec(statement);
+    this.#ftsAvailable = this.initializeFullTextSearch();
+    this.backfillSearchDocuments();
     this.#db.exec('PRAGMA optimize;');
   }
 
@@ -205,6 +240,15 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
         (id, requirement_id, provider, state, created_at, updated_at)
         VALUES (?, ?, ?, 'idle', ?, ?)`)
         .run(input.sessionId, input.requirementId, input.provider, input.now, input.now);
+      this.upsertSearchDocument({
+        kind: 'requirement',
+        sourceId: input.requirementId,
+        requirementId: input.requirementId,
+        title: input.title,
+        body: input.description,
+        keywords: `${input.requirementId} ${input.sessionId} ${input.provider} ${input.model ?? ''}`,
+        updatedAt: input.now,
+      });
       this.#db.exec('COMMIT');
     } catch (error) {
       this.#db.exec('ROLLBACK');
@@ -237,6 +281,79 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       FROM requirements r JOIN agent_sessions s ON s.requirement_id = r.id
       WHERE r.status != 'cancelled' ORDER BY r.updated_at DESC`).all() as Row[];
     return rows.map((row) => ({ ...requirementFrom(row), session: sessionFrom(row, 's_') }));
+  }
+
+  listChildRequirements(parentRequirementId: string): RequirementWithSession[] {
+    const rows = this.#db.prepare(`SELECT
+      r.*, s.id AS s_id, s.requirement_id AS s_requirement_id, s.provider AS s_provider,
+      s.native_session_id AS s_native_session_id, s.state AS s_state, s.last_error AS s_last_error,
+      s.last_consumed_message_sequence AS s_last_consumed_message_sequence,
+      (SELECT COUNT(*) FROM requirement_messages m WHERE m.requirement_id = r.id
+        AND m.deliver_to_rd = 1 AND m.sequence > s.last_consumed_message_sequence) AS s_pending_message_count,
+      s.created_at AS s_created_at, s.updated_at AS s_updated_at
+      FROM requirements r JOIN agent_sessions s ON s.requirement_id = r.id
+      WHERE r.parent_requirement_id = ? ORDER BY r.updated_at DESC`).all(parentRequirementId) as Row[];
+    return rows.map((row) => ({ ...requirementFrom(row), session: sessionFrom(row, 's_') }));
+  }
+
+  search(query: string, limit = 50): SearchResult[] {
+    const trimmed = query.trim();
+    if (!trimmed) return [];
+    const safeLimit = Math.max(1, Math.min(Math.trunc(limit), 200));
+    const ftsScores = new Map<string, number>();
+    const matchQuery = fullTextQuery(trimmed);
+    if (matchQuery && this.#ftsAvailable) {
+      const matches = this.#db.prepare(`SELECT document.id, bm25(search_documents_fts, 5.0, 1.0, 2.0) AS rank
+        FROM search_documents_fts
+        JOIN search_documents document ON document.rowid = search_documents_fts.rowid
+        JOIN requirements requirement ON requirement.id = document.requirement_id
+        WHERE search_documents_fts MATCH ? AND requirement.status != 'cancelled'`).all(matchQuery) as Row[];
+      const strengths = matches.map((row) => Math.max(0, -Number(row.rank)));
+      const maximumStrength = strengths.reduce((maximum, strength) => Math.max(maximum, strength), 0);
+      matches.forEach((row, index) => {
+        const strength = strengths[index] ?? 0;
+        ftsScores.set(String(row.id), maximumStrength === 0 ? 0.75 : 0.75 + (strength / maximumStrength) * 0.25);
+      });
+    }
+
+    const queryEmbedding = createSearchEmbedding(trimmed);
+    const rows = this.#db.prepare(`SELECT document.*
+      FROM search_documents document
+      JOIN requirements requirement ON requirement.id = document.requirement_id
+      WHERE requirement.status != 'cancelled'`).all() as Row[];
+    const results = rows.flatMap((row): SearchResult[] => {
+      const title = String(row.title);
+      const body = String(row.body);
+      const keywords = String(row.keywords);
+      const localScore = localFullTextScore(trimmed, title, body, keywords);
+      const fullTextScore = Math.max(localScore, ftsScores.get(String(row.id)) ?? 0);
+      const storedEmbedding = row.embedding;
+      const vectorScore = storedEmbedding instanceof Uint8Array
+        ? Math.max(0, searchEmbeddingSimilarity(queryEmbedding, storedEmbedding))
+        : 0;
+      if (fullTextScore === 0 && vectorScore < 0.2) return [];
+      const score = fullTextScore * 0.7 + vectorScore * 0.3;
+      return [{
+        kind: String(row.kind) as SearchDocumentKind,
+        sourceId: String(row.source_id),
+        requirementId: String(row.requirement_id),
+        title,
+        excerpt: searchExcerpt([title, body].filter(Boolean).join('\n'), trimmed),
+        score: Number(score.toFixed(6)),
+        fullTextScore: Number(fullTextScore.toFixed(6)),
+        vectorScore: Number(vectorScore.toFixed(6)),
+        updatedAt: String(row.updated_at),
+      }];
+    }).sort((left, right) => right.score - left.score || right.updatedAt.localeCompare(left.updatedAt));
+
+    const counts = new Map<string, number>();
+    return results.filter((result) => {
+      const key = `${result.requirementId}:${result.kind}`;
+      const count = counts.get(key) ?? 0;
+      if (count >= 2) return false;
+      counts.set(key, count + 1);
+      return true;
+    }).slice(0, safeLimit);
   }
 
   listSessions(): AgentSession[] {
@@ -292,10 +409,19 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       const next = this.#db.prepare(`SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence
         FROM requirement_messages WHERE requirement_id = ?`).get(input.requirementId) as Row;
       this.#db.prepare(`INSERT INTO requirement_messages
-        (id, requirement_id, session_id, run_id, author, body, sequence, deliver_to_rd, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(input.id, input.requirementId, input.sessionId, input.runId ?? null, input.author,
+        (id, requirement_id, session_id, run_id, source_requirement_id, author, body, sequence, deliver_to_rd, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(input.id, input.requirementId, input.sessionId, input.runId ?? null, input.sourceRequirementId ?? null, input.author,
           body, Number(next.sequence), (input.deliverToRd ?? (input.author === 'human' || input.author === 'reviewer')) ? 1 : 0, input.now);
+      this.upsertSearchDocument({
+        kind: 'message',
+        sourceId: input.id,
+        requirementId: input.requirementId,
+        title: `Message ${Number(next.sequence)} (${input.author})`,
+        body,
+        keywords: `${input.id} ${input.requirementId} ${input.sessionId} ${input.sourceRequirementId ?? ''} ${input.author}`,
+        updatedAt: input.now,
+      });
       for (const attachmentId of attachmentIds) {
         this.#db.prepare('UPDATE message_attachments SET message_id = ? WHERE id = ?').run(input.id, attachmentId);
       }
@@ -330,6 +456,15 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(input.id, input.requirementId, input.sessionId, input.runId ?? null, input.author,
           body, Number(next.sequence), input.deliverToRd ? 1 : 0, input.now);
+      this.upsertSearchDocument({
+        kind: 'message',
+        sourceId: input.id,
+        requirementId: input.requirementId,
+        title: `Message ${Number(next.sequence)} (${input.author})`,
+        body,
+        keywords: `${input.id} ${input.requirementId} ${input.sessionId} ${input.author}`,
+        updatedAt: input.now,
+      });
       this.#db.exec('COMMIT');
     } catch (error) {
       this.#db.exec('ROLLBACK');
@@ -362,19 +497,100 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       .map((row) => messageFrom(row, this.listMessageAttachments(String(row.id))));
   }
 
+  createAgentTimer(input: CreateAgentTimerRecord): AgentTimer {
+    this.requireBundle(input.requirementId);
+    const description = input.description.trim();
+    if (!description || description.length > 500) {
+      throw new TypeError('description must contain from 1 to 500 characters');
+    }
+    if (!Number.isInteger(input.intervalSeconds) || input.intervalSeconds <= 0) {
+      throw new TypeError('intervalSeconds must be a positive integer');
+    }
+    this.#db.prepare(`INSERT INTO agent_timers
+      (id, requirement_id, description, schedule, interval_seconds, status, next_fire_at, last_fired_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'active', ?, NULL, ?, ?)`).run(
+      input.id,
+      input.requirementId,
+      description,
+      input.schedule,
+      input.intervalSeconds,
+      input.nextFireAt,
+      input.now,
+      input.now,
+    );
+    return this.requireAgentTimer(input.id);
+  }
+
+  getAgentTimer(id: string): AgentTimer | null {
+    const row = this.#db.prepare('SELECT * FROM agent_timers WHERE id = ?').get(id) as Row | undefined;
+    return row ? agentTimerFrom(row) : null;
+  }
+
+  listAgentTimers(requirementId?: string): AgentTimer[] {
+    const rows = requirementId
+      ? this.#db.prepare(`SELECT * FROM agent_timers
+        WHERE requirement_id = ? ORDER BY created_at DESC, id DESC`).all(requirementId)
+      : this.#db.prepare(`SELECT * FROM agent_timers
+        ORDER BY CASE WHEN next_fire_at IS NULL THEN 1 ELSE 0 END, next_fire_at ASC, id ASC`).all();
+    return (rows as Row[]).map(agentTimerFrom);
+  }
+
+  completeAgentTimerOccurrence(input: CompleteAgentTimerOccurrenceRecord): AgentTimer | null {
+    const status = input.nextFireAt ? 'active' : 'completed';
+    const result = this.#db.prepare(`UPDATE agent_timers
+      SET status = ?, next_fire_at = ?, last_fired_at = ?, updated_at = ?
+      WHERE id = ? AND status = 'active' AND next_fire_at = ?`).run(
+      status,
+      input.nextFireAt ?? null,
+      input.now,
+      input.now,
+      input.id,
+      input.expectedNextFireAt,
+    );
+    return result.changes === 0 ? null : this.requireAgentTimer(input.id);
+  }
+
+  cancelAgentTimer(id: string, now: string): AgentTimer {
+    const existing = this.getAgentTimer(id);
+    if (!existing) throw new StoreNotFoundError(`Agent Timer ${id} not found`);
+    const result = this.#db.prepare(`UPDATE agent_timers
+      SET status = 'cancelled', next_fire_at = NULL, updated_at = ? WHERE id = ? AND status = 'active'`)
+      .run(now, id);
+    if (result.changes === 0) throw new StoreConflictError(`Agent Timer ${id} is already ${existing.status}`);
+    return this.requireAgentTimer(id);
+  }
+
   upsertPullRequest(input: UpsertPullRequestRecord): PullRequest {
     this.requireBundle(input.requirementId);
-    this.#db.prepare(`INSERT INTO pull_requests
-      (id, requirement_id, repository, number, url, title, base_branch, head_branch, head_sha, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(repository, number) DO UPDATE SET
-        requirement_id = excluded.requirement_id, url = excluded.url, title = excluded.title,
-        base_branch = excluded.base_branch, head_branch = excluded.head_branch,
-        head_sha = excluded.head_sha, status = excluded.status, updated_at = excluded.updated_at`)
-      .run(input.id, input.requirementId, input.repository, input.number, input.url, input.title,
-        input.baseBranch, input.headBranch, input.headSha, input.status, input.now, input.now);
-    return pullRequestFrom(this.#db.prepare('SELECT * FROM pull_requests WHERE repository = ? AND number = ?')
-      .get(input.repository, input.number) as Row);
+    this.#db.exec('BEGIN IMMEDIATE');
+    try {
+      this.#db.prepare(`INSERT INTO pull_requests
+        (id, requirement_id, repository, number, url, title, base_branch, head_branch, head_sha, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(repository, number) DO UPDATE SET
+          requirement_id = excluded.requirement_id, url = excluded.url, title = excluded.title,
+          base_branch = excluded.base_branch, head_branch = excluded.head_branch,
+          head_sha = excluded.head_sha, status = excluded.status, updated_at = excluded.updated_at`)
+        .run(input.id, input.requirementId, input.repository, input.number, input.url, input.title,
+          input.baseBranch, input.headBranch, input.headSha, input.status, input.now, input.now);
+      const row = this.#db.prepare('SELECT * FROM pull_requests WHERE repository = ? AND number = ?')
+        .get(input.repository, input.number) as Row;
+      const pullRequest = pullRequestFrom(row);
+      this.upsertSearchDocument({
+        kind: 'pull_request',
+        sourceId: pullRequest.id,
+        requirementId: pullRequest.requirementId,
+        title: pullRequest.title,
+        body: `${pullRequest.repository} #${pullRequest.number}\n${pullRequest.headBranch} → ${pullRequest.baseBranch}`,
+        keywords: `${pullRequest.id} ${pullRequest.url} ${pullRequest.repository} ${pullRequest.number} ${pullRequest.headBranch} ${pullRequest.baseBranch}`,
+        updatedAt: pullRequest.updatedAt,
+      });
+      this.#db.exec('COMMIT');
+      return pullRequest;
+    } catch (error) {
+      this.#db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   getPullRequest(id: string): PullRequest | null {
@@ -580,6 +796,10 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       if (next === 'done' || next === 'cancelled') {
         this.#db.prepare("UPDATE agent_sessions SET state = 'completed', last_error = NULL, updated_at = ? WHERE requirement_id = ?")
           .run(now, requirementId);
+        this.#db.prepare(`UPDATE agent_timers
+          SET status = 'cancelled', next_fire_at = NULL, updated_at = ?
+          WHERE requirement_id = ? AND status = 'active'`)
+          .run(now, requirementId);
       }
       this.#db.exec('COMMIT');
       return this.requireBundle(requirementId);
@@ -587,6 +807,64 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       this.#db.exec('ROLLBACK');
       throw error;
     }
+  }
+
+  purgeExpiredRequirements(input: PurgeExpiredRequirementsRecord): PurgeExpiredRequirementsResult {
+    const expiredPredicate = `
+      ((requirement.status = 'cancelled' AND requirement.updated_at <= ?)
+        OR (requirement.status = 'done' AND requirement.updated_at <= ?))
+      AND NOT EXISTS (
+        SELECT 1 FROM agent_runs active_run
+        WHERE active_run.requirement_id = requirement.id AND active_run.status = 'running'
+      )`;
+    this.#db.exec('BEGIN IMMEDIATE');
+    try {
+      const rows = this.#db.prepare(`SELECT requirement.id, requirement.status
+        FROM requirements requirement WHERE ${expiredPredicate}
+        ORDER BY requirement.updated_at ASC, requirement.id ASC`)
+        .all(input.cancelledBefore, input.doneBefore) as Row[];
+      const requirements = rows.map((row) => ({
+        id: String(row.id),
+        status: String(row.status) as Extract<RequirementStatus, 'cancelled' | 'done'>,
+      }));
+      if (requirements.length === 0) {
+        this.#db.exec('COMMIT');
+        return { requirements };
+      }
+
+      this.#db.prepare(`INSERT OR IGNORE INTO pending_attachment_deletions (local_path, created_at)
+        SELECT attachment.local_path, ?
+        FROM message_attachments attachment
+        JOIN requirements requirement ON requirement.id = attachment.requirement_id
+        WHERE ${expiredPredicate}`)
+        .run(input.now, input.cancelledBefore, input.doneBefore);
+
+      this.#db.prepare(`UPDATE requirements SET source_session_id = NULL
+        WHERE source_session_id IN (
+          SELECT session.id
+          FROM agent_sessions session
+          JOIN requirements requirement ON requirement.id = session.requirement_id
+          WHERE ${expiredPredicate}
+        )`).run(input.cancelledBefore, input.doneBefore);
+      this.#db.prepare(`DELETE FROM requirements WHERE id IN (
+        SELECT requirement.id FROM requirements requirement WHERE ${expiredPredicate}
+      )`)
+        .run(input.cancelledBefore, input.doneBefore);
+      this.#db.exec('COMMIT');
+      return { requirements };
+    } catch (error) {
+      this.#db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  listPendingAttachmentDeletions(): string[] {
+    return (this.#db.prepare(`SELECT local_path FROM pending_attachment_deletions
+      ORDER BY created_at ASC, local_path ASC`).all() as Row[]).map((row) => String(row.local_path));
+  }
+
+  completePendingAttachmentDeletion(localPath: string): void {
+    this.#db.prepare('DELETE FROM pending_attachment_deletions WHERE local_path = ?').run(localPath);
   }
 
   appendEvent(input: AppendEventRecord): ManagerEvent {
@@ -671,6 +949,12 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     return reviewRequestFrom(row);
   }
 
+  private requireAgentTimer(id: string): AgentTimer {
+    const value = this.getAgentTimer(id);
+    if (!value) throw new StoreNotFoundError(`Agent Timer ${id} not found`);
+    return value;
+  }
+
   private migrateLegacySchema(): void {
     const ensureColumn = (table: string, column: string, definition: string): boolean => {
       const columns = this.#db.prepare(`PRAGMA table_info(${table})`).all() as Row[];
@@ -689,6 +973,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     ensureColumn('agent_runs', 'input_from_sequence', 'INTEGER');
     ensureColumn('agent_runs', 'input_to_sequence', 'INTEGER');
     const sequenceAdded = ensureColumn('requirement_messages', 'sequence', 'INTEGER NOT NULL DEFAULT 0');
+    ensureColumn('requirement_messages', 'source_requirement_id', 'TEXT REFERENCES requirements(id) ON DELETE SET NULL');
     ensureColumn('requirement_messages', 'deliver_to_rd', 'INTEGER NOT NULL DEFAULT 0 CHECK (deliver_to_rd IN (0, 1))');
     ensureColumn('review_requests', 'model', 'TEXT');
     ensureColumn('review_requests', 'reasoning_effort', "TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max'))");
@@ -763,6 +1048,134 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     }
     this.#db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS messages_requirement_sequence
       ON requirement_messages (requirement_id, sequence)`);
+  }
+
+  private initializeFullTextSearch(): boolean {
+    const compiled = this.#db.prepare("SELECT sqlite_compileoption_used('ENABLE_FTS5') AS enabled").get() as Row;
+    if (Number(compiled.enabled) !== 1) {
+      this.dropFullTextTriggers();
+      return false;
+    }
+    try {
+      this.#db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS search_documents_fts USING fts5(
+        title,
+        body,
+        keywords,
+        content='search_documents',
+        content_rowid='rowid',
+        tokenize='trigram case_sensitive 0 remove_diacritics 1'
+      );
+      CREATE TRIGGER IF NOT EXISTS search_documents_ai AFTER INSERT ON search_documents BEGIN
+        INSERT INTO search_documents_fts(rowid, title, body, keywords)
+        VALUES (new.rowid, new.title, new.body, new.keywords);
+      END;
+      CREATE TRIGGER IF NOT EXISTS search_documents_ad AFTER DELETE ON search_documents BEGIN
+        INSERT INTO search_documents_fts(search_documents_fts, rowid, title, body, keywords)
+        VALUES ('delete', old.rowid, old.title, old.body, old.keywords);
+      END;
+      CREATE TRIGGER IF NOT EXISTS search_documents_au AFTER UPDATE ON search_documents BEGIN
+        INSERT INTO search_documents_fts(search_documents_fts, rowid, title, body, keywords)
+        VALUES ('delete', old.rowid, old.title, old.body, old.keywords);
+        INSERT INTO search_documents_fts(rowid, title, body, keywords)
+        VALUES (new.rowid, new.title, new.body, new.keywords);
+      END;
+      INSERT INTO search_documents_fts(search_documents_fts) VALUES ('rebuild');`);
+      return true;
+    } catch {
+      this.dropFullTextTriggers();
+      return false;
+    }
+  }
+
+  private dropFullTextTriggers(): void {
+    this.#db.exec(`DROP TRIGGER IF EXISTS search_documents_ai;
+      DROP TRIGGER IF EXISTS search_documents_ad;
+      DROP TRIGGER IF EXISTS search_documents_au;`);
+  }
+
+  private backfillSearchDocuments(): void {
+    this.#db.exec('BEGIN IMMEDIATE');
+    try {
+      const requirements = this.#db.prepare(`SELECT requirement.*, session.id AS session_id
+        FROM requirements requirement
+        JOIN agent_sessions session ON session.requirement_id = requirement.id`).all() as Row[];
+      for (const row of requirements) {
+        this.upsertSearchDocument({
+          kind: 'requirement',
+          sourceId: String(row.id),
+          requirementId: String(row.id),
+          title: String(row.title),
+          body: String(row.description),
+          keywords: `${String(row.id)} ${String(row.session_id)} ${String(row.provider)} ${row.model === null ? '' : String(row.model)}`,
+          updatedAt: String(row.updated_at),
+        });
+      }
+      const messages = this.#db.prepare('SELECT * FROM requirement_messages').all() as Row[];
+      for (const row of messages) {
+        this.upsertSearchDocument({
+          kind: 'message',
+          sourceId: String(row.id),
+          requirementId: String(row.requirement_id),
+          title: `Message ${Number(row.sequence)} (${String(row.author)})`,
+          body: String(row.body),
+          keywords: `${String(row.id)} ${String(row.requirement_id)} ${String(row.session_id)} ${String(row.author)}`,
+          updatedAt: String(row.created_at),
+        });
+      }
+      const pullRequests = this.#db.prepare('SELECT * FROM pull_requests').all() as Row[];
+      for (const row of pullRequests) {
+        const pullRequest = pullRequestFrom(row);
+        this.upsertSearchDocument({
+          kind: 'pull_request',
+          sourceId: pullRequest.id,
+          requirementId: pullRequest.requirementId,
+          title: pullRequest.title,
+          body: `${pullRequest.repository} #${pullRequest.number}\n${pullRequest.headBranch} → ${pullRequest.baseBranch}`,
+          keywords: `${pullRequest.id} ${pullRequest.url} ${pullRequest.repository} ${pullRequest.number} ${pullRequest.headBranch} ${pullRequest.baseBranch}`,
+          updatedAt: pullRequest.updatedAt,
+        });
+      }
+      this.#db.exec('COMMIT');
+    } catch (error) {
+      this.#db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  private upsertSearchDocument(input: {
+    kind: SearchDocumentKind;
+    sourceId: string;
+    requirementId: string;
+    title: string;
+    body: string;
+    keywords: string;
+    updatedAt: string;
+  }): void {
+    const id = `${input.kind}:${input.sourceId}`;
+    const existing = this.#db.prepare(`SELECT title, body, keywords, embedding_version, updated_at
+      FROM search_documents WHERE id = ?`).get(id) as Row | undefined;
+    if (existing
+      && String(existing.title) === input.title
+      && String(existing.body) === input.body
+      && String(existing.keywords) === input.keywords
+      && Number(existing.embedding_version) === SEARCH_EMBEDDING_VERSION
+      && String(existing.updated_at) === input.updatedAt) return;
+    const embedding = createSearchEmbedding(`${input.title}\n${input.body}`);
+    this.#db.prepare(`INSERT INTO search_documents
+      (id, kind, source_id, requirement_id, title, body, keywords, embedding, embedding_version, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        kind = excluded.kind,
+        source_id = excluded.source_id,
+        requirement_id = excluded.requirement_id,
+        title = excluded.title,
+        body = excluded.body,
+        keywords = excluded.keywords,
+        embedding = excluded.embedding,
+        embedding_version = excluded.embedding_version,
+        updated_at = excluded.updated_at`)
+      .run(id, input.kind, input.sourceId, input.requirementId, input.title, input.body, input.keywords,
+        embedding, SEARCH_EMBEDDING_VERSION, input.updatedAt);
   }
 
   private updateRun(runId: string, outcome: RunOutcome, now: string): void {

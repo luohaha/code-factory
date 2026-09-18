@@ -89,6 +89,8 @@ export interface AgentManagerConfiguration {
   openDashboard: boolean;
   databasePath: string | null;
   pullRequestReconcileIntervalSeconds: number;
+  cancelledRequirementRetentionDays: number;
+  doneRequirementRetentionDays: number;
   logLevel: 'debug' | 'info' | 'warn' | 'error' | 'silent';
   logFilePath: string | null;
   logMaxSize: string | number;
@@ -108,8 +110,21 @@ export interface ManagerEventDto {
   requirementId: string | null;
   sessionId: string | null;
   runId: string | null;
-  payload: Record<string, unknown>;
+  payload: ManagerEventPayloadDto;
   createdAt: string;
+}
+
+export interface ManagerEventPayloadDto extends Record<string, unknown> {
+  requirement?: RequirementDto | null;
+  requirementIds?: string[];
+  run?: AgentRunDto | null;
+  message?: RequirementMessageDto | null;
+  pullRequest?: PullRequestDto | null;
+  reviewRequest?: ReviewRequestDto | null;
+  timer?: AgentTimerDto | null;
+  timers?: AgentTimerDto[];
+  configuration?: AgentManagerConfigurationSnapshot;
+  modelCatalog?: AgentModelCatalogDto;
 }
 
 export interface RequirementMessageDto {
@@ -117,6 +132,7 @@ export interface RequirementMessageDto {
   requirementId: string;
   sessionId: string;
   runId: string | null;
+  sourceRequirementId: string | null;
   author: 'human' | 'rd_agent' | 'reviewer' | 'system';
   body: string;
   attachments: MessageAttachmentDto[];
@@ -168,6 +184,40 @@ export interface ReviewRequestDto {
   finishedAt: string | null;
 }
 
+export interface AgentTimerDto {
+  id: string;
+  requirementId: string;
+  description: string;
+  schedule: 'once' | 'recurring';
+  intervalSeconds: number;
+  status: 'active' | 'completed' | 'cancelled';
+  nextFireAt: string | null;
+  lastFiredAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SearchResultDto {
+  kind: 'requirement' | 'message' | 'pull_request';
+  sourceId: string;
+  requirementId: string;
+  title: string;
+  excerpt: string;
+  score: number;
+  fullTextScore: number;
+  vectorScore: number;
+  updatedAt: string;
+}
+
+export interface RequirementActionAcceptedDto {
+  accepted: true;
+  requirementId: string;
+  action: 'start';
+  requirement: RequirementDto;
+  run: AgentRunDto | null;
+  message: RequirementMessageDto | null;
+}
+
 export const DEFAULT_AGENT_MANAGER_URL = 'http://127.0.0.1:4310';
 
 export class AgentManagerApiError extends Error {
@@ -213,8 +263,22 @@ export class AgentManagerClient {
     return response.items;
   }
 
-  async listRuns(): Promise<AgentRunDto[]> {
-    const response = await this.request<{ items: AgentRunDto[] }>('/api/runs');
+  getRequirement(id: string): Promise<RequirementDto> {
+    return this.request(`/api/requirements/${encodeURIComponent(id)}`);
+  }
+
+  async search(query: string, limit = 100): Promise<SearchResultDto[]> {
+    const parameters = new URLSearchParams({ q: query, limit: String(limit) });
+    const response = await this.request<{ items: SearchResultDto[] }>(`/api/search?${parameters.toString()}`);
+    return response.items;
+  }
+
+  async listRuns(requirementId?: string): Promise<AgentRunDto[]> {
+    const response = await this.request<{ items: AgentRunDto[] }>(
+      requirementId
+        ? `/api/runs?${new URLSearchParams({ requirementId }).toString()}`
+        : '/api/runs',
+    );
     return response.items;
   }
 
@@ -225,13 +289,47 @@ export class AgentManagerClient {
     return response.items;
   }
 
-  async listPullRequests(): Promise<PullRequestDto[]> {
-    const response = await this.request<{ items: PullRequestDto[] }>('/api/pull-requests');
+  async listAgentTimers(requirementId?: string): Promise<AgentTimerDto[]> {
+    const response = await this.request<{ items: AgentTimerDto[] }>(
+      requirementId
+        ? `/api/requirements/${encodeURIComponent(requirementId)}/timers`
+        : '/api/timers',
+    );
     return response.items;
   }
 
-  async listReviewRequests(): Promise<ReviewRequestDto[]> {
-    const response = await this.request<{ items: ReviewRequestDto[] }>('/api/review-requests');
+  createAgentTimer(
+    requirementId: string,
+    input: { description: string; schedule: 'once' | 'recurring'; intervalSeconds: number },
+  ): Promise<AgentTimerDto> {
+    return this.request(`/api/requirements/${encodeURIComponent(requirementId)}/timers`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+
+  cancelAgentTimer(requirementId: string, timerId: string): Promise<AgentTimerDto> {
+    return this.request(
+      `/api/requirements/${encodeURIComponent(requirementId)}/timers/${encodeURIComponent(timerId)}`,
+      { method: 'DELETE' },
+    );
+  }
+
+  async listPullRequests(requirementId?: string): Promise<PullRequestDto[]> {
+    const response = await this.request<{ items: PullRequestDto[] }>(
+      requirementId
+        ? `/api/pull-requests?${new URLSearchParams({ requirementId }).toString()}`
+        : '/api/pull-requests',
+    );
+    return response.items;
+  }
+
+  async listReviewRequests(pullRequestId?: string): Promise<ReviewRequestDto[]> {
+    const response = await this.request<{ items: ReviewRequestDto[] }>(
+      pullRequestId
+        ? `/api/review-requests?${new URLSearchParams({ pullRequestId }).toString()}`
+        : '/api/review-requests',
+    );
     return response.items;
   }
 
@@ -243,14 +341,23 @@ export class AgentManagerClient {
     return this.request(`/api/requirements/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
 
-  startRequirement(id: string, message?: string, attachmentIds: string[] = []): Promise<{ accepted: true }> {
+  startRequirement(id: string, message?: string, attachmentIds: string[] = []): Promise<RequirementActionAcceptedDto> {
     return this.action(id, 'start', {
       ...(message ? { message } : {}),
       ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
     });
   }
 
-  replyToRequirement(id: string, message: string, attachmentIds: string[] = []): Promise<{ accepted: true; queued: boolean }> {
+  replyToRequirement(
+    id: string,
+    message: string,
+    attachmentIds: string[] = [],
+  ): Promise<{
+    accepted: true;
+    queued: boolean;
+    message: RequirementMessageDto;
+    requirement: RequirementDto;
+  }> {
     return this.action(id, 'reply', { message, attachmentIds });
   }
 
@@ -281,7 +388,11 @@ export class AgentManagerClient {
     return `${this.baseUrl}/api/attachments/${encodeURIComponent(id)}`;
   }
 
-  requestReview(id: string, configuration: AgentConfiguration): Promise<{ accepted: true }> {
+  requestReview(id: string, configuration: AgentConfiguration): Promise<{
+    accepted: true;
+    reviewRequest: ReviewRequestDto | null;
+    run: AgentRunDto | null;
+  }> {
     return this.request(`/api/pull-requests/${encodeURIComponent(id)}/review-requests`, {
       method: 'POST',
       body: JSON.stringify(configuration),
@@ -292,7 +403,7 @@ export class AgentManagerClient {
     return this.action(id, 'confirm', {});
   }
 
-  retryRequirement(id: string): Promise<{ accepted: true }> {
+  retryRequirement(id: string): Promise<RequirementActionAcceptedDto> {
     return this.action(id, 'start', { message: 'Continue the previously failed task. Inspect the current repository state first, then finish the remaining work and run the necessary tests.' });
   }
 
@@ -306,6 +417,7 @@ export class AgentManagerClient {
       'requirement.created',
       'requirement.deleted',
       'requirement.completed',
+      'requirements.purged',
       'run.started',
       'run.succeeded',
       'run.failed',
@@ -315,6 +427,9 @@ export class AgentManagerClient {
       'pull_request.created',
       'pull_request.updated',
       'review_request.started',
+      'timer.created',
+      'timer.fired',
+      'timer.cancelled',
       'manager.reconciled',
       'manager.configuration.updated',
       'agent_models.updated',

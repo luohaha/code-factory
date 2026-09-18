@@ -36,14 +36,17 @@ Discovery results are cached in memory. Provider failures retain the previous li
 
 ### RD control-plane CLI
 
-RD Agents use two self-describing commands instead of constructing Agent API requests in their prompts:
+RD Agents use self-describing commands instead of constructing Agent API requests in their prompts:
 
 ```bash
 code-factory-cli pr register --help
 code-factory-cli requirement propose --help
+code-factory-cli timer register --help
+code-factory-cli timer show --help
+code-factory-cli timer cancel --help
 ```
 
-`pr register` registers a newly created PR or refreshes metadata changed by the RD Agent. `requirement propose` records separate follow-up work as a linked TODO Requirement. Both commands print the Agent API JSON response on stdout. Exit code `0` means success, `2` means invalid input or missing context, and `1` means an execution, network, HTTP, or response-format failure. Errors go to stderr. API requests and GitHub lookups time out after 30 seconds; writes are never automatically retried. A timeout or invalid response can occur after the server commits a write: inspect the Requirement before retrying, especially when proposing follow-up work.
+`pr register` registers a newly created PR or refreshes metadata changed by the RD Agent. `requirement propose` records separate follow-up work as a linked TODO Requirement. `requirement related` lists direct parent and child Requirements; `requirement message` coordinates with their RD Agents. `timer register` registers a one-time wake-up by default or a recurring one with `--repeat`; `timer show` recovers timer IDs and statuses for the current Requirement; `timer cancel` stops an active timer. The commands print the Agent API JSON response on stdout. Exit code `0` means success, `2` means invalid input or missing context, and `1` means an execution, network, HTTP, or response-format failure. Errors go to stderr. API requests and GitHub lookups time out after 30 seconds; writes are never automatically retried. A timeout or invalid response can occur after the server commits a write: inspect the Requirement before retrying, especially when proposing follow-up work.
 
 Prefer registration from an explicit PR URL, using the authenticated local `gh` CLI:
 
@@ -144,9 +147,17 @@ Agent Manager depends only on normalized fields. Raw events may be exposed as a 
 
 Agent Manager deliberately owns the rest of the delivery path: it scopes durable receipts by trigger ID, appends each accepted message to the Requirement conversation, publishes `message.created`, and starts or queues the target RD session. A stopped trigger's delivery context no longer accepts messages. This keeps future integrations such as a Slack-thread listener out of session and persistence internals.
 
+### Built-in Timer Trigger
+
+The `timer` Agent Trigger executes Requirement-scoped one-time and recurring `AgentTimer` resources persisted in SQLite. A timer's first occurrence is `intervalSeconds` after creation; recurring timers continue at the same interval. Each occurrence appends one System message containing the timer ID, schedule, and required follow-up description. Recurring messages also tell the RD Agent how to cancel the timer when it is no longer needed. An idle or waiting RD Session resumes immediately, while an active Run leaves the message queued for the next Run.
+
+Timers survive Agent Manager restarts. If the Manager was stopped across several recurring intervals, startup delivers only one due wake-up and advances directly to the next future occurrence instead of replaying a backlog. The occurrence's scheduled timestamp is part of its trigger-scoped idempotency key, so a crash between message persistence and timer advancement cannot duplicate the conversation message. Completing or cancelling a Requirement cancels its remaining active timers.
+
+Humans manage timers from the clock control beside the Requirement chat composer or through the HTTP API. An RD Agent must track every long-running process or task it starts—including builds, tests, deployments, data jobs, and other background work—to completion. While the current Run remains active, it uses the provider's normal wait, task-output, or monitor mechanism. It registers a Code Factory timer before ending the Run only when the task is guaranteed to continue independently after the Run ends and the Session needs to wake later to inspect it. The Agent can use `code-factory-cli timer register --description DESCRIPTION --after-seconds SECONDS [--repeat]`, recover the timer ID and description later with `code-factory-cli timer show`, then cancel a recurring timer with `code-factory-cli timer cancel --id TIMER_ID` once it is no longer needed. Descriptions must contain 1 through 500 characters after trimming. Intervals must be whole seconds from 60 through 31536000.
+
 ### Built-in PR Triggers
 
-By default, Agent Manager polls Draft and Open PRs every 30 seconds through the authenticated local `gh` CLI. One fetched snapshot is shared by four independently registered triggers, so the split does not multiply GitHub requests:
+By default, Agent Manager polls registered PRs whose last stored state is Draft or Open every 30 seconds through the authenticated local `gh` CLI. A poll can capture and persist a Draft-to-Open transition as well as transitions to Draft, Closed, or Merged; terminal PRs are then skipped on later polls. One fetched snapshot is shared by four independently registered triggers, so the split does not multiply GitHub requests:
 
 - `github.pull-request.status` turns PR lifecycle changes into System messages;
 - `github.pull-request.comment` turns general comments, reviews, and inline review comments into Reviewer messages that explicitly mark their bodies as untrusted external feedback;

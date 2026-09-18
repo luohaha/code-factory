@@ -15,6 +15,11 @@ Code Factory control-plane commands for RD Agents.
 Commands:
   pr register             Register or refresh a pull request
   requirement propose     Propose a separately tracked TODO requirement
+  requirement related     Show this Requirement's direct parent and children
+  requirement message     Send a message to a related Requirement's RD Agent
+  timer register          Register a one-time or recurring wake-up timer
+  timer show              Show timers registered for this Requirement
+  timer cancel            Cancel a registered wake-up timer
 
 Options:
   -v, --version           Print the installed Code Factory version
@@ -70,6 +75,56 @@ Proposals remain TODO until a human starts them.
 
 Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
 CODE_FACTORY_SESSION_ID.`;
+
+const REQUIREMENT_RELATED_HELP = `Usage: code-factory-cli requirement related
+
+Show this Requirement's direct parent and child Requirements, including their
+current status and RD Session state.
+
+Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
+CODE_FACTORY_SESSION_ID.`;
+
+const REQUIREMENT_MESSAGE_HELP = `Usage: code-factory-cli requirement message [options]
+
+Send a message to a direct parent or child Requirement's RD Agent. The message
+is persisted in the target Requirement conversation and starts or queues its RD
+Agent. A completed target is reactivated; a cancelled target is rejected.
+
+Required options:
+  --requirement-id ID     Direct parent or child Requirement ID
+  --message TEXT          Message for the related Requirement's RD Agent
+
+Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
+CODE_FACTORY_SESSION_ID.`;
+
+const TIMER_REGISTER_HELP = `Usage: code-factory-cli timer register [options]
+
+Register a timer that sends its ID and follow-up description to this Requirement after a delay.
+
+Required options:
+  --after-seconds SECONDS  Delay before the first wake-up (60-31536000)
+  --description TEXT       Follow-up the Agent should perform when the timer fires
+
+Optional options:
+  --repeat                 Repeat at the same interval until cancelled
+
+Context: CODE_FACTORY_API_URL and CODE_FACTORY_REQUIREMENT_ID.`;
+
+const TIMER_SHOW_HELP = `Usage: code-factory-cli timer show
+
+Show every timer registered for this Requirement, including its ID, description,
+status, schedule, interval, and next or previous wake-up time.
+
+Context: CODE_FACTORY_API_URL and CODE_FACTORY_REQUIREMENT_ID.`;
+
+const TIMER_CANCEL_HELP = `Usage: code-factory-cli timer cancel [options]
+
+Cancel an active scheduled wake-up.
+
+Required options:
+  --id TIMER_ID
+
+Context: CODE_FACTORY_API_URL and CODE_FACTORY_REQUIREMENT_ID.`;
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
@@ -273,6 +328,31 @@ async function parseRequirementPayload(args: readonly string[], runtime: CodeFac
   };
 }
 
+function parseTimerRegistrationPayload(args: readonly string[]): Record<string, unknown> {
+  const values = parseOptions(args, TIMER_REGISTER_HELP, {
+    'after-seconds': { type: 'string' },
+    description: { type: 'string' },
+    repeat: { type: 'boolean' },
+  });
+  const intervalSeconds = Number(required(
+    values['after-seconds'] as string | undefined,
+    '--after-seconds',
+    TIMER_REGISTER_HELP,
+  ));
+  if (!Number.isInteger(intervalSeconds) || intervalSeconds < 60 || intervalSeconds > 31_536_000) {
+    throw new CliUsageError('--after-seconds must be an integer from 60 to 31536000', TIMER_REGISTER_HELP);
+  }
+  const description = required(values.description as string | undefined, '--description', TIMER_REGISTER_HELP);
+  if (description.length > 500) {
+    throw new CliUsageError('--description must be 500 characters or fewer', TIMER_REGISTER_HELP);
+  }
+  return {
+    description,
+    schedule: values.repeat ? 'recurring' : 'once',
+    intervalSeconds,
+  };
+}
+
 function errorMessage(payload: unknown, fallback: string): string {
   if (payload && typeof payload === 'object' && 'error' in payload) {
     const value = (payload as { error?: unknown }).error;
@@ -281,39 +361,43 @@ function errorMessage(payload: unknown, fallback: string): string {
   return fallback;
 }
 
-async function postJson(
+async function requestJson(
   runtime: CodeFactoryCliRuntime,
   url: string,
-  body: Record<string, unknown>,
+  method: 'GET' | 'POST' | 'DELETE',
+  body?: Record<string, unknown>,
 ): Promise<unknown> {
+  const retryGuidance = method === 'GET'
+    ? ''
+    : '; the write may have succeeded. Check the Requirement before retrying.';
   let response: Response;
   let text: string;
   try {
     response = await runtime.fetch(url, {
-      method: 'POST',
+      method,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(runtime.requestTimeoutMs),
     });
     text = await response.text();
   } catch (error) {
     const timeout = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
     const detail = timeout ? 'timed out' : `failed: ${error instanceof Error ? error.message : String(error)}`;
-    throw new CliRequestError(`Code Factory API request ${detail}; the write may have succeeded. Check the Requirement before retrying.`);
+    throw new CliRequestError(`Code Factory API request ${detail}${retryGuidance}`);
   }
   let payload: unknown = null;
   if (text) {
     try {
       payload = JSON.parse(text) as unknown;
     } catch {
-      if (response.ok) throw new CliRequestError('Code Factory API returned invalid JSON; the write may have succeeded. Check the Requirement before retrying.');
+      if (response.ok) throw new CliRequestError(`Code Factory API returned invalid JSON${retryGuidance}`);
     }
   }
   if (!response.ok) {
     throw new CliRequestError(`Code Factory API returned ${response.status}: ${errorMessage(payload, response.statusText)}`);
   }
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    throw new CliRequestError('Code Factory API returned an invalid response object; the write may have succeeded. Check the Requirement before retrying.');
+    throw new CliRequestError(`Code Factory API returned an invalid response object${retryGuidance}`);
   }
   return payload;
 }
@@ -339,7 +423,8 @@ export async function runCodeFactoryCli(
   const command = `${args[0] ?? ''} ${args[1] ?? ''}`.trim();
   let help: string;
   let endpoint: string;
-  let body: Record<string, unknown>;
+  let method: 'GET' | 'POST' | 'DELETE' = 'POST';
+  let body: Record<string, unknown> | undefined;
   try {
     if (command === 'pr register') {
       help = PR_REGISTER_HELP;
@@ -359,10 +444,101 @@ export async function runCodeFactoryCli(
       endpoint = '/agent/requirements';
       apiBaseUrl(runtime.environment);
       body = await parseRequirementPayload(args.slice(2), runtime);
+    } else if (command === 'requirement related') {
+      help = REQUIREMENT_RELATED_HELP;
+      if (writesHelp(args.slice(2))) {
+        runtime.writeOut(`${help}\n`);
+        return 0;
+      }
+      parseOptions(args.slice(2), help, {});
+      const requirementId = required(
+        runtime.environment[CODE_FACTORY_REQUIREMENT_ID],
+        CODE_FACTORY_REQUIREMENT_ID,
+        help,
+      );
+      const sessionId = required(
+        runtime.environment[CODE_FACTORY_SESSION_ID],
+        CODE_FACTORY_SESSION_ID,
+        help,
+      );
+      endpoint = `/agent/requirements/${encodeURIComponent(requirementId)}/related?sourceSessionId=${encodeURIComponent(sessionId)}`;
+      method = 'GET';
+    } else if (command === 'requirement message') {
+      help = REQUIREMENT_MESSAGE_HELP;
+      if (writesHelp(args.slice(2))) {
+        runtime.writeOut(`${help}\n`);
+        return 0;
+      }
+      const values = parseOptions(args.slice(2), help, {
+        'requirement-id': { type: 'string' },
+        message: { type: 'string' },
+      });
+      const sourceRequirementId = required(
+        runtime.environment[CODE_FACTORY_REQUIREMENT_ID],
+        CODE_FACTORY_REQUIREMENT_ID,
+        help,
+      );
+      const sourceSessionId = required(
+        runtime.environment[CODE_FACTORY_SESSION_ID],
+        CODE_FACTORY_SESSION_ID,
+        help,
+      );
+      const targetRequirementId = required(
+        values['requirement-id'] as string | undefined,
+        '--requirement-id',
+        help,
+      );
+      endpoint = `/agent/requirements/${encodeURIComponent(sourceRequirementId)}/related/${encodeURIComponent(targetRequirementId)}/messages`;
+      body = {
+        sourceSessionId,
+        message: required(values.message as string | undefined, '--message', help),
+      };
+    } else if (command === 'timer register') {
+      help = TIMER_REGISTER_HELP;
+      if (writesHelp(args.slice(2))) {
+        runtime.writeOut(`${help}\n`);
+        return 0;
+      }
+      const requirementId = required(
+        runtime.environment[CODE_FACTORY_REQUIREMENT_ID],
+        CODE_FACTORY_REQUIREMENT_ID,
+        help,
+      );
+      endpoint = `/requirements/${encodeURIComponent(requirementId)}/timers`;
+      body = parseTimerRegistrationPayload(args.slice(2));
+    } else if (command === 'timer show') {
+      help = TIMER_SHOW_HELP;
+      if (writesHelp(args.slice(2))) {
+        runtime.writeOut(`${help}\n`);
+        return 0;
+      }
+      parseOptions(args.slice(2), help, {});
+      const requirementId = required(
+        runtime.environment[CODE_FACTORY_REQUIREMENT_ID],
+        CODE_FACTORY_REQUIREMENT_ID,
+        help,
+      );
+      endpoint = `/requirements/${encodeURIComponent(requirementId)}/timers`;
+      method = 'GET';
+    } else if (command === 'timer cancel') {
+      help = TIMER_CANCEL_HELP;
+      if (writesHelp(args.slice(2))) {
+        runtime.writeOut(`${help}\n`);
+        return 0;
+      }
+      const requirementId = required(
+        runtime.environment[CODE_FACTORY_REQUIREMENT_ID],
+        CODE_FACTORY_REQUIREMENT_ID,
+        help,
+      );
+      const values = parseOptions(args.slice(2), help, { id: { type: 'string' } });
+      const timerId = required(values.id as string | undefined, '--id', help);
+      endpoint = `/requirements/${encodeURIComponent(requirementId)}/timers/${encodeURIComponent(timerId)}`;
+      method = 'DELETE';
     } else {
       throw new CliUsageError(`Unknown command: ${args.join(' ')}`, HELP);
     }
-    const result = await postJson(runtime, `${apiBaseUrl(runtime.environment)}${endpoint}`, body);
+    const result = await requestJson(runtime, `${apiBaseUrl(runtime.environment)}${endpoint}`, method, body);
     runtime.writeOut(`${JSON.stringify(result)}\n`);
     return 0;
   } catch (error) {
