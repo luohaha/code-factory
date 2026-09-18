@@ -111,6 +111,7 @@ import {
   isAwayFromConversationTop,
   upsertConversationMessage,
 } from '@/lib/conversation-scroll';
+import { replaceRequirementRuns, upsertRequirement } from '@/lib/dashboard-state';
 import { formatDuration } from '@/lib/format-duration';
 import { I18nProvider, useI18n } from '@/lib/i18n';
 import { useTheme } from '@/lib/theme';
@@ -1949,6 +1950,38 @@ function Dashboard() {
     }
   }, [client, t]);
 
+  const reloadRequirementState = useCallback(async (
+    requirementId: string,
+    includeRuns = false,
+  ) => {
+    try {
+      const [nextRequirement, nextRuns] = await Promise.all([
+        client.getRequirement(requirementId),
+        includeRuns ? client.listRuns(requirementId) : Promise.resolve(null),
+      ]);
+      setRequirements((current) => upsertRequirement(current, nextRequirement));
+      if (nextRuns) {
+        setRuns((current) => replaceRequirementRuns(current, requirementId, nextRuns));
+      }
+      setConnection('online');
+      setError(null);
+      const syncedAt = new Date();
+      setLastSynced(syncedAt);
+      setFilterReferenceTime(syncedAt.getTime());
+    } catch (caught) {
+      if (caught instanceof AgentManagerApiError && caught.status === 404) {
+        setRequirements((current) => current.filter((item) => item.id !== requirementId));
+        if (includeRuns) {
+          setRuns((current) => current.filter((run) => run.requirementId !== requirementId));
+        }
+        setConnection('online');
+        return;
+      }
+      setConnection('offline');
+      setError(caught instanceof Error ? caught.message : t('Unable to connect to Agent Manager'));
+    }
+  }, [client, t]);
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       const saved = window.localStorage.getItem('code-factory.agent-manager-url');
@@ -1984,7 +2017,15 @@ function Dashboard() {
       onOpen: () => setConnection('online'),
       onError: () => setConnection((current) => current === 'online' ? 'reconnecting' : 'offline'),
       onEvent: (event: ManagerEventDto) => {
-        if (event.type === 'message.created') setMessageRevision((value) => value + 1);
+        if (event.type === 'message.created' && event.requirementId) {
+          setMessageRevision((value) => value + 1);
+          void reloadRequirementState(event.requirementId);
+          return;
+        }
+        if (event.type === 'run.started' && event.requirementId) {
+          void reloadRequirementState(event.requirementId, true);
+          return;
+        }
         void reload(false);
       },
     });
@@ -1992,7 +2033,7 @@ function Dashboard() {
       window.clearTimeout(timer);
       disconnect();
     };
-  }, [client, reload]);
+  }, [client, reload, reloadRequirementState]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -2179,10 +2220,10 @@ function Dashboard() {
     try {
       const attachmentIds = await uploadMessageAttachments(requirementId, attachments);
       const result = await client.replyToRequirement(requirementId, message, attachmentIds);
+      setRequirements((current) => upsertRequirement(current, result.requirement));
       if (selectedIdRef.current === requirementId) {
         setMessages((current) => upsertConversationMessage(current, result.message));
       }
-      void reload(false);
     } catch (caught) {
       const prefix = caught instanceof AgentManagerApiError && caught.status === 409 ? t('This action conflicts with the current state. Refresh and try again.') : '';
       setError(prefix || (caught instanceof Error ? caught.message : t('Operation failed')));

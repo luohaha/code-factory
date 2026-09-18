@@ -452,6 +452,11 @@ test('HTTP reply queues by default and the interrupt action resumes the RD Agent
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ title: 'Correct course', description: 'Initial task', provider: 'codex' }),
     }).then((response) => response.json()) as { id: string };
+    const detailResponse = await fetch(`${baseUrl}/api/requirements/${created.id}`);
+    assert.equal(detailResponse.status, 200);
+    assert.equal((await detailResponse.json() as { id: string }).id, created.id);
+    const missingDetailResponse = await fetch(`${baseUrl}/api/requirements/req_missing`);
+    assert.equal(missingDetailResponse.status, 404);
     await fetch(`${baseUrl}/api/requirements/${created.id}/start`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -464,8 +469,14 @@ test('HTTP reply queues by default and the interrupt action resumes the RD Agent
       body: JSON.stringify({ message: 'Use this corrected direction.' }),
     });
     assert.equal(response.status, 202);
-    const body = await response.json() as { queued: boolean };
+    const body = await response.json() as {
+      queued: boolean;
+      requirement: { id: string; session: { state: string; pendingMessageCount: number } };
+    };
     assert.equal(body.queued, true);
+    assert.equal(body.requirement.id, created.id);
+    assert.equal(body.requirement.session.state, 'running');
+    assert.equal(body.requirement.session.pendingMessageCount, 1);
     assert.equal(runner.requests[0]?.signal?.aborted, false);
 
     const interruptResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/interrupt`, {
@@ -545,9 +556,16 @@ test('HTTP reply reactivates a completed requirement', async () => {
       body: JSON.stringify({ message: 'Reopen this and cover the edge case.' }),
     });
     assert.equal(response.status, 202);
-    const body = await response.json() as { queued: boolean; message: { body: string } };
+    const body = await response.json() as {
+      queued: boolean;
+      message: { body: string };
+      requirement: { status: string; completedAt: string | null; session: { state: string } };
+    };
     assert.equal(body.queued, false);
     assert.equal(body.message.body, 'Reopen this and cover the edge case.');
+    assert.equal(body.requirement.status, 'doing');
+    assert.equal(body.requirement.session.state, 'running');
+    assert.equal(body.requirement.completedAt, null);
 
     const reactivated = manager.getRequirement(requirement.id);
     assert.equal(reactivated?.status, 'doing');

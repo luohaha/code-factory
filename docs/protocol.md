@@ -11,6 +11,7 @@ GET /api/health
 GET /api/workspace
 GET /api/configuration
 GET /api/requirements
+GET /api/requirements/:id
 GET /api/sessions
 GET /api/runs?requirementId=<id>
 GET /api/requirements/:id/messages
@@ -58,7 +59,7 @@ POST /api/requirements/:id/attachments
 
 Upload a file as the raw binary request body to the `attachments` endpoint, then include the returned ID in `attachmentIds` on `start` or `reply`. A message supports up to six attachments of at most 20 MB each. PNG, JPEG, GIF, and WebP files are previewed as images; other files are downloaded as regular attachments. A reply body has the form `{"message":"...","attachmentIds":["att_..."]}` and may omit text when attachments are present. While RD is running, replies are appended and queued without interrupting the current Run. Replying to a DONE Requirement reactivates it as DOING and starts a new Run in the original RD Session. Only an explicit call to `interrupt`—the Web dashboard's Interrupt button—stops the current RD Run.
 
-If RD is running, `reply` still returns `202`. `queued=true` means the message was appended to the Requirement conversation and will be handled after the current Run; an active Session is not a conflict.
+If RD is running, `reply` still returns `202`. `queued=true` means the message was appended to the Requirement conversation and will be handled after the current Run; an active Session is not a conflict. The response includes the persisted message and the latest Requirement with its RD Session so clients can update the affected conversation and card without a workspace-wide refresh.
 
 Request a PR review:
 

@@ -283,6 +283,13 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
       }
 
       const requirement = url.pathname.match(/^\/api\/requirements\/([^/]+)$/);
+      if (request.method === 'GET' && requirement) {
+        const requirementId = decodeURIComponent(requirement[1]!);
+        const item = manager.getRequirement(requirementId);
+        if (!item) throw new StoreNotFoundError(`Requirement ${requirementId} not found`);
+        sendJson(response, 200, item);
+        return;
+      }
       if (request.method === 'DELETE' && requirement) {
         manager.deleteRequirement(decodeURIComponent(requirement[1]!));
         response.writeHead(204).end();
@@ -372,7 +379,14 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
             stringField(body, 'message') ?? '',
             stringArrayField(body, 'attachmentIds'),
           );
-          sendJson(response, 202, { accepted: true, requirementId, action: name, queued: result.queued, message: result.message });
+          sendJson(response, 202, {
+            accepted: true,
+            requirementId,
+            action: name,
+            queued: result.queued,
+            message: result.message,
+            requirement: result.requirement,
+          });
           return;
         }
         const message = stringField(body, 'message');
