@@ -35,3 +35,13 @@ export function countAddedMessages(
     0,
   );
 }
+
+export function upsertConversationMessage<T extends { id: string; sequence: number }>(
+  messages: readonly T[],
+  message: T,
+): T[] {
+  return [
+    ...messages.filter((item) => item.id !== message.id),
+    message,
+  ].sort((left, right) => left.sequence - right.sequence);
+}

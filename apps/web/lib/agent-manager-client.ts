@@ -309,7 +309,11 @@ export class AgentManagerClient {
     });
   }
 
-  replyToRequirement(id: string, message: string, attachmentIds: string[] = []): Promise<{ accepted: true; queued: boolean }> {
+  replyToRequirement(
+    id: string,
+    message: string,
+    attachmentIds: string[] = [],
+  ): Promise<{ accepted: true; queued: boolean; message: RequirementMessageDto }> {
     return this.action(id, 'reply', { message, attachmentIds });
   }
 
