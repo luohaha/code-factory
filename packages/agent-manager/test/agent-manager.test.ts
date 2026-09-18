@@ -489,6 +489,162 @@ test('Agent Manager includes a human start message in the initial RD Run', async
   }
 });
 
+test('related Requirements can inspect each other and deliver visible RD Agent messages', async () => {
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    logger: silentLogger,
+  });
+  try {
+    const parent = manager.createRequirement({
+      title: 'Parent contract',
+      description: 'Coordinate the shared contract',
+      provider: 'codex',
+    });
+    const child = manager.createRequirement({
+      title: 'Child implementation',
+      description: 'Implement one part of the contract',
+      provider: 'codex',
+      createdBy: 'rd_agent',
+      parentRequirementId: parent.id,
+      sourceSessionId: parent.session.id,
+    });
+    const unrelated = manager.createRequirement({
+      title: 'Unrelated work',
+      description: 'Must not receive this message',
+      provider: 'codex',
+    });
+    const cancelledChild = manager.createRequirement({
+      title: 'Cancelled child',
+      description: 'Remain visible as relationship history',
+      provider: 'codex',
+      createdBy: 'rd_agent',
+      parentRequirementId: parent.id,
+      sourceSessionId: parent.session.id,
+    });
+    manager.deleteRequirement(cancelledChild.id);
+
+    const parentRelations = manager.listRelatedRequirements(parent.id, parent.session.id);
+    assert.equal(parentRelations.parent, null);
+    assert.deepEqual(
+      new Set(parentRelations.children.map((requirement) => requirement.id)),
+      new Set([child.id, cancelledChild.id]),
+    );
+    const childRelations = manager.listRelatedRequirements(child.id, child.session.id);
+    assert.equal(childRelations.parent?.id, parent.id);
+    assert.deepEqual(childRelations.children, []);
+    assert.throws(
+      () => manager.listRelatedRequirements(child.id, parent.session.id),
+      /sourceSessionId must belong to source Requirement/,
+    );
+    assert.throws(
+      () => manager.postRelatedRequirementMessage(
+        child.id,
+        child.session.id,
+        unrelated.id,
+        'This must be rejected.',
+      ),
+      /is not a parent or child/,
+    );
+
+    const delivered = manager.postRelatedRequirementMessage(
+      child.id,
+      child.session.id,
+      parent.id,
+      'The shared contract now uses field version 2.',
+    );
+    assert.equal(delivered.queued, false);
+    assert.equal(delivered.message.author, 'rd_agent');
+    assert.equal(delivered.message.sourceRequirementId, child.id);
+    assert.equal(delivered.message.deliverToRd, true);
+    assert.equal(delivered.requirement.session.state, 'running');
+    assert.deepEqual(manager.listMessages(parent.id).map((message) => message.body), [
+      'The shared contract now uses field version 2.',
+    ]);
+    assert.match(runner.requests[0]?.invocation.input ?? '', /Related RD Agent from Child implementation/);
+    assert.match(runner.requests[0]?.invocation.input ?? '', /The shared contract now uses field version 2\./);
+  } finally {
+    await manager.close();
+  }
+});
+
+test('a related RD Agent message reactivates done work and rejects a cancelled target', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
+  try {
+    const completedParent = manager.createRequirement({
+      title: 'Completed parent',
+      description: 'Resume when the child needs coordination',
+      provider: 'codex',
+    });
+    const completedChild = manager.createRequirement({
+      title: 'Completed parent child',
+      description: 'Send a follow-up to the parent',
+      provider: 'codex',
+      createdBy: 'rd_agent',
+      parentRequirementId: completedParent.id,
+      sourceSessionId: completedParent.session.id,
+    });
+    store.beginRun({
+      runId: 'run-related-completed',
+      requirementId: completedParent.id,
+      role: 'rd',
+      provider: 'codex',
+      taskSummary: 'Complete the parent',
+      now: '2026-09-18T00:00:00.000Z',
+    });
+    store.finishRdRun('run-related-completed', {
+      status: 'succeeded',
+      exitCode: 0,
+      nativeSessionId: 'native-related-parent',
+      finalMessage: 'ready',
+      error: null,
+    }, '2026-09-18T00:01:00.000Z');
+    manager.confirmRequirement(completedParent.id);
+
+    const reactivated = manager.postRelatedRequirementMessage(
+      completedChild.id,
+      completedChild.session.id,
+      completedParent.id,
+      'Please extend the completed contract.',
+    );
+    assert.equal(reactivated.queued, false);
+    assert.equal(reactivated.requirement.status, 'doing');
+    assert.equal(reactivated.requirement.session.state, 'running');
+    assert.equal(reactivated.requirement.completedAt, null);
+    assert.ok(runner.requests[0]?.invocation.args.includes('native-related-parent'));
+
+    const cancelledParent = manager.createRequirement({
+      title: 'Cancelled parent',
+      description: 'Remain terminal',
+      provider: 'codex',
+    });
+    const cancelledChild = manager.createRequirement({
+      title: 'Cancelled parent child',
+      description: 'Cannot revive the cancelled parent',
+      provider: 'codex',
+      createdBy: 'rd_agent',
+      parentRequirementId: cancelledParent.id,
+      sourceSessionId: cancelledParent.session.id,
+    });
+    manager.deleteRequirement(cancelledParent.id);
+    assert.throws(
+      () => manager.postRelatedRequirementMessage(
+        cancelledChild.id,
+        cancelledChild.session.id,
+        cancelledParent.id,
+        'This target must stay cancelled.',
+      ),
+      /already cancelled/,
+    );
+  } finally {
+    await manager.close();
+  }
+});
+
 test('Agent Manager queues conversation messages during a Run and resumes without replaying RD output', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new DeferredRunner();
@@ -515,6 +671,10 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
       value.includes('code-factory-cli pr register')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
       value.includes('code-factory-cli requirement propose')));
+    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
+      value.includes('code-factory-cli requirement related')));
+    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
+      value.includes('code-factory-cli requirement message')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
       value.includes('code-factory-cli timer register')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>

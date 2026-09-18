@@ -119,6 +119,7 @@ export interface RequirementMessageDto {
   requirementId: string;
   sessionId: string;
   runId: string | null;
+  sourceRequirementId: string | null;
   author: 'human' | 'rd_agent' | 'reviewer' | 'system';
   body: string;
   attachments: MessageAttachmentDto[];

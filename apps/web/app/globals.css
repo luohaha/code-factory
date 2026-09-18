@@ -134,6 +134,63 @@ body {
   scrollbar-width: thin;
 }
 
+.requirement-tree-roots,
+.requirement-tree-children {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.requirement-tree-branch {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.requirement-tree-children {
+  position: relative;
+  margin-left: 4rem;
+}
+
+.requirement-tree-children::before {
+  position: absolute;
+  top: 50%;
+  left: -4rem;
+  width: 2rem;
+  border-top: 1px solid color-mix(in oklch, var(--border) 82%, var(--foreground));
+  content: '';
+}
+
+.requirement-tree-children > .requirement-tree-branch::before {
+  position: absolute;
+  top: 50%;
+  left: -2rem;
+  width: 2rem;
+  border-top: 1px solid color-mix(in oklch, var(--border) 82%, var(--foreground));
+  content: '';
+}
+
+.requirement-tree-children > .requirement-tree-branch::after {
+  position: absolute;
+  top: -0.5rem;
+  bottom: -0.5rem;
+  left: -2rem;
+  border-left: 1px solid color-mix(in oklch, var(--border) 82%, var(--foreground));
+  content: '';
+}
+
+.requirement-tree-children > .requirement-tree-branch:first-child::after {
+  top: 50%;
+}
+
+.requirement-tree-children > .requirement-tree-branch:last-child::after {
+  bottom: 50%;
+}
+
+.requirement-tree-children > .requirement-tree-branch:only-child::after {
+  display: none;
+}
+
 .message-markdown {
   min-width: 0;
   overflow-wrap: anywhere;

@@ -64,6 +64,8 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/events | Subscribe to the resumable SSE stream |
 | POST | /api/agent/pull-requests | Register or update a PR from an RD Agent |
 | POST | /api/agent/requirements | Propose a follow-up Requirement from an RD Agent |
+| GET | /api/agent/requirements/:id/related | List a source Requirement's direct parent and children |
+| POST | /api/agent/requirements/:id/related/:targetId/messages | Message a directly related Requirement's RD Agent |
 
 URL-encode IDs used in path parameters. Requirement, Session, Run, PR, and ReviewRequest lists are ordered with the most recently updated or created items first. Messages and events are ordered by ascending sequence number. List responses use:
 
@@ -154,6 +156,7 @@ interface RequirementMessage {
   requirementId: string;
   sessionId: string;
   runId: string | null;
+  sourceRequirementId: string | null; // sender for a related RD Agent message
   author: 'human' | 'rd_agent' | 'reviewer' | 'system';
   body: string;
   attachments: MessageAttachment[];
@@ -174,7 +177,7 @@ interface MessageAttachment {
 }
 ~~~
 
-sequence increases monotonically within a Requirement. deliverToRd=true means RD must consume the message. RD output is never delivered back to itself.
+sequence increases monotonically within a Requirement. deliverToRd=true means RD must consume the message. A Requirement's own RD output is never delivered back to itself. Messages explicitly sent by a directly related RD Agent have author=rd_agent, identify the sender through sourceRequirementId, and use deliverToRd=true in the target conversation.
 
 ### 3.5 PullRequest
 
@@ -641,6 +644,8 @@ These endpoints are the transport used by `code-factory-cli` and other trusted l
 ~~~bash
 code-factory-cli pr register --help
 code-factory-cli requirement propose --help
+code-factory-cli requirement related --help
+code-factory-cli requirement message --help
 code-factory-cli timer register --help
 code-factory-cli timer show --help
 code-factory-cli timer cancel --help
@@ -715,6 +720,31 @@ curl -X POST http://127.0.0.1:4310/api/agent/requirements \
 ~~~
 
 Success: 201 Created with the new Requirement and createdBy=rd_agent. Returns 404 for an unknown source Session and 400 when parentRequirementId does not match or another field is invalid.
+
+### GET /api/agent/requirements/:sourceRequirementId/related
+
+Returns the source Requirement's direct parent and children as `{ "parent": Requirement | null, "children": Requirement[] }`, including terminal records that have not yet expired. The required `sourceSessionId` query parameter must identify the source Requirement's RD Session.
+
+The CLI supplies both values from its injected context:
+
+~~~bash
+code-factory-cli requirement related
+~~~
+
+Success: 200 OK. Returns 404 for an unknown source Requirement and 400 when the Session does not belong to it.
+
+### POST /api/agent/requirements/:sourceRequirementId/related/:targetRequirementId/messages
+
+Persists an RD Agent message in a direct parent or child Requirement and starts or queues the target RD Session.
+
+~~~json
+{
+  "sourceSessionId": "ses_...",
+  "message": "Use contract version 2 for the shared implementation."
+}
+~~~
+
+Success: 202 Accepted with `accepted`, source and target IDs, `queued`, the persisted `message`, and the current target `requirement`. The message has `author=rd_agent`, `sourceRequirementId` equal to the source, and `deliverToRd=true`. A DONE target is reactivated in its original Session. Returns 400 for invalid input or mismatched source Session, 404 for an unknown source or target, and 409 for an unrelated or CANCELLED target.
 
 ## 8. SSE event stream
 

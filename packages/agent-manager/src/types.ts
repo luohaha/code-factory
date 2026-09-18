@@ -106,6 +106,7 @@ export interface RequirementMessage {
   requirementId: string;
   sessionId: string;
   runId: string | null;
+  sourceRequirementId: string | null;
   author: MessageAuthor;
   body: string;
   attachments: MessageAttachment[];
@@ -171,6 +172,11 @@ export interface AgentTimer {
 
 export interface RequirementWithSession extends Requirement {
   session: AgentSession;
+}
+
+export interface RelatedRequirements {
+  parent: RequirementWithSession | null;
+  children: RequirementWithSession[];
 }
 
 export interface SearchResult {
