@@ -681,29 +681,29 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
     const firstExecution = manager.runRequirement(first.id);
     assert.equal(runner.requests[0]?.workspaceRoot, manager.workspaceRoot);
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('Agent Manager owns draft/open/closed/merged lifecycle synchronization')));
+      value.includes('The GitHub reconciler owns lifecycle')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('Reuse a worktree dedicated to this requirement')));
+      value.includes('reuse or create a Requirement-specific worktree')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('Do not move, discard, or overwrite pre-existing changes')));
+      value.includes('Preserve pre-existing changes')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('code-factory-cli pr register')));
+      value.includes('pr register --from-github <PR-URL>')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('code-factory-cli requirement propose')));
+      value.includes('requirement propose')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('code-factory-cli requirement related')));
+      value.includes('requirement related')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('code-factory-cli requirement message')));
+      value.includes('requirement message')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('code-factory-cli timer register')));
+      value.includes('timer register')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('For every long-running process or task you start')));
+      value.includes('Track started tasks to completion')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes("use the agent provider's normal wait, task-output, or monitor mechanism")));
+      value.includes("provider wait/monitor tools")));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('only when the task is guaranteed to continue independently after the Run ends')));
+      value.includes('only for work guaranteed to continue independently afterward')));
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
-      value.includes('code-factory-cli timer show')));
+      value.includes('timer show')));
     assert.ok(runner.requests[0]?.invocation.args.every((value) =>
       !value.includes('/agent/pull-requests') && !value.includes('/agent/requirements')));
     assert.ok(runner.requests[0]?.invocation.args.every((value) =>
@@ -745,8 +745,8 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
     assert.match(runner.requests[2]?.invocation.input ?? '', /add another test/);
     assert.match(runner.requests[2]?.invocation.input ?? '', /Title: First/);
     assert.match(runner.requests[2]?.invocation.input ?? '', /Description:\nFirst task/);
-    assert.ok(runner.requests[2]?.invocation.args.some((value) => value.includes('avoid duplicating commits')));
-    assert.ok(runner.requests[1]?.invocation.args.some((value) => value.includes('human confirmation owns completion')));
+    assert.ok(runner.requests[2]?.invocation.args.some((value) => value.includes('check worktree and PR state before repeating actions')));
+    assert.ok(runner.requests[1]?.invocation.args.some((value) => value.includes('humans confirm completion')));
     assert.doesNotMatch(runner.requests[2]?.invocation.input ?? '', /Implementation is ready/);
     runner.resolvers[2]?.({
       status: 'succeeded',
