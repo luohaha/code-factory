@@ -1,6 +1,6 @@
 export const conversationBottomThreshold = 96;
 
-export type RequirementDetailEntryPoint = 'conversation' | 'trace';
+export type RequirementDetailMode = 'conversation' | 'trace';
 export type RequirementDetailSourceView = 'requirements' | 'relationships' | 'pull_requests' | 'sessions' | 'timers';
 
 type ScrollMetrics = Pick<
@@ -29,25 +29,10 @@ export function isAwayFromConversationTop(
   return scrollTop > threshold;
 }
 
-export function shouldScrollToLatestOnInitialLoad(
-  entryPoint: RequirementDetailEntryPoint,
-): boolean {
-  return entryPoint === 'conversation';
-}
-
-export function requirementDetailEntryPointForView(
+export function requirementDetailModeForView(
   view: RequirementDetailSourceView,
-): RequirementDetailEntryPoint {
+): RequirementDetailMode {
   return view === 'sessions' ? 'trace' : 'conversation';
-}
-
-export function scrollTopForRelativeElement(
-  viewportScrollTop: number,
-  viewportTop: number,
-  elementTop: number,
-  offset = 0,
-): number {
-  return Math.max(0, viewportScrollTop + elementTop - viewportTop - offset);
 }
 
 export function countAddedMessages(

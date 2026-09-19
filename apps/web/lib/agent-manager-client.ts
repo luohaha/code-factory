@@ -306,6 +306,13 @@ export class AgentManagerClient {
     return response.items;
   }
 
+  async listRequirementAgentTrace(requirementId: string): Promise<AgentTraceEventDto[]> {
+    const response = await this.request<{ items: AgentTraceEventDto[] }>(
+      `/api/requirements/${encodeURIComponent(requirementId)}/trace`,
+    );
+    return response.items;
+  }
+
   async listMessages(requirementId: string): Promise<RequirementMessageDto[]> {
     const response = await this.request<{ items: RequirementMessageDto[] }>(
       `/api/requirements/${encodeURIComponent(requirementId)}/messages`,

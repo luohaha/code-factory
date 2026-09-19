@@ -195,6 +195,12 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         sendJson(response, 200, { items: manager.listAgentTrace(runId) });
         return;
       }
+      const requirementTrace = url.pathname.match(/^\/api\/requirements\/([^/]+)\/trace$/);
+      if (request.method === 'GET' && requirementTrace) {
+        const requirementId = decodeURIComponent(requirementTrace[1]!);
+        sendJson(response, 200, { items: manager.listRequirementAgentTrace(requirementId) });
+        return;
+      }
       if (request.method === 'GET' && url.pathname === '/api/pull-requests') {
         sendJson(response, 200, { items: manager.listPullRequests(url.searchParams.get('requirementId') ?? undefined) });
         return;

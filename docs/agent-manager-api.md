@@ -50,6 +50,7 @@ The service listens only on the loopback interface by default and currently has 
 | POST | /api/requirements/:id/interrupt | Interrupt the current RD Run |
 | POST | /api/requirements/:id/confirm | Confirm Requirement completion |
 | GET | /api/requirements/:id/messages | Read the complete Requirement conversation |
+| GET | /api/requirements/:id/trace | Read the normalized execution trace across all RD Runs in a Requirement's Session |
 | GET | /api/timers | List Agent Timers across the workspace |
 | GET | /api/requirements/:id/timers | List Agent Timers for a Requirement |
 | POST | /api/requirements/:id/timers | Create a one-time or recurring Agent Timer |
@@ -167,7 +168,7 @@ interface AgentTraceEvent {
 }
 ~~~
 
-Trace events preserve Provider-emitted progress such as reasoning summaries, tool calls, command output, tool results, Agent messages, and lifecycle/errors. They contain normalized fields rather than exposing the Provider's private JSON schema directly. Each trace is stored once as the payload of its durable `run.trace.appended` ManagerEvent; the Run trace endpoint projects those events instead of maintaining a second trace table.
+Trace events preserve Provider-emitted progress such as reasoning summaries, tool calls, command output, tool results, Agent messages, and lifecycle/errors. They contain normalized fields rather than exposing the Provider's private JSON schema directly. Each trace is stored once as the payload of its durable `run.trace.appended` ManagerEvent; the Run and Requirement trace endpoints project those events instead of maintaining a second trace table.
 
 ### 3.5 RequirementMessage
 
@@ -415,6 +416,12 @@ Success: 200 OK with {"items": AgentRun[]}. An unknown requirementId returns an 
 Returns one Run's trace in ascending sequence order. Trace capture is available for new Runs; Runs created before this feature may return an empty list.
 
 Success: 200 OK with `{"items": AgentTraceEvent[]}`. Returns 404 Not Found for an unknown Run.
+
+### GET /api/requirements/:id/trace
+
+Returns the trace events for all RD Runs in one Requirement's persistent Session. Reviewer Runs are not part of the Session and are excluded. The endpoint reads the canonical `run.trace.appended` ManagerEvents directly, so clients can load a complete Session timeline with one request instead of fetching every Run separately. The dashboard orders the combined events by `createdAt`, using `sequence` to break ties, and appends live SSE events to the same timeline.
+
+Success: 200 OK with `{"items": AgentTraceEvent[]}`. Returns 404 Not Found for an unknown Requirement.
 
 ### GET /api/requirements/:id/messages
 

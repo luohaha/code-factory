@@ -114,14 +114,13 @@ import {
   isAwayFromConversationTop,
   mergeConversationSnapshot,
   mergeSelectedConversationMessage,
-  requirementDetailEntryPointForView,
-  scrollTopForRelativeElement,
-  shouldScrollToLatestOnInitialLoad,
-  type RequirementDetailEntryPoint,
+  requirementDetailModeForView,
+  type RequirementDetailMode,
   type RequirementDetailSourceView,
 } from '@/lib/conversation-scroll';
 import {
   applyRequirementScopedUpdate,
+  collectRequirementAgentTrace,
   managerEventInvalidatesSearch,
   mergeAgentTrace,
   mergeVersionedSnapshot,
@@ -1624,111 +1623,89 @@ function RequirementComposer({
   );
 }
 
-function AgentTracePanel({ runs, tracesByRun, loadedRunIds, sectionRef, onLoadTrace }: {
+function AgentTracePanel({ requirementId, runs, tracesByRun, loadedRequirementIds, onLoadTrace }: {
+  requirementId: string;
   runs: AgentRunDto[];
   tracesByRun: Readonly<Record<string, AgentTraceEventDto[] | undefined>>;
-  loadedRunIds: ReadonlySet<string>;
-  sectionRef: RefObject<HTMLElement | null>;
-  onLoadTrace: (runId: string) => Promise<void>;
+  loadedRequirementIds: ReadonlySet<string>;
+  onLoadTrace: (requirementId: string) => Promise<void>;
 }) {
   const { locale, t } = useI18n();
-  const latestRunId = runs[0]?.id ?? '';
-  const [manuallySelectedRunId, setManuallySelectedRunId] = useState<string | null>(null);
-  const [loadError, setLoadError] = useState<{ runId: string; message: string } | null>(null);
-  const requestedRunIdsRef = useRef(new Set<string>());
-  const selectedRunId = runs.some((run) => run.id === manuallySelectedRunId)
-    ? manuallySelectedRunId!
-    : latestRunId;
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const requestedRequirementIdsRef = useRef(new Set<string>());
+  const sessionRuns = useMemo(
+    () => runs.filter((run) => run.role === 'rd' && run.sessionId !== null),
+    [runs],
+  );
+  const runIds = useMemo(() => new Set(sessionRuns.map((run) => run.id)), [sessionRuns]);
+  const trace = useMemo(
+    () => collectRequirementAgentTrace(runIds, tracesByRun),
+    [runIds, tracesByRun],
+  );
+  const running = sessionRuns.some((run) => run.status === 'running');
 
-  const requestTrace = useCallback((runId: string) => {
-    if (!runId || requestedRunIdsRef.current.has(runId)) return;
-    requestedRunIdsRef.current.add(runId);
-    setLoadError((current) => current?.runId === runId ? null : current);
-    void onLoadTrace(runId)
+  const requestTrace = useCallback(() => {
+    if (requestedRequirementIdsRef.current.has(requirementId)) return;
+    requestedRequirementIdsRef.current.add(requirementId);
+    setLoadError(null);
+    void onLoadTrace(requirementId)
       .catch((caught: unknown) => {
-        setLoadError({
-          runId,
-          message: caught instanceof Error ? caught.message : t('Failed to load Agent trace'),
-        });
+        setLoadError(caught instanceof Error ? caught.message : t('Failed to load Agent trace'));
       });
-  }, [onLoadTrace, t]);
+  }, [onLoadTrace, requirementId, t]);
 
   useEffect(() => {
-    if (!selectedRunId || loadedRunIds.has(selectedRunId)) return;
-    requestTrace(selectedRunId);
-  }, [loadedRunIds, requestTrace, selectedRunId]);
+    if (loadedRequirementIds.has(requirementId)) return;
+    requestTrace();
+  }, [loadedRequirementIds, requestTrace, requirementId]);
 
-  if (runs.length === 0) return null;
-  const selectedRun = runs.find((run) => run.id === selectedRunId) ?? runs[0]!;
-  const trace = tracesByRun[selectedRun.id] ?? [];
-  const selectedLoadError = loadError?.runId === selectedRun.id ? loadError.message : null;
-  const loading = !loadedRunIds.has(selectedRun.id) && selectedLoadError === null;
+  const loading = !loadedRequirementIds.has(requirementId) && loadError === null;
 
   return (
-    <section ref={sectionRef} className="mt-5 scroll-mt-4" aria-labelledby="agent-trace">
-      <div className="mb-2.5 flex flex-wrap items-center gap-2">
+    <section aria-labelledby="agent-trace">
+      <div className="mb-2.5 flex items-center gap-2">
         <Terminal className="size-3.5 text-muted-foreground" />
         <h3 id="agent-trace" className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Agent trace')}</h3>
         <Badge variant="secondary" className="h-5 min-w-5 justify-center px-1.5 font-mono text-[9px]">{trace.length}</Badge>
-        <NativeSelect
-          size="sm"
-          className="ml-auto w-full sm:w-64"
-          value={selectedRun.id}
-          aria-label={t('Select Run trace')}
-          onChange={(event) => {
-            setManuallySelectedRunId(event.currentTarget.value);
-          }}
-        >
-          {runs.map((run, index) => (
-            <NativeSelectOption key={run.id} value={run.id}>
-              {t('Run {number} · {status} · {time}', {
-                number: runs.length - index,
-                status: t(runStatusLabel[run.status]),
-                time: formatTime(run.startedAt, locale),
-              })}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
       </div>
-      <div className="rounded-xl border border-border/80 bg-card">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/70 px-3.5 py-2.5 text-[9px] text-muted-foreground">
-          <span className="font-medium text-foreground">{selectedRun.taskSummary}</span>
-          <span className="font-mono">run-{shortId(selectedRun.id)}</span>
-          <span>{formatTime(selectedRun.startedAt, locale)}</span>
-          <Badge variant="outline" className="ml-auto h-5 text-[9px]">{t(runStatusLabel[selectedRun.status])}</Badge>
-        </div>
+      <div className="rounded-xl border border-border/80 bg-card px-3.5 py-3">
         {loading ? (
           <div className="flex items-center justify-center gap-2 px-4 py-8 text-[10px] text-muted-foreground">
             <LoaderCircle className="size-3.5 animate-spin" />{t('Loading Agent trace')}
           </div>
-        ) : selectedLoadError ? (
+        ) : loadError ? (
           <div className="flex flex-col items-center gap-2 px-4 py-6 text-center text-[10px] text-destructive">
-            <span>{selectedLoadError}</span>
+            <span>{loadError}</span>
             <Button
               type="button"
               size="xs"
               variant="outline"
               onClick={() => {
-                requestedRunIdsRef.current.delete(selectedRun.id);
-                requestTrace(selectedRun.id);
+                requestedRequirementIdsRef.current.delete(requirementId);
+                requestTrace();
               }}
             >
               <RotateCcw data-icon="inline-start" />{t('Retry trace')}
             </Button>
           </div>
         ) : trace.length === 0 ? (
-          <div className="px-4 py-7 text-center text-[10px] text-muted-foreground">
-            {t(selectedRun.status === 'running' ? 'Waiting for Agent trace events…' : 'No trace was captured for this Run.')}
+          <div className="px-4 py-8 text-center text-[10px] text-muted-foreground">
+            {t(sessionRuns.length === 0
+              ? 'This Session has no Runs yet.'
+              : running
+                ? 'Waiting for Agent trace events…'
+                : 'No trace was captured for this Session.')}
           </div>
         ) : (
-          <div className="max-h-96 overflow-y-auto px-3.5 py-3" aria-live="polite">
-            <ol className="space-y-3">
+          <div aria-live="polite">
+            <ol className="space-y-4">
               {trace.map((item) => (
-                <li key={item.id} className="relative pl-5 before:absolute before:top-5 before:bottom-[-0.75rem] before:left-[5px] before:w-px before:bg-border last:before:hidden">
+                <li key={item.id} className="relative pl-5 before:absolute before:top-5 before:bottom-[-1rem] before:left-[5px] before:w-px before:bg-border last:before:hidden">
                   <span className={`absolute top-1 left-0 size-2.5 rounded-full border-2 border-card ${item.kind === 'error' || item.status === 'failed' ? 'bg-rose-500' : item.kind === 'tool_call' || item.kind === 'tool_result' ? 'bg-amber-500' : item.kind === 'reasoning' ? 'bg-violet-500' : 'bg-emerald-500'}`} />
                   <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                     <Badge variant="outline" className="h-5 text-[9px]">{t(traceKindLabel[item.kind])}</Badge>
                     <span className="min-w-0 flex-1 truncate text-[10px] font-semibold" title={item.title}>{item.title}</span>
+                    <span className="shrink-0 font-mono text-[8px] text-muted-foreground">run-{shortId(item.runId)}</span>
                     <span className="shrink-0 text-[9px] text-muted-foreground">{formatTime(item.createdAt, locale)}</span>
                   </div>
                   {item.detail ? (
@@ -1753,7 +1730,7 @@ function RequirementDetail({
   requirement,
   runs,
   tracesByRun,
-  loadedTraceRunIds,
+  loadedTraceRequirementIds,
   messages,
   agentTimers,
   pullRequests,
@@ -1762,7 +1739,7 @@ function RequirementDetail({
   messageLoading,
   busy,
   busyPullRequestId,
-  initialEntryPoint,
+  detailMode,
   onOpenChange,
   onStart,
   onReply,
@@ -1777,7 +1754,7 @@ function RequirementDetail({
   requirement: RequirementDto | null;
   runs: AgentRunDto[];
   tracesByRun: Readonly<Record<string, AgentTraceEventDto[] | undefined>>;
-  loadedTraceRunIds: ReadonlySet<string>;
+  loadedTraceRequirementIds: ReadonlySet<string>;
   messages: RequirementMessageDto[];
   agentTimers: AgentTimerDto[];
   pullRequests: PullRequestDto[];
@@ -1786,7 +1763,7 @@ function RequirementDetail({
   messageLoading: boolean;
   busy: boolean;
   busyPullRequestId: string | null;
-  initialEntryPoint: RequirementDetailEntryPoint;
+  detailMode: RequirementDetailMode;
   onOpenChange: (open: boolean) => void;
   onStart: (message?: string, attachments?: File[]) => Promise<void>;
   onReply: (message: string, attachments?: File[]) => Promise<void>;
@@ -1797,7 +1774,7 @@ function RequirementDetail({
     input: { description: string; schedule: 'once' | 'recurring'; intervalSeconds: number },
   ) => Promise<void>;
   onCancelAgentTimer: (timerId: string) => Promise<void>;
-  onLoadTrace: (runId: string) => Promise<void>;
+  onLoadTrace: (requirementId: string) => Promise<void>;
   apiUrl: string;
 }) {
   const { locale, t } = useI18n();
@@ -1806,9 +1783,7 @@ function RequirementDetail({
   const [scrollToTopRequirementId, setScrollToTopRequirementId] = useState<string | null>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
-  const traceSectionRef = useRef<HTMLElement>(null);
   const followsLatestRef = useRef(true);
-  const traceInitialScrollRequirementIdRef = useRef<string | undefined>(undefined);
   const initializedRequirementIdRef = useRef<string | undefined>(undefined);
   const loadedRequirementIdRef = useRef<string | undefined>(undefined);
   const previousMessageIdsRef = useRef<Set<string>>(new Set());
@@ -1834,40 +1809,8 @@ function RequirementDetail({
     scrollViewportRef.current?.scrollTo({ top: 0, behavior: 'auto' });
   }, []);
 
-  const scrollToTrace = useCallback(() => {
-    const viewport = scrollViewportRef.current;
-    const traceSection = traceSectionRef.current;
-    if (!viewport || !traceSection) return false;
-    followsLatestRef.current = false;
-    setNewMessages(null);
-    viewport.scrollTo({
-      top: scrollTopForRelativeElement(
-        viewport.scrollTop,
-        viewport.getBoundingClientRect().top,
-        traceSection.getBoundingClientRect().top,
-        16,
-      ),
-      behavior: 'auto',
-    });
-    return true;
-  }, []);
-
   useEffect(() => {
-    if (!requirementId) {
-      traceInitialScrollRequirementIdRef.current = undefined;
-      return;
-    }
-    if (
-      initialEntryPoint !== 'trace'
-      || traceInitialScrollRequirementIdRef.current === requirementId
-    ) return;
-    const frame = window.requestAnimationFrame(() => {
-      if (scrollToTrace()) traceInitialScrollRequirementIdRef.current = requirementId;
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [initialEntryPoint, requirementId, runs.length, scrollToTrace]);
-
-  useEffect(() => {
+    if (detailMode !== 'conversation') return;
     if (!requirementId) {
       followsLatestRef.current = true;
       initializedRequirementIdRef.current = undefined;
@@ -1893,11 +1836,8 @@ function RequirementDetail({
     previousMessageIdsRef.current = nextMessageIds;
 
     if (isInitialLoad || (addedMessageCount > 0 && followsLatestRef.current)) {
-      if (!isInitialLoad || shouldScrollToLatestOnInitialLoad(initialEntryPoint)) {
-        const frame = window.requestAnimationFrame(scrollToLatest);
-        return () => window.cancelAnimationFrame(frame);
-      }
-      return;
+      const frame = window.requestAnimationFrame(scrollToLatest);
+      return () => window.cancelAnimationFrame(frame);
     }
     if (addedMessageCount > 0) {
       const frame = window.requestAnimationFrame(() => {
@@ -1910,7 +1850,7 @@ function RequirementDetail({
       });
       return () => window.cancelAnimationFrame(frame);
     }
-  }, [initialEntryPoint, messageLoading, messages, requirementId, scrollToLatest]);
+  }, [detailMode, messageLoading, messages, requirementId, scrollToLatest]);
 
   if (!requirement) return <Sheet open={false} onOpenChange={onOpenChange} />;
 
@@ -1919,7 +1859,7 @@ function RequirementDetail({
       <SheetContent
         className="data-[side=right]:w-full! data-[side=right]:max-w-none! gap-0 sm:data-[side=right]:w-[min(820px,calc(100vw-48px))]!"
         side="right"
-        initialFocus={initialEntryPoint === 'conversation' && requirement.status === 'todo' ? messageInputRef : true}
+        initialFocus={detailMode === 'conversation' && requirement.status === 'todo' ? messageInputRef : true}
       >
         <SheetHeader className="max-h-[40dvh] shrink-0 overflow-y-auto border-b border-border bg-card py-4 pr-12 pl-5 sm:pr-12 sm:pl-6">
           <div className="mb-2.5 flex items-center gap-2">
@@ -1940,8 +1880,8 @@ function RequirementDetail({
 
         <ScrollArea
           className="min-h-0 flex-1 bg-muted/15"
-          viewportRef={scrollViewportRef}
-          onViewportScroll={(event) => {
+          viewportRef={detailMode === 'conversation' ? scrollViewportRef : undefined}
+          onViewportScroll={detailMode === 'conversation' ? (event) => {
             const awayFromBottom = isAwayFromConversationBottom(event.currentTarget);
             const followsLatest = !awayFromBottom;
             followsLatestRef.current = followsLatest;
@@ -1954,8 +1894,8 @@ function RequirementDetail({
                 ? requirementId
                 : null,
             );
-          }}
-          overlay={(
+          } : undefined}
+          overlay={detailMode === 'conversation' ? (
             <>
               {showScrollToTop ? (
                 <Button
@@ -1996,9 +1936,19 @@ function RequirementDetail({
                 </Button>
               ) : null}
             </>
-          )}
+          ) : null}
         >
           <div className="px-5 py-5 sm:px-6">
+            {detailMode === 'trace' ? (
+              <AgentTracePanel
+                requirementId={requirement.id}
+                runs={runs}
+                tracesByRun={tracesByRun}
+                loadedRequirementIds={loadedTraceRequirementIds}
+                onLoadTrace={onLoadTrace}
+              />
+            ) : (
+              <>
             <section className="rounded-xl border border-border/80 bg-card px-4 py-3.5">
               <p className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Requirement description')}</p>
               <p className="mt-1.5 text-xs leading-5 whitespace-pre-wrap">{requirement.description}</p>
@@ -2008,14 +1958,6 @@ function RequirementDetail({
                 <div className="col-span-2 min-w-0 sm:col-span-1"><dt className="sr-only">{t('Native Session')}</dt><dd className="truncate" title={requirement.session.nativeSessionId ?? undefined}>{t('Native: {id}', { id: requirement.session.nativeSessionId ? shortId(requirement.session.nativeSessionId) : t('Not created') })}</dd></div>
               </dl>
             </section>
-
-            <AgentTracePanel
-              runs={runs}
-              tracesByRun={tracesByRun}
-              loadedRunIds={loadedTraceRunIds}
-              sectionRef={traceSectionRef}
-              onLoadTrace={onLoadTrace}
-            />
 
             {pullRequests.length > 0 ? (
               <section className="mt-5" aria-labelledby="linked-pull-requests">
@@ -2122,21 +2064,25 @@ function RequirementDetail({
               </div>
             ) : null}
             </section>
+              </>
+            )}
           </div>
         </ScrollArea>
 
-        <RequirementComposer
-          requirement={requirement}
-          agentTimers={agentTimers}
-          busy={busy}
-          inputRef={messageInputRef}
-          onStart={onStart}
-          onReply={onReply}
-          onConfirm={onConfirm}
-          onCreateAgentTimer={onCreateAgentTimer}
-          onCancelAgentTimer={onCancelAgentTimer}
-          onSent={scrollToLatest}
-        />
+        {detailMode === 'conversation' ? (
+          <RequirementComposer
+            requirement={requirement}
+            agentTimers={agentTimers}
+            busy={busy}
+            inputRef={messageInputRef}
+            onStart={onStart}
+            onReply={onReply}
+            onConfirm={onConfirm}
+            onCreateAgentTimer={onCreateAgentTimer}
+            onCancelAgentTimer={onCancelAgentTimer}
+            onSent={scrollToLatest}
+          />
+        ) : null}
       </SheetContent>
     </Sheet>
   );
@@ -2155,7 +2101,7 @@ function Dashboard() {
   const [requirements, setRequirements] = useState<RequirementDto[]>([]);
   const [runs, setRuns] = useState<AgentRunDto[]>([]);
   const [agentTraces, setAgentTraces] = useState<Record<string, AgentTraceEventDto[] | undefined>>({});
-  const [loadedTraceRunIds, setLoadedTraceRunIds] = useState<Set<string>>(() => new Set());
+  const [loadedTraceRequirementIds, setLoadedTraceRequirementIds] = useState<Set<string>>(() => new Set());
   const [pullRequests, setPullRequests] = useState<PullRequestDto[]>([]);
   const [reviewRequests, setReviewRequests] = useState<ReviewRequestDto[]>([]);
   const [conversation, setConversation] = useState<{
@@ -2165,8 +2111,9 @@ function Dashboard() {
   const [agentTimers, setAgentTimers] = useState<AgentTimerDto[]>([]);
   const [messageLoading, setMessageLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [detailEntryPoint, setDetailEntryPoint] = useState<RequirementDetailEntryPoint>('conversation');
+  const [detailMode, setDetailMode] = useState<RequirementDetailMode>('conversation');
   const selectedIdRef = useRef<string | null>(null);
+  const detailModeRef = useRef<RequirementDetailMode>('conversation');
   const pendingRefreshTargetsRef = useRef<DashboardRefreshTarget[]>([]);
   const refreshTimerRef = useRef<number | null>(null);
   const eventRevisionRef = useRef(0);
@@ -2192,19 +2139,24 @@ function Dashboard() {
     requirementId: string,
     sourceView: RequirementDetailSourceView = 'requirements',
   ) => {
-    setDetailEntryPoint(requirementDetailEntryPointForView(sourceView));
+    const nextDetailMode = requirementDetailModeForView(sourceView);
+    detailModeRef.current = nextDetailMode;
+    setDetailMode(nextDetailMode);
     setSelectedId(requirementId);
   }, []);
 
-  const loadAgentTrace = useCallback(async (runId: string) => {
-    const items = await client.listAgentTrace(runId);
-    setAgentTraces((current) => ({
-      ...current,
-      [runId]: mergeAgentTrace(current[runId] ?? [], items),
-    }));
-    setLoadedTraceRunIds((current) => {
+  const loadRequirementAgentTrace = useCallback(async (requirementId: string) => {
+    const items = await client.listRequirementAgentTrace(requirementId);
+    setAgentTraces((current) => {
+      const next = { ...current };
+      for (const item of items) {
+        next[item.runId] = mergeAgentTrace(next[item.runId] ?? [], [item]);
+      }
+      return next;
+    });
+    setLoadedTraceRequirementIds((current) => {
       const next = new Set(current);
-      next.add(runId);
+      next.add(requirementId);
       return next;
     });
   }, [client]);
@@ -2212,6 +2164,10 @@ function Dashboard() {
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
+
+  useEffect(() => {
+    detailModeRef.current = detailMode;
+  }, [detailMode]);
 
   const markSynced = useCallback(() => {
     const syncedAt = new Date();
@@ -2364,6 +2320,7 @@ function Dashboard() {
           }
           case 'messages':
             if (selectedIdRef.current === target.requirementId
+              && detailModeRef.current === 'conversation'
               && !removedRequirementIdsRef.current.has(target.requirementId)) {
               const items = await client.listMessages(target.requirementId);
               if (selectedIdRef.current === target.requirementId) {
@@ -2538,6 +2495,7 @@ function Dashboard() {
       && payload.message
       && payload.message.requirementId === event.requirementId
       && event.requirementId === selectedIdRef.current
+      && detailModeRef.current === 'conversation'
       && !removedRequirementIdsRef.current.has(event.requirementId)) {
       setConversation((current) => mergeSelectedConversationMessage(
         current,
@@ -2614,7 +2572,7 @@ function Dashboard() {
   }, [apiUrlReady, applyManagerEvent, client, reload]);
 
   useEffect(() => {
-    if (!selectedId) return;
+    if (!selectedId || detailMode !== 'conversation') return;
     let cancelled = false;
     const timer = window.setTimeout(() => {
       setMessageLoading(true);
@@ -2640,7 +2598,7 @@ function Dashboard() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [client, selectedId, t]);
+  }, [client, detailMode, selectedId, t]);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -2677,7 +2635,7 @@ function Dashboard() {
   const selectedRuns = runs.filter((run) => run.requirementId === selectedId);
   const selectedPullRequests = pullRequests.filter((pullRequest) => pullRequest.requirementId === selectedId);
   const selectedMessages = conversation.requirementId === selectedId ? conversation.items : [];
-  const selectedMessageLoading = selectedId !== null
+  const selectedMessageLoading = detailMode === 'conversation' && selectedId !== null
     && (messageLoading || conversation.requirementId !== selectedId);
   const normalizedQuery = query.trim();
   const searchResults = useMemo(
@@ -3295,11 +3253,11 @@ function Dashboard() {
       </section>
 
       <RequirementDetail
-        key={selectedRequirement ? `${selectedRequirement.id}:${detailEntryPoint}` : 'closed'}
+        key={selectedRequirement ? `${selectedRequirement.id}:${detailMode}` : 'closed'}
         requirement={selectedRequirement}
         runs={selectedRuns}
         tracesByRun={agentTraces}
-        loadedTraceRunIds={loadedTraceRunIds}
+        loadedTraceRequirementIds={loadedTraceRequirementIds}
         messages={selectedMessages}
         agentTimers={agentTimers.filter((timer) => timer.requirementId === selectedId)}
         pullRequests={selectedPullRequests}
@@ -3310,7 +3268,7 @@ function Dashboard() {
           ? busyId === selectedRequirement.id || interruptingRequirementIds.has(selectedRequirement.id)
           : false}
         busyPullRequestId={busyPullRequestId}
-        initialEntryPoint={detailEntryPoint}
+        detailMode={detailMode}
         apiUrl={apiUrl}
         onOpenChange={(open) => { if (!open) setSelectedId(null); }}
         onStart={(message, attachments = []) => selectedRequirement ? runAction(
@@ -3340,7 +3298,7 @@ function Dashboard() {
         onReview={requestReview}
         onCreateAgentTimer={createAgentTimer}
         onCancelAgentTimer={cancelAgentTimer}
-        onLoadTrace={loadAgentTrace}
+        onLoadTrace={loadRequirementAgentTrace}
       />
 
       <div className="fixed right-4 bottom-4 hidden items-center gap-2 rounded-lg border border-border bg-card/95 px-3 py-2 text-[10px] text-muted-foreground shadow-lg backdrop-blur sm:flex">

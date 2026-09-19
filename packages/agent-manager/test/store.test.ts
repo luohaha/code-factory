@@ -98,6 +98,7 @@ test('Agent trace events are derived from the durable Manager event stream', () 
     assert.equal(first.sequence, firstEvent.id);
     assert.equal(second.sequence, secondEvent.id);
     assert.deepEqual(store.listAgentTrace('run-trace'), [first, second]);
+    assert.deepEqual(store.listRequirementAgentTrace('req-trace'), [first, second]);
   } finally {
     store.close();
   }

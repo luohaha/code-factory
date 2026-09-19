@@ -4,6 +4,7 @@ import test from 'node:test';
 import type { ManagerEventDto } from './agent-manager-client.ts';
 import {
   applyRequirementScopedUpdate,
+  collectRequirementAgentTrace,
   mergeAgentTrace,
   mergeRefreshTargets,
   mergeVersionedSnapshot,
@@ -22,6 +23,19 @@ void test('merges trace snapshots with live events in sequence order', () => {
 
   assert.deepEqual(mergeAgentTrace(live, snapshot), snapshot);
   assert.deepEqual(mergeAgentTrace(snapshot, live), [snapshot[0], live[0]]);
+});
+
+void test('collects every Run trace into one chronological Requirement timeline', () => {
+  const first = { id: 'trace-1', runId: 'run-1', sequence: 8, createdAt: '2026-09-18T01:00:00.000Z' };
+  const second = { id: 'trace-2', runId: 'run-2', sequence: 3, createdAt: '2026-09-18T02:00:00.000Z' };
+  assert.deepEqual(
+    collectRequirementAgentTrace(new Set(['run-1', 'run-2']), {
+      'run-2': [second],
+      'run-other': [{ id: 'trace-other', runId: 'run-other', sequence: 1, createdAt: '2026-09-18T00:00:00.000Z' }],
+      'run-1': [first],
+    }),
+    [first, second],
+  );
 });
 
 function managerEvent(

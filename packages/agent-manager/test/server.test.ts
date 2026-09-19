@@ -871,7 +871,7 @@ test('HTTP API exposes the persisted human and RD Agent conversation', async () 
 
     const traceResponse = await fetch(`${baseUrl}/api/runs/${acceptedStart.run?.id}/trace`);
     assert.equal(traceResponse.status, 200);
-    const traceBody = await traceResponse.json() as { items: Array<{ kind: string; detail: string; sequence: number }> };
+    const traceBody = await traceResponse.json() as { items: Array<{ id: string; kind: string; detail: string; sequence: number }> };
     assert.equal(traceBody.items[0]?.kind, 'tool_call');
     assert.equal(traceBody.items[0]?.detail, 'npm test');
     assert.ok(Number.isInteger(traceBody.items[0]?.sequence));
@@ -881,8 +881,18 @@ test('HTTP API exposes the persisted human and RD Agent conversation', async () 
     assert.match(cappedTraceDetail, /… trace output truncated$/);
     assert.doesNotMatch(cappedTraceDetail, /�/);
 
+    const requirementTraceResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/trace`);
+    assert.equal(requirementTraceResponse.status, 200);
+    const requirementTraceBody = await requirementTraceResponse.json() as { items: Array<{ id: string }> };
+    assert.deepEqual(
+      requirementTraceBody.items.map((item) => item.id),
+      traceBody.items.map((item) => item.id),
+    );
+
     const missingTraceResponse = await fetch(`${baseUrl}/api/runs/missing-run/trace`);
     assert.equal(missingTraceResponse.status, 404);
+    const missingRequirementTraceResponse = await fetch(`${baseUrl}/api/requirements/missing-requirement/trace`);
+    assert.equal(missingRequirementTraceResponse.status, 404);
 
     const queuedResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/reply`, {
       method: 'POST',
