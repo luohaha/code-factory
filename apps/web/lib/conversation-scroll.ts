@@ -35,6 +35,14 @@ export function requirementDetailModeForView(
   return view === 'sessions' ? 'trace' : 'conversation';
 }
 
+export function shouldAutoScrollTrace(
+  previousEventCount: number | undefined,
+  nextEventCount: number,
+  followsLatest: boolean,
+): boolean {
+  return followsLatest && previousEventCount !== nextEventCount;
+}
+
 export function countAddedMessages(
   previousMessageIds: ReadonlySet<string>,
   messages: ReadonlyArray<{ id: string }>,

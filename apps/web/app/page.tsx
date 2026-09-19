@@ -115,6 +115,7 @@ import {
   mergeConversationSnapshot,
   mergeSelectedConversationMessage,
   requirementDetailModeForView,
+  shouldAutoScrollTrace,
   type RequirementDetailMode,
   type RequirementDetailSourceView,
 } from '@/lib/conversation-scroll';
@@ -1784,6 +1785,7 @@ function RequirementDetail({
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const followsLatestRef = useRef(true);
+  const previousTraceEventCountRef = useRef<number | undefined>(undefined);
   const initializedRequirementIdRef = useRef<string | undefined>(undefined);
   const loadedRequirementIdRef = useRef<string | undefined>(undefined);
   const previousMessageIdsRef = useRef<Set<string>>(new Set());
@@ -1794,6 +1796,17 @@ function RequirementDetail({
     : 0;
   const showScrollToBottom = scrollToBottomRequirementId === requirementId;
   const showScrollToTop = scrollToTopRequirementId === requirementId;
+  const traceEventCount = useMemo(() => {
+    if (detailMode !== 'trace') return 0;
+    return runs.reduce(
+      (count, run) => count + (
+        run.role === 'rd' && run.sessionId !== null
+          ? tracesByRun[run.id]?.length ?? 0
+          : 0
+      ),
+      0,
+    );
+  }, [detailMode, runs, tracesByRun]);
 
   const scrollToLatest = useCallback(() => {
     followsLatestRef.current = true;
@@ -1808,6 +1821,40 @@ function RequirementDetail({
     setScrollToTopRequirementId(null);
     scrollViewportRef.current?.scrollTo({ top: 0, behavior: 'auto' });
   }, []);
+
+  const updateScrollPosition = useCallback((viewport: HTMLDivElement) => {
+    const awayFromBottom = isAwayFromConversationBottom(viewport);
+    const followsLatest = !awayFromBottom;
+    followsLatestRef.current = followsLatest;
+    if (detailMode === 'conversation' && followsLatest && newMessageCount > 0) {
+      setNewMessages(null);
+    }
+    setScrollToBottomRequirementId(
+      requirementId && awayFromBottom ? requirementId : null,
+    );
+    setScrollToTopRequirementId(
+      requirementId && isAwayFromConversationTop(viewport) ? requirementId : null,
+    );
+  }, [detailMode, newMessageCount, requirementId]);
+
+  useEffect(() => {
+    if (detailMode !== 'trace' || !requirementId) {
+      previousTraceEventCountRef.current = undefined;
+      return;
+    }
+    const previousEventCount = previousTraceEventCountRef.current;
+    previousTraceEventCountRef.current = traceEventCount;
+    const frame = window.requestAnimationFrame(() => {
+      const viewport = scrollViewportRef.current;
+      if (!viewport) return;
+      if (shouldAutoScrollTrace(previousEventCount, traceEventCount, followsLatestRef.current)) {
+        scrollToLatest();
+      } else {
+        updateScrollPosition(viewport);
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [detailMode, requirementId, scrollToLatest, traceEventCount, updateScrollPosition]);
 
   useEffect(() => {
     if (detailMode !== 'conversation') return;
@@ -1880,22 +1927,9 @@ function RequirementDetail({
 
         <ScrollArea
           className="min-h-0 flex-1 bg-muted/15"
-          viewportRef={detailMode === 'conversation' ? scrollViewportRef : undefined}
-          onViewportScroll={detailMode === 'conversation' ? (event) => {
-            const awayFromBottom = isAwayFromConversationBottom(event.currentTarget);
-            const followsLatest = !awayFromBottom;
-            followsLatestRef.current = followsLatest;
-            if (followsLatest && newMessageCount > 0) setNewMessages(null);
-            setScrollToBottomRequirementId(
-              requirementId && awayFromBottom ? requirementId : null,
-            );
-            setScrollToTopRequirementId(
-              requirementId && isAwayFromConversationTop(event.currentTarget)
-                ? requirementId
-                : null,
-            );
-          } : undefined}
-          overlay={detailMode === 'conversation' ? (
+          viewportRef={scrollViewportRef}
+          onViewportScroll={(event) => updateScrollPosition(event.currentTarget)}
+          overlay={(
             <>
               {showScrollToTop ? (
                 <Button
@@ -1921,7 +1955,7 @@ function RequirementDetail({
                   <ArrowDown data-icon="inline-end" />
                 </Button>
               ) : null}
-              {newMessageCount > 0 ? (
+              {detailMode === 'conversation' && newMessageCount > 0 ? (
                 <Button
                   type="button"
                   variant="secondary"
@@ -1936,7 +1970,7 @@ function RequirementDetail({
                 </Button>
               ) : null}
             </>
-          ) : null}
+          )}
         >
           <div className="px-5 py-5 sm:px-6">
             {detailMode === 'trace' ? (

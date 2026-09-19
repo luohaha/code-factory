@@ -10,6 +10,7 @@ import {
   mergeConversationSnapshot,
   mergeSelectedConversationMessage,
   requirementDetailModeForView,
+  shouldAutoScrollTrace,
   upsertConversationMessage,
 } from './conversation-scroll.ts';
 
@@ -73,6 +74,13 @@ void test('uses a trace-only detail mode exclusively for the Session board', () 
   for (const view of ['requirements', 'relationships', 'pull_requests', 'timers'] as const) {
     assert.equal(requirementDetailModeForView(view), 'conversation');
   }
+});
+
+void test('keeps Trace pinned to new events only while the viewport follows the latest event', () => {
+  assert.equal(shouldAutoScrollTrace(undefined, 4, true), true);
+  assert.equal(shouldAutoScrollTrace(4, 5, true), true);
+  assert.equal(shouldAutoScrollTrace(4, 5, false), false);
+  assert.equal(shouldAutoScrollTrace(4, 4, true), false);
 });
 
 void test('counts only message ids that were not present in the previous refresh', () => {
