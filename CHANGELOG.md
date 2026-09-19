@@ -6,6 +6,22 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-09-19
+
+### Added
+
+- Added persistent, live-updating execution traces for Codex and Claude Code runs, with API, SSE, and dashboard access across historical Runs.
+- Added GitHub-backed pull request registration and file-backed Requirement proposal descriptions to the Code Factory CLI.
+
+### Changed
+
+- Preserved Requirement context across resumed RD runs and clarified recovery, control-plane, and human-ownership guidance.
+- Distinguished messages from related Requirements' RD agents with a separate dashboard avatar color.
+- Removed Requirement composer input lag by isolating draft state and avoiding unnecessary conversation rendering.
+- Normalized GitHub repository identities across casing variants and consolidated execution traces into ManagerEvent storage.
+- Redesigned the Code Factory logo, dashboard header mark, favicon, and README branding.
+- Added validation and timeouts to GitHub and Agent Manager calls made by the Code Factory CLI.
+
 ## [0.1.6] - 2026-09-18
 
 ### Added
