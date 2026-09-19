@@ -1,5 +1,7 @@
 export const conversationBottomThreshold = 96;
 
+export type RequirementDetailEntryPoint = 'conversation' | 'trace';
+
 type ScrollMetrics = Pick<
   HTMLElement,
   'clientHeight' | 'scrollHeight' | 'scrollTop'
@@ -24,6 +26,21 @@ export function isAwayFromConversationTop(
   threshold = conversationBottomThreshold,
 ): boolean {
   return scrollTop > threshold;
+}
+
+export function shouldScrollToLatestOnInitialLoad(
+  entryPoint: RequirementDetailEntryPoint,
+): boolean {
+  return entryPoint === 'conversation';
+}
+
+export function scrollTopForRelativeElement(
+  viewportScrollTop: number,
+  viewportTop: number,
+  elementTop: number,
+  offset = 0,
+): number {
+  return Math.max(0, viewportScrollTop + elementTop - viewportTop - offset);
 }
 
 export function countAddedMessages(
