@@ -6,6 +6,17 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-09-19
+
+### Added
+
+- Rendered Requirement descriptions as GitHub Flavored Markdown, including tables, lists, links, and code blocks.
+
+### Changed
+
+- Combined every RD Run into one chronological, live-updating Session trace, while keeping Session board details trace-focused and other Requirement entry points conversation-focused.
+- Opened Session traces at the latest event, kept following live updates while the viewport remains near the bottom, and added controls for jumping to the beginning or latest event.
+
 ## [0.1.8] - 2026-09-19
 
 ### Changed
