@@ -155,7 +155,7 @@ inputFromSequence and inputToSequence record the Requirement-message range captu
 interface AgentTraceEvent {
   id: string;                         // trc_<uuid>
   runId: string;
-  sequence: number;                   // monotonic within the Run
+  sequence: number;                   // backing ManagerEvent ID; monotonic within the Run
   kind: 'lifecycle' | 'reasoning' | 'assistant_message' | 'tool_call' | 'tool_result' | 'error';
   status: 'started' | 'completed' | 'failed' | null;
   title: string;
@@ -167,7 +167,7 @@ interface AgentTraceEvent {
 }
 ~~~
 
-Trace events preserve Provider-emitted progress such as reasoning summaries, tool calls, command output, tool results, Agent messages, and lifecycle/errors. They contain normalized fields rather than exposing the Provider's private JSON schema directly.
+Trace events preserve Provider-emitted progress such as reasoning summaries, tool calls, command output, tool results, Agent messages, and lifecycle/errors. They contain normalized fields rather than exposing the Provider's private JSON schema directly. Each trace is stored once as the payload of its durable `run.trace.appended` ManagerEvent; the Run trace endpoint projects those events instead of maintaining a second trace table.
 
 ### 3.5 RequirementMessage
 

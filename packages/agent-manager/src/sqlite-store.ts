@@ -14,7 +14,6 @@ import {
 } from './search.js';
 import {
   type AgentManagerStore,
-  type AppendAgentTraceRecord,
   type AppendAgentTriggerMessageRecord,
   type AppendExternalMessageRecord,
   type AppendMessageRecord,
@@ -107,31 +106,73 @@ function runFrom(row: Row): AgentRun {
   };
 }
 
-function agentTraceEventFrom(row: Row): AgentTraceEvent {
+const agentTraceKinds = new Set<AgentTraceEvent['kind']>([
+  'lifecycle',
+  'reasoning',
+  'assistant_message',
+  'tool_call',
+  'tool_result',
+  'error',
+]);
+
+const agentTraceStatuses = new Set<NonNullable<AgentTraceEvent['status']>>([
+  'started',
+  'completed',
+  'failed',
+]);
+
+function agentTraceFromManagerEvent(
+  eventId: number,
+  eventType: string,
+  runId: string | null,
+  payload: Record<string, unknown>,
+  createdAt: string,
+): AgentTraceEvent | null {
+  if (eventType !== 'run.trace.appended' || !runId) return null;
+  const value = payload.trace;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  const kind = typeof source.kind === 'string' && agentTraceKinds.has(source.kind as AgentTraceEvent['kind'])
+    ? source.kind as AgentTraceEvent['kind']
+    : null;
+  const title = typeof source.title === 'string' ? source.title : '';
+  if (!kind || !title) return null;
+  const status = typeof source.status === 'string'
+    && agentTraceStatuses.has(source.status as NonNullable<AgentTraceEvent['status']>)
+    ? source.status as NonNullable<AgentTraceEvent['status']>
+    : null;
   return {
-    id: String(row.id),
-    runId: String(row.run_id),
-    sequence: Number(row.sequence),
-    kind: String(row.kind) as AgentTraceEvent['kind'],
-    status: row.status === null ? null : String(row.status) as AgentTraceEvent['status'],
-    title: String(row.title),
-    detail: row.detail === null ? null : String(row.detail),
-    toolName: row.tool_name === null ? null : String(row.tool_name),
-    toolCallId: row.tool_call_id === null ? null : String(row.tool_call_id),
-    nativeType: row.native_type === null ? null : String(row.native_type),
-    createdAt: String(row.created_at),
+    id: typeof source.id === 'string' && source.id ? source.id : `trc_evt_${eventId}`,
+    runId,
+    sequence: eventId,
+    kind,
+    status,
+    title,
+    detail: typeof source.detail === 'string' ? source.detail : null,
+    toolName: typeof source.toolName === 'string' ? source.toolName : null,
+    toolCallId: typeof source.toolCallId === 'string' ? source.toolCallId : null,
+    nativeType: typeof source.nativeType === 'string' ? source.nativeType : null,
+    createdAt,
   };
 }
 
 function eventFrom(row: Row): ManagerEvent {
+  const id = Number(row.id);
+  const type = String(row.type);
+  const runId = row.run_id === null ? null : String(row.run_id);
+  const createdAt = String(row.created_at);
+  const payload = JSON.parse(String(row.payload_json)) as Record<string, unknown>;
+  const trace = agentTraceFromManagerEvent(id, type, runId, payload, createdAt);
   return {
-    id: Number(row.id),
-    type: String(row.type),
+    id,
+    type,
     requirementId: row.requirement_id === null ? null : String(row.requirement_id),
     sessionId: row.session_id === null ? null : String(row.session_id),
-    runId: row.run_id === null ? null : String(row.run_id),
-    payload: JSON.parse(String(row.payload_json)) as Record<string, unknown>,
-    createdAt: String(row.created_at),
+    runId,
+    payload: type === 'run.trace.appended'
+      ? { ...payload, trace }
+      : payload,
+    createdAt,
   };
 }
 
@@ -391,39 +432,13 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     return row ? runFrom(row) : null;
   }
 
-  appendAgentTrace(input: AppendAgentTraceRecord): AgentTraceEvent {
-    this.#db.exec('BEGIN IMMEDIATE');
-    try {
-      if (!this.getRun(input.runId)) throw new StoreNotFoundError(`Run ${input.runId} not found`);
-      const row = this.#db.prepare('SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM agent_trace_events WHERE run_id = ?')
-        .get(input.runId) as Row;
-      const sequence = Number(row.sequence);
-      this.#db.prepare(`INSERT INTO agent_trace_events
-        (id, run_id, sequence, kind, status, title, detail, tool_name, tool_call_id, native_type, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        input.id,
-        input.runId,
-        sequence,
-        input.kind,
-        input.status ?? null,
-        input.title,
-        input.detail ?? null,
-        input.toolName ?? null,
-        input.toolCallId ?? null,
-        input.nativeType ?? null,
-        input.now,
-      );
-      this.#db.exec('COMMIT');
-      return agentTraceEventFrom(this.#db.prepare('SELECT * FROM agent_trace_events WHERE id = ?').get(input.id) as Row);
-    } catch (error) {
-      this.#db.exec('ROLLBACK');
-      throw error;
-    }
-  }
-
   listAgentTrace(runId: string): AgentTraceEvent[] {
-    return (this.#db.prepare(`SELECT * FROM agent_trace_events
-      WHERE run_id = ? ORDER BY sequence ASC`).all(runId) as Row[]).map(agentTraceEventFrom);
+    return (this.#db.prepare(`SELECT * FROM manager_events
+      WHERE run_id = ? AND type = 'run.trace.appended' ORDER BY id ASC`).all(runId) as Row[])
+      .flatMap((row) => {
+        const trace = eventFrom(row).payload.trace;
+        return trace ? [trace as AgentTraceEvent] : [];
+      });
   }
 
   createMessageAttachment(input: CreateMessageAttachmentRecord): MessageAttachment {
@@ -1118,6 +1133,68 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     }
     this.#db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS messages_requirement_sequence
       ON requirement_messages (requirement_id, sequence)`);
+    this.migrateLegacyAgentTraceEvents();
+  }
+
+  private migrateLegacyAgentTraceEvents(): void {
+    const legacyTable = this.#db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_trace_events'",
+    ).get();
+    if (!legacyTable) return;
+
+    const existingTraceIds = new Set<string>();
+    const existingEvents = this.#db.prepare(
+      "SELECT payload_json FROM manager_events WHERE type = 'run.trace.appended'",
+    ).all() as Row[];
+    for (const event of existingEvents) {
+      try {
+        const payload = JSON.parse(String(event.payload_json)) as Record<string, unknown>;
+        const trace = payload.trace;
+        if (trace && typeof trace === 'object' && !Array.isArray(trace)) {
+          const id = (trace as Record<string, unknown>).id;
+          if (typeof id === 'string') existingTraceIds.add(id);
+        }
+      } catch {
+        // Existing event readers retain their established malformed-payload behavior.
+      }
+    }
+
+    const traces = this.#db.prepare(`SELECT trace.*, run.requirement_id, run.session_id
+      FROM agent_trace_events trace
+      JOIN agent_runs run ON run.id = trace.run_id
+      ORDER BY trace.run_id ASC, trace.sequence ASC`).all() as Row[];
+    this.#db.exec('BEGIN IMMEDIATE');
+    try {
+      const insert = this.#db.prepare(`INSERT INTO manager_events
+        (type, requirement_id, session_id, run_id, payload_json, idempotency_key, created_at)
+        VALUES ('run.trace.appended', ?, ?, ?, ?, NULL, ?)`);
+      for (const row of traces) {
+        const id = String(row.id);
+        if (existingTraceIds.has(id)) continue;
+        const trace = {
+          id,
+          runId: String(row.run_id),
+          kind: String(row.kind),
+          status: row.status === null ? null : String(row.status),
+          title: String(row.title),
+          detail: row.detail === null ? null : String(row.detail),
+          toolName: row.tool_name === null ? null : String(row.tool_name),
+          toolCallId: row.tool_call_id === null ? null : String(row.tool_call_id),
+          nativeType: row.native_type === null ? null : String(row.native_type),
+        };
+        insert.run(
+          String(row.requirement_id),
+          row.session_id === null ? null : String(row.session_id),
+          trace.runId,
+          JSON.stringify({ trace }),
+          String(row.created_at),
+        );
+      }
+      this.#db.exec('DROP INDEX IF EXISTS trace_events_run_sequence; DROP TABLE agent_trace_events; COMMIT;');
+    } catch (error) {
+      this.#db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   private initializeFullTextSearch(): boolean {
