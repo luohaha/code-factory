@@ -341,7 +341,7 @@ function isWithinTimeRange(value: string, timeRange: TimeRange, now: number): bo
   return Number.isFinite(timestamp) && timestamp >= now - timeRangeMilliseconds[timeRange];
 }
 
-const MessageBody = memo(function MessageBody({ body, inverted = false }: { body: string; inverted?: boolean }) {
+const MarkdownBody = memo(function MarkdownBody({ body, inverted = false }: { body: string; inverted?: boolean }) {
   return (
     <div className={`message-markdown ${inverted ? 'message-markdown-inverted' : ''}`}>
       <ReactMarkdown
@@ -2001,7 +2001,9 @@ function RequirementDetail({
           <div className="px-5 py-5 sm:px-6">
             <section className="rounded-xl border border-border/80 bg-card px-4 py-3.5">
               <p className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Requirement description')}</p>
-              <p className="mt-1.5 text-xs leading-5 whitespace-pre-wrap">{requirement.description}</p>
+              <div className="mt-1.5 text-xs leading-5">
+                <MarkdownBody body={requirement.description} />
+              </div>
               <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 border-t border-border/70 pt-3 text-[10px] text-muted-foreground sm:grid-cols-3">
                 <div><dt className="sr-only">{t('Created at')}</dt><dd>{t('Created {time}', { time: formatTime(requirement.createdAt, locale) })}</dd></div>
                 <div><dt className="sr-only">{t('Run count')}</dt><dd>{t('{count} Runs', { count: runs.length })}</dd></div>
@@ -2075,7 +2077,7 @@ function RequirementDetail({
                         <span className="text-[10px] font-semibold">{t('System event')}</span>
                         <span className="shrink-0 text-[9px] text-muted-foreground">{formatTime(item.createdAt, locale)}</span>
                       </div>
-                      {item.body ? <div className="mt-1 text-[11px] leading-5 break-words"><MessageBody body={item.body} /></div> : null}
+                      {item.body ? <div className="mt-1 text-[11px] leading-5 break-words"><MarkdownBody body={item.body} /></div> : null}
                       {attachments.length > 0 ? <div className="mt-2"><MessageAttachments attachments={attachments} apiUrl={apiUrl} /></div> : null}
                     </div>
                   </article>
@@ -2095,7 +2097,7 @@ function RequirementDetail({
                       <span className="text-[9px] text-muted-foreground">{formatTime(item.createdAt, locale)}</span>
                     </div>
                     <div className={`mt-1.5 rounded-2xl px-3.5 py-2.5 text-left text-xs leading-5 break-words shadow-[0_1px_2px_oklch(0.18_0.02_255/0.04)] ${human ? 'rounded-tr-md bg-primary text-primary-foreground' : reviewer ? 'rounded-tl-md border border-violet-500/15 bg-violet-500/7' : 'rounded-tl-md border border-border/80 bg-card'}`}>
-                      {item.body ? <MessageBody body={item.body} inverted={human} /> : null}
+                      {item.body ? <MarkdownBody body={item.body} inverted={human} /> : null}
                       {attachments.length > 0 ? <div className={item.body ? 'mt-2.5' : ''}><MessageAttachments attachments={attachments} apiUrl={apiUrl} /></div> : null}
                     </div>
                   </div>
