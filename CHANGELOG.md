@@ -6,6 +6,17 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-09-19
+
+### Changed
+
+- Added README badges for the license, published npm version, supported Node.js version, and strict TypeScript configuration.
+
+### Fixed
+
+- Opened Session board cards directly at the Agent trace while preserving conversation-focused behavior for other Requirement entry points.
+- Rendered the complete Code Factory logo on GitHub and other SVG consumers that do not support its previous masking approach.
+
 ## [0.1.7] - 2026-09-19
 
 ### Added
