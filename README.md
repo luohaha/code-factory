@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/brand/code-factory-logo.png" alt="Code Factory logo" width="180" />
+  <img src="docs/assets/brand/code-factory-logo.svg" alt="Code Factory logo" width="180" />
 </p>
 
 <h1 align="center">Code Factory</h1>
