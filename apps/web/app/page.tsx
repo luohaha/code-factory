@@ -114,6 +114,11 @@ import {
   isAwayFromConversationTop,
   mergeConversationSnapshot,
   mergeSelectedConversationMessage,
+  requirementDetailEntryPointForView,
+  scrollTopForRelativeElement,
+  shouldScrollToLatestOnInitialLoad,
+  type RequirementDetailEntryPoint,
+  type RequirementDetailSourceView,
 } from '@/lib/conversation-scroll';
 import {
   applyRequirementScopedUpdate,
@@ -142,7 +147,7 @@ import { RequirementTreeView } from '@/components/requirement-tree-view';
 
 type ConnectionState = 'connecting' | 'online' | 'reconnecting' | 'offline';
 type TimeRange = '1d' | '7d' | '30d' | '90d' | 'all';
-type DashboardView = 'requirements' | 'relationships' | 'pull_requests' | 'sessions' | 'timers';
+type DashboardView = RequirementDetailSourceView;
 
 const timeRangeOptions: Array<{ value: TimeRange; label: TranslationKey }> = [
   { value: '1d', label: 'Last 24 hours' },
@@ -1619,10 +1624,11 @@ function RequirementComposer({
   );
 }
 
-function AgentTracePanel({ runs, tracesByRun, loadedRunIds, onLoadTrace }: {
+function AgentTracePanel({ runs, tracesByRun, loadedRunIds, sectionRef, onLoadTrace }: {
   runs: AgentRunDto[];
   tracesByRun: Readonly<Record<string, AgentTraceEventDto[] | undefined>>;
   loadedRunIds: ReadonlySet<string>;
+  sectionRef: RefObject<HTMLElement | null>;
   onLoadTrace: (runId: string) => Promise<void>;
 }) {
   const { locale, t } = useI18n();
@@ -1659,7 +1665,7 @@ function AgentTracePanel({ runs, tracesByRun, loadedRunIds, onLoadTrace }: {
   const loading = !loadedRunIds.has(selectedRun.id) && selectedLoadError === null;
 
   return (
-    <section className="mt-5" aria-labelledby="agent-trace">
+    <section ref={sectionRef} className="mt-5 scroll-mt-4" aria-labelledby="agent-trace">
       <div className="mb-2.5 flex flex-wrap items-center gap-2">
         <Terminal className="size-3.5 text-muted-foreground" />
         <h3 id="agent-trace" className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Agent trace')}</h3>
@@ -1756,6 +1762,7 @@ function RequirementDetail({
   messageLoading,
   busy,
   busyPullRequestId,
+  initialEntryPoint,
   onOpenChange,
   onStart,
   onReply,
@@ -1779,6 +1786,7 @@ function RequirementDetail({
   messageLoading: boolean;
   busy: boolean;
   busyPullRequestId: string | null;
+  initialEntryPoint: RequirementDetailEntryPoint;
   onOpenChange: (open: boolean) => void;
   onStart: (message?: string, attachments?: File[]) => Promise<void>;
   onReply: (message: string, attachments?: File[]) => Promise<void>;
@@ -1798,7 +1806,9 @@ function RequirementDetail({
   const [scrollToTopRequirementId, setScrollToTopRequirementId] = useState<string | null>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
+  const traceSectionRef = useRef<HTMLElement>(null);
   const followsLatestRef = useRef(true);
+  const traceInitialScrollRequirementIdRef = useRef<string | undefined>(undefined);
   const initializedRequirementIdRef = useRef<string | undefined>(undefined);
   const loadedRequirementIdRef = useRef<string | undefined>(undefined);
   const previousMessageIdsRef = useRef<Set<string>>(new Set());
@@ -1823,6 +1833,39 @@ function RequirementDetail({
     setScrollToTopRequirementId(null);
     scrollViewportRef.current?.scrollTo({ top: 0, behavior: 'auto' });
   }, []);
+
+  const scrollToTrace = useCallback(() => {
+    const viewport = scrollViewportRef.current;
+    const traceSection = traceSectionRef.current;
+    if (!viewport || !traceSection) return false;
+    followsLatestRef.current = false;
+    setNewMessages(null);
+    viewport.scrollTo({
+      top: scrollTopForRelativeElement(
+        viewport.scrollTop,
+        viewport.getBoundingClientRect().top,
+        traceSection.getBoundingClientRect().top,
+        16,
+      ),
+      behavior: 'auto',
+    });
+    return true;
+  }, []);
+
+  useEffect(() => {
+    if (!requirementId) {
+      traceInitialScrollRequirementIdRef.current = undefined;
+      return;
+    }
+    if (
+      initialEntryPoint !== 'trace'
+      || traceInitialScrollRequirementIdRef.current === requirementId
+    ) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (scrollToTrace()) traceInitialScrollRequirementIdRef.current = requirementId;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [initialEntryPoint, requirementId, runs.length, scrollToTrace]);
 
   useEffect(() => {
     if (!requirementId) {
@@ -1850,8 +1893,11 @@ function RequirementDetail({
     previousMessageIdsRef.current = nextMessageIds;
 
     if (isInitialLoad || (addedMessageCount > 0 && followsLatestRef.current)) {
-      const frame = window.requestAnimationFrame(scrollToLatest);
-      return () => window.cancelAnimationFrame(frame);
+      if (!isInitialLoad || shouldScrollToLatestOnInitialLoad(initialEntryPoint)) {
+        const frame = window.requestAnimationFrame(scrollToLatest);
+        return () => window.cancelAnimationFrame(frame);
+      }
+      return;
     }
     if (addedMessageCount > 0) {
       const frame = window.requestAnimationFrame(() => {
@@ -1864,7 +1910,7 @@ function RequirementDetail({
       });
       return () => window.cancelAnimationFrame(frame);
     }
-  }, [messageLoading, messages, requirementId, scrollToLatest]);
+  }, [initialEntryPoint, messageLoading, messages, requirementId, scrollToLatest]);
 
   if (!requirement) return <Sheet open={false} onOpenChange={onOpenChange} />;
 
@@ -1873,7 +1919,7 @@ function RequirementDetail({
       <SheetContent
         className="data-[side=right]:w-full! data-[side=right]:max-w-none! gap-0 sm:data-[side=right]:w-[min(820px,calc(100vw-48px))]!"
         side="right"
-        initialFocus={requirement.status === 'todo' ? messageInputRef : true}
+        initialFocus={initialEntryPoint === 'conversation' && requirement.status === 'todo' ? messageInputRef : true}
       >
         <SheetHeader className="max-h-[40dvh] shrink-0 overflow-y-auto border-b border-border bg-card py-4 pr-12 pl-5 sm:pr-12 sm:pl-6">
           <div className="mb-2.5 flex items-center gap-2">
@@ -1967,6 +2013,7 @@ function RequirementDetail({
               runs={runs}
               tracesByRun={tracesByRun}
               loadedRunIds={loadedTraceRunIds}
+              sectionRef={traceSectionRef}
               onLoadTrace={onLoadTrace}
             />
 
@@ -2118,6 +2165,7 @@ function Dashboard() {
   const [agentTimers, setAgentTimers] = useState<AgentTimerDto[]>([]);
   const [messageLoading, setMessageLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detailEntryPoint, setDetailEntryPoint] = useState<RequirementDetailEntryPoint>('conversation');
   const selectedIdRef = useRef<string | null>(null);
   const pendingRefreshTargetsRef = useRef<DashboardRefreshTarget[]>([]);
   const refreshTimerRef = useRef<number | null>(null);
@@ -2139,6 +2187,14 @@ function Dashboard() {
   const [filterReferenceTime, setFilterReferenceTime] = useState(0);
 
   const client = useMemo(() => new AgentManagerClient(apiUrl), [apiUrl]);
+
+  const openRequirementDetail = useCallback((
+    requirementId: string,
+    sourceView: RequirementDetailSourceView = 'requirements',
+  ) => {
+    setDetailEntryPoint(requirementDetailEntryPointForView(sourceView));
+    setSelectedId(requirementId);
+  }, []);
 
   const loadAgentTrace = useCallback(async (runId: string) => {
     const items = await client.listAgentTrace(runId);
@@ -2896,7 +2952,7 @@ function Dashboard() {
       setRequirements((current) => upsertRequirement(current, created));
       setSearchRevision((value) => value + 1);
       markSynced();
-      setSelectedId(created.id);
+      openRequirementDetail(created.id);
       setView('requirements');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t('Failed to create requirement'));
@@ -3099,8 +3155,8 @@ function Dashboard() {
                         run={latestRun(item.id, runs)}
                         searchMatch={normalizedQuery ? searchMatchByRequirement.get(item.id) : undefined}
                         busy={busyId === item.id}
-                        onOpen={() => setSelectedId(item.id)}
-                        onStart={() => setSelectedId(item.id)}
+                        onOpen={() => openRequirementDetail(item.id)}
+                        onStart={() => openRequirementDetail(item.id)}
                         onDelete={() => void runAction(
                           item.id,
                           () => client.deleteRequirement(item.id),
@@ -3133,7 +3189,7 @@ function Dashboard() {
             visibleRequirementIds={filteredRequirementIds}
             loading={loading}
             filtered={normalizedQuery.length > 0 || provider !== 'all' || timeRange !== 'all'}
-            onOpen={setSelectedId}
+            onOpen={(requirementId) => openRequirementDetail(requirementId, 'relationships')}
           />
         ) : view === 'pull_requests' ? (
           <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-4 gap-4 p-4 lg:p-5">
@@ -3191,7 +3247,7 @@ function Dashboard() {
                         key={timer.id}
                         timer={timer}
                         requirement={requirementsById.get(timer.requirementId)}
-                        onOpenRequirement={() => setSelectedId(timer.requirementId)}
+                        onOpenRequirement={() => openRequirementDetail(timer.requirementId, 'timers')}
                       />
                     ))}
                     {items.length === 0 ? (
@@ -3221,7 +3277,7 @@ function Dashboard() {
                         requirement={item}
                         run={latestRun(item.id, runs)}
                         busy={busyId === item.id}
-                        onOpen={() => setSelectedId(item.id)}
+                        onOpen={() => openRequirementDetail(item.id, 'sessions')}
                         onRetry={() => void runAction(
                           item.id,
                           () => client.retryRequirement(item.id),
@@ -3239,7 +3295,7 @@ function Dashboard() {
       </section>
 
       <RequirementDetail
-        key={selectedRequirement?.id ?? 'closed'}
+        key={selectedRequirement ? `${selectedRequirement.id}:${detailEntryPoint}` : 'closed'}
         requirement={selectedRequirement}
         runs={selectedRuns}
         tracesByRun={agentTraces}
@@ -3254,6 +3310,7 @@ function Dashboard() {
           ? busyId === selectedRequirement.id || interruptingRequirementIds.has(selectedRequirement.id)
           : false}
         busyPullRequestId={busyPullRequestId}
+        initialEntryPoint={detailEntryPoint}
         apiUrl={apiUrl}
         onOpenChange={(open) => { if (!open) setSelectedId(null); }}
         onStart={(message, attachments = []) => selectedRequirement ? runAction(

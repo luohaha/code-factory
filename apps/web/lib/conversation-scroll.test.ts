@@ -9,6 +9,9 @@ import {
   isNearConversationBottom,
   mergeConversationSnapshot,
   mergeSelectedConversationMessage,
+  requirementDetailEntryPointForView,
+  scrollTopForRelativeElement,
+  shouldScrollToLatestOnInitialLoad,
   upsertConversationMessage,
 } from './conversation-scroll.ts';
 
@@ -65,6 +68,17 @@ void test('shows the return-to-bottom control only after leaving the bottom thre
     }),
     true,
   );
+});
+
+void test('opens Requirement details at the entry-point-specific section', () => {
+  assert.equal(requirementDetailEntryPointForView('sessions'), 'trace');
+  for (const view of ['requirements', 'relationships', 'pull_requests', 'timers'] as const) {
+    assert.equal(requirementDetailEntryPointForView(view), 'conversation');
+  }
+  assert.equal(shouldScrollToLatestOnInitialLoad('conversation'), true);
+  assert.equal(shouldScrollToLatestOnInitialLoad('trace'), false);
+  assert.equal(scrollTopForRelativeElement(600, 100, 340, 16), 824);
+  assert.equal(scrollTopForRelativeElement(0, 100, 80, 16), 0);
 });
 
 void test('counts only message ids that were not present in the previous refresh', () => {
