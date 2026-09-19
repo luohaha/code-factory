@@ -7,6 +7,13 @@
 <p align="center"><strong>From requirement to reviewed pull request, keep every coding-agent loop visible and under human control.</strong></p>
 
 <p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue" alt="License: Apache 2.0" /></a>
+  <a href="https://www.npmjs.com/package/@luoyixin/code-factory"><img src="https://img.shields.io/npm/v/%40luoyixin%2Fcode-factory?label=npm&amp;color=CB3837" alt="npm version" /></a>
+  <a href="packages/agent-manager/package.json"><img src="https://img.shields.io/badge/node-%3E%3D22.13.0-brightgreen" alt="Node.js: >=22.13.0" /></a>
+  <a href="packages/agent-manager/tsconfig.json"><img src="https://img.shields.io/badge/TypeScript-strict-3178C6" alt="TypeScript: strict" /></a>
+</p>
+
+<p align="center">
   <img src="docs/assets/brand/code-factory-overview.png" alt="Code Factory connects requirements, persistent RD agents, a local workspace, pull requests, AI review, scheduled wake-ups, and human control. Agent Triggers route timed and GitHub PR events into existing Requirements and are designed to support more sources and new Requirement creation in the future." />
 </p>
 
