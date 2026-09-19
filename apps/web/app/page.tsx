@@ -114,9 +114,11 @@ import {
   isAwayFromConversationTop,
   mergeConversationSnapshot,
   mergeSelectedConversationMessage,
+  requirementDetailEntryPointForView,
   scrollTopForRelativeElement,
   shouldScrollToLatestOnInitialLoad,
   type RequirementDetailEntryPoint,
+  type RequirementDetailSourceView,
 } from '@/lib/conversation-scroll';
 import {
   applyRequirementScopedUpdate,
@@ -145,7 +147,7 @@ import { RequirementTreeView } from '@/components/requirement-tree-view';
 
 type ConnectionState = 'connecting' | 'online' | 'reconnecting' | 'offline';
 type TimeRange = '1d' | '7d' | '30d' | '90d' | 'all';
-type DashboardView = 'requirements' | 'relationships' | 'pull_requests' | 'sessions' | 'timers';
+type DashboardView = RequirementDetailSourceView;
 
 const timeRangeOptions: Array<{ value: TimeRange; label: TranslationKey }> = [
   { value: '1d', label: 'Last 24 hours' },
@@ -2188,9 +2190,9 @@ function Dashboard() {
 
   const openRequirementDetail = useCallback((
     requirementId: string,
-    entryPoint: RequirementDetailEntryPoint = 'conversation',
+    sourceView: RequirementDetailSourceView = 'requirements',
   ) => {
-    setDetailEntryPoint(entryPoint);
+    setDetailEntryPoint(requirementDetailEntryPointForView(sourceView));
     setSelectedId(requirementId);
   }, []);
 
@@ -3187,7 +3189,7 @@ function Dashboard() {
             visibleRequirementIds={filteredRequirementIds}
             loading={loading}
             filtered={normalizedQuery.length > 0 || provider !== 'all' || timeRange !== 'all'}
-            onOpen={(requirementId) => openRequirementDetail(requirementId)}
+            onOpen={(requirementId) => openRequirementDetail(requirementId, 'relationships')}
           />
         ) : view === 'pull_requests' ? (
           <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-4 gap-4 p-4 lg:p-5">
@@ -3245,7 +3247,7 @@ function Dashboard() {
                         key={timer.id}
                         timer={timer}
                         requirement={requirementsById.get(timer.requirementId)}
-                        onOpenRequirement={() => openRequirementDetail(timer.requirementId)}
+                        onOpenRequirement={() => openRequirementDetail(timer.requirementId, 'timers')}
                       />
                     ))}
                     {items.length === 0 ? (
@@ -3275,7 +3277,7 @@ function Dashboard() {
                         requirement={item}
                         run={latestRun(item.id, runs)}
                         busy={busyId === item.id}
-                        onOpen={() => openRequirementDetail(item.id, 'trace')}
+                        onOpen={() => openRequirementDetail(item.id, 'sessions')}
                         onRetry={() => void runAction(
                           item.id,
                           () => client.retryRequirement(item.id),

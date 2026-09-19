@@ -9,6 +9,7 @@ import {
   isNearConversationBottom,
   mergeConversationSnapshot,
   mergeSelectedConversationMessage,
+  requirementDetailEntryPointForView,
   scrollTopForRelativeElement,
   shouldScrollToLatestOnInitialLoad,
   upsertConversationMessage,
@@ -70,6 +71,10 @@ void test('shows the return-to-bottom control only after leaving the bottom thre
 });
 
 void test('opens Requirement details at the entry-point-specific section', () => {
+  assert.equal(requirementDetailEntryPointForView('sessions'), 'trace');
+  for (const view of ['requirements', 'relationships', 'pull_requests', 'timers'] as const) {
+    assert.equal(requirementDetailEntryPointForView(view), 'conversation');
+  }
   assert.equal(shouldScrollToLatestOnInitialLoad('conversation'), true);
   assert.equal(shouldScrollToLatestOnInitialLoad('trace'), false);
   assert.equal(scrollTopForRelativeElement(600, 100, 340, 16), 824);

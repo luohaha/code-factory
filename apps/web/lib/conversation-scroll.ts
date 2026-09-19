@@ -1,6 +1,7 @@
 export const conversationBottomThreshold = 96;
 
 export type RequirementDetailEntryPoint = 'conversation' | 'trace';
+export type RequirementDetailSourceView = 'requirements' | 'relationships' | 'pull_requests' | 'sessions' | 'timers';
 
 type ScrollMetrics = Pick<
   HTMLElement,
@@ -32,6 +33,12 @@ export function shouldScrollToLatestOnInitialLoad(
   entryPoint: RequirementDetailEntryPoint,
 ): boolean {
   return entryPoint === 'conversation';
+}
+
+export function requirementDetailEntryPointForView(
+  view: RequirementDetailSourceView,
+): RequirementDetailEntryPoint {
+  return view === 'sessions' ? 'trace' : 'conversation';
 }
 
 export function scrollTopForRelativeElement(
