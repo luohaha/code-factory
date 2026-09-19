@@ -173,6 +173,7 @@ export interface AgentManagerStore {
   listRuns(requirementId?: string): AgentRun[];
   getRun(id: string): AgentRun | null;
   listAgentTrace(runId: string): AgentTraceEvent[];
+  listRequirementAgentTrace(requirementId: string): AgentTraceEvent[];
   createMessageAttachment(input: CreateMessageAttachmentRecord): MessageAttachment;
   getMessageAttachment(id: string): MessageAttachment | null;
   appendMessage(input: AppendMessageRecord): RequirementMessage;

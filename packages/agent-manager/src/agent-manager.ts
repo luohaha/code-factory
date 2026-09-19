@@ -653,6 +653,13 @@ export class AgentManager extends EventEmitter {
     return this.#store.listAgentTrace(runId);
   }
 
+  listRequirementAgentTrace(requirementId: string) {
+    if (!this.#store.getRequirement(requirementId)) {
+      throw new StoreNotFoundError(`Requirement ${requirementId} not found`);
+    }
+    return this.#store.listRequirementAgentTrace(requirementId);
+  }
+
   listMessages(requirementId: string) {
     return this.#store.listMessages(requirementId);
   }

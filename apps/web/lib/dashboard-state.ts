@@ -66,6 +66,18 @@ export function mergeAgentTrace<T extends { id: string; sequence: number }>(
   return [...merged.values()].sort((left, right) => left.sequence - right.sequence);
 }
 
+export function collectRequirementAgentTrace<
+  T extends { createdAt: string; runId: string; sequence: number },
+>(
+  runIds: ReadonlySet<string>,
+  tracesByRun: Readonly<Record<string, readonly T[] | undefined>>,
+): T[] {
+  return Object.entries(tracesByRun)
+    .filter(([runId]) => runIds.has(runId))
+    .flatMap(([, trace]) => trace ?? [])
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.sequence - right.sequence);
+}
+
 export function replaceRequirementRuns<
   T extends { id: string; requirementId: string; startedAt: string; finishedAt?: string | null },
 >(runs: readonly T[], requirementId: string, requirementRuns: readonly T[]): T[] {

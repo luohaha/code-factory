@@ -176,6 +176,13 @@ function eventFrom(row: Row): ManagerEvent {
   };
 }
 
+function agentTracesFromEventRows(rows: Row[]): AgentTraceEvent[] {
+  return rows.flatMap((row) => {
+    const trace = eventFrom(row).payload.trace;
+    return trace ? [trace as AgentTraceEvent] : [];
+  });
+}
+
 function attachmentFrom(row: Row): MessageAttachment {
   return {
     id: String(row.id),
@@ -433,12 +440,14 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
   }
 
   listAgentTrace(runId: string): AgentTraceEvent[] {
-    return (this.#db.prepare(`SELECT * FROM manager_events
-      WHERE run_id = ? AND type = 'run.trace.appended' ORDER BY id ASC`).all(runId) as Row[])
-      .flatMap((row) => {
-        const trace = eventFrom(row).payload.trace;
-        return trace ? [trace as AgentTraceEvent] : [];
-      });
+    return agentTracesFromEventRows(this.#db.prepare(`SELECT * FROM manager_events
+      WHERE run_id = ? AND type = 'run.trace.appended' ORDER BY id ASC`).all(runId) as Row[]);
+  }
+
+  listRequirementAgentTrace(requirementId: string): AgentTraceEvent[] {
+    return agentTracesFromEventRows(this.#db.prepare(`SELECT * FROM manager_events
+      WHERE requirement_id = ? AND session_id IS NOT NULL AND type = 'run.trace.appended'
+      ORDER BY id ASC`).all(requirementId) as Row[]);
   }
 
   createMessageAttachment(input: CreateMessageAttachmentRecord): MessageAttachment {

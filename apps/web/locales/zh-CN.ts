@@ -132,6 +132,8 @@ export const zhCN = {
   'Retry trace': '重试加载轨迹',
   'Waiting for Agent trace events…': '正在等待 Agent 执行轨迹…',
   'No trace was captured for this Run.': '该次运行没有已记录的执行轨迹。',
+  'No trace was captured for this Session.': '该会话没有已记录的执行轨迹。',
+  'This Session has no Runs yet.': '该会话尚无运行记录。',
   'Native Session': '原生会话',
   'Native: {id}': '原生会话：{id}',
   'Not created': '尚未建立',
