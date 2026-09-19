@@ -8,13 +8,8 @@
       <stop stop-color="#20D7BA"/>
       <stop offset="1" stop-color="#05AA91"/>
     </linearGradient>
-    <path id="gear-loop" d="M36.26 42.69L35.57 45.3L37.57 47.03L35.38 50.83L32.87 49.96L27.55 54.05L27.74 56.69L23.51 57.82L22.35 55.44L15.7 54.57L13.97 56.57L10.17 54.38L11.04 51.87L6.95 46.55L4.31 46.74L3.18 42.51L5.56 41.35L6.43 34.7L4.43 32.97L6.62 29.17L9.13 30.04L14.45 25.95L14.26 23.31L18.49 22.18L19.65 24.56L25.27 25.1C30.2 24.9 36.1 27.2 39 31.1C40.65 32.95 39.45 35.45 37.3 35.25C33.55 34.9 28.95 32.55 23.56 31.06A9.3 9.3 0 1 0 30.16 41.61Z"/>
-    <mask id="teal-cutout" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
-      <rect width="64" height="64" fill="white"/>
-      <use href="#gear-loop" fill="black" stroke="black" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"/>
-    </mask>
   </defs>
 
-  <use href="#gear-loop" transform="rotate(180 32 32)" fill="url(#teal)" stroke="url(#teal)" stroke-width="0.9" stroke-linejoin="round" stroke-linecap="round" mask="url(#teal-cutout)"/>
-  <use href="#gear-loop" fill="url(#blue)" stroke="url(#blue)" stroke-width="0.9" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M36.26 42.69L35.57 45.3L37.57 47.03L35.38 50.83L32.87 49.96L27.55 54.05L27.74 56.69L23.51 57.82L22.35 55.44L15.7 54.57L13.97 56.57L10.17 54.38L11.04 51.87L6.95 46.55L4.31 46.74L3.18 42.51L5.56 41.35L6.43 34.7L4.43 32.97L6.62 29.17L9.13 30.04L14.45 25.95L14.26 23.31L18.49 22.18L19.65 24.56L25.27 25.1C30.2 24.9 36.1 27.2 39 31.1C40.65 32.95 39.45 35.45 37.3 35.25C33.55 34.9 28.95 32.55 23.56 31.06A9.3 9.3 0 1 0 30.16 41.61Z" transform="rotate(180 32 32)" fill="url(#teal)" stroke="url(#teal)" stroke-width="0.9" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M36.26 42.69L35.57 45.3L37.57 47.03L35.38 50.83L32.87 49.96L27.55 54.05L27.74 56.69L23.51 57.82L22.35 55.44L15.7 54.57L13.97 56.57L10.17 54.38L11.04 51.87L6.95 46.55L4.31 46.74L3.18 42.51L5.56 41.35L6.43 34.7L4.43 32.97L6.62 29.17L9.13 30.04L14.45 25.95L14.26 23.31L18.49 22.18L19.65 24.56L25.27 25.1C30.2 24.9 36.1 27.2 39 31.1C40.65 32.95 39.45 35.45 37.3 35.25C33.55 34.9 28.95 32.55 23.56 31.06A9.3 9.3 0 1 0 30.16 41.61Z" fill="url(#blue)" stroke="url(#blue)" stroke-width="0.9" stroke-linejoin="round" stroke-linecap="round"/>
 </svg>
