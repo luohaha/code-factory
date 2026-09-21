@@ -71,8 +71,9 @@ Optional options:
   --provider codex|claude-code
   --model MODEL
   --reasoning-effort low|medium|high|xhigh|max
+  --start                  Start the new Requirement's RD Agent immediately
 
-Proposals remain TODO until a human starts them.
+Proposals remain TODO unless --start is supplied.
 
 Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
 CODE_FACTORY_SESSION_ID.`;
@@ -294,6 +295,7 @@ async function parseRequirementPayload(args: readonly string[], runtime: CodeFac
     provider: { type: 'string' },
     model: { type: 'string' },
     'reasoning-effort': { type: 'string' },
+    start: { type: 'boolean' },
   });
   if (values.description !== undefined && values['description-file'] !== undefined) {
     throw new CliUsageError('Use either --description or --description-file', REQUIREMENT_PROPOSE_HELP);
@@ -326,6 +328,7 @@ async function parseRequirementPayload(args: readonly string[], runtime: CodeFac
       model: required(values.model as string | undefined, '--model', REQUIREMENT_PROPOSE_HELP),
     }),
     ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+    ...(values.start ? { start: true } : {}),
   };
 }
 

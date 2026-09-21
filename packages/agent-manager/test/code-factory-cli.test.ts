@@ -68,6 +68,14 @@ test('code-factory-cli help discovers the supported RD commands', async () => {
   assert.match(output.join(''), /requirement related/);
   assert.match(output.join(''), /requirement message/);
   assert.match(output.join(''), /CODE_FACTORY_REQUIREMENT_ID/);
+
+  const requirementOutput: string[] = [];
+  const requirementExitCode = await runCodeFactoryCli(['requirement', 'propose', '--help'], {
+    writeOut: (value) => requirementOutput.push(value),
+    writeError: () => undefined,
+  });
+  assert.equal(requirementExitCode, 0);
+  assert.match(requirementOutput.join(''), /--start/);
 });
 
 test('code-factory-cli reports the package version without requiring Agent context', async () => {
@@ -138,6 +146,29 @@ test('code-factory-cli proposes a Requirement using injected Session context', a
     description: 'Track throughput separately',
     provider: 'codex',
     reasoningEffort: 'high',
+  });
+});
+
+test('code-factory-cli can start a proposed Requirement immediately', async () => {
+  const requests: CapturedRequest[] = [];
+  const output: string[] = [];
+  const errors: string[] = [];
+  const exitCode = await runCodeFactoryCli([
+    'requirement', 'propose',
+    '--title', 'Investigate follow-up',
+    '--description', 'Start this work without waiting for a human',
+    '--start',
+  ], testRuntime(requests, output, errors));
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(errors, []);
+  assert.equal(requests[0]?.url, 'http://127.0.0.1:4310/api/agent/requirements');
+  assert.deepEqual(requests[0]?.body, {
+    sourceSessionId: 'ses_cli',
+    parentRequirementId: 'req_cli',
+    title: 'Investigate follow-up',
+    description: 'Start this work without waiting for a human',
+    start: true,
   });
 });
 

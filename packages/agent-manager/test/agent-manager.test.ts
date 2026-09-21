@@ -688,7 +688,8 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
       value.includes('Preserve pre-existing changes')));
     for (const capability of [
-      'register PRs', 'propose separate TODO follow-ups', 'inspect direct parent/child requirements',
+      'register PRs', 'create separate follow-ups', 'TODO by default or explicitly started',
+      'inspect direct parent/child requirements',
       'message their RD Agents', 'manage wake-up timers', 'code-factory-cli --help',
       'Track started tasks to completion', 'provider wait/monitor tools',
       'only for work guaranteed to continue independently afterward', 'cancel unneeded recurring timers',

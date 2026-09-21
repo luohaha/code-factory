@@ -65,6 +65,13 @@ function reasoningEffortField(value: unknown): AgentReasoningEffort | undefined 
   return value;
 }
 
+function optionalBooleanField(body: Record<string, unknown>, name: string): boolean {
+  const value = body[name];
+  if (value === undefined) return false;
+  if (typeof value !== 'boolean') throw new TypeError(`${name} must be a boolean`);
+  return value;
+}
+
 function pullRequestStatusField(value: unknown): PullRequestStatus {
   if (value !== 'draft' && value !== 'open' && value !== 'closed' && value !== 'merged') {
     throw new TypeError('status must be draft, open, closed, or merged');
@@ -324,6 +331,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
       if (request.method === 'POST' && url.pathname === '/api/agent/requirements') {
         const body = await readJson(request);
         const sourceSessionId = stringField(body, 'sourceSessionId', true)!;
+        const start = optionalBooleanField(body, 'start');
         const source = manager.listSessions().find((session) => session.id === sourceSessionId);
         if (!source) throw new StoreNotFoundError(`Session ${sourceSessionId} not found`);
         const model = stringField(body, 'model')?.trim();
@@ -338,7 +346,14 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           sourceSessionId,
           parentRequirementId: stringField(body, 'parentRequirementId') ?? source.requirementId,
         });
-        sendJson(response, 201, item);
+        if (start) {
+          void manager.runRequirement(item.id)
+            .catch((error: unknown) => logger.error('RD run failed unexpectedly', {
+              requirementId: item.id,
+              error,
+            }));
+        }
+        sendJson(response, 201, manager.getRequirement(item.id) ?? item);
         return;
       }
 

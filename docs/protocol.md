@@ -114,11 +114,12 @@ Content-Type: application/json
   "parentRequirementId": "req_...",
   "title": "Add a performance benchmark",
   "description": "Track throughput and peak memory as a separate follow-up",
-  "provider": "codex"
+  "provider": "codex",
+  "start": true
 }
 ~~~
 
-`provider` is optional and defaults to the source Session provider. The proposed Requirement is created as `createdBy=rd_agent` in TODO and does not start automatically.
+`provider` is optional and defaults to the source Session provider. The proposed Requirement is created as `createdBy=rd_agent`. It remains TODO by default; set the optional boolean `start` to `true` (or pass `--start` to `code-factory-cli requirement propose`) to start its RD Session immediately.
 
 Inspect and message directly related Requirements:
 
