@@ -742,6 +742,72 @@ test('RD Agent endpoints list related Requirements and deliver cross-Requirement
   }
 });
 
+test('RD Agent can explicitly start a newly proposed Requirement', async () => {
+  const runner = new WaitingRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    logger: createLogger({ level: 'silent' }),
+  });
+  const source = manager.createRequirement({
+    title: 'Source work',
+    description: 'Discover and delegate a separate task',
+    provider: 'codex',
+  });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+  const endpoint = `http://127.0.0.1:${port}/api/agent/requirements`;
+
+  try {
+    const invalidResponse = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceSessionId: source.session.id,
+        title: 'Invalid follow-up',
+        description: 'Must not be created',
+        start: 'yes',
+      }),
+    });
+    assert.equal(invalidResponse.status, 400);
+    assert.equal(manager.listRequirements().length, 1);
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceSessionId: source.session.id,
+        title: 'Immediate follow-up',
+        description: 'Start this separate task now',
+        start: true,
+      }),
+    });
+    assert.equal(response.status, 201);
+    const created = await response.json() as {
+      id: string;
+      status: string;
+      createdBy: string;
+      parentRequirementId: string | null;
+      session: { state: string };
+    };
+    assert.equal(created.status, 'doing');
+    assert.equal(created.createdBy, 'rd_agent');
+    assert.equal(created.parentRequirementId, source.id);
+    assert.equal(created.session.state, 'running');
+    assert.equal(manager.listRuns(created.id)[0]?.status, 'running');
+    assert.match(runner.request?.invocation.input ?? '', /Immediate follow-up/);
+    assert.match(runner.request?.invocation.input ?? '', /Start this separate task now/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
+
 test('HTTP API exposes the persisted human and RD Agent conversation', async () => {
   const runner = new WaitingRunner();
   const logLines: string[] = [];

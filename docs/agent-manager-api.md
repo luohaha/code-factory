@@ -752,7 +752,7 @@ An Agent should register a PR after creating it and call this endpoint again onl
 
 ### POST /api/agent/requirements
 
-Proposes a follow-up Requirement that should be tracked separately from the current work. The new Requirement is created in todo and does not start automatically.
+Proposes a follow-up Requirement that should be tracked separately from the current work. The new Requirement is created in TODO by default and can be started immediately with an explicit opt-in.
 
 Request body:
 
@@ -765,6 +765,7 @@ Request body:
 | provider | string | no | codex or claude-code; defaults to the source Session provider |
 | model | string | no | Model identifier passed to the selected CLI; defaults to CLI configuration |
 | reasoningEffort | string | no | low, medium, high, xhigh, or max; defaults to CLI configuration |
+| start | boolean | no | Start the new Requirement's RD Session immediately; defaults to false |
 
 ~~~bash
 curl -X POST http://127.0.0.1:4310/api/agent/requirements \
@@ -774,11 +775,12 @@ curl -X POST http://127.0.0.1:4310/api/agent/requirements \
     "parentRequirementId": "req_...",
     "title": "Add an export performance benchmark",
     "description": "Track throughput and peak memory for large datasets separately",
-    "provider": "codex"
+    "provider": "codex",
+    "start": true
   }'
 ~~~
 
-Success: 201 Created with the new Requirement and createdBy=rd_agent. Returns 404 for an unknown source Session and 400 when parentRequirementId does not match or another field is invalid.
+Success: 201 Created with the new Requirement and `createdBy=rd_agent`. Without `start: true`, it remains TODO. When `start` is true, the response reflects its started RD Session. Returns 404 for an unknown source Session and 400 when `parentRequirementId` does not match or another field is invalid.
 
 ### GET /api/agent/requirements/:sourceRequirementId/related
 

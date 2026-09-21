@@ -52,12 +52,12 @@ Prefer registration from an explicit PR URL, using the authenticated local `gh` 
 
 ```bash
 code-factory-cli pr register --from-github https://github.com/OWNER/REPO/pull/123
-code-factory-cli requirement propose --title 'Follow-up task' --description-file ./follow-up.md
+code-factory-cli requirement propose --title 'Follow-up task' --description-file ./follow-up.md --start
 ```
 
 `--from-github` reads the PR number, title, URL, branches, head SHA, and state from GitHub and validates the returned identity before registration. The repository key comes from the returned URL and is normalized to lowercase, matching Manager and Store identity checks. GitHub Enterprise URLs are supported and retain the hostname in the repository identifier. It cannot be mixed with manual metadata flags. The existing full manual registration form remains supported for callers that already have a snapshot; an existing PR's lifecycle is still owned by the reconciler, even when `--status` is supplied. The CLI does not create or edit GitHub PRs.
 
-`--description-file` reads a UTF-8 file relative to the CLI's working directory and is mutually exclusive with `--description`. This avoids shell quoting problems for multiline descriptions. Proposed Requirements remain TODO until a human starts them.
+`--description-file` reads a UTF-8 file relative to the CLI's working directory and is mutually exclusive with `--description`. This avoids shell quoting problems for multiline descriptions. Proposed Requirements remain TODO by default; `--start` starts the new Requirement's RD Session immediately.
 
 The RD behavioral prompt is supplied on both initial and resumed invocations. It describes CLI capabilities and behavioral constraints, leaving command names and arguments to `code-factory-cli --help`. It covers Requirement scope, worktree isolation, recovery without duplicate actions, control-plane commands, lifecycle ownership, evaluating external feedback, and evidence-based handoff. Task-specific content stays in the stdin prompt; every invocation includes the current Requirement ID, title, and description, with only new external conversation messages on resume. Questions and investigations do not inherently require code changes, and the RD Agent must not substitute follow-up proposals for work required by the current Requirement. A successful GitHub PR creation and a successful Code Factory registration are separate outcomes; a failed registration must be reported without recreating the PR. Human confirmation owns Requirement completion.
 
