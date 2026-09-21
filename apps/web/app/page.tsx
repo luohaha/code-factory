@@ -434,6 +434,47 @@ function latestRun(requirementId: string, runs: AgentRunDto[]): AgentRunDto | un
   return runs.find((run) => run.requirementId === requirementId);
 }
 
+function DeleteRequirementDialog({
+  requirement,
+  busy,
+  onDelete,
+}: {
+  requirement: RequirementDto;
+  busy: boolean;
+  onDelete: () => void;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+
+  return (
+    <AlertDialog open={open} onOpenChange={setOpen}>
+      <AlertDialogTrigger render={<Button size="xs" variant="destructive" disabled={busy} />}>
+        <Trash2 data-icon="inline-start" />{t('Delete')}
+      </AlertDialogTrigger>
+      <AlertDialogContent size="sm">
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t('Delete requirement?')}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {t('Delete “{title}”? This only works before execution and cannot be undone.', { title: requirement.title })}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            onClick={() => {
+              setOpen(false);
+              onDelete();
+            }}
+          >
+            <Trash2 data-icon="inline-start" />{t('Delete')}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 function RequirementCard({
   requirement,
   run,
@@ -454,7 +495,6 @@ function RequirementCard({
   onConfirm: () => void;
 }) {
   const { t } = useI18n();
-  const [deleteOpen, setDeleteOpen] = useState(false);
   return (
     <article className="rounded-xl border border-border/80 bg-card p-3.5 shadow-[0_1px_2px_oklch(0.18_0.02_255/0.05)] transition hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-[0_8px_24px_oklch(0.18_0.02_255/0.08)]">
       <div className="flex items-start justify-between gap-3">
@@ -506,31 +546,7 @@ function RequirementCard({
           <Button size="xs" disabled={busy} onClick={onStart}>
             {busy ? <LoaderCircle className="animate-spin" /> : <Play data-icon="inline-start" />}{t('Start')}
           </Button>
-          <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-            <AlertDialogTrigger render={<Button size="xs" variant="destructive" disabled={busy} />}>
-              <Trash2 data-icon="inline-start" />{t('Delete')}
-            </AlertDialogTrigger>
-            <AlertDialogContent size="sm">
-              <AlertDialogHeader>
-                <AlertDialogTitle>{t('Delete requirement?')}</AlertDialogTitle>
-                <AlertDialogDescription>
-                  {t('Delete “{title}”? This only works before execution and cannot be undone.', { title: requirement.title })}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
-                <AlertDialogAction
-                  variant="destructive"
-                  onClick={() => {
-                    setDeleteOpen(false);
-                    onDelete();
-                  }}
-                >
-                  <Trash2 data-icon="inline-start" />{t('Delete')}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+          <DeleteRequirementDialog requirement={requirement} busy={busy} onDelete={onDelete} />
         </div>
       ) : null}
       {requirement.status === 'waiting_confirmation' ? (
@@ -1413,6 +1429,7 @@ function RequirementComposer({
   inputRef,
   onStart,
   onReply,
+  onDelete,
   onConfirm,
   onCreateAgentTimer,
   onCancelAgentTimer,
@@ -1424,6 +1441,7 @@ function RequirementComposer({
   inputRef: RefObject<HTMLTextAreaElement | null>;
   onStart: (message?: string, attachments?: File[]) => Promise<void>;
   onReply: (message: string, attachments?: File[]) => Promise<void>;
+  onDelete: () => void;
   onConfirm: () => Promise<void>;
   onCreateAgentTimer: (
     input: { description: string; schedule: 'once' | 'recurring'; intervalSeconds: number },
@@ -1616,9 +1634,12 @@ function RequirementComposer({
       </form>
       {attachmentError ? <p className="mt-1.5 px-1 text-[10px] text-destructive">{attachmentError}</p> : null}
       {requirement.status === 'todo' ? (
-        <Button className="mt-2 w-full" variant="ghost" size="xs" disabled={busy} onClick={() => void onStart()}>
-          <Play data-icon="inline-start" />{t('Start without additional instructions')}
-        </Button>
+        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <Button variant="ghost" size="xs" disabled={busy} onClick={() => void onStart()}>
+            <Play data-icon="inline-start" />{t('Start without additional instructions')}
+          </Button>
+          <DeleteRequirementDialog requirement={requirement} busy={busy} onDelete={onDelete} />
+        </div>
       ) : null}
     </div>
   );
@@ -1744,6 +1765,7 @@ function RequirementDetail({
   onOpenChange,
   onStart,
   onReply,
+  onDelete,
   onInterrupt,
   onConfirm,
   onReview,
@@ -1768,6 +1790,7 @@ function RequirementDetail({
   onOpenChange: (open: boolean) => void;
   onStart: (message?: string, attachments?: File[]) => Promise<void>;
   onReply: (message: string, attachments?: File[]) => Promise<void>;
+  onDelete: () => void;
   onInterrupt: () => Promise<void>;
   onConfirm: () => Promise<void>;
   onReview: (pullRequestId: string, configuration: AgentConfiguration) => Promise<void>;
@@ -2113,6 +2136,7 @@ function RequirementDetail({
             inputRef={messageInputRef}
             onStart={onStart}
             onReply={onReply}
+            onDelete={onDelete}
             onConfirm={onConfirm}
             onCreateAgentTimer={onCreateAgentTimer}
             onCancelAgentTimer={onCancelAgentTimer}
@@ -3318,6 +3342,17 @@ function Dashboard() {
         onReply={(message, attachments = []) => selectedRequirement
           ? replyToRequirement(selectedRequirement.id, message, attachments)
           : Promise.resolve()}
+        onDelete={() => {
+          if (!selectedRequirement) return;
+          void runAction(
+            selectedRequirement.id,
+            () => client.deleteRequirement(selectedRequirement.id),
+            () => {
+              removeRequirementState([selectedRequirement.id]);
+              setSearchRevision((value) => value + 1);
+            },
+          ).catch(() => undefined);
+        }}
         onInterrupt={() => selectedRequirement
           ? interruptRequirement(selectedRequirement.id)
           : Promise.resolve()}
