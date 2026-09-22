@@ -45,7 +45,9 @@ function trackPullRequest(store: SqliteAgentManagerStore, number: number): PullR
     headBranch: `feature-${number}`,
     headSha: `head-${number}`,
     status: 'open',
-    now: `2026-09-21T00:00:0${number}.000Z`,
+    // The store returns most recently updated PRs first. Keep #1 first so the
+    // isolation tests prove that reconciliation continues after its failure.
+    now: number === 1 ? '2026-09-21T00:00:02.000Z' : '2026-09-21T00:00:01.000Z',
   });
 }
 
@@ -110,8 +112,10 @@ test('PR reconciliation isolates transient inspection failures and retries termi
   const store = createStore();
   const stderr = new MemoryWriter();
   const attempts = new Map<number, number>();
+  const inspectionOrder: number[] = [];
   const githubClient: GitHubClient = {
     inspectPullRequest: async (pullRequest) => {
+      inspectionOrder.push(pullRequest.number);
       const attempt = (attempts.get(pullRequest.number) ?? 0) + 1;
       attempts.set(pullRequest.number, attempt);
       if (pullRequest.number === 1 && attempt === 1) {
@@ -142,6 +146,7 @@ test('PR reconciliation isolates transient inspection failures and retries termi
     assert.equal(store.getPullRequest('pr-1')?.status, 'open');
     assert.equal(store.getPullRequest('pr-2')?.status, 'merged', 'another eligible PR still synchronizes');
     assert.deepEqual(Object.fromEntries(attempts), { 1: 1, 2: 1 });
+    assert.deepEqual(inspectionOrder, [1, 2], 'the successful PR is inspected after the failed PR');
 
     const entry = JSON.parse(stderr.lines[0]!) as {
       reconciliationStage: string;
@@ -197,7 +202,7 @@ test('snapshot reconciliation failures include PR context and do not stop later 
 
     await assert.rejects(reconciler.reconcile(registration(trigger)), AggregateError);
 
-    assert.deepEqual(reconciledNumbers.sort((left, right) => left - right), [1, 2]);
+    assert.deepEqual(reconciledNumbers, [1, 2], 'the later PR reconciles after the earlier snapshot failure');
     const entry = JSON.parse(stderr.lines[0]!) as Record<string, unknown>;
     assert.equal(entry.reconciliationStage, 'snapshot');
     assert.equal(entry.pullRequestId, 'pr-1');
@@ -208,3 +213,41 @@ test('snapshot reconciliation failures include PR context and do not stop later 
     store.close();
   }
 });
+
+test('scheduled reconciliation clears a rejected run and retries on the next interval', async () => {
+  const store = createStore();
+  const stderr = new MemoryWriter();
+  let attempts = 0;
+  const githubClient: GitHubClient = {
+    inspectPullRequest: async (pullRequest) => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('temporary GitHub outage');
+      return snapshot(pullRequest, 'merged');
+    },
+  };
+  const reconciler = createReconciler(store, githubClient, stderr);
+
+  try {
+    trackPullRequest(store, 1);
+    reconciler.register(noOpTrigger, context);
+    reconciler.setInterval(1_000);
+    const startedAt = Date.now();
+    reconciler.start();
+
+    await waitFor(() => store.getPullRequest('pr-1')?.status === 'merged', 4_000);
+
+    assert.equal(attempts, 2);
+    assert.ok(Date.now() - startedAt >= 900, 'the retry should wait for the configured interval');
+  } finally {
+    reconciler.stop();
+    store.close();
+  }
+});
+
+async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`Condition was not met within ${timeoutMs}ms`);
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+}

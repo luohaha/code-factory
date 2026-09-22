@@ -27,11 +27,10 @@ test('GhCliGitHubClient kills a hung gh subprocess at its timeout', async () => 
   const executable = join(directory, 'gh');
   const pidFile = join(directory, 'pids');
   writeFileSync(executable, [
-    '#!/usr/bin/env node',
-    "const { appendFileSync } = require('node:fs');",
-    "if (process.argv[2] === 'api') { process.stdout.write('[]'); process.exit(0); }",
-    `appendFileSync(${JSON.stringify(pidFile)}, \`${'${process.pid}'}\\n\`);`,
-    'setInterval(() => undefined, 1_000);',
+    '#!/bin/sh',
+    'if [ "$1" = "api" ]; then printf "[]"; exit 0; fi',
+    `printf '%s\\n' "$$" >> '${pidFile.replaceAll("'", "'\\''")}'`,
+    'exec sleep 60',
   ].join('\n'), { mode: 0o700 });
 
   try {
