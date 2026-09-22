@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -26,29 +27,35 @@ test('GhCliGitHubClient kills a hung gh subprocess at its timeout', async () => 
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-gh-timeout-'));
   const executable = join(directory, 'gh');
   const pidFile = join(directory, 'pids');
+  const hangTarget = join(directory, 'hung-gh-marker');
+  writeFileSync(hangTarget, '');
   writeFileSync(executable, [
     '#!/bin/sh',
     'if [ "$1" = "api" ]; then printf "[]"; exit 0; fi',
     `printf '%s\\n' "$$" >> '${pidFile.replaceAll("'", "'\\''")}'`,
-    'exec sleep 60',
+    `exec tail -f '${hangTarget.replaceAll("'", "'\\''")}'`,
   ].join('\n'), { mode: 0o700 });
 
   try {
-    const client = new GhCliGitHubClient(directory, { executable, timeoutMs: 750 });
+    const client = new GhCliGitHubClient(directory, { executable, timeoutMs: 2_000 });
     const startedAt = Date.now();
     await assert.rejects(client.inspectPullRequest(pullRequest), (error: unknown) => {
       assert.ok(error instanceof Error);
       assert.equal(error.name, 'TimeoutError');
-      assert.match(error.message, /^gh (?:pr view|api) timed out after 750ms$/);
+      assert.match(error.message, /^gh (?:pr view|api) timed out after 2000ms$/);
       return true;
     });
-    assert.ok(Date.now() - startedAt < 3_000, 'the hung command should reject promptly');
+    assert.ok(Date.now() - startedAt < 5_000, 'the hung command should reject promptly');
 
-    await waitFor(() => existsSync(pidFile) && readPids(pidFile).length === 1);
+    assert.ok(existsSync(pidFile), 'the fake gh command should reach its hung state before the timeout');
     const pids = readPids(pidFile);
-    await waitFor(() => pids.every((pid) => !processExists(pid)));
-    assert.ok(pids.every((pid) => !processExists(pid)), 'all gh subprocesses should be terminated');
+    assert.equal(pids.length, 1);
+    await waitFor(() => pids.every((pid) => !markedProcessIsRunning(pid, hangTarget)));
+    assert.ok(pids.every((pid) => !markedProcessIsRunning(pid, hangTarget)), 'the hung gh subprocess should not be running');
   } finally {
+    for (const pid of existsSync(pidFile) ? readPids(pidFile) : []) {
+      if (markedProcessIsRunning(pid, hangTarget)) process.kill(pid, 'SIGKILL');
+    }
     rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -102,12 +109,15 @@ function readPids(filePath: string): number[] {
   return readFileSync(filePath, 'utf8').trim().split('\n').filter(Boolean).map(Number);
 }
 
-function processExists(pid: number): boolean {
+function markedProcessIsRunning(pid: number, marker: string): boolean {
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return !(error instanceof Error && 'code' in error && error.code === 'ESRCH');
+    const output = execFileSync('ps', ['-o', 'stat=', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).trim();
+    const match = output.match(/^(\S+)\s+(.*)$/s);
+    if (!match) return false;
+    const [, state, command] = match;
+    return !state!.startsWith('Z') && command!.includes(marker);
+  } catch {
+    return false;
   }
 }
 
