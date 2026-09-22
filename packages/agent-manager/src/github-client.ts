@@ -2,6 +2,8 @@ import { execFile } from 'node:child_process';
 
 import type { PullRequest, PullRequestStatus } from './types.js';
 
+export const DEFAULT_GH_CLI_TIMEOUT_MS = 30_000;
+
 export type GitHubReviewActivityKind = 'comment' | 'review' | 'review_comment';
 export type GitHubPullRequestMergeability = 'CONFLICTING' | 'MERGEABLE' | 'UNKNOWN';
 
@@ -42,6 +44,11 @@ export interface GitHubPullRequestSnapshot {
 
 export interface GitHubClient {
   inspectPullRequest(pullRequest: PullRequest): Promise<GitHubPullRequestSnapshot>;
+}
+
+export interface GhCliGitHubClientOptions {
+  executable?: string;
+  timeoutMs?: number;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -141,9 +148,17 @@ function repositoryApiTarget(repository: string): { hostname: string | null; pat
 
 export class GhCliGitHubClient implements GitHubClient {
   readonly #workspaceRoot: string;
+  readonly #executable: string;
+  readonly #timeoutMs: number;
 
-  constructor(workspaceRoot: string) {
+  constructor(workspaceRoot: string, options: GhCliGitHubClientOptions = {}) {
+    const timeoutMs = options.timeoutMs ?? DEFAULT_GH_CLI_TIMEOUT_MS;
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+      throw new RangeError('GitHub CLI timeout must be a positive integer');
+    }
     this.#workspaceRoot = workspaceRoot;
+    this.#executable = options.executable ?? 'gh';
+    this.#timeoutMs = timeoutMs;
   }
 
   async inspectPullRequest(pullRequest: PullRequest): Promise<GitHubPullRequestSnapshot> {
@@ -193,23 +208,54 @@ export class GhCliGitHubClient implements GitHubClient {
 
   private runJson(args: string[]): Promise<unknown> {
     return new Promise((resolve, reject) => {
-      execFile('gh', args, {
+      const command = ghCommandLabel(args);
+      execFile(this.#executable, args, {
         cwd: this.#workspaceRoot,
         env: process.env,
         encoding: 'utf8',
         maxBuffer: 10 * 1024 * 1024,
+        timeout: this.#timeoutMs,
+        killSignal: 'SIGKILL',
       }, (error, stdout, stderr) => {
         if (error) {
-          const detail = String(stderr).trim() || error.message;
-          reject(new Error(`gh ${args.slice(0, 2).join(' ')} failed: ${detail}`));
+          if (error.killed && error.signal === 'SIGKILL') {
+            const timeoutError = new Error(`${command} timed out after ${this.#timeoutMs}ms`);
+            timeoutError.name = 'TimeoutError';
+            reject(timeoutError);
+            return;
+          }
+          reject(new Error(`${command} failed: ${ghFailureDetail(error, String(stderr))}`));
           return;
         }
         try {
           resolve(JSON.parse(String(stdout)) as unknown);
-        } catch (parseError) {
-          reject(new Error(`gh returned invalid JSON: ${parseError instanceof Error ? parseError.message : String(parseError)}`));
+        } catch {
+          // stdout can contain review bodies. Identify the parse failure without
+          // copying the response payload or the engine's source excerpt to logs.
+          reject(new SyntaxError(`${command} returned invalid JSON`));
         }
       });
     });
   }
+}
+
+function ghCommandLabel(args: readonly string[]): string {
+  return args[0] === 'pr' && args[1] === 'view' ? 'gh pr view' : `gh ${args[0] ?? 'command'}`;
+}
+
+function ghFailureDetail(error: Error & { code?: string | number | null; signal?: NodeJS.Signals | null }, stderr: string): string {
+  const diagnostic = redactCredentials(stderr.trim()).slice(0, 4_000);
+  if (diagnostic) return diagnostic;
+  if (error.code !== undefined && error.code !== null) {
+    return typeof error.code === 'number' ? `exit code ${error.code}` : `process error ${error.code}`;
+  }
+  if (error.signal) return `terminated by ${error.signal}`;
+  return error.name;
+}
+
+function redactCredentials(value: string): string {
+  return value
+    .replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,})\b/g, '[REDACTED]')
+    .replace(/(authorization:\s*(?:bearer|token)\s+)[^\s]+/gi, '$1[REDACTED]')
+    .replace(/(https?:\/\/)[^\s/@]+@/gi, '$1[REDACTED]@');
 }

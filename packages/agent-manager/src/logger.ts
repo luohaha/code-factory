@@ -215,6 +215,7 @@ function safeStringify(value: unknown): string {
         message: current.message,
         ...(current.stack ? { stack: current.stack } : {}),
         ...(current.cause === undefined ? {} : { cause: current.cause }),
+        ...(current instanceof AggregateError ? { errors: current.errors } : {}),
       };
     }
     return current;

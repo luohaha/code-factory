@@ -171,6 +171,8 @@ By default, Agent Manager polls registered PRs whose last stored state is Draft 
 
 Set `pullRequestReconcileIntervalSeconds` in the workspace configuration or dashboard to change the interval dynamically; `0` disables polling. The compatible `--pr-reconcile-interval SECONDS` launch override is also available. Reconciliation requires the launching user to be authenticated with `gh auth login`.
 
+Every `gh` subprocess has a 30-second elapsed timeout and is force-terminated if it hangs. Inspection and snapshot-processing failures are isolated to the affected PR, so the reconciler continues through the other eligible PRs, clears the active polling attempt, and retries failed non-terminal PRs on the next interval. Each failure is logged with `reconciliationStage`, `pullRequestId`, `repository`, `number`, and the nested error details. Diagnostics omit raw `gh` JSON output (which can contain review bodies), process credentials, and recognized credentials in `gh` error output.
+
 ## 6. Recovery and failure
 
 - A native session ID is stored as soon as the CLI reports it.

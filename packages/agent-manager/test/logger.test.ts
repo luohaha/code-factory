@@ -61,6 +61,25 @@ test('child logger adds context and safely serializes errors and circular values
   assert.equal(entry.count, '1');
 });
 
+test('logger preserves nested AggregateError details and causes', () => {
+  const stderr = new MemoryWriter();
+  const logger = createLogger({ level: 'error', stdout: new MemoryWriter(), stderr });
+  const nested = new AggregateError([
+    new Error('gh pr view failed'),
+    new AggregateError([new SyntaxError('gh api returned invalid JSON')], 'inline comments failed'),
+  ], 'pull request inspection failed');
+
+  logger.error('reconciliation failed', {
+    error: new Error('acme/widgets#81 failed', { cause: nested }),
+  });
+
+  const entry = JSON.parse(stderr.lines[0]!) as {
+    error: { cause: { errors: Array<{ message: string; errors?: Array<{ message: string }> }> } };
+  };
+  assert.equal(entry.error.cause.errors[0]?.message, 'gh pr view failed');
+  assert.equal(entry.error.cause.errors[1]?.errors?.[0]?.message, 'gh api returned invalid JSON');
+});
+
 test('file logger appends every log level to a private JSONL file', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-logger-'));
   const filePath = join(directory, 'nested', 'agent-manager.log');
