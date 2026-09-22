@@ -5,4 +5,5 @@ import { MANAGER_EVENT_TYPES } from './manager-event-types.ts';
 
 void test('subscribes to live Agent trace events', () => {
   assert.ok(MANAGER_EVENT_TYPES.includes('run.trace.appended'));
+  assert.ok(MANAGER_EVENT_TYPES.includes('requirement.updated'));
 });

@@ -477,6 +477,113 @@ test('Agent Manager removes a TODO requirement from active lists and publishes a
   }
 });
 
+test('Agent Manager manages only TODO children proposed by the source RD Session', async () => {
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    logger: silentLogger,
+  });
+  try {
+    const source = manager.createRequirement({
+      title: 'Source work',
+      description: 'Find follow-up tasks',
+      provider: 'codex',
+    });
+    const child = manager.createRequirement({
+      title: 'Draft follow-up',
+      description: 'Initial scope',
+      provider: 'codex',
+      createdBy: 'rd_agent',
+      parentRequirementId: source.id,
+      sourceSessionId: source.session.id,
+    });
+    const humanRequirement = manager.createRequirement({
+      title: 'Human work',
+      description: 'Must not be changed by the Agent',
+      provider: 'codex',
+    });
+    const startedChild = manager.createRequirement({
+      title: 'Start follow-up',
+      description: 'Run this separate task',
+      provider: 'codex',
+      createdBy: 'rd_agent',
+      parentRequirementId: source.id,
+      sourceSessionId: source.session.id,
+    });
+
+    const updated = manager.updateProposedRequirement(
+      source.id,
+      source.session.id,
+      child.id,
+      { description: 'Corrected scope' },
+    );
+    assert.equal(updated.title, 'Draft follow-up');
+    assert.equal(updated.description, 'Corrected scope');
+    const event = manager.listEvents().at(-1);
+    assert.equal(event?.type, 'requirement.updated');
+    assert.equal(event?.requirementId, child.id);
+    assert.equal((event?.payload.requirement as { description?: string })?.description, 'Corrected scope');
+
+    assert.throws(() => manager.updateProposedRequirement(
+      source.id,
+      source.session.id,
+      humanRequirement.id,
+      { title: 'Unauthorized' },
+    ), /was not proposed by/);
+    assert.throws(() => manager.startProposedRequirement(
+      source.id,
+      source.session.id,
+      humanRequirement.id,
+    ), /was not proposed by/);
+    assert.throws(() => manager.deleteProposedRequirement(
+      source.id,
+      source.session.id,
+      humanRequirement.id,
+    ), /was not proposed by/);
+
+    const execution = manager.startProposedRequirement(
+      source.id,
+      source.session.id,
+      startedChild.id,
+    );
+    assert.equal(manager.getRequirement(startedChild.id)?.status, 'doing');
+    assert.equal(manager.getRequirement(startedChild.id)?.session.state, 'running');
+    assert.equal(runner.requests.at(-1)?.invocation.input.includes('Start follow-up'), true);
+    runner.resolvers.at(-1)?.({
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'native-started-child', finalMessage: 'done', error: null,
+    });
+    await execution;
+    assert.throws(() => manager.updateProposedRequirement(
+      source.id,
+      source.session.id,
+      startedChild.id,
+      { title: 'Too late' },
+    ), /is not TODO/);
+    assert.throws(() => manager.deleteProposedRequirement(
+      source.id,
+      source.session.id,
+      startedChild.id,
+    ), /is not TODO/);
+
+    const deleted = manager.deleteProposedRequirement(
+      source.id,
+      source.session.id,
+      child.id,
+    );
+    assert.equal(deleted.status, 'cancelled');
+    assert.throws(() => manager.updateProposedRequirement(
+      source.id,
+      source.session.id,
+      child.id,
+      { title: 'Too late' },
+    ), /is not TODO/);
+  } finally {
+    await manager.close();
+  }
+});
+
 test('Agent Manager includes a human start message in the initial RD Run', async () => {
   const runner = new DeferredRunner();
   const manager = new AgentManager({
@@ -688,7 +795,9 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
     assert.ok(runner.requests[0]?.invocation.args.some((value) =>
       value.includes('Preserve pre-existing changes')));
     for (const capability of [
-      'register PRs', 'propose separate TODO follow-ups', 'inspect direct parent/child requirements',
+      'register PRs', 'propose separate TODO follow-ups',
+      'update, start, or delete those proposals while they remain TODO',
+      'inspect direct parent/child requirements',
       'message their RD Agents', 'manage wake-up timers', 'code-factory-cli --help',
       'Track started tasks to completion', 'provider wait/monitor tools',
       'only for work guaranteed to continue independently afterward', 'cancel unneeded recurring timers',

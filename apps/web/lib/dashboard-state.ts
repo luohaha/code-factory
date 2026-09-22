@@ -183,6 +183,7 @@ export function refreshTargetsForManagerEvent(event: ManagerEventDto): Dashboard
   const hasTimer = Boolean(requirementId && event.payload.timer?.requirementId === requirementId);
   switch (event.type) {
     case 'requirement.created':
+    case 'requirement.updated':
       return !hasRequirement && requirementId
         ? [{ scope: 'requirement', requirementId, includeRuns: false }]
         : [];
@@ -298,6 +299,7 @@ export function mergeRefreshTargets(
 export function managerEventInvalidatesSearch(event: ManagerEventDto): boolean {
   return [
     'requirement.created',
+    'requirement.updated',
     'requirement.deleted',
     'requirements.purged',
     'message.created',

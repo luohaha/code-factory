@@ -1,5 +1,6 @@
 export const MANAGER_EVENT_TYPES = [
   'requirement.created',
+  'requirement.updated',
   'requirement.deleted',
   'requirement.completed',
   'requirements.purged',

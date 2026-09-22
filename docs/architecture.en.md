@@ -80,7 +80,8 @@ Every headless RD and Reviewer invocation skips interactive approval and CLI san
 - optional `model` and `reasoningEffort` pin the CLI configuration for every RD Run in the Session;
 - `createdBy`: `human | rd_agent`;
 - an agent-proposed Requirement records `parentRequirementId` and `sourceSessionId`;
-- an agent proposal is created as TODO by default, preventing uncontrolled recursive work; an explicit CLI `--start` opt-in starts its RD Session immediately.
+- the source RD Session may update, start, or delete that proposed child only while it remains TODO;
+- an agent proposal is created as TODO by default, preventing uncontrolled recursive work; an explicit CLI `--start` opt-in starts its RD Session immediately, while `requirement start` can start it later.
 - the proposing Requirement and its direct child can discover each other and exchange explicit, durable RD messages without sharing native agent-session context.
 
 ### AgentSession

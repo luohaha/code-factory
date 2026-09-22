@@ -666,6 +666,22 @@ test('RD Agent endpoints list related Requirements and deliver cross-Requirement
     parentRequirementId: parent.id,
     sourceSessionId: parent.session.id,
   });
+  const startChild = manager.createRequirement({
+    title: 'Start child API implementation',
+    description: 'Start this proposed work',
+    provider: 'codex',
+    createdBy: 'rd_agent',
+    parentRequirementId: parent.id,
+    sourceSessionId: parent.session.id,
+  });
+  const deleteChild = manager.createRequirement({
+    title: 'Delete child API implementation',
+    description: 'Remove this proposed work',
+    provider: 'codex',
+    createdBy: 'rd_agent',
+    parentRequirementId: parent.id,
+    sourceSessionId: parent.session.id,
+  });
   const unrelated = manager.createRequirement({
     title: 'Unrelated API work',
     description: 'Remain isolated',
@@ -680,6 +696,109 @@ test('RD Agent endpoints list related Requirements and deliver cross-Requirement
   const baseUrl = `http://127.0.0.1:${port}`;
 
   try {
+    const updateResponse = await fetch(`${baseUrl}/api/agent/requirements/${child.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceRequirementId: parent.id,
+        sourceSessionId: parent.session.id,
+        title: 'Corrected child API implementation',
+      }),
+    });
+    assert.equal(updateResponse.status, 200);
+    const updated = await updateResponse.json() as { title: string; description: string; status: string };
+    assert.equal(updated.title, 'Corrected child API implementation');
+    assert.equal(updated.description, 'Implement the child work');
+    assert.equal(updated.status, 'todo');
+
+    const emptyUpdateResponse = await fetch(`${baseUrl}/api/agent/requirements/${child.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceRequirementId: parent.id,
+        sourceSessionId: parent.session.id,
+      }),
+    });
+    assert.equal(emptyUpdateResponse.status, 400);
+
+    const unrelatedUpdateResponse = await fetch(`${baseUrl}/api/agent/requirements/${unrelated.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceRequirementId: parent.id,
+        sourceSessionId: parent.session.id,
+        title: 'Must fail',
+      }),
+    });
+    assert.equal(unrelatedUpdateResponse.status, 409);
+
+    const startResponse = await fetch(`${baseUrl}/api/agent/requirements/${startChild.id}/start`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceRequirementId: parent.id,
+        sourceSessionId: parent.session.id,
+      }),
+    });
+    assert.equal(startResponse.status, 202);
+    const started = await startResponse.json() as {
+      action: string;
+      requirement: { id: string; status: string; session: { state: string } };
+      run: { requirementId: string; status: string } | null;
+    };
+    assert.equal(started.action, 'start');
+    assert.equal(started.requirement.id, startChild.id);
+    assert.equal(started.requirement.status, 'doing');
+    assert.equal(started.requirement.session.state, 'running');
+    assert.equal(started.run?.requirementId, startChild.id);
+    assert.equal(started.run?.status, 'running');
+
+    const repeatedStartResponse = await fetch(`${baseUrl}/api/agent/requirements/${startChild.id}/start`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceRequirementId: parent.id,
+        sourceSessionId: parent.session.id,
+      }),
+    });
+    assert.equal(repeatedStartResponse.status, 409);
+
+    const deleteQuery = new URLSearchParams({
+      sourceRequirementId: parent.id,
+      sourceSessionId: parent.session.id,
+    });
+    const deleteResponse = await fetch(
+      `${baseUrl}/api/agent/requirements/${deleteChild.id}?${deleteQuery.toString()}`,
+      { method: 'DELETE' },
+    );
+    assert.equal(deleteResponse.status, 200);
+    const deleted = await deleteResponse.json() as {
+      deleted: boolean;
+      requirement: { id: string; status: string; session: { state: string } };
+    };
+    assert.equal(deleted.deleted, true);
+    assert.equal(deleted.requirement.id, deleteChild.id);
+    assert.equal(deleted.requirement.status, 'cancelled');
+    assert.equal(deleted.requirement.session.state, 'completed');
+
+    const repeatedDeleteResponse = await fetch(
+      `${baseUrl}/api/agent/requirements/${deleteChild.id}?${deleteQuery.toString()}`,
+      { method: 'DELETE' },
+    );
+    assert.equal(repeatedDeleteResponse.status, 409);
+
+    const missingDeleteContextResponse = await fetch(
+      `${baseUrl}/api/agent/requirements/${child.id}`,
+      { method: 'DELETE' },
+    );
+    assert.equal(missingDeleteContextResponse.status, 400);
+
+    const unrelatedDeleteResponse = await fetch(
+      `${baseUrl}/api/agent/requirements/${unrelated.id}?${deleteQuery.toString()}`,
+      { method: 'DELETE' },
+    );
+    assert.equal(unrelatedDeleteResponse.status, 409);
+
     const relatedResponse = await fetch(
       `${baseUrl}/api/agent/requirements/${child.id}/related?sourceSessionId=${child.session.id}`,
     );
@@ -725,7 +844,7 @@ test('RD Agent endpoints list related Requirements and deliver cross-Requirement
     assert.equal(conversation.items.length, 1);
     assert.equal(conversation.items[0]?.sourceRequirementId, child.id);
     assert.equal(conversation.items[0]?.body, 'Please consume contract version 2.');
-    assert.match(runner.request?.invocation.input ?? '', /Related RD Agent from Child API implementation/);
+    assert.match(runner.request?.invocation.input ?? '', /Related RD Agent from Corrected child API implementation/);
 
     const unrelatedResponse = await fetch(
       `${baseUrl}/api/agent/requirements/${child.id}/related/${unrelated.id}/messages`,

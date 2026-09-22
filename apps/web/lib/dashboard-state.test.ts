@@ -192,6 +192,9 @@ void test('does not apply an in-flight scoped response after its Requirement is 
 });
 
 void test('routes legacy SSE payloads to precise resource refreshes', () => {
+  assert.deepEqual(refreshTargetsForManagerEvent(managerEvent('requirement.updated')), [
+    { scope: 'requirement', requirementId: 'requirement-1', includeRuns: false },
+  ]);
   assert.deepEqual(refreshTargetsForManagerEvent(managerEvent('message.created')), [
     { scope: 'messages', requirementId: 'requirement-1' },
     { scope: 'requirement', requirementId: 'requirement-1', includeRuns: false },
@@ -221,6 +224,7 @@ void test('routes legacy SSE payloads to precise resource refreshes', () => {
 void test('does not refresh when a common SSE event carries persisted resources', () => {
   const payloads: Array<[string, Record<string, unknown>]> = [
     ['requirement.created', { requirement: { id: 'requirement-1' } }],
+    ['requirement.updated', { requirement: { id: 'requirement-1' } }],
     ['message.created', { message: { id: 'message-1', requirementId: 'requirement-1' }, requirement: { id: 'requirement-1' } }],
     ['run.started', { run: { id: 'run-1', requirementId: 'requirement-1' }, requirement: { id: 'requirement-1' } }],
     ['run.succeeded', { run: { id: 'run-1', requirementId: 'requirement-1' }, requirement: { id: 'requirement-1' } }],
