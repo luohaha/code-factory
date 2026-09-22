@@ -66,6 +66,8 @@ test('code-factory-cli help discovers the supported RD commands', async () => {
   assert.match(output.join(''), /timer show/);
   assert.match(output.join(''), /requirement propose/);
   assert.match(output.join(''), /requirement update/);
+  assert.match(output.join(''), /requirement start/);
+  assert.match(output.join(''), /requirement delete/);
   assert.match(output.join(''), /requirement related/);
   assert.match(output.join(''), /requirement message/);
   assert.match(output.join(''), /CODE_FACTORY_REQUIREMENT_ID/);
@@ -85,6 +87,16 @@ test('code-factory-cli help discovers the supported RD commands', async () => {
   });
   assert.equal(updateExitCode, 0);
   assert.match(updateOutput.join(''), /--requirement-id/);
+
+  for (const action of ['start', 'delete']) {
+    const actionOutput: string[] = [];
+    const actionExitCode = await runCodeFactoryCli(['requirement', action, '--help'], {
+      writeOut: (value) => actionOutput.push(value),
+      writeError: () => undefined,
+    });
+    assert.equal(actionExitCode, 0);
+    assert.match(actionOutput.join(''), /--requirement-id/);
+  }
 });
 
 test('code-factory-cli reports the package version without requiring Agent context', async () => {
@@ -212,6 +224,34 @@ test('code-factory-cli requires a proposed Requirement update field', async () =
   ], testRuntime(requests, [], errors)), 2);
   assert.deepEqual(requests, []);
   assert.match(errors.join(''), /Provide --title, --description, or --description-file/);
+});
+
+test('code-factory-cli starts and deletes proposed TODO Requirements using injected context', async () => {
+  const requests: CapturedRequest[] = [];
+  const output: string[] = [];
+  const errors: string[] = [];
+  const runtime = testRuntime(requests, output, errors);
+
+  assert.equal(await runCodeFactoryCli([
+    'requirement', 'start', '--requirement-id', 'req_child/value',
+  ], runtime), 0);
+  assert.equal(await runCodeFactoryCli([
+    'requirement', 'delete', '--requirement-id', 'req_child/value',
+  ], runtime), 0);
+
+  assert.deepEqual(errors, []);
+  assert.deepEqual(requests, [{
+    url: 'http://127.0.0.1:4310/api/agent/requirements/req_child%2Fvalue/start',
+    method: 'POST',
+    body: {
+      sourceRequirementId: 'req_cli',
+      sourceSessionId: 'ses_cli',
+    },
+  }, {
+    url: 'http://127.0.0.1:4310/api/agent/requirements/req_child%2Fvalue?sourceRequirementId=req_cli&sourceSessionId=ses_cli',
+    method: 'DELETE',
+    body: {},
+  }]);
 });
 
 test('code-factory-cli lists related Requirements and messages a related RD Agent', async () => {

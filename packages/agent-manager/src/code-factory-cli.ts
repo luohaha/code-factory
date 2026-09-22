@@ -17,6 +17,8 @@ Commands:
   pr register             Register or refresh a pull request
   requirement propose     Propose a separately tracked TODO requirement
   requirement update      Update a TODO requirement proposed by this RD Agent
+  requirement start       Start a TODO requirement proposed by this RD Agent
+  requirement delete      Delete a TODO requirement proposed by this RD Agent
   requirement related     Show this Requirement's direct parent and children
   requirement message     Send a message to a related Requirement's RD Agent
   timer register          Register a one-time or recurring wake-up timer
@@ -75,6 +77,31 @@ Optional options:
   --start                  Start the new Requirement's RD Agent immediately
 
 Proposals remain TODO unless --start is supplied.
+
+Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
+CODE_FACTORY_SESSION_ID.`;
+
+const REQUIREMENT_START_HELP = `Usage: code-factory-cli requirement start [options]
+
+Start a TODO requirement proposed by this RD Agent.
+
+Required options:
+  --requirement-id ID      Proposed child Requirement ID
+
+Use "requirement related" to find proposed child Requirement IDs.
+
+Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
+CODE_FACTORY_SESSION_ID.`;
+
+const REQUIREMENT_DELETE_HELP = `Usage: code-factory-cli requirement delete [options]
+
+Delete a TODO requirement proposed by this RD Agent. Deleted Requirements are
+cancelled and retained according to the workspace retention policy.
+
+Required options:
+  --requirement-id ID      Proposed child Requirement ID
+
+Use "requirement related" to find proposed child Requirement IDs.
 
 Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
 CODE_FACTORY_SESSION_ID.`;
@@ -407,6 +434,27 @@ async function parseRequirementUpdatePayload(
   };
 }
 
+function parseProposedRequirementTarget(
+  args: readonly string[],
+  runtime: CodeFactoryCliRuntime,
+  help: string,
+): { targetRequirementId: string; sourceRequirementId: string; sourceSessionId: string } {
+  const values = parseOptions(args, help, { 'requirement-id': { type: 'string' } });
+  return {
+    targetRequirementId: required(values['requirement-id'] as string | undefined, '--requirement-id', help),
+    sourceRequirementId: required(
+      runtime.environment[CODE_FACTORY_REQUIREMENT_ID],
+      CODE_FACTORY_REQUIREMENT_ID,
+      help,
+    ),
+    sourceSessionId: required(
+      runtime.environment[CODE_FACTORY_SESSION_ID],
+      CODE_FACTORY_SESSION_ID,
+      help,
+    ),
+  };
+}
+
 function parseTimerRegistrationPayload(args: readonly string[]): Record<string, unknown> {
   const values = parseOptions(args, TIMER_REGISTER_HELP, {
     'after-seconds': { type: 'string' },
@@ -534,6 +582,29 @@ export async function runCodeFactoryCli(
       endpoint = `/agent/requirements/${encodeURIComponent(update.targetRequirementId)}`;
       method = 'PATCH';
       body = update.body;
+    } else if (command === 'requirement start' || command === 'requirement delete') {
+      help = command === 'requirement start' ? REQUIREMENT_START_HELP : REQUIREMENT_DELETE_HELP;
+      if (writesHelp(args.slice(2))) {
+        runtime.writeOut(`${help}\n`);
+        return 0;
+      }
+      apiBaseUrl(runtime.environment);
+      const target = parseProposedRequirementTarget(args.slice(2), runtime, help);
+      const path = `/agent/requirements/${encodeURIComponent(target.targetRequirementId)}`;
+      if (command === 'requirement start') {
+        endpoint = `${path}/start`;
+        body = {
+          sourceRequirementId: target.sourceRequirementId,
+          sourceSessionId: target.sourceSessionId,
+        };
+      } else {
+        const query = new URLSearchParams({
+          sourceRequirementId: target.sourceRequirementId,
+          sourceSessionId: target.sourceSessionId,
+        });
+        endpoint = `${path}?${query.toString()}`;
+        method = 'DELETE';
+      }
     } else if (command === 'requirement related') {
       help = REQUIREMENT_RELATED_HELP;
       if (writesHelp(args.slice(2))) {

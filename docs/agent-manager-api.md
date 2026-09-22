@@ -67,6 +67,8 @@ The service listens only on the loopback interface by default and currently has 
 | POST | /api/agent/pull-requests | Register or update a PR from an RD Agent |
 | POST | /api/agent/requirements | Propose a follow-up Requirement from an RD Agent |
 | PATCH | /api/agent/requirements/:id | Update a TODO Requirement proposed by the current RD Agent |
+| DELETE | /api/agent/requirements/:id | Delete a TODO Requirement proposed by the current RD Agent |
+| POST | /api/agent/requirements/:id/start | Start a TODO Requirement proposed by the current RD Agent |
 | GET | /api/agent/requirements/:id/related | List a source Requirement's direct parent and children |
 | POST | /api/agent/requirements/:id/related/:targetId/messages | Message a directly related Requirement's RD Agent |
 
@@ -705,6 +707,8 @@ These endpoints are the transport used by `code-factory-cli` and other trusted l
 code-factory-cli pr register --help
 code-factory-cli requirement propose --help
 code-factory-cli requirement update --help
+code-factory-cli requirement start --help
+code-factory-cli requirement delete --help
 code-factory-cli requirement related --help
 code-factory-cli requirement message --help
 code-factory-cli timer register --help
@@ -816,6 +820,39 @@ The CLI supplies the source identifiers from its injected context. Use `requirem
 ~~~bash
 code-factory-cli requirement update --requirement-id req_child --title 'Corrected title'
 code-factory-cli requirement update --requirement-id req_child --description-file ./corrected-scope.md
+~~~
+
+### POST /api/agent/requirements/:targetRequirementId/start
+
+Starts a proposed child Requirement while it remains TODO. The JSON request body requires `sourceRequirementId` and `sourceSessionId`; they must identify the RD Session that originally proposed the target.
+
+~~~bash
+curl -X POST http://127.0.0.1:4310/api/agent/requirements/req_child/start \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "sourceRequirementId": "req_parent",
+    "sourceSessionId": "ses_parent"
+  }'
+~~~
+
+Success: 202 Accepted with `accepted`, `action=start`, the started Requirement/session snapshot, and its running RD Run. Returns 404 for an unknown source or target, 400 for a mismatched source Session, and 409 when the target was not proposed by the source or is no longer TODO.
+
+~~~bash
+code-factory-cli requirement start --requirement-id req_child
+~~~
+
+### DELETE /api/agent/requirements/:targetRequirementId
+
+Deletes a proposed child Requirement while it remains TODO. The required `sourceRequirementId` and `sourceSessionId` query parameters must identify the RD Session that originally proposed the target. Deletion follows the normal Requirement lifecycle: the Requirement becomes CANCELLED and is retained according to workspace policy.
+
+~~~bash
+curl -X DELETE 'http://127.0.0.1:4310/api/agent/requirements/req_child?sourceRequirementId=req_parent&sourceSessionId=ses_parent'
+~~~
+
+Success: 200 OK with `{ "deleted": true, "requirement": ... }`. Returns 404 for an unknown source or target, 400 for missing or mismatched source context, and 409 when the target was not proposed by the source or is no longer TODO.
+
+~~~bash
+code-factory-cli requirement delete --requirement-id req_child
 ~~~
 
 ### GET /api/agent/requirements/:sourceRequirementId/related

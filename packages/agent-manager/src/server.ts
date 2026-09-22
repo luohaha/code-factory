@@ -375,6 +375,46 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         sendJson(response, 200, item);
         return;
       }
+      if (request.method === 'DELETE' && agentRequirement) {
+        const targetRequirementId = decodeURIComponent(agentRequirement[1]!);
+        const sourceRequirementId = url.searchParams.get('sourceRequirementId')?.trim();
+        const sourceSessionId = url.searchParams.get('sourceSessionId')?.trim();
+        if (!sourceRequirementId) throw new TypeError('sourceRequirementId must be a non-empty string');
+        if (!sourceSessionId) throw new TypeError('sourceSessionId must be a non-empty string');
+        const item = manager.deleteProposedRequirement(
+          sourceRequirementId,
+          sourceSessionId,
+          targetRequirementId,
+        );
+        sendJson(response, 200, { deleted: true, requirement: item });
+        return;
+      }
+
+      const agentRequirementStart = url.pathname.match(/^\/api\/agent\/requirements\/([^/]+)\/start$/);
+      if (request.method === 'POST' && agentRequirementStart) {
+        const targetRequirementId = decodeURIComponent(agentRequirementStart[1]!);
+        const body = await readJson(request);
+        void manager.startProposedRequirement(
+          stringField(body, 'sourceRequirementId', true)!,
+          stringField(body, 'sourceSessionId', true)!,
+          targetRequirementId,
+        ).catch((error: unknown) => logger.error('RD run failed unexpectedly', {
+          requirementId: targetRequirementId,
+          error,
+        }));
+        const current = manager.getRequirement(targetRequirementId);
+        if (!current) throw new StoreNotFoundError(`Requirement ${targetRequirementId} not found`);
+        const run = manager.listRuns(targetRequirementId)
+          .find((item) => item.role === 'rd' && item.status === 'running') ?? null;
+        sendJson(response, 202, {
+          accepted: true,
+          requirementId: targetRequirementId,
+          action: 'start',
+          requirement: current,
+          run,
+        });
+        return;
+      }
 
       const agentRelatedRequirements = url.pathname.match(
         /^\/api\/agent\/requirements\/([^/]+)\/related$/,

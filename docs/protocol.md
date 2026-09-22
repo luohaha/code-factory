@@ -137,6 +137,24 @@ Content-Type: application/json
 
 `title` and `description` are partial updates, with at least one required. The target must be a direct child created by the same source RD Session and must still be TODO. `code-factory-cli requirement update --requirement-id req_child` supplies the source identifiers from the injected context.
 
+Start or delete a still-TODO proposal later:
+
+~~~http
+POST /api/agent/requirements/req_child/start
+Content-Type: application/json
+
+{
+  "sourceRequirementId": "req_parent",
+  "sourceSessionId": "ses_parent"
+}
+~~~
+
+~~~http
+DELETE /api/agent/requirements/req_child?sourceRequirementId=req_parent&sourceSessionId=ses_parent
+~~~
+
+The corresponding CLI commands are `requirement start --requirement-id req_child` and `requirement delete --requirement-id req_child`. Both enforce the same source-Session ownership and TODO-only rules as updates. Starting enters the normal RD Run lifecycle; deleting enters the normal cancelled-retention lifecycle.
+
 Inspect and message directly related Requirements:
 
 ~~~bash
