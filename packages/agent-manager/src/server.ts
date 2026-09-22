@@ -357,6 +357,25 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         return;
       }
 
+      const agentRequirement = url.pathname.match(/^\/api\/agent\/requirements\/([^/]+)$/);
+      if (request.method === 'PATCH' && agentRequirement) {
+        const targetRequirementId = decodeURIComponent(agentRequirement[1]!);
+        const body = await readJson(request);
+        const title = stringField(body, 'title');
+        const description = stringField(body, 'description');
+        const item = manager.updateProposedRequirement(
+          stringField(body, 'sourceRequirementId', true)!,
+          stringField(body, 'sourceSessionId', true)!,
+          targetRequirementId,
+          {
+            ...(title === undefined ? {} : { title }),
+            ...(description === undefined ? {} : { description }),
+          },
+        );
+        sendJson(response, 200, item);
+        return;
+      }
+
       const agentRelatedRequirements = url.pathname.match(
         /^\/api\/agent\/requirements\/([^/]+)\/related$/,
       );

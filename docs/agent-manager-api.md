@@ -66,6 +66,7 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/events | Subscribe to the resumable SSE stream |
 | POST | /api/agent/pull-requests | Register or update a PR from an RD Agent |
 | POST | /api/agent/requirements | Propose a follow-up Requirement from an RD Agent |
+| PATCH | /api/agent/requirements/:id | Update a TODO Requirement proposed by the current RD Agent |
 | GET | /api/agent/requirements/:id/related | List a source Requirement's direct parent and children |
 | POST | /api/agent/requirements/:id/related/:targetId/messages | Message a directly related Requirement's RD Agent |
 
@@ -703,6 +704,7 @@ These endpoints are the transport used by `code-factory-cli` and other trusted l
 ~~~bash
 code-factory-cli pr register --help
 code-factory-cli requirement propose --help
+code-factory-cli requirement update --help
 code-factory-cli requirement related --help
 code-factory-cli requirement message --help
 code-factory-cli timer register --help
@@ -782,6 +784,40 @@ curl -X POST http://127.0.0.1:4310/api/agent/requirements \
 
 Success: 201 Created with the new Requirement and `createdBy=rd_agent`. Without `start: true`, it remains TODO. When `start` is true, the response reflects its started RD Session. Returns 404 for an unknown source Session and 400 when `parentRequirementId` does not match or another field is invalid.
 
+### PATCH /api/agent/requirements/:targetRequirementId
+
+Updates the title and/or description of a follow-up Requirement before it starts. The target must be a TODO child proposed by the same source RD Session. This prevents an Agent from changing unrelated, human-created, running, or terminal work.
+
+Request body:
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| sourceRequirementId | string | yes | Current Requirement injected into the source RD Agent |
+| sourceSessionId | string | yes | Current Requirement's RD Session |
+| title | string | no | Replacement title |
+| description | string | no | Replacement description |
+
+At least one of `title` or `description` is required. Omitted fields retain their current values.
+
+~~~bash
+curl -X PATCH http://127.0.0.1:4310/api/agent/requirements/req_child \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "sourceRequirementId": "req_parent",
+    "sourceSessionId": "ses_parent",
+    "description": "Corrected follow-up scope"
+  }'
+~~~
+
+Success: 200 OK with the updated Requirement and Session. Returns 404 for an unknown source or target, 400 for invalid input or a mismatched source Session, and 409 when the target was not proposed by the source or is no longer TODO.
+
+The CLI supplies the source identifiers from its injected context. Use `requirement related` to discover child IDs:
+
+~~~bash
+code-factory-cli requirement update --requirement-id req_child --title 'Corrected title'
+code-factory-cli requirement update --requirement-id req_child --description-file ./corrected-scope.md
+~~~
+
 ### GET /api/agent/requirements/:sourceRequirementId/related
 
 Returns the source Requirement's direct parent and children as `{ "parent": Requirement | null, "children": Requirement[] }`, including terminal records that have not yet expired. The required `sourceSessionId` query parameter must identify the source Requirement's RD Session.
@@ -843,6 +879,7 @@ Current event types and primary payloads:
 | Event | Payload |
 | --- | --- |
 | requirement.created | requirement, provider, createdBy |
+| requirement.updated | updated requirement |
 | requirement.deleted | terminal requirement and its timers |
 | requirement.completed | updated requirement and its timers |
 | requirements.purged | requirementIds, cancelledCount, doneCount |

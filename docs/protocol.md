@@ -121,6 +121,22 @@ Content-Type: application/json
 
 `provider` is optional and defaults to the source Session provider. The proposed Requirement is created as `createdBy=rd_agent`. It remains TODO by default; set the optional boolean `start` to `true` (or pass `--start` to `code-factory-cli requirement propose`) to start its RD Session immediately.
 
+Update a still-TODO Requirement proposed by the current RD Session:
+
+~~~http
+PATCH /api/agent/requirements/req_child
+Content-Type: application/json
+
+{
+  "sourceRequirementId": "req_parent",
+  "sourceSessionId": "ses_parent",
+  "title": "Corrected follow-up title",
+  "description": "Corrected follow-up scope"
+}
+~~~
+
+`title` and `description` are partial updates, with at least one required. The target must be a direct child created by the same source RD Session and must still be TODO. `code-factory-cli requirement update --requirement-id req_child` supplies the source identifiers from the injected context.
+
 Inspect and message directly related Requirements:
 
 ~~~bash
@@ -164,7 +180,7 @@ data: {"id":42,"type":"review_request.started",...}
 
 Current event types include:
 
-- `requirement.created` / `requirement.deleted` / `requirement.completed` / `requirements.purged`;
+- `requirement.created` / `requirement.updated` / `requirement.deleted` / `requirement.completed` / `requirements.purged`;
 - `message.created`;
 - `pull_request.created` / `pull_request.updated`;
 - `review_request.started`;

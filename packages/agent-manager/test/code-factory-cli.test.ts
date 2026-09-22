@@ -65,6 +65,7 @@ test('code-factory-cli help discovers the supported RD commands', async () => {
   assert.match(output.join(''), /timer register/);
   assert.match(output.join(''), /timer show/);
   assert.match(output.join(''), /requirement propose/);
+  assert.match(output.join(''), /requirement update/);
   assert.match(output.join(''), /requirement related/);
   assert.match(output.join(''), /requirement message/);
   assert.match(output.join(''), /CODE_FACTORY_REQUIREMENT_ID/);
@@ -76,6 +77,14 @@ test('code-factory-cli help discovers the supported RD commands', async () => {
   });
   assert.equal(requirementExitCode, 0);
   assert.match(requirementOutput.join(''), /--start/);
+
+  const updateOutput: string[] = [];
+  const updateExitCode = await runCodeFactoryCli(['requirement', 'update', '--help'], {
+    writeOut: (value) => updateOutput.push(value),
+    writeError: () => undefined,
+  });
+  assert.equal(updateExitCode, 0);
+  assert.match(updateOutput.join(''), /--requirement-id/);
 });
 
 test('code-factory-cli reports the package version without requiring Agent context', async () => {
@@ -170,6 +179,39 @@ test('code-factory-cli can start a proposed Requirement immediately', async () =
     description: 'Start this work without waiting for a human',
     start: true,
   });
+});
+
+test('code-factory-cli updates a proposed TODO Requirement using injected context', async () => {
+  const requests: CapturedRequest[] = [];
+  const output: string[] = [];
+  const errors: string[] = [];
+  const exitCode = await runCodeFactoryCli([
+    'requirement', 'update',
+    '--requirement-id', 'req_child/value',
+    '--title', 'Corrected benchmark',
+    '--description', 'Measure latency as well as throughput',
+  ], testRuntime(requests, output, errors));
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(errors, []);
+  assert.equal(requests[0]?.url, 'http://127.0.0.1:4310/api/agent/requirements/req_child%2Fvalue');
+  assert.equal(requests[0]?.method, 'PATCH');
+  assert.deepEqual(requests[0]?.body, {
+    sourceRequirementId: 'req_cli',
+    sourceSessionId: 'ses_cli',
+    title: 'Corrected benchmark',
+    description: 'Measure latency as well as throughput',
+  });
+});
+
+test('code-factory-cli requires a proposed Requirement update field', async () => {
+  const requests: CapturedRequest[] = [];
+  const errors: string[] = [];
+  assert.equal(await runCodeFactoryCli([
+    'requirement', 'update', '--requirement-id', 'req_child',
+  ], testRuntime(requests, [], errors)), 2);
+  assert.deepEqual(requests, []);
+  assert.match(errors.join(''), /Provide --title, --description, or --description-file/);
 });
 
 test('code-factory-cli lists related Requirements and messages a related RD Agent', async () => {

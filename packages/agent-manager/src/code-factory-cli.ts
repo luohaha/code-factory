@@ -16,6 +16,7 @@ Code Factory control-plane commands for RD Agents.
 Commands:
   pr register             Register or refresh a pull request
   requirement propose     Propose a separately tracked TODO requirement
+  requirement update      Update a TODO requirement proposed by this RD Agent
   requirement related     Show this Requirement's direct parent and children
   requirement message     Send a message to a related Requirement's RD Agent
   timer register          Register a one-time or recurring wake-up timer
@@ -74,6 +75,23 @@ Optional options:
   --start                  Start the new Requirement's RD Agent immediately
 
 Proposals remain TODO unless --start is supplied.
+
+Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
+CODE_FACTORY_SESSION_ID.`;
+
+const REQUIREMENT_UPDATE_HELP = `Usage: code-factory-cli requirement update [options]
+
+Update the title or description of a TODO requirement proposed by this RD Agent.
+Started or terminal Requirements cannot be updated.
+
+Required options:
+  --requirement-id ID      Proposed child Requirement ID
+
+Update at least one:
+  --title TITLE
+  --description DESCRIPTION or --description-file PATH (UTF-8)
+
+Use "requirement related" to find proposed child Requirement IDs.
 
 Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
 CODE_FACTORY_SESSION_ID.`;
@@ -332,6 +350,63 @@ async function parseRequirementPayload(args: readonly string[], runtime: CodeFac
   };
 }
 
+async function parseRequirementUpdatePayload(
+  args: readonly string[],
+  runtime: CodeFactoryCliRuntime,
+): Promise<{ targetRequirementId: string; body: Record<string, unknown> }> {
+  const { environment } = runtime;
+  const values = parseOptions(args, REQUIREMENT_UPDATE_HELP, {
+    'requirement-id': { type: 'string' },
+    title: { type: 'string' },
+    description: { type: 'string' },
+    'description-file': { type: 'string' },
+  });
+  if (values.description !== undefined && values['description-file'] !== undefined) {
+    throw new CliUsageError('Use either --description or --description-file', REQUIREMENT_UPDATE_HELP);
+  }
+  if (values.title === undefined
+    && values.description === undefined
+    && values['description-file'] === undefined) {
+    throw new CliUsageError('Provide --title, --description, or --description-file', REQUIREMENT_UPDATE_HELP);
+  }
+  const description = values.description === undefined && values['description-file'] === undefined
+    ? undefined
+    : required(
+      values['description-file'] === undefined
+        ? values.description as string | undefined
+        : await runtime.readTextFile(required(
+          values['description-file'] as string | undefined,
+          '--description-file',
+          REQUIREMENT_UPDATE_HELP,
+        )),
+      '--description or --description-file',
+      REQUIREMENT_UPDATE_HELP,
+    );
+  return {
+    targetRequirementId: required(
+      values['requirement-id'] as string | undefined,
+      '--requirement-id',
+      REQUIREMENT_UPDATE_HELP,
+    ),
+    body: {
+      sourceRequirementId: required(
+        environment[CODE_FACTORY_REQUIREMENT_ID],
+        CODE_FACTORY_REQUIREMENT_ID,
+        REQUIREMENT_UPDATE_HELP,
+      ),
+      sourceSessionId: required(
+        environment[CODE_FACTORY_SESSION_ID],
+        CODE_FACTORY_SESSION_ID,
+        REQUIREMENT_UPDATE_HELP,
+      ),
+      ...(values.title === undefined ? {} : {
+        title: required(values.title as string | undefined, '--title', REQUIREMENT_UPDATE_HELP),
+      }),
+      ...(description === undefined ? {} : { description }),
+    },
+  };
+}
+
 function parseTimerRegistrationPayload(args: readonly string[]): Record<string, unknown> {
   const values = parseOptions(args, TIMER_REGISTER_HELP, {
     'after-seconds': { type: 'string' },
@@ -368,7 +443,7 @@ function errorMessage(payload: unknown, fallback: string): string {
 async function requestJson(
   runtime: CodeFactoryCliRuntime,
   url: string,
-  method: 'GET' | 'POST' | 'DELETE',
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
   body?: Record<string, unknown>,
 ): Promise<unknown> {
   const retryGuidance = method === 'GET'
@@ -427,7 +502,7 @@ export async function runCodeFactoryCli(
   const command = `${args[0] ?? ''} ${args[1] ?? ''}`.trim();
   let help: string;
   let endpoint: string;
-  let method: 'GET' | 'POST' | 'DELETE' = 'POST';
+  let method: 'GET' | 'POST' | 'PATCH' | 'DELETE' = 'POST';
   let body: Record<string, unknown> | undefined;
   try {
     if (command === 'pr register') {
@@ -448,6 +523,17 @@ export async function runCodeFactoryCli(
       endpoint = '/agent/requirements';
       apiBaseUrl(runtime.environment);
       body = await parseRequirementPayload(args.slice(2), runtime);
+    } else if (command === 'requirement update') {
+      help = REQUIREMENT_UPDATE_HELP;
+      if (writesHelp(args.slice(2))) {
+        runtime.writeOut(`${help}\n`);
+        return 0;
+      }
+      apiBaseUrl(runtime.environment);
+      const update = await parseRequirementUpdatePayload(args.slice(2), runtime);
+      endpoint = `/agent/requirements/${encodeURIComponent(update.targetRequirementId)}`;
+      method = 'PATCH';
+      body = update.body;
     } else if (command === 'requirement related') {
       help = REQUIREMENT_RELATED_HELP;
       if (writesHelp(args.slice(2))) {

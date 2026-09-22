@@ -680,6 +680,42 @@ test('RD Agent endpoints list related Requirements and deliver cross-Requirement
   const baseUrl = `http://127.0.0.1:${port}`;
 
   try {
+    const updateResponse = await fetch(`${baseUrl}/api/agent/requirements/${child.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceRequirementId: parent.id,
+        sourceSessionId: parent.session.id,
+        title: 'Corrected child API implementation',
+      }),
+    });
+    assert.equal(updateResponse.status, 200);
+    const updated = await updateResponse.json() as { title: string; description: string; status: string };
+    assert.equal(updated.title, 'Corrected child API implementation');
+    assert.equal(updated.description, 'Implement the child work');
+    assert.equal(updated.status, 'todo');
+
+    const emptyUpdateResponse = await fetch(`${baseUrl}/api/agent/requirements/${child.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceRequirementId: parent.id,
+        sourceSessionId: parent.session.id,
+      }),
+    });
+    assert.equal(emptyUpdateResponse.status, 400);
+
+    const unrelatedUpdateResponse = await fetch(`${baseUrl}/api/agent/requirements/${unrelated.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceRequirementId: parent.id,
+        sourceSessionId: parent.session.id,
+        title: 'Must fail',
+      }),
+    });
+    assert.equal(unrelatedUpdateResponse.status, 409);
+
     const relatedResponse = await fetch(
       `${baseUrl}/api/agent/requirements/${child.id}/related?sourceSessionId=${child.session.id}`,
     );
@@ -725,7 +761,7 @@ test('RD Agent endpoints list related Requirements and deliver cross-Requirement
     assert.equal(conversation.items.length, 1);
     assert.equal(conversation.items[0]?.sourceRequirementId, child.id);
     assert.equal(conversation.items[0]?.body, 'Please consume contract version 2.');
-    assert.match(runner.request?.invocation.input ?? '', /Related RD Agent from Child API implementation/);
+    assert.match(runner.request?.invocation.input ?? '', /Related RD Agent from Corrected child API implementation/);
 
     const unrelatedResponse = await fetch(
       `${baseUrl}/api/agent/requirements/${child.id}/related/${unrelated.id}/messages`,
