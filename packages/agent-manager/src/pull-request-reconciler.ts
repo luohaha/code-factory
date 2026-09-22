@@ -110,15 +110,40 @@ export class PullRequestReconciler {
     const errors: Error[] = [];
     for (const pullRequest of this.#store.listPullRequests()
       .filter((item) => item.status === 'draft' || item.status === 'open')) {
+      let snapshot: Awaited<ReturnType<GitHubClient['inspectPullRequest']>>;
       try {
-        const snapshot = await this.#githubClient.inspectPullRequest(pullRequest);
-        if (this.#isClosed()) return;
+        snapshot = await this.#githubClient.inspectPullRequest(pullRequest);
+      } catch (error) {
+        errors.push(this.recordFailure(pullRequest, 'inspection', error));
+        continue;
+      }
+      if (this.#isClosed()) return;
+      try {
         this.reconcileSnapshot(registrations, pullRequest, snapshot);
       } catch (error) {
-        errors.push(error instanceof Error ? error : new Error(String(error)));
+        errors.push(this.recordFailure(pullRequest, 'snapshot', error));
       }
     }
     if (errors.length > 0) throw new AggregateError(errors, `${errors.length} pull request(s) could not be reconciled`);
+  }
+
+  private recordFailure(
+    pullRequest: PullRequest,
+    reconciliationStage: 'inspection' | 'snapshot',
+    error: unknown,
+  ): Error {
+    const underlyingError = error instanceof Error ? error : new Error(String(error));
+    this.#logger.error('Pull request reconciliation failed', {
+      reconciliationStage,
+      pullRequestId: pullRequest.id,
+      repository: pullRequest.repository,
+      number: pullRequest.number,
+      error: underlyingError,
+    });
+    return new Error(
+      `${reconciliationStage} failed for ${pullRequest.repository}#${pullRequest.number} (${pullRequest.id})`,
+      { cause: underlyingError },
+    );
   }
 
   private reconcileSnapshot(

@@ -133,6 +133,8 @@ Workspace data is stored outside the managed repository by default:
 
 The foreground CLI prints a startup banner containing the workspace, configuration, database, log path, dashboard URL, API URL, and PR reconciliation interval. Daemon commands print supervisor and manager PIDs plus the daemon log path. Operational logs are structured JSONL and omit prompts, conversation bodies, and raw Agent output. Daemon state and log files use mode `0600`.
 
+PR reconciliation failures are logged individually with `reconciliationStage`, `pullRequestId`, `repository`, `number`, and recursively serialized error or `AggregateError` details. Each local `gh` command is force-terminated after 30 seconds if it hangs; the affected non-terminal PR is retried at the next configured reconciliation interval while other eligible PRs continue. These diagnostics omit raw `gh` JSON output, including review bodies, and do not include process credentials.
+
 The daemon log is append-only diagnostic history: its presence does not mean that a daemon is running and never blocks a later start. `daemon.lock` is also only PID metadata, so a stale copy does not block startup. Live-process detection uses `daemon.json` together with the recorded supervisor PID; an operating-system-released SQLite lock in `daemon.guard.sqlite` serializes supervisor ownership and is safe to leave on disk.
 
 Follow the active logs with:
