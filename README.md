@@ -13,10 +13,6 @@
   <a href="packages/agent-manager/tsconfig.json"><img src="https://img.shields.io/badge/TypeScript-strict-3178C6" alt="TypeScript: strict" /></a>
 </p>
 
-<p align="center">
-  <img src="docs/assets/brand/code-factory-overview.png" alt="Code Factory connects requirements, persistent RD agents, a local workspace, pull requests, AI review, scheduled wake-ups, and human control. Agent Triggers route timed and GitHub PR events into existing Requirements and are designed to support more sources and new Requirement creation in the future." />
-</p>
-
 Code Factory is a **local control plane for agent-driven software delivery**. It turns each requirement into a persistent development loop that connects a human, an RD coding agent, the local workspace, GitHub pull requests, on-demand AI reviewers, and external events routed through Agent Triggers in one Web dashboard.
 
 It is designed for developers and engineering teams that already use **Codex** or **Claude Code**, but need more than isolated terminal sessions: durable context, visible progress, human intervention, PR feedback, and an auditable conversation around the work.
@@ -48,38 +44,19 @@ Prerequisites, daemon operation, configuration, CLI options, and log locations a
 
 ## How It Works
 
-~~~mermaid
-flowchart LR
-  H[Human] <--> W[Web dashboard]
-  W <-->|HTTP + SSE| M[Agent Manager]
-  M <--> DB[(SQLite)]
-  M -->|Create or resume| RD[Long-lived RD session<br/>Codex or Claude Code]
-  M -->|Request review| RV[Short-lived Reviewer<br/>Codex or Claude Code]
-  RD -->|Edit and test| WS[Local workspace]
-  RD -->|Create or update PR| GH[GitHub]
-  RD -->|code-factory-cli| M
-  RV -->|Review comments| GH
-  RV -->|Reviewer summary| M
-  GH -->|Current PR events| T[Agent Triggers]
-  W -->|Configure timed wake-up| T
-  EXT[Slack / Jira / more] -.->|Future sources| T
-  T -->|Current: deliver to<br/>existing Requirement| M
-  T -.->|Future: create<br/>Requirement| M
-~~~
+<p align="center">
+  <img src="docs/assets/brand/code-factory-overview.png" alt="Code Factory coordinates multiple related Requirements, each with its own persistent RD session. RD agents can create and manage child Requirements, exchange durable messages, work in the local workspace, and deliver GitHub pull requests. Timer and GitHub triggers are available today; Slack and Jira triggers are planned." />
+</p>
 
-1. A human creates a Requirement and chooses Codex or Claude Code, optionally pinning a model and reasoning effort. Code Factory creates a dedicated, persistent RD session for it.
-2. Agent Manager starts or resumes that agent in the managed workspace. Messages sent during a run are queued; the human may explicitly interrupt when an immediate correction is needed.
-3. The RD agent edits and tests the repository, then uses the bundled `code-factory-cli` to register any pull request it creates, propose separate follow-up work, apply lifecycle actions to its proposals, inspect its direct parent and child Requirements, message their RD Agents, or schedule a wake-up while a long external build or command continues. Related-Agent messages are persisted in the target Requirement conversation and start or queue its long-lived RD session.
-4. Agent Triggers route normalized, deduplicated messages into the Requirement conversation. The timer trigger executes configurable one-time or recurring timers and sends their ID and follow-up description when due. The GitHub triggers poll registered PRs whose last stored state is Draft or Open, observing state, comments and reviews, CI failures, and merge conflicts. This lets the reconciler discover when a Draft PR becomes Open. Once a PR transitions to Closed or Merged, it is excluded from later polls. An idle RD session resumes immediately; a running session consumes the new messages after its current run.
-5. A human can request a short-lived AI review for an open PR with its own provider, model, and reasoning effort. Review results return to the same conversation and wake the original RD session to continue the loop.
+Each Requirement owns one long-lived RD session. Sessions for different Requirements can run in parallel, but a session has at most one active RD run. Directly related Requirements coordinate through explicit, durable RD-to-RD messages while keeping their native agent contexts isolated.
 
-The Agent Trigger boundary is intentionally source-neutral, but its current message contract targets an existing Requirement. Scheduled wake-ups are natively configurable; dynamic discovery and configuration of third-party trigger implementations, Slack and Jira sources, and triggers that create new Requirements are future extensions rather than implemented behavior.
+1. **Create.** A human creates a Requirement in the dashboard and selects Codex or Claude Code, with optional model and reasoning settings. Agent Manager creates the Requirement and its RD session atomically.
+2. **Build and delegate.** Agent Manager starts or resumes that session in the managed workspace. The RD edits and tests the repository, then uses `code-factory-cli` to register pull requests, create directly related child Requirements, manage their permitted lifecycle transitions, message their RD agents, or schedule a later wake-up.
+3. **Continue.** The durable Requirement conversation is also the RD delivery stream: Human and Reviewer messages, selected System events, and explicit related-Agent messages are delivered to RD; the RD's own output is displayed but not fed back as new input. New input stays queued in order, and a running session processes it after the current run unless a human explicitly interrupts.
+4. **React.** Today's Timer and GitHub triggers add deduplicated messages for due wake-ups, PR state changes, reviews and comments, CI failures, and merge conflicts. The source-neutral trigger boundary is designed for future Slack and Jira sources, which are not implemented yet. GitHub and the reconciler—not the RD—own PR lifecycle state.
+5. **Review.** On request, a separate short-lived Reviewer reads the open PR, can publish inline comments, and appends a summary to the Requirement conversation, waking the RD to continue the loop.
 
-Different Requirements can run concurrently, while each Requirement has at most one active RD run. Requirement state, conversations, runs, sessions, PR metadata, scheduled wake-ups, and Agent Trigger receipts are persisted in SQLite. Cancelled Requirements are retained for 7 days and completed Requirements for 365 days by default; both periods are runtime-configurable, and expiry atomically removes the Requirement and its related domain records while retaining retryable tombstones until attachment files are deleted.
-
-Agent Manager places `code-factory-cli` on every RD process's `PATH` and injects its API URL, Requirement ID, and Session ID through the environment. The RD prompt describes available capabilities and leaves command names and arguments to `code-factory-cli --help`; raw HTTP details remain an internal transport contract. Use `code-factory-cli pr register --from-github <PR-URL>` to read current metadata through `gh`, `requirement propose --description-file <PATH> [--start]` for multiline follow-up descriptions with optional immediate execution, and `requirement action --requirement-id <ID>` with exactly one of `--start`, `--stop`, `--delete`, or `--done` to manage a proposal through the same lifecycle controls available to a human. Proposed Requirement content is immutable after creation. Resumed prompts retain the current Requirement context and instruct agents to check for already-completed actions before retrying.
-
-Agent context is scoped to the Requirement rather than copied from whichever interactive agent or terminal started Agent Manager. A Requirement's first RD Run creates a new native Codex thread or Claude Code session; later Runs resume that same native session, preserving its conversation context. Because the child CLI inherits Agent Manager's environment and starts in the managed workspace, it also discovers the provider's configured project/user instructions, Skills, plugins, and local memory features according to the CLI's own rules. Code Factory does not automatically copy another agent's live transcript or merge context from other Requirements. An explicit related-Agent message is new, durable input to the target Requirement rather than shared session context. Code Factory does not guarantee that every provider-managed memory entry is injected.
+SQLite persists Requirements, relationships, conversations, runs, sessions, PR metadata, timers, and trigger receipts across restarts. Related-agent communication becomes new input in the target Requirement; it does not merge the agents' native session contexts.
 
 For the complete domain model, state machines, concurrency rules, and delivery semantics, see [Final architecture and domain model](docs/architecture.en.md).
 
