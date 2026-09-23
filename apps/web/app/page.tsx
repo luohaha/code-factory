@@ -9,6 +9,9 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowUp,
+  Bell,
+  BellOff,
+  BellRing,
   Bot,
   Check,
   CircleDot,
@@ -140,6 +143,7 @@ import {
 } from '@/lib/dashboard-state';
 import { formatDuration } from '@/lib/format-duration';
 import { summarizeRequirementRelations } from '@/lib/requirement-tree';
+import { useDesktopNotifications } from '@/lib/use-desktop-notifications';
 import { I18nProvider, useI18n } from '@/lib/i18n';
 import { useTheme } from '@/lib/theme';
 import type { TranslationKey } from '@/locales/zh-CN';
@@ -2204,6 +2208,13 @@ function Dashboard() {
     setDetailMode(nextDetailMode);
     setSelectedId(requirementId);
   }, []);
+  const {
+    availability: notificationAvailability,
+    enabled: notificationsEnabled,
+    busy: notificationBusy,
+    toggle: toggleNotifications,
+    notifyForEvent,
+  } = useDesktopNotifications(t, openRequirementDetail);
 
   const loadRequirementAgentTrace = useCallback(async (requirementId: string) => {
     const items = await client.listRequirementAgentTrace(requirementId);
@@ -2496,6 +2507,7 @@ function Dashboard() {
 
   const applyManagerEvent = useCallback((event: ManagerEventDto) => {
     eventRevisionRef.current += 1;
+    notifyForEvent(event);
     const payload = event.payload;
     const removesRequirement = event.type === 'requirement.deleted'
       || event.type === 'requirements.purged';
@@ -2581,7 +2593,7 @@ function Dashboard() {
     setConnection('online');
     setError(null);
     markSynced();
-  }, [enqueueRefreshTargets, markSynced, removeRequirementState]);
+  }, [enqueueRefreshTargets, markSynced, notifyForEvent, removeRequirementState]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -3025,6 +3037,15 @@ function Dashboard() {
     ? 'Requirement board'
     : view === 'relationships' ? 'Requirement relationship tree'
     : view === 'pull_requests' ? 'Pull Request board' : view === 'sessions' ? 'Agent Session board' : 'Timer board';
+  const notificationButtonLabel: TranslationKey = notificationAvailability === 'insecure'
+    ? 'Desktop notifications require HTTPS or localhost'
+    : notificationAvailability === 'unsupported'
+      ? 'This browser does not support desktop notifications'
+      : notificationAvailability === 'blocked'
+        ? 'Allow notifications for this site in browser settings'
+        : notificationsEnabled
+          ? 'Turn off desktop notifications'
+          : 'Turn on desktop notifications';
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -3051,6 +3072,16 @@ function Dashboard() {
               <CircleDot className={`size-3 shrink-0 ${connection === 'online' ? 'text-emerald-500' : connection === 'reconnecting' ? 'text-amber-500' : 'text-rose-500'}`} />
               <span className="truncate font-mono">{workspaceLabel}</span>
             </div>
+            <Button
+              variant={notificationsEnabled ? 'secondary' : 'outline'}
+              size="icon"
+              aria-label={t(notificationButtonLabel)}
+              title={t(notificationButtonLabel)}
+              disabled={notificationAvailability !== 'ready' || notificationBusy}
+              onClick={() => void toggleNotifications()}
+            >
+              {notificationsEnabled ? <BellRing /> : notificationAvailability === 'ready' ? <Bell /> : <BellOff />}
+            </Button>
             <Button
               variant="outline"
               size="icon"
