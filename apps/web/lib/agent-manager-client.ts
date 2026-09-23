@@ -8,6 +8,11 @@ export interface AgentConfiguration {
   reasoningEffort?: AgentReasoningEffort;
 }
 
+export interface RequirementAgentConfigurationUpdate {
+  model?: string | null;
+  reasoningEffort?: AgentReasoningEffort | null;
+}
+
 export interface AgentModelDto {
   id: string;
   displayName: string;
@@ -366,6 +371,16 @@ export class AgentManagerClient {
 
   createRequirement(input: { title: string; description: string } & AgentConfiguration): Promise<RequirementDto> {
     return this.request('/api/requirements', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  updateRequirementAgentConfiguration(
+    id: string,
+    input: RequirementAgentConfigurationUpdate,
+  ): Promise<RequirementDto> {
+    return this.request(`/api/requirements/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    });
   }
 
   deleteRequirement(id: string): Promise<void> {

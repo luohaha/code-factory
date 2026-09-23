@@ -66,6 +66,7 @@ import type {
   AgentTimer,
   AgentTimerSchedule,
   TrackPullRequestInput,
+  UpdateRequirementAgentConfigurationInput,
 } from './types.js';
 
 export interface AgentManagerOptions {
@@ -594,6 +595,47 @@ export class AgentManager extends EventEmitter {
       model: model ?? null,
       reasoningEffort: input.reasoningEffort ?? null,
       createdBy: requirement.createdBy,
+    });
+    return requirement;
+  }
+
+  updateRequirementAgentConfiguration(
+    id: string,
+    input: UpdateRequirementAgentConfigurationInput,
+  ): RequirementWithSession {
+    const hasModel = Object.hasOwn(input, 'model');
+    const hasReasoningEffort = Object.hasOwn(input, 'reasoningEffort');
+    if (!hasModel && !hasReasoningEffort) {
+      throw new TypeError('model or reasoningEffort is required');
+    }
+    const current = this.#store.getRequirement(id);
+    if (!current) throw new StoreNotFoundError(`Requirement ${id} not found`);
+    if (current.status !== 'todo') {
+      throw new StoreConflictError(`Requirement ${id} configuration can only be changed while it is todo`);
+    }
+    const model = hasModel ? input.model?.trim() || null : current.model;
+    const reasoningEffort = hasReasoningEffort
+      ? input.reasoningEffort ?? null
+      : current.reasoningEffort;
+    if (model === current.model && reasoningEffort === current.reasoningEffort) return current;
+
+    const requirement = this.#store.updateRequirementAgentConfiguration({
+      requirementId: id,
+      model,
+      reasoningEffort,
+      now: new Date().toISOString(),
+    });
+    this.publish({
+      type: 'requirement.updated',
+      requirementId: id,
+      sessionId: requirement.session.id,
+      payload: { requirement, model, reasoningEffort },
+    });
+    this.logger.info('Requirement Agent configuration updated', {
+      requirementId: id,
+      sessionId: requirement.session.id,
+      model,
+      reasoningEffort,
     });
     return requirement;
   }

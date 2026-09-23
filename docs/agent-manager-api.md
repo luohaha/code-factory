@@ -44,6 +44,7 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/requirements | List Requirements with their RD Sessions |
 | GET | /api/requirements/:id | Read one Requirement with its RD Session |
 | POST | /api/requirements | Create a Requirement and RD Session |
+| PATCH | /api/requirements/:id | Change a TODO Requirement's model and reasoning effort |
 | DELETE | /api/requirements/:id | Remove a TODO Requirement |
 | POST | /api/requirements/:id/start | Start or retry a Requirement |
 | POST | /api/requirements/:id/reply | Send a human conversation message |
@@ -509,6 +510,23 @@ curl -X POST http://127.0.0.1:4310/api/requirements \
 
 Success: 201 Created with the new Requirement. Its initial status is todo and its Session state is idle.
 
+### PATCH /api/requirements/:id
+
+Changes the Agent configuration used when a human starts a Requirement from the dashboard. The Requirement must still be in `todo`; its provider does not change. At least one field is required.
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| model | string or null | no | Non-empty model identifier, or null to restore the CLI default |
+| reasoningEffort | string or null | no | low, medium, high, xhigh, or max; null restores the CLI default |
+
+~~~bash
+curl -X PATCH http://127.0.0.1:4310/api/requirements/req_... \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-5.6","reasoningEffort":"xhigh"}'
+~~~
+
+Success: `200 OK` with the updated Requirement. Returns `404 Not Found` for an unknown Requirement, `409 Conflict` after execution has started, and `400 Bad Request` for missing or invalid fields. The RD Agent CLI intentionally does not expose this mutation.
+
 ### DELETE /api/requirements/:id
 
 Removes a Requirement that is still in `todo` from active lists by marking it `cancelled` and archiving its Session. The underlying records remain until the cancelled-Requirement retention period expires (7 days by default), then are deleted together. A Requirement cannot be deleted after execution starts.
@@ -885,6 +903,7 @@ Current event types and primary payloads:
 | Event | Payload |
 | --- | --- |
 | requirement.created | requirement, provider, createdBy |
+| requirement.updated | updated requirement, model, reasoningEffort |
 | requirement.deleted | terminal requirement and its timers |
 | requirement.completed | updated requirement and its timers |
 | requirements.purged | requirementIds, cancelledCount, doneCount |

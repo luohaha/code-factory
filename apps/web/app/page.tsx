@@ -102,6 +102,7 @@ import {
   type PullRequestDto,
   type PullRequestStatus,
   type RequirementActionAcceptedDto,
+  type RequirementAgentConfigurationUpdate,
   type RequirementDto,
   type RequirementMessageDto,
   type RequirementStatus,
@@ -476,6 +477,120 @@ function DeleteRequirementDialog({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+function EditRequirementAgentConfigurationDialog({
+  requirement,
+  busy,
+  modelCatalog,
+  onUpdate,
+}: {
+  requirement: RequirementDto;
+  busy: boolean;
+  modelCatalog: AgentModelCatalogDto | null;
+  onUpdate: (input: RequirementAgentConfigurationUpdate) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const fieldId = useId();
+  const [open, setOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [model, setModel] = useState(requirement.model ?? '');
+  const [reasoningEffort, setReasoningEffort] = useState(requirement.reasoningEffort ?? '');
+
+  async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
+    event.preventDefault();
+    setSubmitError(null);
+    setSubmitting(true);
+    try {
+      await onUpdate({
+        model: model.trim() || null,
+        reasoningEffort: reasoningEffort
+          ? reasoningEffort as AgentReasoningEffort
+          : null,
+      });
+      setOpen(false);
+    } catch (caught) {
+      setSubmitError(caught instanceof Error ? caught.message : t('Failed to update Agent configuration'));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) {
+          setModel(requirement.model ?? '');
+          setReasoningEffort(requirement.reasoningEffort ?? '');
+          setSubmitError(null);
+        }
+      }}
+    >
+      <DialogTrigger render={<Button type="button" variant="outline" size="xs" disabled={busy} />}>
+        <SlidersHorizontal data-icon="inline-start" />{t('Edit Agent configuration')}
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-lg">
+        <form onSubmit={submit}>
+          <DialogHeader>
+            <DialogTitle>{t('Edit Agent configuration')}</DialogTitle>
+            <DialogDescription>
+              {t('Choose the model and reasoning effort to use when this TODO requirement starts. The Agent type remains {provider}.', {
+                provider: providerLabel(requirement.provider),
+              })}
+            </DialogDescription>
+          </DialogHeader>
+          {submitError ? (
+            <Alert variant="destructive" className="mt-5">
+              <TriangleAlert />
+              <AlertTitle>{t('Failed to update Agent configuration')}</AlertTitle>
+              <AlertDescription>{submitError}</AlertDescription>
+            </Alert>
+          ) : null}
+          <FieldGroup className="my-5 gap-4">
+            <Field>
+              <FieldLabel htmlFor={`${fieldId}-model`}>{t('Model')}</FieldLabel>
+              <AgentModelSelect
+                id={`${fieldId}-model`}
+                name="model"
+                catalog={modelCatalog}
+                provider={requirement.provider}
+                value={model}
+                onChange={setModel}
+                disabled={submitting}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`${fieldId}-reasoning-effort`}>{t('Reasoning effort')}</FieldLabel>
+              <NativeSelect
+                id={`${fieldId}-reasoning-effort`}
+                name="reasoningEffort"
+                className="w-full"
+                value={reasoningEffort}
+                disabled={submitting}
+                onChange={(event) => setReasoningEffort(event.target.value as AgentReasoningEffort | '')}
+              >
+                <NativeSelectOption value="">{t('Default reasoning')}</NativeSelectOption>
+                <NativeSelectOption value="low">Low</NativeSelectOption>
+                <NativeSelectOption value="medium">Medium</NativeSelectOption>
+                <NativeSelectOption value="high">High</NativeSelectOption>
+                <NativeSelectOption value="xhigh">XHigh</NativeSelectOption>
+                <NativeSelectOption value="max">Max</NativeSelectOption>
+              </NativeSelect>
+            </Field>
+          </FieldGroup>
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="outline" />}>{t('Cancel')}</DialogClose>
+            <Button type="submit" disabled={submitting}>
+              {submitting ? <LoaderCircle className="animate-spin" /> : null}{t('Save changes')}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1768,6 +1883,7 @@ function RequirementDetail({
   detailMode,
   onOpenChange,
   onStart,
+  onUpdateAgentConfiguration,
   onReply,
   onDelete,
   onInterrupt,
@@ -1793,6 +1909,7 @@ function RequirementDetail({
   detailMode: RequirementDetailMode;
   onOpenChange: (open: boolean) => void;
   onStart: (message?: string, attachments?: File[]) => Promise<void>;
+  onUpdateAgentConfiguration: (input: RequirementAgentConfigurationUpdate) => Promise<void>;
   onReply: (message: string, attachments?: File[]) => Promise<void>;
   onDelete: () => void;
   onInterrupt: () => Promise<void>;
@@ -1950,6 +2067,16 @@ function RequirementDetail({
             <span aria-hidden="true">·</span>
             <span className="font-mono">ses-{shortId(requirement.session.id)}</span>
           </SheetDescription>
+          {requirement.status === 'todo' ? (
+            <div className="mt-3">
+              <EditRequirementAgentConfigurationDialog
+                requirement={requirement}
+                busy={busy}
+                modelCatalog={modelCatalog}
+                onUpdate={onUpdateAgentConfiguration}
+              />
+            </div>
+          ) : null}
         </SheetHeader>
 
         <ScrollArea
@@ -3369,6 +3496,19 @@ function Dashboard() {
             return await client.startRequirement(selectedRequirement.id, message, attachmentIds);
           },
           applyRequirementAction,
+        ).then(() => undefined) : Promise.resolve()}
+        onUpdateAgentConfiguration={(configuration) => selectedRequirement ? runAction(
+          selectedRequirement.id,
+          () => client.updateRequirementAgentConfiguration(selectedRequirement.id, configuration),
+          (requirement) => {
+            setRequirements((current) => applyRequirementScopedUpdate(
+              current,
+              requirement.id,
+              removedRequirementIdsRef.current,
+              (acceptedCurrent) => upsertRequirement(acceptedCurrent, requirement),
+            ));
+            setSearchRevision((value) => value + 1);
+          },
         ).then(() => undefined) : Promise.resolve()}
         onReply={(message, attachments = []) => selectedRequirement
           ? replyToRequirement(selectedRequirement.id, message, attachments)
