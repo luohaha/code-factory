@@ -40,13 +40,6 @@ export interface CreateRequirementRecord {
   now: string;
 }
 
-export interface UpdateRequirementRecord {
-  requirementId: string;
-  title: string;
-  description: string;
-  now: string;
-}
-
 export interface BeginRunRecord {
   runId: string;
   requirementId: string;
@@ -172,7 +165,6 @@ export interface CompleteAgentTimerOccurrenceRecord {
 export interface AgentManagerStore {
   close(): void;
   createRequirement(input: CreateRequirementRecord): RequirementWithSession;
-  updateRequirement(input: UpdateRequirementRecord): RequirementWithSession;
   getRequirement(id: string): RequirementWithSession | null;
   listRequirements(): RequirementWithSession[];
   listChildRequirements(parentRequirementId: string): RequirementWithSession[];

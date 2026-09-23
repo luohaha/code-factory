@@ -477,8 +477,8 @@ test('Agent Manager removes a TODO requirement from active lists and publishes a
   }
 });
 
-test('Agent Manager manages only TODO children proposed by the source RD Session', async () => {
-  const runner = new DeferredRunner();
+test('Agent Manager applies lifecycle actions only to children proposed by the source RD Session', async () => {
+  const runner = new InterruptibleRunner();
   const manager = new AgentManager({
     workspaceRoot: process.cwd(),
     store: new SqliteAgentManagerStore(':memory:'),
@@ -493,7 +493,7 @@ test('Agent Manager manages only TODO children proposed by the source RD Session
     });
     const child = manager.createRequirement({
       title: 'Draft follow-up',
-      description: 'Initial scope',
+      description: 'Delete this separate task',
       provider: 'codex',
       createdBy: 'rd_agent',
       parentRequirementId: source.id,
@@ -501,7 +501,7 @@ test('Agent Manager manages only TODO children proposed by the source RD Session
     });
     const humanRequirement = manager.createRequirement({
       title: 'Human work',
-      description: 'Must not be changed by the Agent',
+      description: 'Must not be managed by the Agent',
       provider: 'codex',
     });
     const startedChild = manager.createRequirement({
@@ -513,31 +513,22 @@ test('Agent Manager manages only TODO children proposed by the source RD Session
       sourceSessionId: source.session.id,
     });
 
-    const updated = manager.updateProposedRequirement(
-      source.id,
-      source.session.id,
-      child.id,
-      { description: 'Corrected scope' },
-    );
-    assert.equal(updated.title, 'Draft follow-up');
-    assert.equal(updated.description, 'Corrected scope');
-    const event = manager.listEvents().at(-1);
-    assert.equal(event?.type, 'requirement.updated');
-    assert.equal(event?.requirementId, child.id);
-    assert.equal((event?.payload.requirement as { description?: string })?.description, 'Corrected scope');
-
-    assert.throws(() => manager.updateProposedRequirement(
-      source.id,
-      source.session.id,
-      humanRequirement.id,
-      { title: 'Unauthorized' },
-    ), /was not proposed by/);
     assert.throws(() => manager.startProposedRequirement(
       source.id,
       source.session.id,
       humanRequirement.id,
     ), /was not proposed by/);
+    assert.throws(() => manager.stopProposedRequirement(
+      source.id,
+      source.session.id,
+      humanRequirement.id,
+    ), /was not proposed by/);
     assert.throws(() => manager.deleteProposedRequirement(
+      source.id,
+      source.session.id,
+      humanRequirement.id,
+    ), /was not proposed by/);
+    assert.throws(() => manager.completeProposedRequirement(
       source.id,
       source.session.id,
       humanRequirement.id,
@@ -551,21 +542,54 @@ test('Agent Manager manages only TODO children proposed by the source RD Session
     assert.equal(manager.getRequirement(startedChild.id)?.status, 'doing');
     assert.equal(manager.getRequirement(startedChild.id)?.session.state, 'running');
     assert.equal(runner.requests.at(-1)?.invocation.input.includes('Start follow-up'), true);
-    runner.resolvers.at(-1)?.({
-      status: 'succeeded', exitCode: 0, nativeSessionId: 'native-started-child', finalMessage: 'done', error: null,
-    });
-    await execution;
-    assert.throws(() => manager.updateProposedRequirement(
+    const activeRunId = manager.listRuns(startedChild.id)[0]?.id;
+    assert.ok(activeRunId);
+    const repeatedStart = await manager.startProposedRequirement(
       source.id,
       source.session.id,
       startedChild.id,
-      { title: 'Too late' },
-    ), /is not TODO/);
+    );
+    assert.equal(repeatedStart.session.state, 'running');
+    assert.equal(runner.requests.length, 1);
+
+    const stopped = manager.stopProposedRequirement(
+      source.id,
+      source.session.id,
+      startedChild.id,
+    );
+    assert.equal(stopped.runId, activeRunId);
+    await execution;
+    assert.equal(manager.getRequirement(startedChild.id)?.status, 'doing');
+    assert.equal(manager.getRequirement(startedChild.id)?.session.state, 'waiting_human');
+
+    const retry = manager.startProposedRequirement(
+      source.id,
+      source.session.id,
+      startedChild.id,
+    );
+    runner.resolvers.at(-1)?.({
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'native-started-child', finalMessage: 'done', error: null,
+    });
+    await retry;
+    assert.equal(manager.getRequirement(startedChild.id)?.status, 'waiting_confirmation');
     assert.throws(() => manager.deleteProposedRequirement(
       source.id,
       source.session.id,
       startedChild.id,
-    ), /is not TODO/);
+    ), /cannot transition to cancelled/);
+
+    const completed = manager.completeProposedRequirement(
+      source.id,
+      source.session.id,
+      startedChild.id,
+    );
+    assert.equal(completed.status, 'done');
+    assert.equal(completed.session.state, 'completed');
+    assert.throws(() => manager.completeProposedRequirement(
+      source.id,
+      source.session.id,
+      startedChild.id,
+    ), /cannot transition to done/);
 
     const deleted = manager.deleteProposedRequirement(
       source.id,
@@ -573,12 +597,11 @@ test('Agent Manager manages only TODO children proposed by the source RD Session
       child.id,
     );
     assert.equal(deleted.status, 'cancelled');
-    assert.throws(() => manager.updateProposedRequirement(
+    assert.throws(() => manager.startProposedRequirement(
       source.id,
       source.session.id,
       child.id,
-      { title: 'Too late' },
-    ), /is not TODO/);
+    ), /already cancelled/);
   } finally {
     await manager.close();
   }
@@ -796,7 +819,7 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
       value.includes('Preserve pre-existing changes')));
     for (const capability of [
       'register PRs', 'propose separate TODO follow-ups',
-      'update, start, or delete those proposals while they remain TODO',
+      'manage those proposals with lifecycle actions',
       'inspect direct parent/child requirements',
       'message their RD Agents', 'manage wake-up timers', 'code-factory-cli --help',
       'Track started tasks to completion', 'provider wait/monitor tools',
