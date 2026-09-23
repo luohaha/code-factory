@@ -16,6 +16,10 @@ const finishedRunStatusByEvent: Record<string, FinishedRunStatus> = {
   'run.cancelled': 'cancelled',
 };
 
+export function desktopNotificationsEnabled(storedPreference: string | null): boolean {
+  return storedPreference !== 'off';
+}
+
 export function takeFinishedRdRun(event: ManagerEventDto, seenRunIds: Set<string>): FinishedRdRun | null {
   const status = finishedRunStatusByEvent[event.type];
   const run = event.payload.run;

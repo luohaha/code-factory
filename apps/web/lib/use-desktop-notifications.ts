@@ -3,10 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { ManagerEventDto } from './agent-manager-client.ts';
-import { takeFinishedRdRun, type FinishedRunStatus } from './desktop-notifications.ts';
+import {
+  desktopNotificationsEnabled,
+  takeFinishedRdRun,
+  type FinishedRunStatus,
+} from './desktop-notifications.ts';
 import type { TranslationKey } from '@/locales/zh-CN';
 
-type Availability = 'checking' | 'ready' | 'blocked' | 'insecure' | 'unsupported';
+export type DesktopNotificationAvailability = 'checking' | 'ready' | 'prompt' | 'blocked' | 'insecure' | 'unsupported';
 
 const storageKey = 'code-factory.desktop-notifications';
 
@@ -17,17 +21,18 @@ const outcomeText: Record<FinishedRunStatus, TranslationKey> = {
   cancelled: 'RD task was cancelled. Click to open the Requirement.',
 };
 
-function browserAvailability(): Availability {
+function browserAvailability(): DesktopNotificationAvailability {
   if (!window.isSecureContext) return 'insecure';
   if (!('Notification' in window)) return 'unsupported';
-  return Notification.permission === 'denied' ? 'blocked' : 'ready';
+  if (Notification.permission === 'denied') return 'blocked';
+  return Notification.permission === 'granted' ? 'ready' : 'prompt';
 }
 
-function readOptIn(): boolean | null {
+function readOptIn(): boolean {
   try {
-    return window.localStorage.getItem(storageKey) === 'on';
+    return desktopNotificationsEnabled(window.localStorage.getItem(storageKey));
   } catch {
-    return null;
+    return true;
   }
 }
 
@@ -43,10 +48,10 @@ export function useDesktopNotifications(
   t: (key: TranslationKey) => string,
   openRequirement: (requirementId: string) => void,
 ) {
-  const [availability, setAvailability] = useState<Availability>('checking');
-  const [enabled, setEnabled] = useState(false);
+  const [availability, setAvailability] = useState<DesktopNotificationAvailability>('checking');
+  const [enabled, setEnabled] = useState(true);
   const [busy, setBusy] = useState(false);
-  const enabledRef = useRef(false);
+  const enabledRef = useRef(true);
   const seenRunIdsRef = useRef(new Set<string>());
   const translateRef = useRef(t);
   const openRequirementRef = useRef(openRequirement);
@@ -60,16 +65,9 @@ export function useDesktopNotifications(
     const sync = () => {
       const nextAvailability = browserAvailability();
       setAvailability(nextAvailability);
-      if (nextAvailability !== 'ready' || Notification.permission !== 'granted') {
-        enabledRef.current = false;
-        setEnabled(false);
-      } else {
-        const optedIn = readOptIn();
-        if (optedIn !== null) {
-          enabledRef.current = optedIn;
-          setEnabled(optedIn);
-        }
-      }
+      const optedIn = readOptIn();
+      enabledRef.current = optedIn;
+      setEnabled(optedIn);
     };
     sync();
     window.addEventListener('focus', sync);
@@ -80,33 +78,34 @@ export function useDesktopNotifications(
     };
   }, []);
 
-  const toggle = useCallback(async () => {
-    if (browserAvailability() !== 'ready') return;
-    if (enabledRef.current) {
-      enabledRef.current = false;
-      setEnabled(false);
-      saveOptIn(false);
-      return;
-    }
-
+  const requestPermission = useCallback(async () => {
+    if (browserAvailability() !== 'prompt') return;
     setBusy(true);
     try {
       // Request permission directly from this click handler to retain the user gesture.
-      const permission = Notification.permission === 'granted'
-        ? 'granted'
-        : await Notification.requestPermission();
-      setAvailability(permission === 'denied' ? 'blocked' : 'ready');
-      if (permission === 'granted') {
-        enabledRef.current = true;
-        setEnabled(true);
-        saveOptIn(true);
-      }
+      await Notification.requestPermission();
+      setAvailability(browserAvailability());
     } catch {
       setAvailability(browserAvailability());
     } finally {
       setBusy(false);
     }
   }, []);
+
+  const setPreference = useCallback(async (nextEnabled: boolean) => {
+    enabledRef.current = nextEnabled;
+    setEnabled(nextEnabled);
+    saveOptIn(nextEnabled);
+    if (nextEnabled && browserAvailability() === 'prompt') await requestPermission();
+  }, [requestPermission]);
+
+  const toggle = useCallback(async () => {
+    if (enabledRef.current && browserAvailability() === 'prompt') {
+      await requestPermission();
+      return;
+    }
+    await setPreference(!enabledRef.current);
+  }, [requestPermission, setPreference]);
 
   const notifyForEvent = useCallback((event: ManagerEventDto) => {
     const finished = takeFinishedRdRun(event, seenRunIdsRef.current);
@@ -129,5 +128,5 @@ export function useDesktopNotifications(
     }
   }, []);
 
-  return { availability, enabled, busy, toggle, notifyForEvent };
+  return { availability, enabled, busy, requestPermission, setPreference, toggle, notifyForEvent };
 }
