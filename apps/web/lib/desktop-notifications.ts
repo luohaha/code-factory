@@ -16,7 +16,13 @@ const finishedRunStatusByEvent: Record<string, FinishedRunStatus> = {
   'run.cancelled': 'cancelled',
 };
 
-export function desktopNotificationsEnabled(storedPreference: string | null): boolean {
+export function desktopNotificationsEnabled(
+  storedPreference: string | null,
+  currentPreference = true,
+  volatilePreference: boolean | null = null,
+): boolean {
+  if (volatilePreference !== null) return volatilePreference;
+  if (storedPreference === null) return currentPreference;
   return storedPreference !== 'off';
 }
 

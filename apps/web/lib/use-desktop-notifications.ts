@@ -28,19 +28,25 @@ function browserAvailability(): DesktopNotificationAvailability {
   return Notification.permission === 'granted' ? 'ready' : 'prompt';
 }
 
-function readOptIn(): boolean {
+function readOptIn(currentPreference: boolean, volatilePreference: boolean | null): boolean {
   try {
-    return desktopNotificationsEnabled(window.localStorage.getItem(storageKey));
+    return desktopNotificationsEnabled(
+      window.localStorage.getItem(storageKey),
+      currentPreference,
+      volatilePreference,
+    );
   } catch {
-    return true;
+    return volatilePreference ?? currentPreference;
   }
 }
 
-function saveOptIn(enabled: boolean): void {
+function saveOptIn(enabled: boolean): boolean {
   try {
     window.localStorage.setItem(storageKey, enabled ? 'on' : 'off');
+    return true;
   } catch {
     // This tab can still show notifications until it closes when storage is unavailable.
+    return false;
   }
 }
 
@@ -52,6 +58,7 @@ export function useDesktopNotifications(
   const [enabled, setEnabled] = useState(true);
   const [busy, setBusy] = useState(false);
   const enabledRef = useRef(true);
+  const volatilePreferenceRef = useRef<boolean | null>(null);
   const seenRunIdsRef = useRef(new Set<string>());
   const translateRef = useRef(t);
   const openRequirementRef = useRef(openRequirement);
@@ -65,7 +72,7 @@ export function useDesktopNotifications(
     const sync = () => {
       const nextAvailability = browserAvailability();
       setAvailability(nextAvailability);
-      const optedIn = readOptIn();
+      const optedIn = readOptIn(enabledRef.current, volatilePreferenceRef.current);
       enabledRef.current = optedIn;
       setEnabled(optedIn);
     };
@@ -95,7 +102,7 @@ export function useDesktopNotifications(
   const setPreference = useCallback(async (nextEnabled: boolean) => {
     enabledRef.current = nextEnabled;
     setEnabled(nextEnabled);
-    saveOptIn(nextEnabled);
+    volatilePreferenceRef.current = saveOptIn(nextEnabled) ? null : nextEnabled;
     if (nextEnabled && browserAvailability() === 'prompt') await requestPermission();
   }, [requestPermission]);
 

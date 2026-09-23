@@ -12,6 +12,8 @@ void test('enables desktop notifications by default and preserves an explicit op
   assert.equal(desktopNotificationsEnabled(null), true);
   assert.equal(desktopNotificationsEnabled('on'), true);
   assert.equal(desktopNotificationsEnabled('off'), false);
+  assert.equal(desktopNotificationsEnabled(null, false), false);
+  assert.equal(desktopNotificationsEnabled('on', false, false), false);
 });
 
 function finishedEvent(status: FinishedRunStatus): ManagerEventDto {
