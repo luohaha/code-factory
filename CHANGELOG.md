@@ -6,6 +6,21 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-09-23
+
+### Added
+
+- Allowed RD Agents to start proposed follow-up Requirements immediately and manage their lifecycle with start, stop, delete, and done actions guarded by proposal ownership and state.
+- Added a confirmed delete action to TODO Requirement details in the dashboard.
+
+### Changed
+
+- Kept RD prompt guidance focused on control-plane capabilities while leaving command names and arguments to the self-describing `code-factory-cli` help.
+
+### Fixed
+
+- Bounded GitHub CLI calls during pull-request reconciliation, isolated failures per PR, retried eligible failures, and recorded structured diagnostics without sensitive response content.
+
 ## [0.1.9] - 2026-09-19
 
 ### Added
