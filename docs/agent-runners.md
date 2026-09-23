@@ -130,7 +130,7 @@ claude --print --output-format stream-json --verbose \
 
 Claude Reviewers also run as ordinary headless Agents instead of invoking `/review`. They receive `Review GitHub PR <url>` through stdin. `--no-session-persistence` prevents them from becoming long-lived Sessions.
 
-The model and reasoning flags shown above are optional. RD choices are stored on the Requirement and applied again when its native Session resumes. Reviewer choices are stored on both the ReviewRequest and AgentRun so each review can use a different configuration.
+The model and reasoning flags shown above are optional. RD choices are stored on the Requirement and applied again when its native Session resumes. A human may change or clear those choices in the dashboard only while the Requirement is still TODO; the Agent CLI does not expose that mutation. Reviewer choices are stored on both the ReviewRequest and AgentRun so each review can use a different configuration.
 
 Codex and Claude Code share the same Reviewer system/developer instructions: inspect the target PR through the GitHub CLI/API, record the head SHA at the start and verify it again before publishing, publish GitHub review comments, and do not modify the shared workspace. Agent Manager still captures `ReviewRequest.targetHeadSha` internally when the review is requested; it does not need to appear in the task prompt.
 

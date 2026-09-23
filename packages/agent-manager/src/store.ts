@@ -40,6 +40,13 @@ export interface CreateRequirementRecord {
   now: string;
 }
 
+export interface UpdateRequirementAgentConfigurationRecord {
+  requirementId: string;
+  model: string | null;
+  reasoningEffort: AgentReasoningEffort | null;
+  now: string;
+}
+
 export interface BeginRunRecord {
   runId: string;
   requirementId: string;
@@ -165,6 +172,7 @@ export interface CompleteAgentTimerOccurrenceRecord {
 export interface AgentManagerStore {
   close(): void;
   createRequirement(input: CreateRequirementRecord): RequirementWithSession;
+  updateRequirementAgentConfiguration(input: UpdateRequirementAgentConfigurationRecord): RequirementWithSession;
   getRequirement(id: string): RequirementWithSession | null;
   listRequirements(): RequirementWithSession[];
   listChildRequirements(parentRequirementId: string): RequirementWithSession[];

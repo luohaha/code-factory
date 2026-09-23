@@ -65,6 +65,18 @@ function reasoningEffortField(value: unknown): AgentReasoningEffort | undefined 
   return value;
 }
 
+function nullableStringField(body: Record<string, unknown>, name: string): string | null | undefined {
+  const value = body[name];
+  if (value === undefined || value === null) return value;
+  if (typeof value !== 'string' || !value.trim()) throw new TypeError(`${name} must be a non-empty string or null`);
+  return value.trim();
+}
+
+function nullableReasoningEffortField(value: unknown): AgentReasoningEffort | null | undefined {
+  if (value === null) return null;
+  return reasoningEffortField(value);
+}
+
 function optionalBooleanField(body: Record<string, unknown>, name: string): boolean {
   const value = body[name];
   if (value === undefined) return false;
@@ -327,6 +339,17 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         const item = manager.getRequirement(requirementId);
         if (!item) throw new StoreNotFoundError(`Requirement ${requirementId} not found`);
         sendJson(response, 200, item);
+        return;
+      }
+      if (request.method === 'PATCH' && requirement) {
+        const requirementId = decodeURIComponent(requirement[1]!);
+        const body = await readJson(request);
+        const model = nullableStringField(body, 'model');
+        const reasoningEffort = nullableReasoningEffortField(body.reasoningEffort);
+        sendJson(response, 200, manager.updateRequirementAgentConfiguration(requirementId, {
+          ...(model !== undefined ? { model } : {}),
+          ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+        }));
         return;
       }
       if (request.method === 'DELETE' && requirement) {

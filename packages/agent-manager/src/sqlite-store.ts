@@ -24,6 +24,7 @@ import {
   type CreateAgentTimerRecord,
   type CreateMessageAttachmentRecord,
   type CreateRequirementRecord,
+  type UpdateRequirementAgentConfigurationRecord,
   type PurgeExpiredRequirementsRecord,
   type PurgeExpiredRequirementsResult,
   type PullRequestObservation,
@@ -322,6 +323,38 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       throw error;
     }
     return this.requireBundle(input.requirementId);
+  }
+
+  updateRequirementAgentConfiguration(
+    input: UpdateRequirementAgentConfigurationRecord,
+  ): RequirementWithSession {
+    this.#db.exec('BEGIN IMMEDIATE');
+    try {
+      const current = this.getRequirement(input.requirementId);
+      if (!current) throw new StoreNotFoundError(`Requirement ${input.requirementId} not found`);
+      if (current.status !== 'todo') {
+        throw new StoreConflictError(`Requirement ${input.requirementId} configuration can only be changed while it is todo`);
+      }
+      this.#db.prepare(`UPDATE requirements
+        SET model = ?, reasoning_effort = ?, updated_at = ?
+        WHERE id = ? AND status = 'todo'`)
+        .run(input.model, input.reasoningEffort, input.now, input.requirementId);
+      const updated = this.requireBundle(input.requirementId);
+      this.upsertSearchDocument({
+        kind: 'requirement',
+        sourceId: updated.id,
+        requirementId: updated.id,
+        title: updated.title,
+        body: updated.description,
+        keywords: `${updated.id} ${updated.session.id} ${updated.provider} ${updated.model ?? ''}`,
+        updatedAt: updated.updatedAt,
+      });
+      this.#db.exec('COMMIT');
+      return updated;
+    } catch (error) {
+      this.#db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   getRequirement(id: string): RequirementWithSession | null {

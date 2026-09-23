@@ -345,6 +345,76 @@ test('HTTP API rejects unsupported reasoning effort values', async () => {
   }
 });
 
+test('HTTP API updates and clears Agent configuration only for TODO requirements', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store,
+    logger: createLogger({ level: 'silent' }),
+  });
+  const requirement = manager.createRequirement({
+    title: 'Editable configuration',
+    description: 'Tune this requirement before it starts',
+    provider: 'codex',
+    model: 'gpt-old',
+    reasoningEffort: 'low',
+  });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+  const endpoint = `http://127.0.0.1:${port}/api/requirements/${requirement.id}`;
+
+  try {
+    const updateResponse = await fetch(endpoint, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-new', reasoningEffort: 'xhigh' }),
+    });
+    assert.equal(updateResponse.status, 200);
+    const updated = await updateResponse.json() as { model: string | null; reasoningEffort: string | null };
+    assert.equal(updated.model, 'gpt-new');
+    assert.equal(updated.reasoningEffort, 'xhigh');
+
+    const clearResponse = await fetch(endpoint, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: null, reasoningEffort: null }),
+    });
+    assert.equal(clearResponse.status, 200);
+    const cleared = await clearResponse.json() as { model: string | null; reasoningEffort: string | null };
+    assert.equal(cleared.model, null);
+    assert.equal(cleared.reasoningEffort, null);
+
+    const invalidResponse = await fetch(endpoint, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reasoningEffort: 'ultra' }),
+    });
+    assert.equal(invalidResponse.status, 400);
+
+    const emptyResponse = await fetch(endpoint, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.equal(emptyResponse.status, 400);
+
+    store.transitionRequirement(requirement.id, ['todo'], 'doing', new Date().toISOString());
+    const conflictResponse = await fetch(endpoint, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'too-late' }),
+    });
+    assert.equal(conflictResponse.status, 409);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
+
 test('HTTP API creates, lists, validates, and cancels Agent Timers', async () => {
   const manager = new AgentManager({
     workspaceRoot: process.cwd(),

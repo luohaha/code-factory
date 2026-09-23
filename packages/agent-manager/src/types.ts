@@ -219,6 +219,11 @@ export interface CreateRequirementInput {
   sourceSessionId?: string;
 }
 
+export interface UpdateRequirementAgentConfigurationInput {
+  model?: string | null;
+  reasoningEffort?: AgentReasoningEffort | null;
+}
+
 export interface TrackPullRequestInput {
   requirementId: string;
   /** Case-insensitive GitHub repository key; normalized to lowercase on writes. */

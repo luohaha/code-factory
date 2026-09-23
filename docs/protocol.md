@@ -188,7 +188,7 @@ data: {"id":42,"type":"review_request.started",...}
 
 Current event types include:
 
-- `requirement.created` / `requirement.deleted` / `requirement.completed` / `requirements.purged`;
+- `requirement.created` / `requirement.updated` / `requirement.deleted` / `requirement.completed` / `requirements.purged`;
 - `message.created`;
 - `pull_request.created` / `pull_request.updated`;
 - `review_request.started`;
