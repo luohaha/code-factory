@@ -66,9 +66,7 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/events | Subscribe to the resumable SSE stream |
 | POST | /api/agent/pull-requests | Register or update a PR from an RD Agent |
 | POST | /api/agent/requirements | Propose a follow-up Requirement from an RD Agent |
-| PATCH | /api/agent/requirements/:id | Update a TODO Requirement proposed by the current RD Agent |
-| DELETE | /api/agent/requirements/:id | Delete a TODO Requirement proposed by the current RD Agent |
-| POST | /api/agent/requirements/:id/start | Start a TODO Requirement proposed by the current RD Agent |
+| POST | /api/agent/requirements/:id/action | Apply a lifecycle action to a Requirement proposed by the current RD Agent |
 | GET | /api/agent/requirements/:id/related | List a source Requirement's direct parent and children |
 | POST | /api/agent/requirements/:id/related/:targetId/messages | Message a directly related Requirement's RD Agent |
 
@@ -706,9 +704,7 @@ These endpoints are the transport used by `code-factory-cli` and other trusted l
 ~~~bash
 code-factory-cli pr register --help
 code-factory-cli requirement propose --help
-code-factory-cli requirement update --help
-code-factory-cli requirement start --help
-code-factory-cli requirement delete --help
+code-factory-cli requirement action --help
 code-factory-cli requirement related --help
 code-factory-cli requirement message --help
 code-factory-cli timer register --help
@@ -788,9 +784,9 @@ curl -X POST http://127.0.0.1:4310/api/agent/requirements \
 
 Success: 201 Created with the new Requirement and `createdBy=rd_agent`. Without `start: true`, it remains TODO. When `start` is true, the response reflects its started RD Session. Returns 404 for an unknown source Session and 400 when `parentRequirementId` does not match or another field is invalid.
 
-### PATCH /api/agent/requirements/:targetRequirementId
+### POST /api/agent/requirements/:targetRequirementId/action
 
-Updates the title and/or description of a follow-up Requirement before it starts. The target must be a TODO child proposed by the same source RD Session. This prevents an Agent from changing unrelated, human-created, running, or terminal work.
+Applies one lifecycle action to a direct child proposed by the same source RD Session. Requirement title and description are immutable after creation; this endpoint changes lifecycle state only.
 
 Request body:
 
@@ -798,61 +794,34 @@ Request body:
 | --- | --- | --- | --- |
 | sourceRequirementId | string | yes | Current Requirement injected into the source RD Agent |
 | sourceSessionId | string | yes | Current Requirement's RD Session |
-| title | string | no | Replacement title |
-| description | string | no | Replacement description |
+| action | string | yes | start, stop, delete, or done |
 
-At least one of `title` or `description` is required. Omitted fields retain their current values.
+The action uses the same state-machine controls as the human endpoints:
+
+- `start` starts TODO work or retries other non-terminal work. If its Session is already running, the request is accepted without creating a second Run.
+- `stop` requires a running RD Run and interrupts it with the same semantics as the dashboard's Steering control. The Run becomes cancelled after its process exits, while the Requirement remains DOING and its Session returns to WAITING_HUMAN unless queued input causes an immediate resume.
+- `delete` requires TODO and moves it to CANCELLED under the normal retention policy.
+- `done` requires WAITING_CONFIRMATION and moves it to DONE.
 
 ~~~bash
-curl -X PATCH http://127.0.0.1:4310/api/agent/requirements/req_child \
+curl -X POST http://127.0.0.1:4310/api/agent/requirements/req_child/action \
   -H 'Content-Type: application/json' \
   -d '{
     "sourceRequirementId": "req_parent",
     "sourceSessionId": "ses_parent",
-    "description": "Corrected follow-up scope"
+    "action": "stop"
   }'
 ~~~
 
-Success: 200 OK with the updated Requirement and Session. Returns 404 for an unknown source or target, 400 for invalid input or a mismatched source Session, and 409 when the target was not proposed by the source or is no longer TODO.
+`start` and `stop` return 202 Accepted. `start` includes the current Requirement and active Run; `stop` includes the interrupted Run ID and current Requirement. `delete` and `done` return 200 OK with the terminal Requirement. Every response includes `accepted`, `requirementId`, and `action`. Returns 404 for an unknown source or target, 400 for invalid input or a mismatched source Session, and 409 when the target was not proposed by the source or the requested action is invalid in its current state.
 
 The CLI supplies the source identifiers from its injected context. Use `requirement related` to discover child IDs:
 
 ~~~bash
-code-factory-cli requirement update --requirement-id req_child --title 'Corrected title'
-code-factory-cli requirement update --requirement-id req_child --description-file ./corrected-scope.md
-~~~
-
-### POST /api/agent/requirements/:targetRequirementId/start
-
-Starts a proposed child Requirement while it remains TODO. The JSON request body requires `sourceRequirementId` and `sourceSessionId`; they must identify the RD Session that originally proposed the target.
-
-~~~bash
-curl -X POST http://127.0.0.1:4310/api/agent/requirements/req_child/start \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "sourceRequirementId": "req_parent",
-    "sourceSessionId": "ses_parent"
-  }'
-~~~
-
-Success: 202 Accepted with `accepted`, `action=start`, the started Requirement/session snapshot, and its running RD Run. Returns 404 for an unknown source or target, 400 for a mismatched source Session, and 409 when the target was not proposed by the source or is no longer TODO.
-
-~~~bash
-code-factory-cli requirement start --requirement-id req_child
-~~~
-
-### DELETE /api/agent/requirements/:targetRequirementId
-
-Deletes a proposed child Requirement while it remains TODO. The required `sourceRequirementId` and `sourceSessionId` query parameters must identify the RD Session that originally proposed the target. Deletion follows the normal Requirement lifecycle: the Requirement becomes CANCELLED and is retained according to workspace policy.
-
-~~~bash
-curl -X DELETE 'http://127.0.0.1:4310/api/agent/requirements/req_child?sourceRequirementId=req_parent&sourceSessionId=ses_parent'
-~~~
-
-Success: 200 OK with `{ "deleted": true, "requirement": ... }`. Returns 404 for an unknown source or target, 400 for missing or mismatched source context, and 409 when the target was not proposed by the source or is no longer TODO.
-
-~~~bash
-code-factory-cli requirement delete --requirement-id req_child
+code-factory-cli requirement action --requirement-id req_child --start
+code-factory-cli requirement action --requirement-id req_child --stop
+code-factory-cli requirement action --requirement-id req_child --delete
+code-factory-cli requirement action --requirement-id req_child --done
 ~~~
 
 ### GET /api/agent/requirements/:sourceRequirementId/related
@@ -916,7 +885,6 @@ Current event types and primary payloads:
 | Event | Payload |
 | --- | --- |
 | requirement.created | requirement, provider, createdBy |
-| requirement.updated | updated requirement |
 | requirement.deleted | terminal requirement and its timers |
 | requirement.completed | updated requirement and its timers |
 | requirements.purged | requirementIds, cancelledCount, doneCount |

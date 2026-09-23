@@ -121,39 +121,29 @@ Content-Type: application/json
 
 `provider` is optional and defaults to the source Session provider. The proposed Requirement is created as `createdBy=rd_agent`. It remains TODO by default; set the optional boolean `start` to `true` (or pass `--start` to `code-factory-cli requirement propose`) to start its RD Session immediately.
 
-Update a still-TODO Requirement proposed by the current RD Session:
+Apply a lifecycle action to a Requirement proposed by the current RD Session:
 
 ~~~http
-PATCH /api/agent/requirements/req_child
+POST /api/agent/requirements/req_child/action
 Content-Type: application/json
 
 {
   "sourceRequirementId": "req_parent",
   "sourceSessionId": "ses_parent",
-  "title": "Corrected follow-up title",
-  "description": "Corrected follow-up scope"
+  "action": "start"
 }
 ~~~
 
-`title` and `description` are partial updates, with at least one required. The target must be a direct child created by the same source RD Session and must still be TODO. `code-factory-cli requirement update --requirement-id req_child` supplies the source identifiers from the injected context.
+`action` is `start | stop | delete | done`. The target must be a direct child created by the same source RD Session, and its title and description cannot be changed after creation. The selected transition uses the normal Requirement state machine: `start` starts or retries non-terminal work, `stop` interrupts the running RD Run like the dashboard's Steering control, `delete` requires TODO, and `done` requires WAITING_CONFIRMATION.
 
-Start or delete a still-TODO proposal later:
+The CLI supplies the source identifiers from injected context and requires exactly one action flag:
 
-~~~http
-POST /api/agent/requirements/req_child/start
-Content-Type: application/json
-
-{
-  "sourceRequirementId": "req_parent",
-  "sourceSessionId": "ses_parent"
-}
+~~~bash
+code-factory-cli requirement action --requirement-id req_child --start
+code-factory-cli requirement action --requirement-id req_child --stop
+code-factory-cli requirement action --requirement-id req_child --delete
+code-factory-cli requirement action --requirement-id req_child --done
 ~~~
-
-~~~http
-DELETE /api/agent/requirements/req_child?sourceRequirementId=req_parent&sourceSessionId=ses_parent
-~~~
-
-The corresponding CLI commands are `requirement start --requirement-id req_child` and `requirement delete --requirement-id req_child`. Both enforce the same source-Session ownership and TODO-only rules as updates. Starting enters the normal RD Run lifecycle; deleting enters the normal cancelled-retention lifecycle.
 
 Inspect and message directly related Requirements:
 
@@ -198,7 +188,7 @@ data: {"id":42,"type":"review_request.started",...}
 
 Current event types include:
 
-- `requirement.created` / `requirement.updated` / `requirement.deleted` / `requirement.completed` / `requirements.purged`;
+- `requirement.created` / `requirement.deleted` / `requirement.completed` / `requirements.purged`;
 - `message.created`;
 - `pull_request.created` / `pull_request.updated`;
 - `review_request.started`;

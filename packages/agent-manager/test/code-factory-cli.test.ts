@@ -65,9 +65,8 @@ test('code-factory-cli help discovers the supported RD commands', async () => {
   assert.match(output.join(''), /timer register/);
   assert.match(output.join(''), /timer show/);
   assert.match(output.join(''), /requirement propose/);
-  assert.match(output.join(''), /requirement update/);
-  assert.match(output.join(''), /requirement start/);
-  assert.match(output.join(''), /requirement delete/);
+  assert.match(output.join(''), /requirement action/);
+  assert.doesNotMatch(output.join(''), /requirement (update|start|delete)/);
   assert.match(output.join(''), /requirement related/);
   assert.match(output.join(''), /requirement message/);
   assert.match(output.join(''), /CODE_FACTORY_REQUIREMENT_ID/);
@@ -80,22 +79,15 @@ test('code-factory-cli help discovers the supported RD commands', async () => {
   assert.equal(requirementExitCode, 0);
   assert.match(requirementOutput.join(''), /--start/);
 
-  const updateOutput: string[] = [];
-  const updateExitCode = await runCodeFactoryCli(['requirement', 'update', '--help'], {
-    writeOut: (value) => updateOutput.push(value),
+  const actionOutput: string[] = [];
+  const actionExitCode = await runCodeFactoryCli(['requirement', 'action', '--help'], {
+    writeOut: (value) => actionOutput.push(value),
     writeError: () => undefined,
   });
-  assert.equal(updateExitCode, 0);
-  assert.match(updateOutput.join(''), /--requirement-id/);
-
-  for (const action of ['start', 'delete']) {
-    const actionOutput: string[] = [];
-    const actionExitCode = await runCodeFactoryCli(['requirement', action, '--help'], {
-      writeOut: (value) => actionOutput.push(value),
-      writeError: () => undefined,
-    });
-    assert.equal(actionExitCode, 0);
-    assert.match(actionOutput.join(''), /--requirement-id/);
+  assert.equal(actionExitCode, 0);
+  assert.match(actionOutput.join(''), /--requirement-id/);
+  for (const action of ['start', 'stop', 'delete', 'done']) {
+    assert.match(actionOutput.join(''), new RegExp(`--${action}`));
   }
 });
 
@@ -193,65 +185,52 @@ test('code-factory-cli can start a proposed Requirement immediately', async () =
   });
 });
 
-test('code-factory-cli updates a proposed TODO Requirement using injected context', async () => {
-  const requests: CapturedRequest[] = [];
-  const output: string[] = [];
-  const errors: string[] = [];
-  const exitCode = await runCodeFactoryCli([
-    'requirement', 'update',
-    '--requirement-id', 'req_child/value',
-    '--title', 'Corrected benchmark',
-    '--description', 'Measure latency as well as throughput',
-  ], testRuntime(requests, output, errors));
-
-  assert.equal(exitCode, 0);
-  assert.deepEqual(errors, []);
-  assert.equal(requests[0]?.url, 'http://127.0.0.1:4310/api/agent/requirements/req_child%2Fvalue');
-  assert.equal(requests[0]?.method, 'PATCH');
-  assert.deepEqual(requests[0]?.body, {
-    sourceRequirementId: 'req_cli',
-    sourceSessionId: 'ses_cli',
-    title: 'Corrected benchmark',
-    description: 'Measure latency as well as throughput',
-  });
-});
-
-test('code-factory-cli requires a proposed Requirement update field', async () => {
-  const requests: CapturedRequest[] = [];
-  const errors: string[] = [];
-  assert.equal(await runCodeFactoryCli([
-    'requirement', 'update', '--requirement-id', 'req_child',
-  ], testRuntime(requests, [], errors)), 2);
-  assert.deepEqual(requests, []);
-  assert.match(errors.join(''), /Provide --title, --description, or --description-file/);
-});
-
-test('code-factory-cli starts and deletes proposed TODO Requirements using injected context', async () => {
+test('code-factory-cli applies proposed Requirement lifecycle actions using injected context', async () => {
   const requests: CapturedRequest[] = [];
   const output: string[] = [];
   const errors: string[] = [];
   const runtime = testRuntime(requests, output, errors);
 
-  assert.equal(await runCodeFactoryCli([
-    'requirement', 'start', '--requirement-id', 'req_child/value',
-  ], runtime), 0);
-  assert.equal(await runCodeFactoryCli([
-    'requirement', 'delete', '--requirement-id', 'req_child/value',
-  ], runtime), 0);
+  for (const action of ['start', 'stop', 'delete', 'done']) {
+    assert.equal(await runCodeFactoryCli([
+      'requirement', 'action', '--requirement-id', 'req_child/value', `--${action}`,
+    ], runtime), 0);
+  }
 
   assert.deepEqual(errors, []);
-  assert.deepEqual(requests, [{
-    url: 'http://127.0.0.1:4310/api/agent/requirements/req_child%2Fvalue/start',
+  assert.deepEqual(requests, ['start', 'stop', 'delete', 'done'].map((action) => ({
+    url: 'http://127.0.0.1:4310/api/agent/requirements/req_child%2Fvalue/action',
     method: 'POST',
     body: {
       sourceRequirementId: 'req_cli',
       sourceSessionId: 'ses_cli',
+      action,
     },
-  }, {
-    url: 'http://127.0.0.1:4310/api/agent/requirements/req_child%2Fvalue?sourceRequirementId=req_cli&sourceSessionId=ses_cli',
-    method: 'DELETE',
-    body: {},
-  }]);
+  })));
+});
+
+test('code-factory-cli requires exactly one proposed Requirement lifecycle action', async () => {
+  for (const options of [[], ['--start', '--done']]) {
+    const requests: CapturedRequest[] = [];
+    const errors: string[] = [];
+    assert.equal(await runCodeFactoryCli([
+      'requirement', 'action', '--requirement-id', 'req_child', ...options,
+    ], testRuntime(requests, [], errors)), 2);
+    assert.deepEqual(requests, []);
+    assert.match(errors.join(''), /exactly one of --start, --stop, --delete, or --done/);
+  }
+});
+
+test('code-factory-cli no longer exposes legacy Requirement mutation commands', async () => {
+  for (const command of ['update', 'start', 'delete']) {
+    const requests: CapturedRequest[] = [];
+    const errors: string[] = [];
+    assert.equal(await runCodeFactoryCli([
+      'requirement', command, '--requirement-id', 'req_child',
+    ], testRuntime(requests, [], errors)), 2);
+    assert.deepEqual(requests, []);
+    assert.match(errors.join(''), /Unknown command/);
+  }
 });
 
 test('code-factory-cli lists related Requirements and messages a related RD Agent', async () => {

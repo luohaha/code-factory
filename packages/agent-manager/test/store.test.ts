@@ -36,49 +36,6 @@ test('a requirement is created atomically with exactly one RD session', () => {
   }
 });
 
-test('a TODO requirement update refreshes its search document atomically', () => {
-  const store = new SqliteAgentManagerStore(':memory:');
-  try {
-    store.createRequirement({
-      requirementId: 'req-update',
-      sessionId: 'ses-update',
-      title: 'Draft benchmark',
-      description: 'Measure throughput',
-      provider: 'codex',
-      createdBy: 'rd_agent',
-      now,
-    });
-    const updated = store.updateRequirement({
-      requirementId: 'req-update',
-      title: 'Corrected benchmark',
-      description: 'Measure tail latency',
-      now: '2026-09-10T12:01:00.000Z',
-    });
-
-    assert.equal(updated.title, 'Corrected benchmark');
-    assert.equal(updated.description, 'Measure tail latency');
-    assert.equal(updated.updatedAt, '2026-09-10T12:01:00.000Z');
-    assert.equal(store.search('tail latency')[0]?.requirementId, 'req-update');
-    assert.equal(store.search('Measure throughput').find((result) => result.requirementId === 'req-update')?.title,
-      'Corrected benchmark');
-
-    store.transitionRequirement(
-      'req-update',
-      ['todo'],
-      'doing',
-      '2026-09-10T12:02:00.000Z',
-    );
-    assert.throws(() => store.updateRequirement({
-      requirementId: 'req-update',
-      title: 'Too late',
-      description: 'Must not change',
-      now: '2026-09-10T12:03:00.000Z',
-    }), StoreConflictError);
-  } finally {
-    store.close();
-  }
-});
-
 test('Agent trace events are derived from the durable Manager event stream', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {

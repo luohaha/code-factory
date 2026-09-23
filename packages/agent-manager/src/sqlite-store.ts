@@ -27,7 +27,6 @@ import {
   type PurgeExpiredRequirementsRecord,
   type PurgeExpiredRequirementsResult,
   type PullRequestObservation,
-  type UpdateRequirementRecord,
   type UpsertPullRequestRecord,
   StoreConflictError,
   StoreNotFoundError,
@@ -323,37 +322,6 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       throw error;
     }
     return this.requireBundle(input.requirementId);
-  }
-
-  updateRequirement(input: UpdateRequirementRecord): RequirementWithSession {
-    this.#db.exec('BEGIN IMMEDIATE');
-    try {
-      const result = this.#db.prepare(`UPDATE requirements
-        SET title = ?, description = ?, updated_at = ?
-        WHERE id = ? AND status = 'todo'`)
-        .run(input.title, input.description, input.now, input.requirementId);
-      if (result.changes === 0) {
-        if (!this.getRequirement(input.requirementId)) {
-          throw new StoreNotFoundError(`Requirement ${input.requirementId} not found`);
-        }
-        throw new StoreConflictError(`Requirement ${input.requirementId} is not TODO`);
-      }
-      const requirement = this.requireBundle(input.requirementId);
-      this.upsertSearchDocument({
-        kind: 'requirement',
-        sourceId: requirement.id,
-        requirementId: requirement.id,
-        title: requirement.title,
-        body: requirement.description,
-        keywords: `${requirement.id} ${requirement.session.id} ${requirement.provider} ${requirement.model ?? ''}`,
-        updatedAt: requirement.updatedAt,
-      });
-      this.#db.exec('COMMIT');
-      return requirement;
-    } catch (error) {
-      this.#db.exec('ROLLBACK');
-      throw error;
-    }
   }
 
   getRequirement(id: string): RequirementWithSession | null {

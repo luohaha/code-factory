@@ -84,6 +84,13 @@ function agentTimerScheduleField(value: unknown): 'once' | 'recurring' {
   return value;
 }
 
+function requirementActionField(value: unknown): 'start' | 'stop' | 'delete' | 'done' {
+  if (value !== 'start' && value !== 'stop' && value !== 'delete' && value !== 'done') {
+    throw new TypeError('action must be start, stop, delete, or done');
+  }
+  return value;
+}
+
 function positiveIntegerField(body: Record<string, unknown>, name: string): number {
   const value = body[name];
   if (!Number.isInteger(value) || Number(value) <= 0) throw new TypeError(`${name} must be a positive integer`);
@@ -357,61 +364,58 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         return;
       }
 
-      const agentRequirement = url.pathname.match(/^\/api\/agent\/requirements\/([^/]+)$/);
-      if (request.method === 'PATCH' && agentRequirement) {
-        const targetRequirementId = decodeURIComponent(agentRequirement[1]!);
+      const agentRequirementAction = url.pathname.match(/^\/api\/agent\/requirements\/([^/]+)\/action$/);
+      if (request.method === 'POST' && agentRequirementAction) {
+        const targetRequirementId = decodeURIComponent(agentRequirementAction[1]!);
         const body = await readJson(request);
-        const title = stringField(body, 'title');
-        const description = stringField(body, 'description');
-        const item = manager.updateProposedRequirement(
-          stringField(body, 'sourceRequirementId', true)!,
-          stringField(body, 'sourceSessionId', true)!,
-          targetRequirementId,
-          {
-            ...(title === undefined ? {} : { title }),
-            ...(description === undefined ? {} : { description }),
-          },
-        );
-        sendJson(response, 200, item);
-        return;
-      }
-      if (request.method === 'DELETE' && agentRequirement) {
-        const targetRequirementId = decodeURIComponent(agentRequirement[1]!);
-        const sourceRequirementId = url.searchParams.get('sourceRequirementId')?.trim();
-        const sourceSessionId = url.searchParams.get('sourceSessionId')?.trim();
-        if (!sourceRequirementId) throw new TypeError('sourceRequirementId must be a non-empty string');
-        if (!sourceSessionId) throw new TypeError('sourceSessionId must be a non-empty string');
-        const item = manager.deleteProposedRequirement(
-          sourceRequirementId,
-          sourceSessionId,
-          targetRequirementId,
-        );
-        sendJson(response, 200, { deleted: true, requirement: item });
-        return;
-      }
-
-      const agentRequirementStart = url.pathname.match(/^\/api\/agent\/requirements\/([^/]+)\/start$/);
-      if (request.method === 'POST' && agentRequirementStart) {
-        const targetRequirementId = decodeURIComponent(agentRequirementStart[1]!);
-        const body = await readJson(request);
-        void manager.startProposedRequirement(
-          stringField(body, 'sourceRequirementId', true)!,
-          stringField(body, 'sourceSessionId', true)!,
-          targetRequirementId,
-        ).catch((error: unknown) => logger.error('RD run failed unexpectedly', {
-          requirementId: targetRequirementId,
-          error,
-        }));
-        const current = manager.getRequirement(targetRequirementId);
-        if (!current) throw new StoreNotFoundError(`Requirement ${targetRequirementId} not found`);
-        const run = manager.listRuns(targetRequirementId)
-          .find((item) => item.role === 'rd' && item.status === 'running') ?? null;
-        sendJson(response, 202, {
+        const action = requirementActionField(body.action);
+        const sourceRequirementId = stringField(body, 'sourceRequirementId', true)!;
+        const sourceSessionId = stringField(body, 'sourceSessionId', true)!;
+        if (action === 'start') {
+          void manager.startProposedRequirement(
+            sourceRequirementId,
+            sourceSessionId,
+            targetRequirementId,
+          ).catch((error: unknown) => logger.error('RD run failed unexpectedly', {
+            requirementId: targetRequirementId,
+            error,
+          }));
+          const current = manager.getRequirement(targetRequirementId);
+          if (!current) throw new StoreNotFoundError(`Requirement ${targetRequirementId} not found`);
+          const run = manager.listRuns(targetRequirementId)
+            .find((item) => item.role === 'rd' && item.status === 'running') ?? null;
+          sendJson(response, 202, {
+            accepted: true,
+            requirementId: targetRequirementId,
+            action,
+            requirement: current,
+            run,
+          });
+          return;
+        }
+        if (action === 'stop') {
+          const result = manager.stopProposedRequirement(
+            sourceRequirementId,
+            sourceSessionId,
+            targetRequirementId,
+          );
+          sendJson(response, 202, {
+            accepted: true,
+            requirementId: targetRequirementId,
+            action,
+            runId: result.runId,
+            requirement: manager.getRequirement(targetRequirementId),
+          });
+          return;
+        }
+        const current = action === 'delete'
+          ? manager.deleteProposedRequirement(sourceRequirementId, sourceSessionId, targetRequirementId)
+          : manager.completeProposedRequirement(sourceRequirementId, sourceSessionId, targetRequirementId);
+        sendJson(response, 200, {
           accepted: true,
           requirementId: targetRequirementId,
-          action: 'start',
+          action,
           requirement: current,
-          run,
         });
         return;
       }
