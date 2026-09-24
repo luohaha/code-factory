@@ -37,6 +37,10 @@ test('configuration file fills omitted defaults and rejects unknown or invalid f
       allowedOrigin: null,
     });
     assert.throws(() => validateAgentManagerConfigurationPatch({ port: 0 }), /port/);
+    assert.deepEqual(validateAgentManagerConfigurationPatch({ commitCoAuthorEnabled: false }), {
+      commitCoAuthorEnabled: false,
+    });
+    assert.throws(() => validateAgentManagerConfigurationPatch({ commitCoAuthorEnabled: 'yes' }), /commitCoAuthorEnabled/);
     assert.throws(() => validateAgentManagerConfigurationPatch({
       pullRequestReconcileIntervalSeconds: -1,
     }), /pullRequestReconcileIntervalSeconds/);

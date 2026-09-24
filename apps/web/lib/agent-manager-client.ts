@@ -109,6 +109,7 @@ export interface AgentManagerConfiguration {
   allowedOrigin: string | null;
   openDashboard: boolean;
   databasePath: string | null;
+  commitCoAuthorEnabled: boolean;
   pullRequestReconcileIntervalSeconds: number;
   cancelledRequirementRetentionDays: number;
   doneRequirementRetentionDays: number;

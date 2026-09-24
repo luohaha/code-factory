@@ -239,6 +239,7 @@ test('HTTP API reports its version and reads, validates, persists, and applies c
         port: number;
         openDashboard: boolean;
         databasePath: string | null;
+        commitCoAuthorEnabled: boolean;
         cancelledRequirementRetentionDays: number;
         doneRequirementRetentionDays: number;
       };
@@ -249,6 +250,7 @@ test('HTTP API reports its version and reads, validates, persists, and applies c
     assert.equal(initial.values.port, 4310);
     assert.equal(initial.values.openDashboard, false);
     assert.equal(initial.values.databasePath, null);
+    assert.equal(initial.values.commitCoAuthorEnabled, true);
     assert.equal(initial.values.cancelledRequirementRetentionDays, 7);
     assert.equal(initial.values.doneRequirementRetentionDays, 365);
     assert.equal(initial.restartRequired, false);
@@ -258,6 +260,7 @@ test('HTTP API reports its version and reads, validates, persists, and applies c
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         logLevel: 'warn',
+        commitCoAuthorEnabled: false,
         cancelledRequirementRetentionDays: 14,
         doneRequirementRetentionDays: 730,
       }),
@@ -269,6 +272,7 @@ test('HTTP API reports its version and reads, validates, persists, and applies c
         port: number;
         openDashboard: boolean;
         databasePath: string | null;
+        commitCoAuthorEnabled: boolean;
         cancelledRequirementRetentionDays: number;
         doneRequirementRetentionDays: number;
         logLevel: string;
@@ -280,6 +284,7 @@ test('HTTP API reports its version and reads, validates, persists, and applies c
     assert.equal(updated.values.port, 4310);
     assert.equal(updated.values.openDashboard, false);
     assert.equal(updated.values.databasePath, null);
+    assert.equal(updated.values.commitCoAuthorEnabled, false);
     assert.equal(updated.values.cancelledRequirementRetentionDays, 14);
     assert.equal(updated.values.doneRequirementRetentionDays, 730);
     assert.equal(updated.values.logLevel, 'warn');
