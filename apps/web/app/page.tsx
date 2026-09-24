@@ -83,6 +83,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
+import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import {
   AgentManagerApiError,
@@ -144,7 +145,10 @@ import {
 } from '@/lib/dashboard-state';
 import { formatDuration } from '@/lib/format-duration';
 import { summarizeRequirementRelations } from '@/lib/requirement-tree';
-import { useDesktopNotifications } from '@/lib/use-desktop-notifications';
+import {
+  useDesktopNotifications,
+  type DesktopNotificationAvailability,
+} from '@/lib/use-desktop-notifications';
 import { I18nProvider, useI18n } from '@/lib/i18n';
 import { useTheme } from '@/lib/theme';
 import type { TranslationKey } from '@/locales/zh-CN';
@@ -1207,11 +1211,21 @@ function ConnectionDialog({ apiUrl, onConnect }: { apiUrl: string; onConnect: (u
 function ManagerConfigurationDialog({
   configuration,
   disabled,
+  notificationAvailability,
+  notificationBusy,
+  notificationsEnabled,
+  onNotificationPreferenceChange,
+  onRequestNotificationPermission,
   onSave,
   workspace,
 }: {
   configuration: AgentManagerConfigurationSnapshot | null;
   disabled: boolean;
+  notificationAvailability: DesktopNotificationAvailability;
+  notificationBusy: boolean;
+  notificationsEnabled: boolean;
+  onNotificationPreferenceChange: (enabled: boolean) => Promise<void>;
+  onRequestNotificationPermission: () => Promise<void>;
   onSave: (values: Partial<AgentManagerConfiguration>) => Promise<void>;
   workspace: WorkspaceDto | null;
 }) {
@@ -1274,6 +1288,43 @@ function ManagerConfigurationDialog({
           ) : null}
           {values ? (
             <FieldGroup className="my-5 gap-5">
+              <div>
+                <p className="mb-3 text-xs font-semibold">{t('Browser settings')}</p>
+                <div className="rounded-lg border border-border p-3">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-xs font-medium">{t('Browser notifications')}</p>
+                      <p className="mt-1 text-[10px] text-muted-foreground">{t('Enabled by default and stored only in this browser. Changes apply immediately.')}</p>
+                    </div>
+                    <Switch
+                      aria-label={t('Browser notifications')}
+                      checked={notificationsEnabled}
+                      disabled={notificationAvailability === 'checking' || notificationBusy}
+                      onCheckedChange={(checked) => void onNotificationPreferenceChange(checked)}
+                    />
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+                    <p className="text-[10px] text-muted-foreground">
+                      {t(notificationAvailability === 'ready'
+                        ? 'Browser notification permission granted.'
+                        : notificationAvailability === 'prompt'
+                          ? 'Permission is required before browser notifications can appear.'
+                          : notificationAvailability === 'blocked'
+                            ? 'Allow notifications for this site in browser settings'
+                            : notificationAvailability === 'insecure'
+                              ? 'Desktop notifications require HTTPS or localhost'
+                              : notificationAvailability === 'unsupported'
+                                ? 'This browser does not support desktop notifications'
+                                : 'Checking browser notification support...')}
+                    </p>
+                    {notificationsEnabled && notificationAvailability === 'prompt' ? (
+                      <Button type="button" variant="outline" size="sm" disabled={notificationBusy} onClick={() => void onRequestNotificationPermission()}>
+                        {notificationBusy ? <LoaderCircle className="animate-spin" /> : null}{t('Allow browser notifications')}
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
               <div>
                 <p className="mb-3 text-xs font-semibold">{t('Runtime settings')}</p>
                 <div className="grid gap-4 sm:grid-cols-2">
@@ -2339,6 +2390,8 @@ function Dashboard() {
     availability: notificationAvailability,
     enabled: notificationsEnabled,
     busy: notificationBusy,
+    requestPermission: requestNotificationPermission,
+    setPreference: setNotificationPreference,
     toggle: toggleNotifications,
     notifyForEvent,
   } = useDesktopNotifications(t, openRequirementDetail);
@@ -3170,9 +3223,11 @@ function Dashboard() {
       ? 'This browser does not support desktop notifications'
       : notificationAvailability === 'blocked'
         ? 'Allow notifications for this site in browser settings'
-        : notificationsEnabled
-          ? 'Turn off desktop notifications'
-          : 'Turn on desktop notifications';
+        : notificationAvailability === 'prompt'
+          ? 'Allow browser notifications'
+          : notificationsEnabled
+            ? 'Turn off desktop notifications'
+            : 'Turn on desktop notifications';
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -3200,14 +3255,14 @@ function Dashboard() {
               <span className="truncate font-mono">{workspaceLabel}</span>
             </div>
             <Button
-              variant={notificationsEnabled ? 'secondary' : 'outline'}
+              variant={notificationsEnabled && notificationAvailability === 'ready' ? 'secondary' : 'outline'}
               size="icon"
               aria-label={t(notificationButtonLabel)}
               title={t(notificationButtonLabel)}
-              disabled={notificationAvailability !== 'ready' || notificationBusy}
+              disabled={(notificationAvailability !== 'ready' && notificationAvailability !== 'prompt') || notificationBusy}
               onClick={() => void toggleNotifications()}
             >
-              {notificationsEnabled ? <BellRing /> : notificationAvailability === 'ready' ? <Bell /> : <BellOff />}
+              {notificationsEnabled && notificationAvailability === 'ready' ? <BellRing /> : notificationAvailability === 'ready' || notificationAvailability === 'prompt' ? <Bell /> : <BellOff />}
             </Button>
             <Button
               variant="outline"
@@ -3220,7 +3275,17 @@ function Dashboard() {
             </Button>
             <Button variant="outline" size="sm" aria-label={t('Switch language')} onClick={() => setLocale(locale === 'en' ? 'zh-CN' : 'en')}><Languages data-icon="inline-start" />{locale === 'en' ? t('Chinese') : t('English')}</Button>
             <Button variant="outline" size="icon" aria-label={t('Refresh')} disabled={loading} onClick={() => void reload(true)}><RefreshCw className={loading ? 'animate-spin' : ''} /></Button>
-            <ManagerConfigurationDialog configuration={configuration} disabled={connection !== 'online'} onSave={saveConfiguration} workspace={workspace} />
+            <ManagerConfigurationDialog
+              configuration={configuration}
+              disabled={connection !== 'online'}
+              notificationAvailability={notificationAvailability}
+              notificationBusy={notificationBusy}
+              notificationsEnabled={notificationsEnabled}
+              onNotificationPreferenceChange={setNotificationPreference}
+              onRequestNotificationPermission={requestNotificationPermission}
+              onSave={saveConfiguration}
+              workspace={workspace}
+            />
             <ConnectionDialog apiUrl={apiUrl} onConnect={connect} />
             <NewRequirementDialog disabled={connection !== 'online'} modelCatalog={modelCatalog} onCreate={createRequirement} />
           </div>

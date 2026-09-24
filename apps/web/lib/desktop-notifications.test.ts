@@ -2,7 +2,19 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { AgentRunDto, ManagerEventDto, RequirementDto } from './agent-manager-client.ts';
-import { takeFinishedRdRun, type FinishedRunStatus } from './desktop-notifications.ts';
+import {
+  desktopNotificationsEnabled,
+  takeFinishedRdRun,
+  type FinishedRunStatus,
+} from './desktop-notifications.ts';
+
+void test('enables desktop notifications by default and preserves an explicit opt-out', () => {
+  assert.equal(desktopNotificationsEnabled(null), true);
+  assert.equal(desktopNotificationsEnabled('on'), true);
+  assert.equal(desktopNotificationsEnabled('off'), false);
+  assert.equal(desktopNotificationsEnabled(null, false), false);
+  assert.equal(desktopNotificationsEnabled('on', false, false), false);
+});
 
 function finishedEvent(status: FinishedRunStatus): ManagerEventDto {
   return {
