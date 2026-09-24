@@ -6,6 +6,22 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-09-24
+
+### Added
+
+- Allowed humans to edit a TODO Requirement's model and reasoning effort before its first run.
+- Added configurable browser notifications for completed RD runs, including permission controls and direct links back to the Requirement.
+- Added configurable Code Factory bot co-author attribution to RD-created commits.
+
+### Changed
+
+- Refreshed the README workflow overview to cover related Requirements, persistent RD sessions, durable agent messaging, and trigger sources.
+
+### Fixed
+
+- Preserved explicit browser-notification opt-outs while keeping notifications enabled by default.
+
 ## [0.1.10] - 2026-09-23
 
 ### Added
