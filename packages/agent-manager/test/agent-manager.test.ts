@@ -77,6 +77,52 @@ class SequenceGitHubClient implements GitHubClient {
   }
 }
 
+test('commit co-author guidance is enabled by default and updates without restarting', async () => {
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    logger: silentLogger,
+  });
+  try {
+    const enabledRequirement = manager.createRequirement({
+      title: 'Attributed commit',
+      description: 'Use the default co-author guidance',
+      provider: 'codex',
+    });
+    const enabledRun = manager.runRequirement(enabledRequirement.id);
+    assert.ok(runner.requests[0]?.invocation.args.some((value) =>
+      value.includes('Co-authored-by: code-factory <333128126+code-factory-bot@users.noreply.github.com>')));
+
+    const configuration = manager.updateConfiguration({ commitCoAuthorEnabled: false });
+    assert.equal(configuration.values.commitCoAuthorEnabled, false);
+    assert.equal(configuration.restartRequired, false);
+
+    const disabledRequirement = manager.createRequirement({
+      title: 'Unattributed commit',
+      description: 'Disable the co-author guidance',
+      provider: 'claude-code',
+    });
+    const disabledRun = manager.runRequirement(disabledRequirement.id);
+    assert.ok(runner.requests[1]?.invocation.args.every((value) =>
+      !value.includes('Co-authored-by: code-factory')));
+
+    for (const resolve of runner.resolvers) {
+      resolve({
+        status: 'succeeded',
+        exitCode: 0,
+        nativeSessionId: null,
+        finalMessage: null,
+        error: null,
+      });
+    }
+    await Promise.all([enabledRun, disabledRun]);
+  } finally {
+    await manager.close();
+  }
+});
+
 test('runtime configuration starts and stops PR reconciliation without restarting the manager', async () => {
   const snapshot: GitHubPullRequestSnapshot = {
     status: 'open',

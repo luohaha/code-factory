@@ -11,6 +11,7 @@ export interface AgentManagerConfiguration {
   allowedOrigin: string | null;
   openDashboard: boolean;
   databasePath: string | null;
+  commitCoAuthorEnabled: boolean;
   pullRequestReconcileIntervalSeconds: number;
   cancelledRequirementRetentionDays: number;
   doneRequirementRetentionDays: number;
@@ -38,6 +39,7 @@ export const DEFAULT_AGENT_MANAGER_CONFIGURATION: Readonly<AgentManagerConfigura
   allowedOrigin: 'http://localhost:3000',
   openDashboard: false,
   databasePath: null,
+  commitCoAuthorEnabled: true,
   pullRequestReconcileIntervalSeconds: 30,
   cancelledRequirementRetentionDays: 7,
   doneRequirementRetentionDays: 365,
@@ -48,6 +50,7 @@ export const DEFAULT_AGENT_MANAGER_CONFIGURATION: Readonly<AgentManagerConfigura
 };
 
 export const DYNAMIC_CONFIGURATION_FIELDS: ReadonlySet<keyof AgentManagerConfiguration> = new Set([
+  'commitCoAuthorEnabled',
   'pullRequestReconcileIntervalSeconds',
   'cancelledRequirementRetentionDays',
   'doneRequirementRetentionDays',
@@ -125,6 +128,10 @@ export function validateAgentManagerConfigurationPatch(value: unknown): AgentMan
     output.openDashboard = input.openDashboard;
   }
   if (input.databasePath !== undefined) output.databasePath = nullableString(input.databasePath, 'databasePath');
+  if (input.commitCoAuthorEnabled !== undefined) {
+    if (typeof input.commitCoAuthorEnabled !== 'boolean') throw new TypeError('commitCoAuthorEnabled must be a boolean');
+    output.commitCoAuthorEnabled = input.commitCoAuthorEnabled;
+  }
   if (input.pullRequestReconcileIntervalSeconds !== undefined) {
     output.pullRequestReconcileIntervalSeconds = integerInRange(
       input.pullRequestReconcileIntervalSeconds,

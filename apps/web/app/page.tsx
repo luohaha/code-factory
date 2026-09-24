@@ -1277,7 +1277,7 @@ function ManagerConfigurationDialog({
         <form onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>{t('Agent Manager configuration')}</DialogTitle>
-            <DialogDescription>{t('Reconciliation, requirement retention, and log level changes apply immediately. Other settings take effect after restart.')}</DialogDescription>
+            <DialogDescription>{t('Reconciliation, requirement retention, commit attribution, and log level changes apply immediately. Other settings take effect after restart.')}</DialogDescription>
           </DialogHeader>
           {configuration?.restartRequired ? (
             <Alert className="mt-4">
@@ -1328,6 +1328,17 @@ function ManagerConfigurationDialog({
               <div>
                 <p className="mb-3 text-xs font-semibold">{t('Runtime settings')}</p>
                 <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-3 sm:col-span-2">
+                    <div>
+                      <p className="text-xs font-medium">{t('Code Factory commit attribution')}</p>
+                      <p className="mt-1 text-[10px] text-muted-foreground">{t('Add the code-factory-bot co-author trailer to commits created by RD Agents. Changes apply to subsequent Runs.')}</p>
+                    </div>
+                    <Switch
+                      aria-label={t('Code Factory commit attribution')}
+                      checked={values.commitCoAuthorEnabled}
+                      onCheckedChange={(checked) => update('commitCoAuthorEnabled', checked)}
+                    />
+                  </div>
                   <Field>
                     <FieldLabel htmlFor="configuration-reconcile-interval">{t('PR reconcile interval (seconds)')}</FieldLabel>
                     <Input id="configuration-reconcile-interval" type="number" min="0" max="2147483" step="1" value={values.pullRequestReconcileIntervalSeconds} onChange={(event) => update('pullRequestReconcileIntervalSeconds', Number(event.target.value))} required />
