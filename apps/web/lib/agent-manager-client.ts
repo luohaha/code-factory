@@ -9,6 +9,7 @@ export interface AgentConfiguration {
 }
 
 export interface RequirementAgentConfigurationUpdate {
+  provider?: AgentProvider;
   model?: string | null;
   reasoningEffort?: AgentReasoningEffort | null;
 }

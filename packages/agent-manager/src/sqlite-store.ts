@@ -336,9 +336,11 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
         throw new StoreConflictError(`Requirement ${input.requirementId} configuration can only be changed while it is todo`);
       }
       this.#db.prepare(`UPDATE requirements
-        SET model = ?, reasoning_effort = ?, updated_at = ?
+        SET provider = ?, model = ?, reasoning_effort = ?, updated_at = ?
         WHERE id = ? AND status = 'todo'`)
-        .run(input.model, input.reasoningEffort, input.now, input.requirementId);
+        .run(input.provider, input.model, input.reasoningEffort, input.now, input.requirementId);
+      this.#db.prepare(`UPDATE agent_sessions SET provider = ?, updated_at = ? WHERE id = ?`)
+        .run(input.provider, input.now, current.session.id);
       const updated = this.requireBundle(input.requirementId);
       this.upsertSearchDocument({
         kind: 'requirement',

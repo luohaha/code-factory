@@ -383,6 +383,40 @@ test('HTTP API updates and clears Agent configuration only for TODO requirements
     assert.equal(updated.model, 'gpt-new');
     assert.equal(updated.reasoningEffort, 'xhigh');
 
+    const switchResponse = await fetch(endpoint, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'claude-code' }),
+    });
+    assert.equal(switchResponse.status, 200);
+    const switched = await switchResponse.json() as {
+      provider: string;
+      model: string | null;
+      reasoningEffort: string | null;
+      session: { provider: string };
+    };
+    assert.equal(switched.provider, 'claude-code');
+    assert.equal(switched.session.provider, 'claude-code');
+    assert.equal(switched.model, null);
+    assert.equal(switched.reasoningEffort, null);
+
+    const combinedResponse = await fetch(endpoint, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'codex', model: 'gpt-new', reasoningEffort: 'high' }),
+    });
+    assert.equal(combinedResponse.status, 200);
+    const combined = await combinedResponse.json() as {
+      provider: string;
+      model: string | null;
+      reasoningEffort: string | null;
+      session: { provider: string };
+    };
+    assert.equal(combined.provider, 'codex');
+    assert.equal(combined.session.provider, 'codex');
+    assert.equal(combined.model, 'gpt-new');
+    assert.equal(combined.reasoningEffort, 'high');
+
     const clearResponse = await fetch(endpoint, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
@@ -400,6 +434,13 @@ test('HTTP API updates and clears Agent configuration only for TODO requirements
     });
     assert.equal(invalidResponse.status, 400);
 
+    const invalidProviderResponse = await fetch(endpoint, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'unknown' }),
+    });
+    assert.equal(invalidProviderResponse.status, 400);
+
     const emptyResponse = await fetch(endpoint, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
@@ -411,7 +452,7 @@ test('HTTP API updates and clears Agent configuration only for TODO requirements
     const conflictResponse = await fetch(endpoint, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'too-late' }),
+      body: JSON.stringify({ provider: 'codex' }),
     });
     assert.equal(conflictResponse.status, 409);
   } finally {

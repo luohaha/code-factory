@@ -42,6 +42,7 @@ export interface CreateRequirementRecord {
 
 export interface UpdateRequirementAgentConfigurationRecord {
   requirementId: string;
+  provider: AgentProvider;
   model: string | null;
   reasoningEffort: AgentReasoningEffort | null;
   now: string;
