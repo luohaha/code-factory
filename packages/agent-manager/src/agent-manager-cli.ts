@@ -223,15 +223,15 @@ async function runDaemonStart(args: readonly string[]): Promise<void> {
 
 async function runDaemonStop(): Promise<void> {
   const result = await stopDaemon();
-  process.stdout.write(`${result.stopped
-    ? 'Code Factory Agent Manager daemon stopped'
-    : 'Code Factory Agent Manager daemon is not running'}\n`);
+  process.stdout.write(result.stopped
+    ? 'Code Factory Agent Manager daemon stopped\n'
+    : formatDaemonNotRunning());
 }
 
 function runDaemonStatus(): void {
   const inspection = inspectDaemon();
   if (!inspection.running || !inspection.state) {
-    process.stdout.write('Code Factory Agent Manager daemon is not running\n');
+    process.stdout.write(formatDaemonNotRunning());
     process.exitCode = 3;
     return;
   }
@@ -270,6 +270,15 @@ function formatDaemonState(title: string, state: DaemonState, logFile: string): 
     `Dashboard:      ${state.dashboardUrl ?? 'starting'}`,
     `Restarts:       ${state.restartCount}`,
     `Daemon logs:    ${logFile}`,
+    '',
+  ].join('\n');
+}
+
+function formatDaemonNotRunning(): string {
+  return [
+    'Code Factory Agent Manager daemon is not running for this workspace',
+    `Workspace:      ${realpathSync(process.cwd())}`,
+    'Run lifecycle commands from the directory used to start the daemon.',
     '',
   ].join('\n');
 }

@@ -299,6 +299,14 @@ test('daemon starts in the background, restarts a crashed manager, and stops cle
     const inactive = runCli(['status'], workspace, env);
     assert.equal(inactive.status, 3);
     assert.match(inactive.stdout, /not running/);
+    assert.ok(inactive.stdout.includes(`Workspace:      ${realpathSync(workspace)}`));
+    assert.match(inactive.stdout, /Run lifecycle commands from the directory used to start the daemon/);
+
+    const stoppedAgain = runCli(['stop'], workspace, env);
+    assert.equal(stoppedAgain.status, 0, stoppedAgain.stderr);
+    assert.match(stoppedAgain.stdout, /not running/);
+    assert.ok(stoppedAgain.stdout.includes(`Workspace:      ${realpathSync(workspace)}`));
+    assert.match(stoppedAgain.stdout, /Run lifecycle commands from the directory used to start the daemon/);
 
     const daemonLog = readFileSync(paths.logFile, 'utf8');
     assert.match(daemonLog, /Agent Manager process exited/);
