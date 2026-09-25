@@ -151,7 +151,7 @@ test('Agent Manager writes to the workspace logs directory by default', async ()
   }
 });
 
-test('Agent Manager publishes lifecycle logs through an injected logger', () => {
+test('Agent Manager publishes lifecycle logs through an injected logger', async () => {
   const stdout = new MemoryWriter();
   const logger = createLogger({ level: 'info', stdout, stderr: new MemoryWriter() });
   const manager = new AgentManager({
@@ -165,7 +165,7 @@ test('Agent Manager publishes lifecycle logs through an injected logger', () => 
     description: 'Print lifecycle events',
     provider: 'codex',
   });
-  manager.close();
+  await manager.close();
 
   const entries = stdout.lines.map((line) => JSON.parse(line) as Record<string, unknown>);
   assert.deepEqual(entries.map((entry) => entry.message), [

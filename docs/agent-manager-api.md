@@ -622,7 +622,7 @@ message may be empty when attachmentIds is non-empty. requirement is the latest 
 
 ### POST /api/requirements/:id/interrupt
 
-Interrupts the current Requirement's RD Run without appending a message. The request body may be omitted or be an empty object. Agent Manager terminates the CLI and its complete tool-process tree. POSIX platforms send `SIGTERM` first and then `SIGKILL` to the process group if descendants remain after two seconds. Windows uses `taskkill /T /F`. The Run becomes `cancelled` only after the process tree exits, and the Session returns to `waiting_human`.
+Interrupts the current Requirement's RD Run without appending a message. The request body may be omitted or be an empty object. Agent Manager terminates the CLI and its complete tool-process tree. POSIX platforms send `SIGTERM` first and then `SIGKILL` to the process group if descendants remain after two seconds. Windows uses `taskkill /T /F`. The Run becomes `cancelled` only after the operating system confirms that the process tree exited, and the Session returns to `waiting_human`.
 
 ~~~json
 {

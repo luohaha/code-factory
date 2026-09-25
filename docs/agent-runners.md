@@ -11,7 +11,8 @@ Agent Manager supports the local `codex` and `claude` CLIs. Every invocation fol
 - Agent Manager does not pass `--cd` or `--add-dir`; both CLIs run without interactive approval or CLI sandbox restrictions;
 - stdout is parsed as JSONL, while stderr is retained as an error summary;
 - RD Runs time out after 60 minutes without stdout or stderr activity by default, so an actively progressing Run may continue for longer than one hour. Reviewer Runs retain a total elapsed-time limit of at most 30 minutes. A timeout terminates the CLI and its complete tool-process tree;
-- on POSIX systems, a human interrupt sends `SIGTERM` to the isolated process group and follows with `SIGKILL` after two seconds if descendants remain; Windows uses `taskkill /T /F`. The Run becomes `cancelled` only after the process tree exits;
+- on POSIX systems, a human interrupt sends `SIGTERM` to the isolated process group and follows with `SIGKILL` after two seconds if descendants remain; Windows uses `taskkill /T /F`. The Runner does not complete the Run until the operating system confirms that the process tree exited, so queued work cannot resume the same native session while its previous writer is alive;
+- Manager shutdown applies the same cancellation to every active RD and Reviewer Run and waits for their outcomes to be persisted before closing SQLite or releasing the workspace lock;
 - one RD AgentSession may have only one active Run, while Sessions for different Requirements may run concurrently;
 - Human or Reviewer messages received during an RD Run are appended to the Requirement conversation without interrupting it. Only an explicit human interrupt stops the current Run, after which queued messages continue in the same native Session;
 - Agent Manager puts a private `code-factory-cli` launcher on the RD process's `PATH` and injects its connection context through the environment; project instructions and Skills are still loaded natively from the working directory.
@@ -27,6 +28,8 @@ Agent Manager supports the local `codex` and `claude` CLIs. Every invocation fol
 - **Launching-agent context:** a new RD session does not receive the live transcript, context window, or in-progress reasoning of an interactive agent that happened to start Agent Manager. Sessions belonging to other Requirements are also never merged into it. Provider-managed local memories may make selected information available when enabled, but that is not a copy of every previous conversation.
 
 Reviewers always start as independent, short-lived invocations. They use the same native configuration discovery but do not resume the Requirement's RD session.
+
+When Agent Manager runs under the daemon supervisor, it reports each active Agent process group to the supervisor. If the Manager is forcibly terminated before normal shutdown completes, the supervisor terminates and verifies those process groups before starting the replacement Manager. Startup reconciliation therefore cannot be followed by a resume while an Agent process registered to the previous Manager is still alive.
 
 ### Model discovery
 

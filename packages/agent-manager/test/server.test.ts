@@ -44,7 +44,15 @@ class WaitingRunner implements AgentProcessRunner {
 
   run(request: ProcessRunRequest): Promise<RunOutcome> {
     this.request = request;
-    return new Promise(() => undefined);
+    return new Promise((resolve) => {
+      request.signal?.addEventListener('abort', () => resolve({
+        status: 'cancelled',
+        exitCode: null,
+        nativeSessionId: null,
+        finalMessage: null,
+        error: 'Agent Run interrupted by human',
+      }), { once: true });
+    });
   }
 }
 

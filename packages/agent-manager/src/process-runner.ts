@@ -21,6 +21,12 @@ export interface AgentProcessRunner {
   run(request: ProcessRunRequest): Promise<RunOutcome>;
 }
 
+export interface HeadlessProcessRunnerOptions {
+  terminationGracePeriodMs?: number;
+  onProcessStarted?: (processId: number) => void;
+  onProcessExited?: (processId: number) => void;
+}
+
 function appendCapped(current: string, chunk: string, limit: number): string {
   const combined = current + chunk;
   return Buffer.byteLength(combined) <= limit
@@ -68,6 +74,20 @@ function isProcessTreeAlive(child: ChildProcess): boolean {
 }
 
 export class HeadlessProcessRunner implements AgentProcessRunner {
+  readonly #terminationGracePeriodMs: number;
+  readonly #onProcessStarted: ((processId: number) => void) | undefined;
+  readonly #onProcessExited: ((processId: number) => void) | undefined;
+
+  constructor(options: HeadlessProcessRunnerOptions = {}) {
+    const terminationGracePeriodMs = options.terminationGracePeriodMs ?? 2_000;
+    if (!Number.isFinite(terminationGracePeriodMs) || terminationGracePeriodMs < 0) {
+      throw new RangeError('terminationGracePeriodMs must be a non-negative finite number');
+    }
+    this.#terminationGracePeriodMs = terminationGracePeriodMs;
+    this.#onProcessStarted = options.onProcessStarted;
+    this.#onProcessExited = options.onProcessExited;
+  }
+
   async run(request: ProcessRunRequest): Promise<RunOutcome> {
     return await new Promise<RunOutcome>((resolve) => {
       const child = spawn(request.invocation.command, request.invocation.args, {
@@ -77,6 +97,14 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env, ...request.environment },
       });
+      const processId = child.pid ?? null;
+      if (processId !== null) {
+        try {
+          this.#onProcessStarted?.(processId);
+        } catch {
+          // Process lifecycle observation must not affect the Agent Run.
+        }
+      }
 
       let stdoutBuffer = '';
       let stderr = '';
@@ -85,10 +113,12 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
       let protocolError: string | null = null;
       let termination: 'cancelled' | 'timed_out' | null = null;
       let forceKill: NodeJS.Timeout | null = null;
+      let treeExitCheck: NodeJS.Timeout | null = null;
       let timeout: NodeJS.Timeout | null = null;
       let rootClose: { code: number | null; signal: NodeJS.Signals | null } | null = null;
       let forceSent = false;
       let settled = false;
+      let processExitObserved = false;
       const timeoutMode = request.timeoutMode ?? 'elapsed';
       const timeoutError = timeoutMode === 'inactivity'
         ? `Agent produced no output for ${formatDuration(request.timeoutMs)}`
@@ -97,7 +127,18 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
       const cleanup = () => {
         if (timeout) clearTimeout(timeout);
         if (forceKill) clearTimeout(forceKill);
+        if (treeExitCheck) clearTimeout(treeExitCheck);
         request.signal?.removeEventListener('abort', onAbort);
+      };
+
+      const observeProcessExit = () => {
+        if (processExitObserved || processId === null) return;
+        processExitObserved = true;
+        try {
+          this.#onProcessExited?.(processId);
+        } catch {
+          // Process lifecycle observation must not affect the Agent Run.
+        }
       };
 
       const consumeLine = (line: string) => {
@@ -118,6 +159,7 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         if (settled) return;
         settled = true;
         cleanup();
+        observeProcessExit();
         if (termination === 'cancelled') {
           resolve({ status: 'cancelled', exitCode: code, nativeSessionId, finalMessage, error: 'Agent Run interrupted by human' });
           return;
@@ -134,6 +176,16 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         resolve({ status: 'failed', exitCode: code, nativeSessionId, finalMessage, error: detail });
       };
 
+      const finishAfterProcessTreeExit = () => {
+        if (!rootClose || settled) return;
+        if (isProcessTreeAlive(child)) {
+          treeExitCheck = setTimeout(finishAfterProcessTreeExit, 10);
+          return;
+        }
+        treeExitCheck = null;
+        finishClose(rootClose.code, rootClose.signal);
+      };
+
       const terminate = (reason: 'cancelled' | 'timed_out') => {
         if (termination || settled) return;
         termination = reason;
@@ -142,8 +194,8 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
           forceSent = true;
           signalProcessTree(child, 'SIGKILL');
           forceKill = null;
-          if (rootClose) finishClose(rootClose.code, rootClose.signal);
-        }, 2_000);
+          if (rootClose) finishAfterProcessTreeExit();
+        }, this.#terminationGracePeriodMs);
       };
       const onAbort = () => terminate('cancelled');
       const armTimeout = () => {
@@ -181,6 +233,7 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         if (settled) return;
         settled = true;
         cleanup();
+        observeProcessExit();
         if (termination === 'cancelled') {
           resolve({ status: 'cancelled', exitCode: null, nativeSessionId, finalMessage, error: 'Agent Run interrupted by human' });
           return;
@@ -197,8 +250,9 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
           consumeLine(stdoutBuffer);
           stdoutBuffer = '';
         }
-        if (termination && !forceSent && isProcessTreeAlive(child)) {
+        if (termination && isProcessTreeAlive(child)) {
           rootClose = { code, signal };
+          if (forceSent) finishAfterProcessTreeExit();
           return;
         }
         finishClose(code, signal);

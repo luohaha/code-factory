@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -321,6 +321,222 @@ test('daemon starts in the background, restarts a crashed manager, and stops cle
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('daemon stop, restart, and crash recovery wait for the old Agent writer to exit', { timeout: 60_000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-daemon-agent-exit-'));
+  const workspace = join(directory, 'workspace');
+  const fakeHome = join(directory, 'home');
+  const fakeBin = join(directory, 'bin');
+  const eventFile = join(directory, 'writer-events.jsonl');
+  const managerPort = await reservePort();
+  let writerPort = await reservePort();
+  while (writerPort === managerPort) writerPort = await reservePort();
+  mkdirSync(workspace, { recursive: true });
+  mkdirSync(fakeBin, { recursive: true });
+  const fakeCodex = join(fakeBin, 'codex');
+  writeFileSync(fakeCodex, `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs');
+const { createServer } = require('node:net');
+const requirementId = process.env.CODE_FACTORY_REQUIREMENT_ID;
+const resumed = process.argv.includes('resume');
+const eventFile = process.env.CODE_FACTORY_TEST_WRITER_EVENTS;
+if (!process.argv.includes('exec')) process.exit(0);
+const record = (event) => appendFileSync(eventFile, JSON.stringify({ event, requirementId, resumed, pid: process.pid }) + '\\n');
+const writer = createServer();
+writer.once('error', (error) => {
+  record('writer-conflict');
+  process.stderr.write('thread-store conflict: thread already has an active writer: ' + error.message + '\\n');
+  process.exitCode = 1;
+});
+writer.listen(Number(process.env.CODE_FACTORY_TEST_WRITER_PORT), '127.0.0.1', () => {
+  record('writer-started');
+  process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: 'thread-' + requirementId }) + '\\n');
+  if (resumed) {
+    record('resume-acquired-writer');
+    process.stdout.write(JSON.stringify({ type: 'turn.completed' }) + '\\n');
+    writer.close(() => process.exit(0));
+  }
+});
+process.on('SIGTERM', () => record('sigterm-ignored'));
+`);
+  chmodSync(fakeCodex, 0o755);
+  const env = {
+    ...process.env,
+    HOME: fakeHome,
+    USERPROFILE: fakeHome,
+    PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
+    CODE_FACTORY_TEST_WRITER_EVENTS: eventFile,
+    CODE_FACTORY_TEST_WRITER_PORT: String(writerPort),
+  };
+  const paths = defaultDaemonPaths(workspace, fakeHome);
+  const startArgs = [
+    'start', '--daemon', '--port', String(managerPort),
+    '--pr-reconcile-interval', '0', '--log-level', 'silent',
+  ];
+  const baseUrl = `http://127.0.0.1:${managerPort}`;
+  let supervisorPid: number | null = null;
+  let managerPid: number | null = null;
+
+  const startWriter = async (title: string): Promise<{ requirementId: string; processId: number }> => {
+    const createdResponse = await fetch(`${baseUrl}/api/requirements`, {
+      method: 'POST',
+      headers: { connection: 'close', 'content-type': 'application/json' },
+      body: JSON.stringify({ title, description: 'Hold the native writer until terminated', provider: 'codex' }),
+    });
+    assert.equal(createdResponse.status, 201);
+    const requirement = await createdResponse.json() as { id: string };
+    const startedResponse = await fetch(`${baseUrl}/api/requirements/${requirement.id}/start`, {
+      method: 'POST',
+      headers: { connection: 'close', 'content-type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(startedResponse.status, 202);
+    const event = await waitForWriterEvent(eventFile, (item) => (
+      item.event === 'writer-started' && item.requirementId === requirement.id && item.resumed === false
+    ));
+    await waitForRequirement(baseUrl, requirement.id, (item) => item.session.nativeSessionId !== null);
+    return { requirementId: requirement.id, processId: event.pid };
+  };
+
+  const resumeWriter = async (requirementId: string): Promise<void> => {
+    const response = await fetch(`${baseUrl}/api/requirements/${requirementId}/reply`, {
+      method: 'POST',
+      headers: { connection: 'close', 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'Resume after process handoff.' }),
+    });
+    assert.equal(response.status, 202);
+    await waitForWriterEvent(eventFile, (item) => (
+      item.event === 'resume-acquired-writer' && item.requirementId === requirementId
+    ));
+    await waitForRequirement(baseUrl, requirementId, (item) => item.status === 'waiting_confirmation');
+  };
+
+  try {
+    const started = runCli(startArgs, workspace, env);
+    assert.equal(started.status, 0, started.stderr);
+    let state = readDaemonState(paths.stateFile);
+    assert.ok(state?.managerPid);
+    supervisorPid = state.supervisorPid;
+    managerPid = state.managerPid;
+
+    const restartRun = await startWriter('Restart active writer');
+    const restarted = runCli(['restart'], workspace, env, 25_000);
+    assert.equal(restarted.status, 0, restarted.stderr);
+    assert.equal(isProcessAlive(restartRun.processId), false);
+    await resumeWriter(restartRun.requirementId);
+
+    const stopRun = await startWriter('Stop active writer');
+    const stopped = runCli(['stop'], workspace, env, 25_000);
+    assert.equal(stopped.status, 0, stopped.stderr);
+    assert.equal(isProcessAlive(stopRun.processId), false);
+    assert.equal(existsSync(paths.stateFile), false);
+
+    const startedAgain = runCli(startArgs, workspace, env);
+    assert.equal(startedAgain.status, 0, startedAgain.stderr);
+    state = readDaemonState(paths.stateFile);
+    assert.ok(state?.managerPid);
+    supervisorPid = state.supervisorPid;
+    managerPid = state.managerPid;
+
+    const crashRun = await startWriter('Recover active writer after crash');
+    await waitForFile(paths.logFile, (contents) => (
+      contents.includes('Agent process registered') && contents.includes(`"agentProcessId":${crashRun.processId}`)
+    ));
+    const crashedManagerPid = managerPid;
+    process.kill(crashedManagerPid, 'SIGKILL');
+    const recovered = await waitForState(paths.stateFile, (candidate) => (
+      candidate.status === 'running'
+      && candidate.managerPid !== null
+      && candidate.managerPid !== crashedManagerPid
+      && candidate.restartCount >= 1
+    ), 15_000);
+    managerPid = recovered.managerPid;
+    assert.equal(isProcessAlive(crashRun.processId), false);
+    await resumeWriter(crashRun.requirementId);
+
+    const events = readWriterEvents(eventFile);
+    assert.equal(events.some((event) => event.event === 'writer-conflict'), false);
+    const daemonLog = readFileSync(paths.logFile, 'utf8');
+    assert.match(daemonLog, /Agent processes terminated before Manager recovery/);
+  } finally {
+    if (existsSync(paths.stateFile)) runCli(['stop'], workspace, env, 25_000);
+    const remainingState = readDaemonState(paths.stateFile);
+    const remainingManagerPid = remainingState?.managerPid ?? managerPid;
+    const remainingSupervisorPid = remainingState?.supervisorPid ?? supervisorPid;
+    if (remainingManagerPid !== null && isProcessAlive(remainingManagerPid)) process.kill(remainingManagerPid, 'SIGKILL');
+    if (remainingSupervisorPid !== null && isProcessAlive(remainingSupervisorPid)) process.kill(remainingSupervisorPid, 'SIGKILL');
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+interface WriterEvent {
+  event: string;
+  requirementId: string;
+  resumed: boolean;
+  pid: number;
+}
+
+function readWriterEvents(path: string): WriterEvent[] {
+  if (!existsSync(path)) return [];
+  return readFileSync(path, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as WriterEvent);
+}
+
+async function waitForWriterEvent(
+  path: string,
+  predicate: (event: WriterEvent) => boolean,
+  timeoutMs = 10_000,
+): Promise<WriterEvent> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const event = readWriterEvents(path).find(predicate);
+    if (event) return event;
+    await new Promise<void>((resolveWait) => setTimeout(resolveWait, 25));
+  }
+  throw new Error(`Writer event did not appear: ${path}\n${JSON.stringify(readWriterEvents(path))}`);
+}
+
+async function waitForRequirement(
+  baseUrl: string,
+  requirementId: string,
+  predicate: (requirement: {
+    status: string;
+    session: { state: string; nativeSessionId: string | null };
+  }) => boolean,
+  timeoutMs = 10_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const response = await fetch(`${baseUrl}/api/requirements/${requirementId}`, {
+      headers: { connection: 'close' },
+    });
+    if (response.ok) {
+      const requirement = await response.json() as {
+        status: string;
+        session: { state: string; nativeSessionId: string | null };
+      };
+      if (predicate(requirement)) return;
+    }
+    await new Promise<void>((resolveWait) => setTimeout(resolveWait, 25));
+  }
+  throw new Error(`Requirement ${requirementId} did not reach the expected state`);
+}
+
+async function waitForFile(
+  path: string,
+  predicate: (contents: string) => boolean,
+  timeoutMs = 10_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const contents = existsSync(path) ? readFileSync(path, 'utf8') : '';
+    if (predicate(contents)) return;
+    await new Promise<void>((resolveWait) => setTimeout(resolveWait, 25));
+  }
+  throw new Error(`File did not reach the expected state: ${path}`);
+}
 
 function runCliAsync(
   args: readonly string[],

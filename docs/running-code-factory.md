@@ -58,7 +58,7 @@ npx --yes --package @luoyixin/code-factory code-factory-agent-manager restart
 npx --yes --package @luoyixin/code-factory code-factory-agent-manager stop
 ~~~
 
-When the daemon is running, `restart` reuses its start options unless new options are supplied. `status` exits with code `0` while the supervisor is live and `3` otherwise. The equivalent `daemon start|status|restart|stop` command form is also supported. This supervisor provides background execution and process recovery; it does not install an operating-system service or start automatically after a machine reboot.
+When the daemon is running, `restart` reuses its start options unless new options are supplied. Both `stop` and `restart` cancel active Agent process trees and wait for them to exit before completing. The Manager reports those process groups to the supervisor, so an Agent left by a forcibly terminated Manager is also terminated before the replacement Manager starts and can resume its native session. `status` exits with code `0` while the supervisor is live and `3` otherwise. The equivalent `daemon start|status|restart|stop` command form is also supported. This supervisor provides background execution and process recovery; it does not install an operating-system service or start automatically after a machine reboot.
 
 ## Common examples
 

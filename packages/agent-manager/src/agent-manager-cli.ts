@@ -131,6 +131,22 @@ async function runForeground(args: readonly string[]): Promise<void> {
         command: process.execPath,
         args: [...(sourceExecution ? process.execArgv : []), agentCliEntrypoint],
       },
+      ...(daemonChild
+        ? {
+            agentProcessLifecycle: {
+              onProcessStarted: (processId: number) => {
+                if (process.connected) {
+                  process.send?.({ type: 'code-factory-agent-process-started', processId });
+                }
+              },
+              onProcessExited: (processId: number) => {
+                if (process.connected) {
+                  process.send?.({ type: 'code-factory-agent-process-exited', processId });
+                }
+              },
+            },
+          }
+        : {}),
     });
   } catch (error) {
     workspaceLock.release();
@@ -196,14 +212,17 @@ async function runForeground(args: readonly string[]): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info('Agent Manager shutting down');
-    server.close(async () => {
+    const serverClosed = new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    server.closeAllConnections();
+    const managerClosed = manager.close();
+    void (async () => {
       try {
-        await manager.close();
+        await Promise.all([serverClosed, managerClosed]);
         process.exitCode = 0;
       } finally {
         workspaceLock.release();
       }
-    });
+    })();
   };
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);

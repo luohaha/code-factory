@@ -32,7 +32,44 @@ class DeferredRunner implements AgentProcessRunner {
 
   run(request: ProcessRunRequest): Promise<RunOutcome> {
     this.requests.push(request);
-    return new Promise((resolve) => this.resolvers.push(resolve));
+    return new Promise((resolve) => {
+      this.resolvers.push(resolve);
+      request.signal?.addEventListener('abort', () => resolve({
+        status: 'cancelled',
+        exitCode: null,
+        nativeSessionId: null,
+        finalMessage: null,
+        error: 'Agent Run interrupted by human',
+      }), { once: true });
+    });
+  }
+}
+
+class ExitControlledRunner implements AgentProcessRunner {
+  requests: ProcessRunRequest[] = [];
+  resolvers: Array<(outcome: RunOutcome) => void> = [];
+  events: string[] = [];
+
+  run(request: ProcessRunRequest): Promise<RunOutcome> {
+    this.requests.push(request);
+    const index = this.requests.length - 1;
+    return new Promise((resolve) => {
+      this.resolvers.push(resolve);
+      request.signal?.addEventListener('abort', () => {
+        this.events.push(`abort:${index}`);
+      }, { once: true });
+    });
+  }
+
+  finishCancelled(index: number): void {
+    this.events.push(`writer-exited:${index}`);
+    this.resolvers[index]?.({
+      status: 'cancelled',
+      exitCode: null,
+      nativeSessionId: null,
+      finalMessage: null,
+      error: 'Agent Run interrupted by human',
+    });
   }
 }
 
@@ -1193,6 +1230,75 @@ test('a queued correction does not interrupt until a human explicitly interrupts
     await new Promise<void>((resolve) => setImmediate(resolve));
   } finally {
     manager.close();
+  }
+});
+
+test('Manager shutdown waits for the old native writer before a restarted Manager resumes it', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-manager-restart-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const firstRunner = new ExitControlledRunner();
+  const firstManager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    databasePath,
+    runner: firstRunner,
+    logger: silentLogger,
+  });
+  let secondManager: AgentManager | null = null;
+  try {
+    const requirement = firstManager.createRequirement({
+      title: 'Restart safely',
+      description: 'Do not overlap native thread writers',
+      provider: 'codex',
+    });
+    const firstExecution = firstManager.runRequirement(requirement.id, 'Start the long-running work.');
+    firstRunner.requests[0]?.onNativeSession?.('native-thread-restart');
+    firstManager.postHumanMessage(requirement.id, 'Continue after the restart.');
+
+    let closeFinished = false;
+    const closePromise = firstManager.close().then(() => { closeFinished = true; });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(firstRunner.events, ['abort:0']);
+    assert.equal(closeFinished, false);
+    assert.equal(firstRunner.requests.length, 1);
+
+    firstRunner.finishCancelled(0);
+    await Promise.all([firstExecution, closePromise]);
+    assert.deepEqual(firstRunner.events, ['abort:0', 'writer-exited:0']);
+
+    const restartEvents = firstRunner.events;
+    const resumedRunner: AgentProcessRunner = {
+      run: (request) => {
+        restartEvents.push('resume-started');
+        assert.ok(request.invocation.args.includes('resume'));
+        assert.ok(request.invocation.args.includes('native-thread-restart'));
+        return Promise.resolve({
+          status: 'succeeded',
+          exitCode: 0,
+          nativeSessionId: 'native-thread-restart',
+          finalMessage: 'continued',
+          error: null,
+        });
+      },
+    };
+    secondManager = new AgentManager({
+      workspaceRoot: process.cwd(),
+      databasePath,
+      runner: resumedRunner,
+      logger: silentLogger,
+    });
+    await secondManager.runRequirement(requirement.id);
+
+    assert.deepEqual(restartEvents, ['abort:0', 'writer-exited:0', 'resume-started']);
+    assert.deepEqual(
+      secondManager.listRuns(requirement.id).map((run) => run.status).sort(),
+      ['cancelled', 'succeeded'],
+    );
+    assert.equal(secondManager.listEvents().some((event) => event.type === 'manager.reconciled'), false);
+  } finally {
+    await firstManager.close();
+    await secondManager?.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

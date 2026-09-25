@@ -58,6 +58,8 @@ Each Requirement owns one long-lived RD session. Sessions for different Requirem
 
 SQLite persists Requirements, relationships, conversations, runs, sessions, PR metadata, timers, and trigger receipts across restarts. Related-agent communication becomes new input in the target Requirement; it does not merge the agents' native session contexts.
 
+Stopping or restarting Agent Manager first cancels active Agent process trees and waits for them to exit before releasing the workspace. Under the daemon supervisor, active Agent process groups are also tracked across a forced Manager exit and terminated before recovery starts, preventing a resumed Codex thread from overlapping its previous writer.
+
 For the complete domain model, state machines, concurrency rules, and delivery semantics, see [Final architecture and domain model](docs/architecture.en.md).
 
 ## Web Dashboard

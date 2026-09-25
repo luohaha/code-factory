@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
   chmodSync,
   closeSync,
@@ -74,13 +74,19 @@ interface DaemonStartupFailureMessage {
   message: string;
 }
 
+interface DaemonAgentProcessMessage {
+  type: 'code-factory-agent-process-started' | 'code-factory-agent-process-exited';
+  processId: number;
+}
+
 interface DaemonLock {
   release(): void;
 }
 
 const START_TIMEOUT_MS = 15_000;
-const STOP_TIMEOUT_MS = 12_000;
+const STOP_TIMEOUT_MS = 15_000;
 const FORCE_KILL_DELAY_MS = 10_000;
+const AGENT_PROCESS_FORCE_KILL_DELAY_MS = 2_000;
 const STABLE_RUNTIME_MS = 30_000;
 
 export function defaultDaemonPaths(workspaceRoot: string, homeDirectory = homedir()): DaemonPaths {
@@ -327,6 +333,7 @@ export async function runDaemonSupervisor(managerArgs: readonly string[]): Promi
     while (!stopping) {
       const launchStartedAt = Date.now();
       let startupFailure: string | null = null;
+      const agentProcessIds = new Set<number>();
       child = spawn(
         process.execPath,
         [...process.execArgv, resolve(process.argv[1]!), 'start', ...managerArgs],
@@ -365,6 +372,20 @@ export async function runDaemonSupervisor(managerArgs: readonly string[]): Promi
           });
         } else if (isStartupFailureMessage(message)) {
           startupFailure = message.message;
+        } else if (isAgentProcessMessage(message)) {
+          if (message.type === 'code-factory-agent-process-started') {
+            agentProcessIds.add(message.processId);
+            appendDaemonEvent(logFd, 'Agent process registered', {
+              managerPid: launchedChild.pid ?? null,
+              agentProcessId: message.processId,
+            });
+          } else {
+            agentProcessIds.delete(message.processId);
+            appendDaemonEvent(logFd, 'Agent process exited', {
+              managerPid: launchedChild.pid ?? null,
+              agentProcessId: message.processId,
+            });
+          }
         }
       });
 
@@ -373,6 +394,18 @@ export async function runDaemonSupervisor(managerArgs: readonly string[]): Promi
       if (forceKillTimer) clearTimeout(forceKillTimer);
       forceKillTimer = null;
       appendDaemonEvent(logFd, 'Agent Manager process exited', outcome);
+      if (agentProcessIds.size > 0) {
+        const processIds = [...agentProcessIds];
+        appendDaemonEvent(logFd, 'Terminating Agent processes left by exited Manager', {
+          managerPid: launchedChild.pid ?? null,
+          agentProcessIds: processIds,
+        });
+        await terminateAgentProcessTrees(processIds);
+        appendDaemonEvent(logFd, 'Agent processes terminated before Manager recovery', {
+          managerPid: launchedChild.pid ?? null,
+          agentProcessIds: processIds,
+        });
+      }
       if (stopping) break;
       if (startupFailure !== null) {
         updateState({
@@ -542,6 +575,13 @@ function isStartupFailureMessage(value: unknown): value is DaemonStartupFailureM
     && typeof value.message === 'string';
 }
 
+function isAgentProcessMessage(value: unknown): value is DaemonAgentProcessMessage {
+  return isRecord(value)
+    && (value.type === 'code-factory-agent-process-started'
+      || value.type === 'code-factory-agent-process-exited')
+    && isPositiveInteger(value.processId);
+}
+
 function assertWorkspaceAvailable(workspaceRoot: string): void {
   const lock = acquireWorkspaceLock(workspaceRoot);
   lock.release();
@@ -569,6 +609,54 @@ function signalPid(pid: number, signal: NodeJS.Signals): void {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
   }
+}
+
+async function terminateAgentProcessTrees(processIds: readonly number[]): Promise<void> {
+  let active = processIds.filter(isAgentProcessTreeAlive);
+  if (active.length === 0) return;
+  for (const processId of active) signalAgentProcessTree(processId, 'SIGTERM');
+  active = await waitForAgentProcessTrees(active, AGENT_PROCESS_FORCE_KILL_DELAY_MS);
+  for (const processId of active) signalAgentProcessTree(processId, 'SIGKILL');
+  active = await waitForAgentProcessTrees(active, AGENT_PROCESS_FORCE_KILL_DELAY_MS);
+  if (active.length > 0) {
+    throw new Error(`Unable to terminate orphaned Agent process trees: ${active.join(', ')}`);
+  }
+}
+
+function signalAgentProcessTree(processId: number, signal: NodeJS.Signals): void {
+  if (process.platform === 'win32') {
+    const result = spawnSync('taskkill', ['/PID', String(processId), '/T', '/F'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    if (result.error || result.status !== 0) signalPid(processId, signal);
+    return;
+  }
+  try {
+    process.kill(-processId, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+  }
+}
+
+function isAgentProcessTreeAlive(processId: number): boolean {
+  if (process.platform === 'win32') return isProcessAlive(processId);
+  try {
+    process.kill(-processId, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+async function waitForAgentProcessTrees(processIds: readonly number[], timeoutMs: number): Promise<number[]> {
+  const deadline = Date.now() + timeoutMs;
+  let active = processIds.filter(isAgentProcessTreeAlive);
+  while (active.length > 0 && Date.now() < deadline) {
+    await delay(10);
+    active = active.filter(isAgentProcessTreeAlive);
+  }
+  return active;
 }
 
 function removeFile(path: string): void {

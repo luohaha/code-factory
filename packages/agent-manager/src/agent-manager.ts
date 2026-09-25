@@ -91,6 +91,10 @@ export interface AgentManagerOptions {
   configurationFilePath?: string;
   agentCliInvocation?: CodeFactoryCliInvocation;
   modelCatalog?: AgentModelCatalogService;
+  agentProcessLifecycle?: {
+    onProcessStarted?: (processId: number) => void;
+    onProcessExited?: (processId: number) => void;
+  };
 }
 
 export function defaultDatabasePath(workspaceRoot: string): string {
@@ -151,6 +155,7 @@ export class AgentManager extends EventEmitter {
   readonly #agentCliBinDirectory: string | null;
   readonly #modelCatalog: AgentModelCatalogService;
   readonly #activeRdRuns = new Map<string, { runId: string; controller: AbortController }>();
+  readonly #activeExecutions = new Map<AbortController, Promise<unknown>>();
   readonly #agentTriggers = new Map<string, AgentTrigger>();
   readonly #pullRequestReconciler: PullRequestReconciler;
   readonly #pullRequestTriggers: readonly PullRequestSnapshotTrigger[];
@@ -199,7 +204,7 @@ export class AgentManager extends EventEmitter {
       maxFiles: effectiveConfiguration.logMaxFiles,
     });
     this.#store = options.store ?? new SqliteAgentManagerStore(this.databasePath);
-    this.#runner = options.runner ?? new HeadlessProcessRunner();
+    this.#runner = options.runner ?? new HeadlessProcessRunner(options.agentProcessLifecycle);
     this.#adapters = { codex: new CodexAdapter(), 'claude-code': new ClaudeCodeAdapter() };
     this.#timeoutMs = options.timeoutMs ?? 60 * 60 * 1_000;
     this.#maxOutputBytes = options.maxOutputBytes ?? 2 * 1024 * 1024;
@@ -350,6 +355,11 @@ export class AgentManager extends EventEmitter {
     if (this.#closePromise) return this.#closePromise;
     if (this.#closed) return Promise.resolve();
     this.#closed = true;
+    this.#closePromise = this.finishClose();
+    return this.#closePromise;
+  }
+
+  private async finishClose(): Promise<void> {
     this.#modelCatalog.stop();
     this.#pullRequestReconciler.stop();
     if (this.#requirementRetentionTimer) clearInterval(this.#requirementRetentionTimer);
@@ -362,14 +372,16 @@ export class AgentManager extends EventEmitter {
       }
     }
     this.#agentTriggers.clear();
+    const activeExecutions = [...this.#activeExecutions.entries()];
+    for (const [controller] of activeExecutions) controller.abort();
+    await Promise.allSettled(activeExecutions.map(([, completion]) => completion));
     this.#store.close();
     this.logger.info('Agent Manager closed');
     try {
-      this.#closePromise = Promise.resolve(this.logger.close?.()).catch(() => undefined);
+      await Promise.resolve(this.logger.close?.()).catch(() => undefined);
     } catch {
-      this.#closePromise = Promise.resolve();
+      // Logger shutdown must not prevent workspace-lock release.
     }
-    return this.#closePromise;
   }
 
   startPullRequestReconciler(intervalMs = 30_000): void {
@@ -1084,6 +1096,7 @@ export class AgentManager extends EventEmitter {
     pullRequestId: string,
     options: { provider: AgentProvider; model?: string; reasoningEffort?: AgentReasoningEffort; prompt?: string },
   ): Promise<RunOutcome> {
+    if (this.#closed) throw new Error('Agent Manager is closed');
     const startedAt = performance.now();
     const pullRequest = this.requirePullRequest(pullRequestId);
     const requirement = this.requireRequirement(pullRequest.requirementId);
@@ -1137,7 +1150,8 @@ export class AgentManager extends EventEmitter {
       REVIEWER_DEVELOPER_INSTRUCTIONS,
       options.prompt?.trim() ? `Additional review focus from the human: ${options.prompt.trim()}` : '',
     ].filter(Boolean).join('\n\n');
-    return this.execute({
+    const controller = new AbortController();
+    const completion = this.execute({
       invocation: adapter.buildReviewInvocation({
         prompt,
         ...(model ? { model } : {}),
@@ -1149,6 +1163,7 @@ export class AgentManager extends EventEmitter {
       timeoutMs: Math.min(this.#timeoutMs, 30 * 60 * 1_000),
       timeoutMode: 'elapsed',
       maxOutputBytes: this.#maxOutputBytes,
+      signal: controller.signal,
       onOutput: (line) => this.emit('output', { runId, line }),
       onEvent: (event) => {
         this.recordAgentTraces(requirement.id, requirement.session.id, runId, event.traces);
@@ -1189,6 +1204,7 @@ export class AgentManager extends EventEmitter {
       }
       return outcome;
     });
+    return this.trackExecution(controller, completion);
   }
 
   confirmRequirement(requirementId: string): RequirementWithSession {
@@ -1214,6 +1230,7 @@ export class AgentManager extends EventEmitter {
   }
 
   private startRdRun(requirementId: string): Promise<RequirementWithSession> {
+    if (this.#closed) throw new Error('Agent Manager is closed');
     const startedAt = performance.now();
     const requirement = this.requireRequirement(requirementId);
     const pendingMessages = this.#store.listPendingRdMessages(requirementId);
@@ -1271,7 +1288,7 @@ export class AgentManager extends EventEmitter {
 
     const adapter = this.#adapters[requirement.provider];
     let lastAgentMessage = '';
-    return this.execute({
+    const completion = this.execute({
       invocation: adapter.buildRdInvocation({
         prompt,
         nativeSessionId: requirement.session.nativeSessionId,
@@ -1332,10 +1349,12 @@ export class AgentManager extends EventEmitter {
       if (outcome.status === 'cancelled') this.schedulePendingRdMessages(requirementId, inputToSequence ?? 0);
       return current;
     });
+    return this.trackExecution(controller, completion);
   }
 
   private schedulePendingRdMessages(requirementId: string, afterSequence = 0): void {
     queueMicrotask(() => {
+      if (this.#closed) return;
       const current = this.#store.getRequirement(requirementId);
       if (!current) return;
       if (current.status === 'done' || current.status === 'cancelled' || current.session.state === 'running') return;
@@ -1634,6 +1653,15 @@ export class AgentManager extends EventEmitter {
       finalMessage: null,
       error: error instanceof Error ? error.message : String(error),
     }));
+  }
+
+  private trackExecution<T>(controller: AbortController, completion: Promise<T>): Promise<T> {
+    let tracked: Promise<T>;
+    tracked = completion.finally(() => {
+      if (this.#activeExecutions.get(controller) === tracked) this.#activeExecutions.delete(controller);
+    });
+    this.#activeExecutions.set(controller, tracked);
+    return tracked;
   }
 }
 

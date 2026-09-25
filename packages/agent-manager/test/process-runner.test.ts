@@ -100,8 +100,13 @@ test('HeadlessProcessRunner kills descendant tool processes before completing a 
   let ready: (pid: number) => void = () => undefined;
   const grandchildReady = new Promise<number>((resolve) => { ready = resolve; });
   let grandchildPid: number | null = null;
+  const processLifecycle: string[] = [];
 
-  const outcomePromise = new HeadlessProcessRunner().run({
+  const outcomePromise = new HeadlessProcessRunner({
+    terminationGracePeriodMs: 50,
+    onProcessStarted: (processId) => processLifecycle.push(`started:${processId}`),
+    onProcessExited: (processId) => processLifecycle.push(`exited:${processId}`),
+  }).run({
     invocation: { command: process.execPath, args: ['-e', rootScript], input: '' },
     adapter: noOutputAdapter,
     workspaceRoot: process.cwd(),
@@ -121,10 +126,11 @@ test('HeadlessProcessRunner kills descendant tool processes before completing a 
     ]);
     controller.abort();
     const outcome = await outcomePromise;
-    await new Promise<void>((resolve) => setTimeout(resolve, 100));
 
     assert.equal(outcome.status, 'cancelled');
     assert.equal(processExists(grandchildPid), false);
+    assert.equal(processLifecycle.length, 2);
+    assert.equal(processLifecycle[1], processLifecycle[0]?.replace('started:', 'exited:'));
   } finally {
     if (grandchildPid !== null && processExists(grandchildPid)) process.kill(grandchildPid, 'SIGKILL');
   }
