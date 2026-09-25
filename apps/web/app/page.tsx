@@ -500,6 +500,7 @@ function EditRequirementAgentConfigurationDialog({
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [provider, setProvider] = useState<AgentProvider>(requirement.provider);
   const [model, setModel] = useState(requirement.model ?? '');
   const [reasoningEffort, setReasoningEffort] = useState(requirement.reasoningEffort ?? '');
 
@@ -509,6 +510,7 @@ function EditRequirementAgentConfigurationDialog({
     setSubmitting(true);
     try {
       await onUpdate({
+        provider,
         model: model.trim() || null,
         reasoningEffort: reasoningEffort
           ? reasoningEffort as AgentReasoningEffort
@@ -528,6 +530,7 @@ function EditRequirementAgentConfigurationDialog({
       onOpenChange={(nextOpen) => {
         setOpen(nextOpen);
         if (nextOpen) {
+          setProvider(requirement.provider);
           setModel(requirement.model ?? '');
           setReasoningEffort(requirement.reasoningEffort ?? '');
           setSubmitError(null);
@@ -542,9 +545,7 @@ function EditRequirementAgentConfigurationDialog({
           <DialogHeader>
             <DialogTitle>{t('Edit Agent configuration')}</DialogTitle>
             <DialogDescription>
-              {t('Choose the model and reasoning effort to use when this TODO requirement starts. The Agent type remains {provider}.', {
-                provider: providerLabel(requirement.provider),
-              })}
+              {t('Choose the Agent, model, and reasoning effort to use when this TODO requirement starts.')}
             </DialogDescription>
           </DialogHeader>
           {submitError ? (
@@ -556,12 +557,30 @@ function EditRequirementAgentConfigurationDialog({
           ) : null}
           <FieldGroup className="my-5 gap-4">
             <Field>
+              <FieldLabel htmlFor={`${fieldId}-provider`}>{t('RD Agent')}</FieldLabel>
+              <NativeSelect
+                id={`${fieldId}-provider`}
+                name="provider"
+                className="w-full"
+                value={provider}
+                disabled={submitting}
+                onChange={(event) => {
+                  setProvider(event.target.value as AgentProvider);
+                  setModel('');
+                  setReasoningEffort('');
+                }}
+              >
+                <NativeSelectOption value="codex">Codex headless</NativeSelectOption>
+                <NativeSelectOption value="claude-code">Claude Code headless</NativeSelectOption>
+              </NativeSelect>
+            </Field>
+            <Field>
               <FieldLabel htmlFor={`${fieldId}-model`}>{t('Model')}</FieldLabel>
               <AgentModelSelect
                 id={`${fieldId}-model`}
                 name="model"
                 catalog={modelCatalog}
-                provider={requirement.provider}
+                provider={provider}
                 value={model}
                 onChange={setModel}
                 disabled={submitting}

@@ -56,7 +56,7 @@ export const zhCN = {
   'Use CLI default model': '使用 CLI 默认模型',
   'Default reasoning': '使用默认思考强度',
   'Edit Agent configuration': '修改 Agent 配置',
-  'Choose the model and reasoning effort to use when this TODO requirement starts. The Agent type remains {provider}.': '选择此 TODO 需求启动时使用的模型和思考强度。Agent 类型仍为 {provider}。',
+  'Choose the Agent, model, and reasoning effort to use when this TODO requirement starts.': '选择此 TODO 需求启动时使用的 Agent、模型和思考强度。',
   'Failed to update Agent configuration': '修改 Agent 配置失败',
   'Save changes': '保存修改',
   'Reviewer': '审查 Agent',

@@ -571,6 +571,59 @@ test('Agent Manager updates TODO Agent configuration and uses it for the first R
   }
 });
 
+test('Agent Manager switches a TODO Requirement and Session to another provider before the first Run', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store,
+    runner,
+    logger: silentLogger,
+  });
+  try {
+    const created = manager.createRequirement({
+      title: 'Switch Agent',
+      description: 'Use Claude Code instead',
+      provider: 'codex',
+      model: 'gpt-old',
+      reasoningEffort: 'max',
+    });
+    const switched = manager.updateRequirementAgentConfiguration(created.id, { provider: 'claude-code' });
+    assert.equal(switched.provider, 'claude-code');
+    assert.equal(switched.session.provider, 'claude-code');
+    assert.equal(switched.session.id, created.session.id);
+    assert.equal(switched.model, null);
+    assert.equal(switched.reasoningEffort, null);
+    assert.equal(store.getRequirement(created.id)?.session.provider, 'claude-code');
+
+    const configured = manager.updateRequirementAgentConfiguration(created.id, {
+      model: 'claude-sonnet-test',
+      reasoningEffort: 'high',
+    });
+    assert.equal(configured.model, 'claude-sonnet-test');
+    assert.equal(configured.reasoningEffort, 'high');
+    const runPromise = manager.runRequirement(created.id);
+    assert.equal(runner.requests[0]?.invocation.command, 'claude');
+    assert.ok(runner.requests[0]?.invocation.args.includes('claude-sonnet-test'));
+    assert.ok(runner.requests[0]?.invocation.args.includes('high'));
+    assert.equal(manager.listRuns(created.id)[0]?.provider, 'claude-code');
+    assert.throws(
+      () => manager.updateRequirementAgentConfiguration(created.id, { provider: 'codex' }),
+      /only be changed while it is todo/,
+    );
+    runner.resolvers[0]?.({
+      status: 'succeeded',
+      exitCode: 0,
+      nativeSessionId: 'native-claude',
+      finalMessage: 'done',
+      error: null,
+    });
+    await runPromise;
+  } finally {
+    await manager.close();
+  }
+});
+
 test('Agent Manager applies lifecycle actions only to children proposed by the source RD Session', async () => {
   const runner = new InterruptibleRunner();
   const manager = new AgentManager({

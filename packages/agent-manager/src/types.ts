@@ -220,6 +220,7 @@ export interface CreateRequirementInput {
 }
 
 export interface UpdateRequirementAgentConfigurationInput {
+  provider?: AgentProvider;
   model?: string | null;
   reasoningEffort?: AgentReasoningEffort | null;
 }

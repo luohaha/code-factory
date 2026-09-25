@@ -44,7 +44,7 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/requirements | List Requirements with their RD Sessions |
 | GET | /api/requirements/:id | Read one Requirement with its RD Session |
 | POST | /api/requirements | Create a Requirement and RD Session |
-| PATCH | /api/requirements/:id | Change a TODO Requirement's model and reasoning effort |
+| PATCH | /api/requirements/:id | Change a TODO Requirement's Agent provider, model, or reasoning effort |
 | DELETE | /api/requirements/:id | Remove a TODO Requirement |
 | POST | /api/requirements/:id/start | Start or retry a Requirement |
 | POST | /api/requirements/:id/reply | Send a human conversation message |
@@ -512,17 +512,18 @@ Success: 201 Created with the new Requirement. Its initial status is todo and it
 
 ### PATCH /api/requirements/:id
 
-Changes the Agent configuration used when a human starts a Requirement from the dashboard. The Requirement must still be in `todo`; its provider does not change. At least one field is required.
+Changes the Agent configuration used when a human starts a Requirement from the dashboard. The Requirement must still be in `todo`. At least one field is required. Changing the provider also updates its bound RD Session; omitted model and reasoning effort fields reset to their CLI defaults for the new provider.
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
+| provider | string | no | codex or claude-code |
 | model | string or null | no | Non-empty model identifier, or null to restore the CLI default |
 | reasoningEffort | string or null | no | low, medium, high, xhigh, or max; null restores the CLI default |
 
 ~~~bash
 curl -X PATCH http://127.0.0.1:4310/api/requirements/req_... \
   -H 'Content-Type: application/json' \
-  -d '{"model":"gpt-5.6","reasoningEffort":"xhigh"}'
+  -d '{"provider":"claude-code","model":"claude-sonnet-4-6","reasoningEffort":"high"}'
 ~~~
 
 Success: `200 OK` with the updated Requirement. Returns `404 Not Found` for an unknown Requirement, `409 Conflict` after execution has started, and `400 Bad Request` for missing or invalid fields. The RD Agent CLI intentionally does not expose this mutation.

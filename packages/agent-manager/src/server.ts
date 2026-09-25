@@ -347,6 +347,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         const model = nullableStringField(body, 'model');
         const reasoningEffort = nullableReasoningEffortField(body.reasoningEffort);
         sendJson(response, 200, manager.updateRequirementAgentConfiguration(requirementId, {
+          ...(body.provider !== undefined ? { provider: providerField(body.provider) } : {}),
           ...(model !== undefined ? { model } : {}),
           ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
         }));
