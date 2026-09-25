@@ -238,6 +238,47 @@ test('scheduled reconciliation clears a rejected run and retries on the next int
 
     assert.equal(attempts, 2);
     assert.ok(Date.now() - startedAt >= 900, 'the retry should wait for the configured interval');
+    const errors = stderr.lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(errors.length, 1, 'the expected failure is logged once with its PR context');
+    assert.equal(errors[0]?.reconciliationStage, 'inspection');
+  } finally {
+    reconciler.stop();
+    store.close();
+  }
+});
+
+test('overlapping scheduled ticks do not repeat an in-flight reconciliation failure', async () => {
+  const store = createStore();
+  const stderr = new MemoryWriter();
+  let attempts = 0;
+  let failFirst: ((error: Error) => void) | undefined;
+  const githubClient: GitHubClient = {
+    inspectPullRequest: (pullRequest) => {
+      attempts += 1;
+      if (attempts === 1) {
+        return new Promise((_, reject) => { failFirst = reject; });
+      }
+      return Promise.resolve(snapshot(pullRequest, 'merged'));
+    },
+  };
+  const reconciler = createReconciler(store, githubClient, stderr);
+
+  try {
+    trackPullRequest(store, 1);
+    reconciler.register(noOpTrigger, context);
+    reconciler.setInterval(1_000);
+    reconciler.start();
+    await waitFor(() => failFirst !== undefined, 1_000);
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 2_200));
+    assert.equal(attempts, 1, 'ticks share the unfinished inspection');
+    failFirst?.(new Error('temporary GitHub outage'));
+    await waitFor(() => store.getPullRequest('pr-1')?.status === 'merged', 4_000);
+
+    const errors = stderr.lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0]?.reconciliationStage, 'inspection');
+    assert.equal(errors[0]?.number, 1);
   } finally {
     reconciler.stop();
     store.close();

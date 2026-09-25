@@ -21,6 +21,9 @@ export interface PullRequestReconcilerOptions {
   isClosed(): boolean;
 }
 
+/** Every contained failure already has a PR-specific log entry. */
+class LoggedPullRequestFailures extends AggregateError {}
+
 /**
  * Polls PRs whose last persisted status is Draft or Open and shares each
  * snapshot with independent PR triggers. A snapshot may move an eligible PR
@@ -74,7 +77,9 @@ export class PullRequestReconciler {
   start(): void {
     if (this.#timer) return;
     const reconcile = () => {
+      if (this.#inFlight) return;
       void this.reconcile().catch((error: unknown) => {
+        if (error instanceof LoggedPullRequestFailures) return;
         this.#logger.error('Pull request reconciliation failed', { error });
       });
     };
@@ -124,7 +129,7 @@ export class PullRequestReconciler {
         errors.push(this.recordFailure(pullRequest, 'snapshot', error));
       }
     }
-    if (errors.length > 0) throw new AggregateError(errors, `${errors.length} pull request(s) could not be reconciled`);
+    if (errors.length > 0) throw new LoggedPullRequestFailures(errors, `${errors.length} pull request(s) could not be reconciled`);
   }
 
   private recordFailure(
