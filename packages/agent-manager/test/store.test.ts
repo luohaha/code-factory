@@ -726,10 +726,76 @@ test('an interrupted RD run returns to a non-error waiting state', () => {
       error: 'Agent Run interrupted by human',
     }, '2026-09-10T12:01:00.000Z');
 
-    assert.equal(interrupted.status, 'doing');
+    assert.equal(interrupted.status, 'waiting_confirmation');
     assert.equal(interrupted.session.state, 'waiting_human');
     assert.equal(interrupted.session.lastError, null);
     assert.equal(store.listRuns('req-1')[0]?.status, 'cancelled');
+  } finally {
+    store.close();
+  }
+});
+
+test('an interrupted RD run with a newer message remains doing and preserves that input', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-1',
+      sessionId: 'ses-1',
+      title: 'Requirement',
+      description: 'Description',
+      provider: 'codex',
+      createdBy: 'human',
+      now,
+    });
+    store.beginRun({ runId: 'run-1', requirementId: 'req-1', role: 'rd', provider: 'codex', taskSummary: 'start', now });
+    store.appendMessage({
+      id: 'msg-1', requirementId: 'req-1', sessionId: 'ses-1', author: 'human',
+      body: 'Use the new approach.', deliverToRd: true, now: '2026-09-10T12:00:30.000Z',
+    });
+    const interrupted = store.finishRdRun('run-1', {
+      status: 'cancelled', exitCode: null, nativeSessionId: 'native-1',
+      finalMessage: null, error: 'Agent Run interrupted by human',
+    }, '2026-09-10T12:01:00.000Z');
+
+    assert.equal(interrupted.status, 'doing');
+    assert.equal(interrupted.session.state, 'waiting_human');
+    assert.equal(interrupted.session.lastConsumedMessageSequence, 0);
+    assert.equal(interrupted.session.pendingMessageCount, 1);
+  } finally {
+    store.close();
+  }
+});
+
+test('an interrupted RD run ignores messages consumed by an earlier run', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-1', sessionId: 'ses-1', title: 'Requirement',
+      description: 'Description', provider: 'codex', createdBy: 'human', now,
+    });
+    store.appendMessage({
+      id: 'msg-1', requirementId: 'req-1', sessionId: 'ses-1', author: 'human',
+      body: 'Initial instructions', deliverToRd: true, now,
+    });
+    store.beginRun({
+      runId: 'run-1', requirementId: 'req-1', role: 'rd', provider: 'codex',
+      taskSummary: 'start', inputFromSequence: 1, inputToSequence: 1, now,
+    });
+    store.finishRdRun('run-1', {
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'native-1', finalMessage: 'done', error: null,
+    }, '2026-09-10T12:01:00.000Z');
+    store.beginRun({
+      runId: 'run-2', requirementId: 'req-1', role: 'rd', provider: 'codex',
+      taskSummary: 'resume', now: '2026-09-10T12:02:00.000Z',
+    });
+    const interrupted = store.finishRdRun('run-2', {
+      status: 'cancelled', exitCode: null, nativeSessionId: 'native-1',
+      finalMessage: null, error: 'Agent Run interrupted by human',
+    }, '2026-09-10T12:03:00.000Z');
+
+    assert.equal(interrupted.status, 'waiting_confirmation');
+    assert.equal(interrupted.session.lastConsumedMessageSequence, 1);
+    assert.equal(interrupted.session.pendingMessageCount, 0);
   } finally {
     store.close();
   }

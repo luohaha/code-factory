@@ -706,7 +706,7 @@ test('Agent Manager applies lifecycle actions only to children proposed by the s
     );
     assert.equal(stopped.runId, activeRunId);
     await execution;
-    assert.equal(manager.getRequirement(startedChild.id)?.status, 'doing');
+    assert.equal(manager.getRequirement(startedChild.id)?.status, 'waiting_confirmation');
     assert.equal(manager.getRequirement(startedChild.id)?.session.state, 'waiting_human');
 
     const retry = manager.startProposedRequirement(
@@ -1260,10 +1260,12 @@ test('interrupting an RD Run without a newer message stops instead of immediatel
     assert.equal(activeRun.runId, manager.listRuns(requirement.id)[0]?.id);
 
     const interrupted = await execution;
+    assert.equal(interrupted.status, 'waiting_confirmation');
     assert.equal(interrupted.session.state, 'waiting_human');
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(runner.requests.length, 1);
     assert.throws(() => manager.interruptRdRun(requirement.id), /does not have a running RD Run/);
+    assert.equal(manager.confirmRequirement(requirement.id).status, 'done');
   } finally {
     manager.close();
   }

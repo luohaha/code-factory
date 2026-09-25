@@ -679,6 +679,11 @@ test('HTTP reply queues by default and the interrupt action resumes the RD Agent
     });
     assert.equal(secondInterrupt.status, 202);
     await new Promise<void>((resolve) => setImmediate(resolve));
+    const pausedResponse = await fetch(`${baseUrl}/api/requirements/${created.id}`);
+    assert.equal(pausedResponse.status, 200);
+    const paused = await pausedResponse.json() as { status: string; session: { state: string } };
+    assert.equal(paused.status, 'waiting_confirmation');
+    assert.equal(paused.session.state, 'waiting_human');
 
     const repeatedInterrupt = await fetch(`${baseUrl}/api/requirements/${created.id}/interrupt`, {
       method: 'POST',
@@ -905,7 +910,7 @@ test('RD Agent endpoints list related Requirements and deliver cross-Requirement
     assert.equal(stopped.action, 'stop');
     assert.equal(stopped.runId, activeRunId);
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(manager.getRequirement(startChild.id)?.status, 'doing');
+    assert.equal(manager.getRequirement(startChild.id)?.status, 'waiting_confirmation');
     assert.equal(manager.getRequirement(startChild.id)?.session.state, 'waiting_human');
 
     const deleteResponse = await fetch(

@@ -872,10 +872,15 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
           updated_at = ? WHERE id = ?`)
           .run(outcome.nativeSessionId, run.inputToSequence, now, run.sessionId);
       } else if (outcome.status === 'cancelled') {
+        const hasNewMessages = this.#db.prepare(`SELECT 1 FROM requirement_messages
+          WHERE requirement_id = ? AND deliver_to_rd = 1 AND sequence > COALESCE(?, 0)
+            AND sequence > (SELECT last_consumed_message_sequence FROM agent_sessions WHERE id = ?)
+          LIMIT 1`)
+          .get(run.requirementId, run.inputToSequence, run.sessionId) !== undefined;
         this.#db.prepare("UPDATE agent_sessions SET state = 'waiting_human', last_error = NULL, native_session_id = COALESCE(?, native_session_id), updated_at = ? WHERE id = ?")
           .run(outcome.nativeSessionId, now, run.sessionId);
-        this.#db.prepare("UPDATE requirements SET status = 'doing', updated_at = ? WHERE id = ?")
-          .run(now, run.requirementId);
+        this.#db.prepare('UPDATE requirements SET status = ?, updated_at = ? WHERE id = ?')
+          .run(hasNewMessages ? 'doing' : 'waiting_confirmation', now, run.requirementId);
       } else {
         this.#db.prepare("UPDATE agent_sessions SET state = 'failed', last_error = ?, native_session_id = COALESCE(?, native_session_id), updated_at = ? WHERE id = ?")
           .run(outcome.error ?? `Run ${outcome.status}`, outcome.nativeSessionId, now, run.sessionId);
