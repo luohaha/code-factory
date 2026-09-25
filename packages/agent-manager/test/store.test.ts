@@ -801,6 +801,35 @@ test('an interrupted RD run ignores messages consumed by an earlier run', () => 
   }
 });
 
+for (const status of ['failed', 'timed_out'] as const) {
+  test(`a ${status} RD run leaves its Requirement awaiting confirmation and its Session failed`, () => {
+    const store = new SqliteAgentManagerStore(':memory:');
+    try {
+      store.createRequirement({
+        requirementId: 'req-1', sessionId: 'ses-1', title: 'Requirement',
+        description: 'Description', provider: 'codex', createdBy: 'human', now,
+      });
+      store.beginRun({
+        runId: 'run-1', requirementId: 'req-1', role: 'rd', provider: 'codex',
+        taskSummary: 'start', now,
+      });
+      const stopped = store.finishRdRun('run-1', {
+        status, exitCode: 1, nativeSessionId: 'native-1',
+        finalMessage: null, error: 'Runner stopped unexpectedly',
+      }, '2026-09-10T12:01:00.000Z');
+
+      assert.equal(stopped.status, 'waiting_confirmation');
+      assert.equal(stopped.session.state, 'failed');
+      assert.equal(stopped.session.lastError, 'Runner stopped unexpectedly');
+      assert.equal(store.listRuns('req-1')[0]?.status, status);
+      const confirmed = store.transitionRequirement('req-1', ['waiting_confirmation'], 'done', '2026-09-10T12:02:00.000Z');
+      assert.equal(confirmed.session.state, 'completed');
+    } finally {
+      store.close();
+    }
+  });
+}
+
 test('an open PR starts one ephemeral reviewer without changing its RD session', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {
@@ -1369,9 +1398,58 @@ test('manager restart marks orphaned runs and sessions as failed', () => {
     const result = store.reconcileInterruptedRuns('2026-09-10T12:01:00.000Z');
     assert.deepEqual(result.runIds, ['run-1']);
     assert.equal(store.listRuns('req-1')[0]?.status, 'failed');
+    assert.equal(store.getRequirement('req-1')?.status, 'waiting_confirmation');
     assert.equal(store.getRequirement('req-1')?.session.state, 'failed');
   } finally {
     store.close();
+  }
+});
+
+test('opening an existing database moves settled RD Requirements out of doing', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-settled-status-'));
+  const databasePath = join(directory, 'store.sqlite');
+  try {
+    const initial = new SqliteAgentManagerStore(databasePath);
+    try {
+      for (const id of ['waiting', 'failed', 'running']) {
+        initial.createRequirement({
+          requirementId: `req-${id}`, sessionId: `ses-${id}`, title: id,
+          description: 'Description', provider: 'codex', createdBy: 'human', now,
+        });
+        initial.beginRun({
+          runId: `run-${id}`, requirementId: `req-${id}`, role: 'rd',
+          provider: 'codex', taskSummary: 'start', now,
+        });
+      }
+      initial.finishRdRun('run-waiting', {
+        status: 'succeeded', exitCode: 0, nativeSessionId: 'native-waiting',
+        finalMessage: 'done', error: null,
+      }, '2026-09-10T12:01:00.000Z');
+      initial.finishRdRun('run-failed', {
+        status: 'failed', exitCode: 1, nativeSessionId: 'native-failed',
+        finalMessage: null, error: 'Runner failed',
+      }, '2026-09-10T12:01:00.000Z');
+    } finally {
+      initial.close();
+    }
+
+    const legacy = new DatabaseSync(databasePath);
+    try {
+      legacy.prepare("UPDATE requirements SET status = 'doing' WHERE id IN ('req-waiting', 'req-failed')").run();
+    } finally {
+      legacy.close();
+    }
+
+    const reopened = new SqliteAgentManagerStore(databasePath);
+    try {
+      assert.equal(reopened.getRequirement('req-waiting')?.status, 'waiting_confirmation');
+      assert.equal(reopened.getRequirement('req-failed')?.status, 'waiting_confirmation');
+      assert.equal(reopened.getRequirement('req-running')?.status, 'doing');
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

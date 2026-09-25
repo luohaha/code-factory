@@ -1271,6 +1271,41 @@ test('interrupting an RD Run without a newer message stops instead of immediatel
   }
 });
 
+test('a failed RD Run awaits confirmation while the original Session can be retried', async () => {
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    logger: silentLogger,
+  });
+  try {
+    const requirement = manager.createRequirement({ title: 'Retry', description: 'Initial task', provider: 'codex' });
+    const firstExecution = manager.runRequirement(requirement.id);
+    runner.resolvers[0]?.({
+      status: 'failed', exitCode: 1, nativeSessionId: 'native-thread-1',
+      finalMessage: null, error: 'Runner failed',
+    });
+    const failed = await firstExecution;
+    assert.equal(failed.status, 'waiting_confirmation');
+    assert.equal(failed.session.state, 'failed');
+    assert.equal(failed.session.lastError, 'Runner failed');
+
+    const retry = manager.runRequirement(requirement.id);
+    assert.equal(manager.getRequirement(requirement.id)?.status, 'doing');
+    assert.equal(manager.getRequirement(requirement.id)?.session.state, 'running');
+    runner.resolvers[1]?.({
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'native-thread-1',
+      finalMessage: 'Repaired', error: null,
+    });
+    const finished = await retry;
+    assert.equal(finished.status, 'waiting_confirmation');
+    assert.equal(finished.session.state, 'waiting_human');
+  } finally {
+    manager.close();
+  }
+});
+
 test('RD Agent registration cannot advance an existing PR lifecycle state', () => {
   const manager = new AgentManager({
     workspaceRoot: process.cwd(),

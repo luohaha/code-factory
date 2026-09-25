@@ -634,11 +634,11 @@ Interrupts the current Requirement's RD Run without appending a message. The req
 }
 ~~~
 
-Success: `202 Accepted`. Repeated calls are idempotent while the Run is still exiting. Returns `409 Conflict` when no RD Run is active. If pending messages arrived after the interrupted Run started, Agent Manager automatically resumes the same Session after exit; otherwise the Requirement moves to `waiting_confirmation` and waits for confirmation or a new message.
+Success: `202 Accepted`. Repeated calls are idempotent while the Run is still exiting. Returns `409 Conflict` when no RD Run is active. If pending messages arrived after the interrupted Run started, Agent Manager automatically resumes the same Session after exit; otherwise the Requirement moves to `waiting_confirmation` and waits for confirmation or a new message. Failed and timed-out RD Runs also move the Requirement to `waiting_confirmation` while the Session remains `failed` for inspection and retry.
 
 ### POST /api/requirements/:id/confirm
 
-Moves a Requirement from waiting_confirmation to done and its Session to completed. The request body may be omitted or be an empty object.
+Moves a Requirement from waiting_confirmation to done and its Session to completed. This includes a stopped or failed RD Run when a human has inspected the result and decides the work is complete. The request body may be omitted or be an empty object.
 
 ~~~bash
 curl -X POST http://127.0.0.1:4310/api/requirements/req_.../confirm \
