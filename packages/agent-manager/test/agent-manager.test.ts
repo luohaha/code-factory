@@ -1202,6 +1202,9 @@ test('a Provider quota limit queues Timer and related messages until one shared 
 
     assert.equal(manager.getRequirement(parent.id)?.session.lastConsumedMessageSequence, 0);
     assert.equal(manager.getRequirement(parent.id)?.session.pendingMessageCount, 1);
+    assert.ok(manager.listMessages(parent.id).some((message) =>
+      message.author === 'system'
+      && message.body === "You've hit your session limit · resets soon (UTC)"));
     assert.equal(manager.getRequirement(parent.id)?.providerLimit?.retryAt, retryAt);
     assert.equal(manager.getRequirement(child.id)?.providerLimit?.retryAt, retryAt);
 

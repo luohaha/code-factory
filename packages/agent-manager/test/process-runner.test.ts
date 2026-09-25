@@ -104,6 +104,7 @@ test('HeadlessProcessRunner attaches Provider failure classifications to failed 
   });
 
   assert.equal(outcome.status, 'failed');
+  assert.equal(outcome.error, 'session limit');
   assert.deepEqual(outcome.providerLimit, {
     kind: 'session_limit',
     retryAt: '2099-01-01T00:00:00.000Z',
