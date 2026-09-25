@@ -36,6 +36,66 @@ test('a requirement is created atomically with exactly one RD session', () => {
   }
 });
 
+test('Provider limits and deferred Requirements persist together across Store restarts', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-provider-limit-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const retryAt = '2026-09-10T14:30:00.000Z';
+  const store = new SqliteAgentManagerStore(databasePath);
+  try {
+    for (const suffix of ['one', 'two']) {
+      store.createRequirement({
+        requirementId: `req-${suffix}`,
+        sessionId: `ses-${suffix}`,
+        title: `Requirement ${suffix}`,
+        description: 'Wait for shared quota recovery',
+        provider: 'claude-code',
+        createdBy: 'human',
+        now,
+      });
+    }
+    store.beginRun({
+      runId: 'run-limited',
+      requirementId: 'req-one',
+      role: 'rd',
+      provider: 'claude-code',
+      taskSummary: 'Start RD session',
+      now,
+    });
+    store.finishRdRun('run-limited', {
+      status: 'failed',
+      exitCode: 1,
+      nativeSessionId: null,
+      finalMessage: null,
+      error: 'session limit',
+    }, '2026-09-10T12:01:00.000Z');
+    store.upsertProviderLimit({
+      provider: 'claude-code',
+      requirementId: 'req-one',
+      kind: 'session_limit',
+      retryAt,
+      detectedAt: '2026-09-10T12:01:00.000Z',
+      sourceRunId: 'run-limited',
+    });
+    store.addProviderLimitedRequirement('claude-code', 'req-two');
+  } finally {
+    store.close();
+  }
+
+  const reopened = new SqliteAgentManagerStore(databasePath);
+  try {
+    assert.equal(reopened.getRequirement('req-one')?.providerLimit?.retryAt, retryAt);
+    assert.equal(reopened.getRequirement('req-two')?.providerLimit?.kind, 'session_limit');
+    const deferred = reopened.clearProviderLimit('claude-code', retryAt);
+    assert.ok(deferred);
+    assert.deepEqual(new Set(deferred), new Set(['req-one', 'req-two']));
+    assert.equal(reopened.getRequirement('req-one')?.providerLimit, null);
+    assert.equal(reopened.getRequirement('req-two')?.providerLimit, null);
+  } finally {
+    reopened.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('Agent trace events are derived from the durable Manager event stream', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {

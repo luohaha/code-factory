@@ -58,6 +58,7 @@ import type {
   ManagerEvent,
   MessageAttachment,
   PullRequest,
+  ProviderLimit,
   RelatedRequirements,
   RequirementMessage,
   RequirementWithSession,
@@ -113,6 +114,7 @@ export const MAX_AGENT_TRACE_DETAIL_BYTES = 65_536;
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
 const REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS = DAY_MILLISECONDS;
 const AGENT_TRACE_TRUNCATION_SUFFIX = '\n… trace output truncated';
+const MAX_PROVIDER_RETRY_DELAY_MS = 2_147_483_647;
 
 function truncateAgentTraceDetail(detail: string): string {
   if (Buffer.byteLength(detail) <= MAX_AGENT_TRACE_DETAIL_BYTES) return detail;
@@ -151,6 +153,7 @@ export class AgentManager extends EventEmitter {
   readonly #agentCliBinDirectory: string | null;
   readonly #modelCatalog: AgentModelCatalogService;
   readonly #activeRdRuns = new Map<string, { runId: string; controller: AbortController }>();
+  readonly #providerRetryTimers = new Map<AgentProvider, NodeJS.Timeout>();
   readonly #agentTriggers = new Map<string, AgentTrigger>();
   readonly #pullRequestReconciler: PullRequestReconciler;
   readonly #pullRequestTriggers: readonly PullRequestSnapshotTrigger[];
@@ -340,6 +343,10 @@ export class AgentManager extends EventEmitter {
     this.configurePullRequestReconciler(this.#initialPullRequestReconcileIntervalSeconds);
     this.startRequirementRetentionSweep();
     this.#modelCatalog.start();
+    for (const provider of Object.keys(this.#adapters) as AgentProvider[]) {
+      const limit = this.#store.getProviderLimit(provider);
+      if (limit) this.scheduleProviderLimitRetry(limit);
+    }
   }
 
   listAgentModels(): Promise<AgentModelCatalogSnapshot> {
@@ -354,6 +361,8 @@ export class AgentManager extends EventEmitter {
     this.#pullRequestReconciler.stop();
     if (this.#requirementRetentionTimer) clearInterval(this.#requirementRetentionTimer);
     this.#requirementRetentionTimer = null;
+    for (const timer of this.#providerRetryTimers.values()) clearTimeout(timer);
+    this.#providerRetryTimers.clear();
     for (const trigger of this.#agentTriggers.values()) {
       try {
         trigger.stop();
@@ -655,7 +664,8 @@ export class AgentManager extends EventEmitter {
       sourceSessionId,
       targetRequirementId,
     );
-    return this.runRequirement(target.id);
+    if (target.session.state === 'running') return Promise.resolve(target);
+    return this.startRdRun(target.id, { bypassProviderLimit: false });
   }
 
   deleteProposedRequirement(
@@ -964,6 +974,7 @@ export class AgentManager extends EventEmitter {
     requirementId: string,
     humanMessage?: string,
     attachmentIds: string[] = [],
+    options: { bypassProviderLimit?: boolean } = {},
   ): Promise<RequirementWithSession> {
     const requirement = this.requireRequirement(requirementId);
     if (humanMessage?.trim() || attachmentIds.length > 0) {
@@ -978,7 +989,7 @@ export class AgentManager extends EventEmitter {
     }
     const current = this.requireRequirement(requirementId);
     if (current.session.state === 'running') return Promise.resolve(current);
-    return this.startRdRun(requirementId);
+    return this.startRdRun(requirementId, { bypassProviderLimit: options.bypassProviderLimit ?? true });
   }
 
   postHumanMessage(
@@ -1009,7 +1020,7 @@ export class AgentManager extends EventEmitter {
     }
     const queued = current.session.state === 'running';
     if (!queued) {
-      void this.startRdRun(requirementId).catch((error: unknown) => {
+      void this.startRdRun(requirementId, { bypassProviderLimit: true }).catch((error: unknown) => {
         this.logger.error('RD run failed unexpectedly', { requirementId, error });
       });
     }
@@ -1052,9 +1063,10 @@ export class AgentManager extends EventEmitter {
         sourceRequirementId: source.id,
       });
     }
-    const queued = current.session.state === 'running';
-    if (!queued) {
-      void this.startRdRun(target.id).catch((error: unknown) => {
+    const providerLimited = this.activeProviderLimit(current.provider) !== null;
+    const queued = current.session.state === 'running' || providerLimited;
+    if (current.session.state !== 'running') {
+      void this.startRdRun(target.id, { bypassProviderLimit: false }).catch((error: unknown) => {
         this.logger.error('RD run failed unexpectedly', { requirementId: target.id, error });
       });
     }
@@ -1218,9 +1230,28 @@ export class AgentManager extends EventEmitter {
     return current;
   }
 
-  private startRdRun(requirementId: string): Promise<RequirementWithSession> {
+  private startRdRun(
+    requirementId: string,
+    options: { bypassProviderLimit: boolean } = { bypassProviderLimit: false },
+  ): Promise<RequirementWithSession> {
     const startedAt = performance.now();
     const requirement = this.requireRequirement(requirementId);
+    if (requirement.status === 'done' || requirement.status === 'cancelled') {
+      throw new StoreConflictError(`Requirement ${requirementId} is already ${requirement.status}`);
+    }
+    const providerLimitAtStart = this.activeProviderLimit(requirement.provider);
+    if (providerLimitAtStart && !options.bypassProviderLimit) {
+      this.#store.addProviderLimitedRequirement(requirement.provider, requirementId);
+      this.scheduleProviderLimitRetry(providerLimitAtStart);
+      this.logger.info('RD run deferred until Provider limit resets', {
+        requirementId,
+        sessionId: requirement.session.id,
+        provider: requirement.provider,
+        providerLimitKind: providerLimitAtStart.kind,
+        retryAt: providerLimitAtStart.retryAt,
+      });
+      return Promise.resolve(this.requireRequirement(requirementId));
+    }
     const pendingMessages = this.#store.listPendingRdMessages(requirementId);
     const runId = `run_${randomUUID()}`;
     const isResume = requirement.session.nativeSessionId !== null;
@@ -1252,7 +1283,7 @@ export class AgentManager extends EventEmitter {
       sessionId: started.session.id,
       runId,
       payload: {
-        requirement: { ...started.requirement, session: started.session },
+        requirement: { ...started.requirement, session: started.session, providerLimit: providerLimitAtStart },
         run: started.run,
         role: 'rd',
         provider: requirement.provider,
@@ -1320,7 +1351,37 @@ export class AgentManager extends EventEmitter {
     }).then((outcome) => {
       const active = this.#activeRdRuns.get(requirementId);
       if (active?.runId === runId) this.#activeRdRuns.delete(requirementId);
-      const current = this.#store.finishRdRun(runId, outcome, new Date().toISOString());
+      const finishedAt = new Date().toISOString();
+      let current = this.#store.finishRdRun(runId, outcome, finishedAt);
+      if (outcome.status === 'failed' && outcome.providerLimit
+        && Date.parse(outcome.providerLimit.retryAt) > Date.parse(finishedAt)) {
+        const providerLimit = this.#store.upsertProviderLimit({
+          provider: requirement.provider,
+          requirementId,
+          kind: outcome.providerLimit.kind,
+          retryAt: outcome.providerLimit.retryAt,
+          detectedAt: finishedAt,
+          sourceRunId: runId,
+        });
+        this.scheduleProviderLimitRetry(providerLimit);
+        this.publishProviderLimitChange('provider.limit.detected', providerLimit);
+        this.logger.warn('Provider limit detected', {
+          provider: providerLimit.provider,
+          providerLimitKind: providerLimit.kind,
+          retryAt: providerLimit.retryAt,
+          requirementId,
+          runId,
+        });
+        current = this.requireRequirement(requirementId);
+      } else if (outcome.status === 'succeeded' && providerLimitAtStart && options.bypassProviderLimit) {
+        this.#store.removeProviderLimitedRequirement(requirement.provider, requirementId);
+        this.clearProviderLimitAndResume(
+          requirement.provider,
+          providerLimitAtStart.retryAt,
+          'manual_retry_succeeded',
+        );
+        current = this.requireRequirement(requirementId);
+      }
       if (outcome.status !== 'succeeded') {
         this.appendMessage({
           requirementId,
@@ -1345,10 +1406,81 @@ export class AgentManager extends EventEmitter {
       if (!current) return;
       if (current.status === 'done' || current.status === 'cancelled' || current.session.state === 'running') return;
       if (!this.#store.listPendingRdMessages(requirementId).some((message) => message.sequence > afterSequence)) return;
-      void this.startRdRun(requirementId).catch((error: unknown) => {
+      void this.startRdRun(requirementId, { bypassProviderLimit: false }).catch((error: unknown) => {
         this.logger.error('RD run failed unexpectedly', { requirementId, error });
       });
     });
+  }
+
+  private activeProviderLimit(provider: AgentProvider): ProviderLimit | null {
+    const limit = this.#store.getProviderLimit(provider);
+    if (!limit) return null;
+    if (Date.parse(limit.retryAt) > Date.now()) return limit;
+    this.clearProviderLimitAndResume(provider, limit.retryAt, 'reset_time_reached');
+    return null;
+  }
+
+  private scheduleProviderLimitRetry(limit: ProviderLimit): void {
+    const existing = this.#providerRetryTimers.get(limit.provider);
+    if (existing) clearTimeout(existing);
+    const target = Date.parse(limit.retryAt);
+    const delay = Math.min(
+      MAX_PROVIDER_RETRY_DELAY_MS,
+      Math.max(0, Number.isFinite(target) ? target - Date.now() : 0),
+    );
+    const timer = setTimeout(() => {
+      this.#providerRetryTimers.delete(limit.provider);
+      if (this.#closed) return;
+      const current = this.#store.getProviderLimit(limit.provider);
+      if (!current) return;
+      if (current.retryAt !== limit.retryAt || Date.parse(current.retryAt) > Date.now()) {
+        this.scheduleProviderLimitRetry(current);
+        return;
+      }
+      this.clearProviderLimitAndResume(limit.provider, limit.retryAt, 'reset_time_reached');
+    }, delay);
+    timer.unref();
+    this.#providerRetryTimers.set(limit.provider, timer);
+  }
+
+  private clearProviderLimitAndResume(
+    provider: AgentProvider,
+    expectedRetryAt: string,
+    reason: 'reset_time_reached' | 'manual_retry_succeeded',
+  ): void {
+    const deferredRequirementIds = this.#store.clearProviderLimit(provider, expectedRetryAt);
+    if (!deferredRequirementIds) return;
+    const timer = this.#providerRetryTimers.get(provider);
+    if (timer) clearTimeout(timer);
+    this.#providerRetryTimers.delete(provider);
+    const providerRequirements = this.#store.listRequirements()
+      .filter((requirement) => requirement.provider === provider);
+    const requirementIds = providerRequirements.map((requirement) => requirement.id);
+    this.publish({
+      type: 'provider.limit.cleared',
+      payload: { provider, expectedRetryAt, reason, requirementIds },
+    });
+    this.logger.info('Provider limit cleared', { provider, expectedRetryAt, reason, requirementIds });
+    const deferred = new Set(deferredRequirementIds);
+    queueMicrotask(() => {
+      for (const requirement of providerRequirements) {
+        const current = this.#store.getRequirement(requirement.id);
+        if (!current || current.status === 'done' || current.status === 'cancelled'
+          || current.session.state === 'running') continue;
+        const hasPendingMessages = this.#store.listPendingRdMessages(current.id).length > 0;
+        if (!hasPendingMessages && !deferred.has(current.id)) continue;
+        void this.startRdRun(current.id, { bypassProviderLimit: false }).catch((error: unknown) => {
+          this.logger.error('RD run failed unexpectedly', { requirementId: current.id, error });
+        });
+      }
+    });
+  }
+
+  private publishProviderLimitChange(type: 'provider.limit.detected', providerLimit: ProviderLimit): void {
+    const requirementIds = this.#store.listRequirements()
+      .filter((requirement) => requirement.provider === providerLimit.provider)
+      .map((requirement) => requirement.id);
+    this.publish({ type, payload: { providerLimit, requirementIds } });
   }
 
   private triggerContext(trigger: AgentTrigger, activeOnly = false): AgentTriggerContext {

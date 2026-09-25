@@ -154,6 +154,19 @@ void test('does not let a running Run snapshot overwrite its completed state', (
   assert.deepEqual(upsertRun(completed, stale), completed);
 });
 
+void test('Provider limit changes refresh every Requirement because the limit is Provider-wide', () => {
+  assert.deepEqual(
+    refreshTargetsForManagerEvent(managerEvent('provider.limit.detected', {
+      requirementIds: ['requirement-1', 'requirement-2'],
+    }, null)),
+    [{ scope: 'requirements' }],
+  );
+  assert.deepEqual(
+    refreshTargetsForManagerEvent(managerEvent('provider.limit.cleared', {}, null)),
+    [{ scope: 'requirements' }],
+  );
+});
+
 void test('rejects cross-Requirement rows from a targeted Run refresh', () => {
   const current = [
     { id: 'run-2', requirementId: 'requirement-2', startedAt: '2026-09-18T02:00:00.000Z' },

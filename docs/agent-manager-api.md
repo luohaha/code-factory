@@ -103,10 +103,19 @@ interface Requirement {
   updatedAt: string;
   completedAt: string | null;
   session: AgentSession;
+  providerLimit: ProviderLimit | null;
+}
+
+interface ProviderLimit {
+  provider: 'codex' | 'claude-code';
+  kind: 'session_limit';
+  retryAt: string;
+  detectedAt: string;
+  sourceRunId: string | null;
 }
 ~~~
 
-Requirement query and creation responses always embed the uniquely bound session.
+Requirement query and creation responses always embed the uniquely bound session. `providerLimit` is shared by Requirements using that Provider and is non-null while automatic RD wake-ups are paused until `retryAt`.
 
 ### 3.2 AgentSession
 
@@ -572,13 +581,13 @@ Success: 202 Accepted
 }
 ~~~
 
-requirement is the persisted Requirement/Session state after acceptance. run is the active RD Run, or null if no Run is active. message is the persisted optional input, or null when the request supplied neither text nor attachments. These fields let clients render acceptance without waiting for unrelated workspace queries. Acceptance does not mean the background Run has completed. If the Session is already running, the endpoint still returns 202; optional input is queued for the next Run and no second concurrent RD Run is started. Track completion through SSE or the Run and Session query endpoints.
+requirement is the persisted Requirement/Session state after acceptance. run is the active RD Run, or null if no Run is active. message is the persisted optional input, or null when the request supplied neither text nor attachments. These fields let clients render acceptance without waiting for unrelated workspace queries. Acceptance does not mean the background Run has completed. If the Session is already running, the endpoint still returns 202; optional input is queued for the next Run and no second concurrent RD Run is started. A human start is an explicit immediate attempt and may bypass an active `providerLimit`. Track completion through SSE or the Run and Session query endpoints.
 
 Returns 404 for an unknown Requirement and 409 Conflict for a done or cancelled Requirement.
 
 ### POST /api/requirements/:id/reply
 
-Appends a human message to the Requirement conversation. An idle Session automatically starts an RD Run. A running Session always queues the message without interruption. Replying to a done Requirement changes it back to doing, clears completedAt, and starts a new Run in the original RD Session. Call the interrupt endpoint separately to stop the current Run.
+Appends a human message to the Requirement conversation. An idle Session automatically starts an RD Run, including an explicit immediate attempt while `providerLimit` is active. A successful immediate attempt clears that Provider pause early. A running Session always queues the message without interruption. Replying to a done Requirement changes it back to doing, clears completedAt, and starts a new Run in the original RD Session. Call the interrupt endpoint separately to stop the current Run.
 
 Request body:
 
@@ -857,7 +866,7 @@ Success: 200 OK. Returns 404 for an unknown source Requirement and 400 when the 
 
 ### POST /api/agent/requirements/:sourceRequirementId/related/:targetRequirementId/messages
 
-Persists an RD Agent message in a direct parent or child Requirement and starts or queues the target RD Session.
+Persists an RD Agent message in a direct parent or child Requirement and starts or queues the target RD Session. While that Provider has an active `providerLimit`, the message stays pending without starting a Run until `retryAt`.
 
 ~~~json
 {
@@ -866,7 +875,7 @@ Persists an RD Agent message in a direct parent or child Requirement and starts 
 }
 ~~~
 
-Success: 202 Accepted with `accepted`, source and target IDs, `queued`, the persisted `message`, and the current target `requirement`. The message has `author=rd_agent`, `sourceRequirementId` equal to the source, and `deliverToRd=true`. A DONE target is reactivated in its original Session. Returns 400 for invalid input or mismatched source Session, 404 for an unknown source or target, and 409 for an unrelated or CANCELLED target.
+Success: 202 Accepted with `accepted`, source and target IDs, `queued`, the persisted `message`, and the current target `requirement`. The message has `author=rd_agent`, `sourceRequirementId` equal to the source, and `deliverToRd=true`. queued is true when the target Run is active or its Provider is quota-limited. A DONE target is reactivated in its original Session. Returns 400 for invalid input or mismatched source Session, 404 for an unknown source or target, and 409 for an unrelated or CANCELLED target.
 
 ## 8. SSE event stream
 
@@ -924,6 +933,8 @@ Current event types and primary payloads:
 | manager.reconciled | runIds and requirementIds repaired at startup |
 | manager.configuration.updated | configuration snapshot, changedFields, appliedFields, restartRequired, restartRequiredFields |
 | agent_models.updated | modelCatalog plus provider refresh timestamps and stale flags |
+| provider.limit.detected | providerLimit and every Requirement ID using that Provider |
+| provider.limit.cleared | provider, expectedRetryAt, clear reason, and every Requirement ID using that Provider |
 
 Resource-bearing payloads are persisted before publication. Clients may idempotently upsert them by resource ID and resource update time instead of reloading the workspace. A client talking to an older server may use the event identifiers to refresh only the affected Requirement, Run, PR, ReviewRequest, or Timer. Clients should store the last successfully processed event ID and pass it as `after` when reconnecting. EventSource reconnections can use the standard `Last-Event-ID` request header instead; when both are present, the `after` query parameter takes precedence. A connection without a valid cursor receives only events published after it connects. A connection with a valid non-negative integer cursor replays at most 200 existing events before continuing with live events.
 

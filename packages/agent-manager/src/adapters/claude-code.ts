@@ -8,6 +8,86 @@ import type {
   RdInvocationInput,
   ReviewInvocationInput,
 } from './types.js';
+import type { ProviderLimitClassification } from '../types.js';
+
+const SESSION_LIMIT_PATTERN = /\bsession limit\b[\s\S]*?\bresets\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)/i;
+
+function zonedParts(value: Date, timeZone: string): Record<string, number> {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(value);
+  return Object.fromEntries(parts.flatMap((part) => {
+    const number = Number(part.value);
+    return Number.isFinite(number) ? [[part.type, number]] : [];
+  }));
+}
+
+function instantForZonedTime(
+  date: { year: number; month: number; day: number },
+  time: { hour: number; minute: number },
+  timeZone: string,
+): Date | null {
+  const desiredAsUtc = Date.UTC(date.year, date.month - 1, date.day, time.hour, time.minute);
+  let instant = desiredAsUtc;
+  try {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const actual = zonedParts(new Date(instant), timeZone);
+      const actualAsUtc = Date.UTC(
+        actual.year!, actual.month! - 1, actual.day!, actual.hour!, actual.minute!,
+      );
+      const adjustment = desiredAsUtc - actualAsUtc;
+      instant += adjustment;
+      if (adjustment === 0) break;
+    }
+    const result = new Date(instant);
+    const actual = zonedParts(result, timeZone);
+    return actual.year === date.year && actual.month === date.month && actual.day === date.day
+      && actual.hour === time.hour && actual.minute === time.minute
+      ? result
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function nextLocalDate(date: { year: number; month: number; day: number }): typeof date {
+  const next = new Date(Date.UTC(date.year, date.month - 1, date.day + 1));
+  return { year: next.getUTCFullYear(), month: next.getUTCMonth() + 1, day: next.getUTCDate() };
+}
+
+export function classifyClaudeCodeFailure(error: string, observedAt: Date): ProviderLimitClassification | null {
+  const match = error.match(SESSION_LIMIT_PATTERN);
+  if (!match) return null;
+  const rawHour = Number(match[1]);
+  const minute = Number(match[2] ?? '0');
+  const period = match[3]?.toLowerCase();
+  const timeZone = match[4]?.trim();
+  if (!Number.isInteger(rawHour) || rawHour < 1 || rawHour > 12
+    || !Number.isInteger(minute) || minute < 0 || minute > 59 || !period || !timeZone) return null;
+  const hour = rawHour % 12 + (period === 'pm' ? 12 : 0);
+  let localDate: { year: number; month: number; day: number };
+  try {
+    const observed = zonedParts(observedAt, timeZone);
+    localDate = { year: observed.year!, month: observed.month!, day: observed.day! };
+  } catch {
+    return null;
+  }
+  let retryAt = instantForZonedTime(localDate, { hour, minute }, timeZone);
+  if (!retryAt) return null;
+  if (retryAt.getTime() <= observedAt.getTime()) {
+    retryAt = instantForZonedTime(nextLocalDate(localDate), { hour, minute }, timeZone);
+  }
+  return retryAt && retryAt.getTime() > observedAt.getTime()
+    ? { kind: 'session_limit', retryAt: retryAt.toISOString() }
+    : null;
+}
 
 function assistantText(value: unknown): string | undefined {
   if (typeof value === 'string') return value;
@@ -126,6 +206,10 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       ],
       input: input.prompt,
     };
+  }
+
+  classifyFailure(error: string, observedAt: Date): ProviderLimitClassification | null {
+    return classifyClaudeCodeFailure(error, observedAt);
   }
 
   parseLine(line: string): NormalizedAgentEvent | null {

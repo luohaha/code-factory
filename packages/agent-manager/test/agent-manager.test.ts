@@ -1162,6 +1162,160 @@ test('the native Timer Agent Trigger wakes an idle RD session with timer context
   }
 });
 
+test('a Provider quota limit queues Timer and related messages until one shared reset', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
+  try {
+    const parent = manager.createRequirement({
+      title: 'Quota-limited parent',
+      description: 'Resume after the shared Provider quota resets',
+      provider: 'claude-code',
+    });
+    const child = manager.createRequirement({
+      title: 'Quota-limited child',
+      description: 'Receive a related Requirement message during the pause',
+      provider: 'claude-code',
+      createdBy: 'rd_agent',
+      parentRequirementId: parent.id,
+      sourceSessionId: parent.session.id,
+    });
+    const proposed = manager.createRequirement({
+      title: 'Deferred proposed child',
+      description: 'Remember an Agent-requested start without a conversation message',
+      provider: 'claude-code',
+      createdBy: 'rd_agent',
+      parentRequirementId: parent.id,
+      sourceSessionId: parent.session.id,
+    });
+    const execution = manager.runRequirement(parent.id, 'Keep this input pending.');
+    const retryAt = new Date(Date.now() + 1_500).toISOString();
+    runner.resolvers[0]?.({
+      status: 'failed',
+      exitCode: 1,
+      nativeSessionId: 'claude-session',
+      finalMessage: null,
+      error: "You've hit your session limit · resets soon (UTC)",
+      providerLimit: { kind: 'session_limit', retryAt },
+    });
+    await execution;
+
+    assert.equal(manager.getRequirement(parent.id)?.session.lastConsumedMessageSequence, 0);
+    assert.equal(manager.getRequirement(parent.id)?.session.pendingMessageCount, 1);
+    assert.equal(manager.getRequirement(parent.id)?.providerLimit?.retryAt, retryAt);
+    assert.equal(manager.getRequirement(child.id)?.providerLimit?.retryAt, retryAt);
+
+    const related = manager.postRelatedRequirementMessage(
+      parent.id,
+      parent.session.id,
+      child.id,
+      'Process this after quota recovery.',
+    );
+    assert.equal(related.queued, true);
+    await manager.startProposedRequirement(parent.id, parent.session.id, proposed.id);
+    assert.equal(runner.requests.length, 1);
+
+    const scheduledFor = new Date(Date.now() - 1_000).toISOString();
+    store.createAgentTimer({
+      id: 'tmr-quota-due',
+      requirementId: parent.id,
+      description: 'Retry the parent check',
+      schedule: 'once',
+      intervalSeconds: 60,
+      nextFireAt: scheduledFor,
+      now: scheduledFor,
+    });
+    manager.startConfiguredServices();
+    const deliveryDeadline = Date.now() + 750;
+    while (!manager.listMessages(parent.id).some((message) => message.body.startsWith('Timer fired.'))
+      && Date.now() < deliveryDeadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    }
+    assert.ok(manager.listMessages(parent.id).some((message) => message.body.startsWith('Timer fired.')));
+    assert.equal(runner.requests.length, 1);
+
+    const retryDeadline = Date.now() + 3_000;
+    while (runner.requests.length < 4 && Date.now() < retryDeadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(runner.requests.length, 4);
+    assert.deepEqual(
+      new Set(runner.requests.slice(1).map((request) => request.environment?.[CODE_FACTORY_REQUIREMENT_ID])),
+      new Set([parent.id, child.id, proposed.id]),
+    );
+    assert.equal(manager.getRequirement(parent.id)?.providerLimit, null);
+    assert.equal(manager.getRequirement(child.id)?.providerLimit, null);
+    assert.equal(manager.getRequirement(parent.id)?.session.lastConsumedMessageSequence, 0);
+    assert.match(
+      runner.requests.slice(1).find((request) => request.environment?.[CODE_FACTORY_REQUIREMENT_ID] === parent.id)?.invocation.input ?? '',
+      /Keep this input pending[\s\S]*Timer ID: tmr-quota-due/,
+    );
+    assert.match(
+      runner.requests.slice(1).find((request) => request.environment?.[CODE_FACTORY_REQUIREMENT_ID] === child.id)?.invocation.input ?? '',
+      /Process this after quota recovery/,
+    );
+
+    for (const resolve of runner.resolvers.slice(1)) {
+      resolve({ status: 'succeeded', exitCode: 0, nativeSessionId: null, finalMessage: 'done', error: null });
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  } finally {
+    await manager.close();
+  }
+});
+
+test('a human can retry immediately during a Provider quota pause without consuming input twice', async () => {
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    logger: silentLogger,
+  });
+  try {
+    const requirement = manager.createRequirement({
+      title: 'Manual quota retry',
+      description: 'Allow an explicit retry before the reset time',
+      provider: 'claude-code',
+    });
+    const first = manager.runRequirement(requirement.id, 'Preserve this message.');
+    const retryAt = new Date(Date.now() + 60_000).toISOString();
+    runner.resolvers[0]?.({
+      status: 'failed',
+      exitCode: 1,
+      nativeSessionId: 'claude-session',
+      finalMessage: null,
+      error: "You've hit your session limit · resets later (UTC)",
+      providerLimit: { kind: 'session_limit', retryAt },
+    });
+    await first;
+
+    assert.equal(manager.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, 0);
+    const manualRetry = manager.runRequirement(requirement.id);
+    assert.equal(runner.requests.length, 2);
+    assert.match(runner.requests[1]?.invocation.input ?? '', /Preserve this message/);
+    runner.resolvers[1]?.({
+      status: 'succeeded',
+      exitCode: 0,
+      nativeSessionId: 'claude-session',
+      finalMessage: 'Recovered early',
+      error: null,
+    });
+    await manualRetry;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(manager.getRequirement(requirement.id)?.providerLimit, null);
+    assert.equal(manager.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, 1);
+    assert.equal(manager.getRequirement(requirement.id)?.session.pendingMessageCount, 0);
+    assert.equal(runner.requests.length, 2);
+    assert.ok(manager.listEvents().some((event) => event.type === 'provider.limit.detected'));
+    assert.ok(manager.listEvents().some((event) => event.type === 'provider.limit.cleared'
+      && event.payload.reason === 'manual_retry_succeeded'));
+  } finally {
+    await manager.close();
+  }
+});
+
 test('a pluggable Agent Trigger delivers, deduplicates, and wakes the target RD session', async () => {
   const runner = new DeferredRunner();
   const manager = new AgentManager({

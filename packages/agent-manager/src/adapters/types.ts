@@ -3,6 +3,7 @@ import type {
   AgentReasoningEffort,
   AgentTraceKind,
   AgentTraceStatus,
+  ProviderLimitClassification,
 } from '../types.js';
 
 export interface AgentInvocation {
@@ -50,4 +51,5 @@ export interface AgentAdapter {
   buildRdInvocation(input: RdInvocationInput): AgentInvocation;
   buildReviewInvocation(input: ReviewInvocationInput): AgentInvocation;
   parseLine(line: string): NormalizedAgentEvent | null;
+  classifyFailure?(error: string, observedAt: Date): ProviderLimitClassification | null;
 }

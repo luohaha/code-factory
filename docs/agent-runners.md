@@ -130,6 +130,12 @@ claude --print --output-format stream-json --verbose \
 
 Claude Reviewers also run as ordinary headless Agents instead of invoking `/review`. They receive `Review GitHub PR <url>` through stdin. `--no-session-persistence` prevents them from becoming long-lived Sessions.
 
+### Provider quota recovery
+
+The Claude Code adapter recognizes session-quota failures that include a reset clock time and IANA time zone, converts that value to an absolute ISO timestamp, and returns a normalized `session_limit` classification with the failed Run. Agent Manager persists one Provider-wide limit plus the Requirements deferred by it. Requirement responses and the dashboard expose the reset time.
+
+The failed Run remains failed and does not advance `lastConsumedMessageSequence`. Until the reset, Timer, other Agent Trigger, related-Requirement, and RD-proposed automatic starts persist their normal messages or start intent but do not launch another Run for the limited Provider. Other Providers continue independently. At the reset—or after an explicit human start/reply succeeds early—the limit is cleared and each eligible Requirement resumes once with its full ordered pending input. The persisted pause and deferred Requirement set survive Agent Manager restarts.
+
 The model and reasoning flags shown above are optional. RD choices are stored on the Requirement and applied again when its native Session resumes. A human may change or clear those choices in the dashboard only while the Requirement is still TODO; the Agent CLI does not expose that mutation. Reviewer choices are stored on both the ReviewRequest and AgentRun so each review can use a different configuration.
 
 Codex and Claude Code share the same Reviewer system/developer instructions: inspect the target PR through the GitHub CLI/API, record the head SHA at the start and verify it again before publishing, publish GitHub review comments, and do not modify the shared workspace. Agent Manager still captures `ReviewRequest.targetHeadSha` internally when the review is requested; it does not need to appear in the task prompt.

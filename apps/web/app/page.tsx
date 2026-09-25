@@ -344,6 +344,21 @@ function formatTime(value: string, locale: 'en' | 'zh-CN'): string {
   }).format(new Date(value));
 }
 
+function ProviderLimitNotice({ requirement }: { requirement: RequirementDto }) {
+  const { locale, t } = useI18n();
+  const limit = requirement.providerLimit;
+  if (!limit || requirement.status === 'done' || requirement.status === 'cancelled') return null;
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/8 px-2.5 py-2 text-[10px] leading-4 text-amber-800 dark:text-amber-200">
+      <Clock3 className="mt-0.5 size-3 shrink-0" />
+      <span>{t('{provider} session quota is exhausted. Automatic wake-ups are paused until {time}.', {
+        provider: providerLabel(limit.provider),
+        time: formatTime(limit.retryAt, locale),
+      })}</span>
+    </div>
+  );
+}
+
 function isWithinTimeRange(value: string, timeRange: TimeRange, now: number): boolean {
   if (timeRange === 'all') return true;
   const timestamp = new Date(value).getTime();
@@ -662,7 +677,9 @@ function RequirementCard({
         </button>
       ) : null}
 
-      {requirement.session.lastError ? (
+      {requirement.providerLimit ? (
+        <div className="mt-3"><ProviderLimitNotice requirement={requirement} /></div>
+      ) : requirement.session.lastError ? (
         <div className="mt-3 flex items-start gap-2 rounded-lg bg-rose-500/8 px-2.5 py-2 text-[10px] leading-4 text-rose-700 dark:text-rose-300">
           <TriangleAlert className="mt-0.5 size-3 shrink-0" />{requirement.session.lastError}
         </div>
@@ -715,6 +732,7 @@ function SessionCard({ requirement, run, busy, onOpen, onRetry }: {
   onRetry: () => void;
 }) {
   const { t } = useI18n();
+  const canRetry = requirement.session.state === 'failed' || requirement.session.pendingMessageCount > 0;
   return (
     <article className="rounded-xl border border-border/80 bg-card p-3.5">
       <button type="button" className="block w-full text-left" onClick={onOpen}>
@@ -731,10 +749,13 @@ function SessionCard({ requirement, run, busy, onOpen, onRetry }: {
         {requirement.session.pendingMessageCount > 0 ? (
           <p className="mt-2 text-[10px] font-medium text-amber-600">{t('{count} external messages pending', { count: requirement.session.pendingMessageCount })}</p>
         ) : null}
+        {requirement.providerLimit ? (
+          <div className="mt-2"><ProviderLimitNotice requirement={requirement} /></div>
+        ) : null}
       </button>
-      {requirement.session.lastError ? (
-        <Button size="xs" variant="destructive" className="mt-3 w-full" disabled={busy} onClick={onRetry}>
-          {busy ? <LoaderCircle className="animate-spin" /> : <RotateCcw data-icon="inline-start" />}{t('Retry original Session')}
+      {requirement.session.lastError || (requirement.providerLimit && canRetry) ? (
+        <Button size="xs" variant={requirement.providerLimit ? 'outline' : 'destructive'} className="mt-3 w-full" disabled={busy} onClick={onRetry}>
+          {busy ? <LoaderCircle className="animate-spin" /> : <RotateCcw data-icon="inline-start" />}{t(requirement.providerLimit ? 'Retry now' : 'Retry original Session')}
         </Button>
       ) : null}
     </article>
@@ -1964,6 +1985,7 @@ function RequirementDetail({
   detailMode,
   onOpenChange,
   onStart,
+  onRetry,
   onUpdateAgentConfiguration,
   onReply,
   onDelete,
@@ -1990,6 +2012,7 @@ function RequirementDetail({
   detailMode: RequirementDetailMode;
   onOpenChange: (open: boolean) => void;
   onStart: (message?: string, attachments?: File[]) => Promise<void>;
+  onRetry: () => Promise<void>;
   onUpdateAgentConfiguration: (input: RequirementAgentConfigurationUpdate) => Promise<void>;
   onReply: (message: string, attachments?: File[]) => Promise<void>;
   onDelete: () => void;
@@ -2218,6 +2241,19 @@ function RequirementDetail({
               />
             ) : (
               <>
+            {requirement.providerLimit && requirement.status !== 'done' && requirement.status !== 'cancelled' ? (
+              <section className="mb-5 rounded-xl border border-amber-500/20 bg-amber-500/8 px-4 py-3.5 text-amber-900 dark:text-amber-100">
+                <ProviderLimitNotice requirement={requirement} />
+                <div className="mt-2 flex items-center justify-between gap-3 text-[10px]">
+                  <span>{t('A manual retry can run immediately and will clear the pause if it succeeds.')}</span>
+                  {(requirement.session.state === 'failed' || requirement.session.pendingMessageCount > 0) ? (
+                    <Button size="xs" variant="outline" className="shrink-0" disabled={busy} onClick={() => void onRetry().catch(() => undefined)}>
+                      {busy ? <LoaderCircle className="animate-spin" /> : <RotateCcw data-icon="inline-start" />}{t('Retry now')}
+                    </Button>
+                  ) : null}
+                </div>
+              </section>
+            ) : null}
             <section className="rounded-xl border border-border/80 bg-card px-4 py-3.5">
               <p className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Requirement description')}</p>
               <div className="mt-1.5 text-xs leading-5">
@@ -3590,6 +3626,11 @@ function Dashboard() {
             const attachmentIds = await uploadMessageAttachments(selectedRequirement.id, attachments);
             return await client.startRequirement(selectedRequirement.id, message, attachmentIds);
           },
+          applyRequirementAction,
+        ).then(() => undefined) : Promise.resolve()}
+        onRetry={() => selectedRequirement ? runAction(
+          selectedRequirement.id,
+          () => client.retryRequirement(selectedRequirement.id),
           applyRequirementAction,
         ).then(() => undefined) : Promise.resolve()}
         onUpdateAgentConfiguration={(configuration) => selectedRequirement ? runAction(

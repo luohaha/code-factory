@@ -15,6 +15,8 @@ import type {
   AgentTimerSchedule,
   SearchResult,
   PullRequestStatus,
+  ProviderLimit,
+  ProviderLimitKind,
   RequirementCreator,
   RequirementStatus,
   RequirementWithSession,
@@ -169,6 +171,15 @@ export interface CompleteAgentTimerOccurrenceRecord {
   now: string;
 }
 
+export interface UpsertProviderLimitRecord {
+  provider: AgentProvider;
+  requirementId: string;
+  kind: ProviderLimitKind;
+  retryAt: string;
+  detectedAt: string;
+  sourceRunId: string;
+}
+
 /** Business-level persistence contract; PostgreSQL can implement this without leaking SQL upward. */
 export interface AgentManagerStore {
   close(): void;
@@ -196,6 +207,11 @@ export interface AgentManagerStore {
   listAgentTimers(requirementId?: string): AgentTimer[];
   completeAgentTimerOccurrence(input: CompleteAgentTimerOccurrenceRecord): AgentTimer | null;
   cancelAgentTimer(id: string, now: string): AgentTimer;
+  getProviderLimit(provider: AgentProvider): ProviderLimit | null;
+  upsertProviderLimit(input: UpsertProviderLimitRecord): ProviderLimit;
+  addProviderLimitedRequirement(provider: AgentProvider, requirementId: string): void;
+  removeProviderLimitedRequirement(provider: AgentProvider, requirementId: string): void;
+  clearProviderLimit(provider: AgentProvider, expectedRetryAt: string): string[] | null;
   /** Lowercase repository keys; preserve existing PR identity across case variants. */
   upsertPullRequest(input: UpsertPullRequestRecord): PullRequest;
   getPullRequest(id: string): PullRequest | null;

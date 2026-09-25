@@ -20,4 +20,6 @@ export const MANAGER_EVENT_TYPES = [
   'manager.reconciled',
   'manager.configuration.updated',
   'agent_models.updated',
+  'provider.limit.detected',
+  'provider.limit.cleared',
 ] as const;

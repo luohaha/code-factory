@@ -75,6 +75,29 @@ test('Claude Code persists RD sessions but not reviewer sessions', () => {
   assert.doesNotMatch(review.input, /^\/review/);
 });
 
+test('Claude Code classifies session quota failures with an absolute reset time', () => {
+  const adapter = new ClaudeCodeAdapter();
+  assert.deepEqual(
+    adapter.classifyFailure(
+      "You've hit your session limit · resets 2:30pm (Asia/Shanghai)",
+      new Date('2026-09-23T03:12:31.000Z'),
+    ),
+    { kind: 'session_limit', retryAt: '2026-09-23T06:30:00.000Z' },
+  );
+  assert.deepEqual(
+    adapter.classifyFailure(
+      "You've hit your session limit · resets 2:30pm (Asia/Shanghai)",
+      new Date('2026-09-23T07:12:31.000Z'),
+    ),
+    { kind: 'session_limit', retryAt: '2026-09-24T06:30:00.000Z' },
+  );
+  assert.equal(adapter.classifyFailure('Authentication failed', new Date()), null);
+  assert.equal(adapter.classifyFailure(
+    "You've hit your session limit · resets later (Asia/Shanghai)",
+    new Date(),
+  ), null);
+});
+
 test('adapters normalize native session identifiers', () => {
   const codex = new CodexAdapter().parseLine('{"type":"thread.started","thread_id":"codex-1"}');
   const claude = new ClaudeCodeAdapter().parseLine('{"type":"system","subtype":"init","session_id":"claude-1"}');

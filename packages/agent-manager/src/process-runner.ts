@@ -131,7 +131,15 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
           return;
         }
         const detail = protocolError || stderr.trim() || `terminated by ${signal ?? 'unknown signal'}`;
-        resolve({ status: 'failed', exitCode: code, nativeSessionId, finalMessage, error: detail });
+        const providerLimit = request.adapter.classifyFailure?.(detail, new Date());
+        resolve({
+          status: 'failed',
+          exitCode: code,
+          nativeSessionId,
+          finalMessage,
+          error: detail,
+          ...(providerLimit ? { providerLimit } : {}),
+        });
       };
 
       const terminate = (reason: 'cancelled' | 'timed_out') => {

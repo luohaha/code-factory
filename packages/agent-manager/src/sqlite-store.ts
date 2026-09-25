@@ -28,6 +28,7 @@ import {
   type PurgeExpiredRequirementsRecord,
   type PurgeExpiredRequirementsResult,
   type PullRequestObservation,
+  type UpsertProviderLimitRecord,
   type UpsertPullRequestRecord,
   StoreConflictError,
   StoreNotFoundError,
@@ -46,6 +47,8 @@ import type {
   SearchDocumentKind,
   SearchResult,
   RequirementStatus,
+  ProviderLimit,
+  AgentProvider,
   RequirementWithSession,
   RunOutcome,
   SessionState,
@@ -276,6 +279,18 @@ function agentTimerFrom(row: Row): AgentTimer {
   };
 }
 
+function providerLimitFrom(row: Row, prefix = ''): ProviderLimit | null {
+  const provider = row[`${prefix}provider`];
+  if (provider === null || provider === undefined) return null;
+  return {
+    provider: String(provider) as AgentProvider,
+    kind: String(row[`${prefix}kind`]) as ProviderLimit['kind'],
+    retryAt: String(row[`${prefix}retry_at`]),
+    detectedAt: String(row[`${prefix}detected_at`]),
+    sourceRunId: row[`${prefix}source_run_id`] === null ? null : String(row[`${prefix}source_run_id`]),
+  };
+}
+
 export class SqliteAgentManagerStore implements AgentManagerStore {
   readonly #db: DatabaseSync;
   readonly #ftsAvailable: boolean;
@@ -366,10 +381,13 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       s.last_consumed_message_sequence AS s_last_consumed_message_sequence,
       (SELECT COUNT(*) FROM requirement_messages m WHERE m.requirement_id = r.id
         AND m.deliver_to_rd = 1 AND m.sequence > s.last_consumed_message_sequence) AS s_pending_message_count,
-      s.created_at AS s_created_at, s.updated_at AS s_updated_at
-      FROM requirements r JOIN agent_sessions s ON s.requirement_id = r.id WHERE r.id = ?`).get(id) as Row | undefined;
+      s.created_at AS s_created_at, s.updated_at AS s_updated_at,
+      pl.provider AS pl_provider, pl.kind AS pl_kind, pl.retry_at AS pl_retry_at,
+      pl.detected_at AS pl_detected_at, pl.source_run_id AS pl_source_run_id
+      FROM requirements r JOIN agent_sessions s ON s.requirement_id = r.id
+      LEFT JOIN provider_limits pl ON pl.provider = r.provider WHERE r.id = ?`).get(id) as Row | undefined;
     if (!row) return null;
-    return { ...requirementFrom(row), session: sessionFrom(row, 's_') };
+    return { ...requirementFrom(row), session: sessionFrom(row, 's_'), providerLimit: providerLimitFrom(row, 'pl_') };
   }
 
   listRequirements(): RequirementWithSession[] {
@@ -379,10 +397,17 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       s.last_consumed_message_sequence AS s_last_consumed_message_sequence,
       (SELECT COUNT(*) FROM requirement_messages m WHERE m.requirement_id = r.id
         AND m.deliver_to_rd = 1 AND m.sequence > s.last_consumed_message_sequence) AS s_pending_message_count,
-      s.created_at AS s_created_at, s.updated_at AS s_updated_at
+      s.created_at AS s_created_at, s.updated_at AS s_updated_at,
+      pl.provider AS pl_provider, pl.kind AS pl_kind, pl.retry_at AS pl_retry_at,
+      pl.detected_at AS pl_detected_at, pl.source_run_id AS pl_source_run_id
       FROM requirements r JOIN agent_sessions s ON s.requirement_id = r.id
+      LEFT JOIN provider_limits pl ON pl.provider = r.provider
       WHERE r.status != 'cancelled' ORDER BY r.updated_at DESC`).all() as Row[];
-    return rows.map((row) => ({ ...requirementFrom(row), session: sessionFrom(row, 's_') }));
+    return rows.map((row) => ({
+      ...requirementFrom(row),
+      session: sessionFrom(row, 's_'),
+      providerLimit: providerLimitFrom(row, 'pl_'),
+    }));
   }
 
   listChildRequirements(parentRequirementId: string): RequirementWithSession[] {
@@ -392,10 +417,17 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       s.last_consumed_message_sequence AS s_last_consumed_message_sequence,
       (SELECT COUNT(*) FROM requirement_messages m WHERE m.requirement_id = r.id
         AND m.deliver_to_rd = 1 AND m.sequence > s.last_consumed_message_sequence) AS s_pending_message_count,
-      s.created_at AS s_created_at, s.updated_at AS s_updated_at
+      s.created_at AS s_created_at, s.updated_at AS s_updated_at,
+      pl.provider AS pl_provider, pl.kind AS pl_kind, pl.retry_at AS pl_retry_at,
+      pl.detected_at AS pl_detected_at, pl.source_run_id AS pl_source_run_id
       FROM requirements r JOIN agent_sessions s ON s.requirement_id = r.id
+      LEFT JOIN provider_limits pl ON pl.provider = r.provider
       WHERE r.parent_requirement_id = ? ORDER BY r.updated_at DESC`).all(parentRequirementId) as Row[];
-    return rows.map((row) => ({ ...requirementFrom(row), session: sessionFrom(row, 's_') }));
+    return rows.map((row) => ({
+      ...requirementFrom(row),
+      session: sessionFrom(row, 's_'),
+      providerLimit: providerLimitFrom(row, 'pl_'),
+    }));
   }
 
   search(query: string, limit = 50): SearchResult[] {
@@ -676,6 +708,82 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       .run(now, id);
     if (result.changes === 0) throw new StoreConflictError(`Agent Timer ${id} is already ${existing.status}`);
     return this.requireAgentTimer(id);
+  }
+
+  getProviderLimit(provider: AgentProvider): ProviderLimit | null {
+    const row = this.#db.prepare('SELECT * FROM provider_limits WHERE provider = ?').get(provider) as Row | undefined;
+    return row ? providerLimitFrom(row) : null;
+  }
+
+  upsertProviderLimit(input: UpsertProviderLimitRecord): ProviderLimit {
+    const requirement = this.requireBundle(input.requirementId);
+    if (requirement.provider !== input.provider) {
+      throw new StoreConflictError(`Requirement ${input.requirementId} does not use Provider ${input.provider}`);
+    }
+    this.#db.exec('BEGIN IMMEDIATE');
+    try {
+      this.#db.prepare(`INSERT INTO provider_limits
+        (provider, kind, retry_at, detected_at, source_run_id)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(provider) DO UPDATE SET
+          kind = excluded.kind,
+          retry_at = excluded.retry_at,
+          detected_at = excluded.detected_at,
+          source_run_id = excluded.source_run_id
+        WHERE excluded.retry_at >= provider_limits.retry_at`).run(
+        input.provider,
+        input.kind,
+        input.retryAt,
+        input.detectedAt,
+        input.sourceRunId,
+      );
+      this.#db.prepare(`INSERT OR IGNORE INTO provider_limit_requirements
+        (provider, requirement_id) VALUES (?, ?)`).run(input.provider, input.requirementId);
+      this.#db.exec('COMMIT');
+    } catch (error) {
+      this.#db.exec('ROLLBACK');
+      throw error;
+    }
+    return this.getProviderLimit(input.provider)!;
+  }
+
+  addProviderLimitedRequirement(provider: AgentProvider, requirementId: string): void {
+    const requirement = this.requireBundle(requirementId);
+    if (requirement.provider !== provider) {
+      throw new StoreConflictError(`Requirement ${requirementId} does not use Provider ${provider}`);
+    }
+    const result = this.#db.prepare(`INSERT OR IGNORE INTO provider_limit_requirements
+      (provider, requirement_id) SELECT ?, ? WHERE EXISTS
+      (SELECT 1 FROM provider_limits WHERE provider = ?)`).run(provider, requirementId, provider);
+    if (result.changes === 0 && !this.getProviderLimit(provider)) {
+      throw new StoreConflictError(`Provider ${provider} does not have an active limit`);
+    }
+  }
+
+  removeProviderLimitedRequirement(provider: AgentProvider, requirementId: string): void {
+    this.#db.prepare(`DELETE FROM provider_limit_requirements
+      WHERE provider = ? AND requirement_id = ?`).run(provider, requirementId);
+  }
+
+  clearProviderLimit(provider: AgentProvider, expectedRetryAt: string): string[] | null {
+    this.#db.exec('BEGIN IMMEDIATE');
+    try {
+      const current = this.getProviderLimit(provider);
+      if (!current || current.retryAt !== expectedRetryAt) {
+        this.#db.exec('COMMIT');
+        return null;
+      }
+      const requirementIds = (this.#db.prepare(`SELECT requirement_id
+        FROM provider_limit_requirements WHERE provider = ?`).all(provider) as Row[])
+        .map((row) => String(row.requirement_id));
+      this.#db.prepare('DELETE FROM provider_limits WHERE provider = ? AND retry_at = ?')
+        .run(provider, expectedRetryAt);
+      this.#db.exec('COMMIT');
+      return requirementIds;
+    } catch (error) {
+      this.#db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   upsertPullRequest(input: UpsertPullRequestRecord): PullRequest {

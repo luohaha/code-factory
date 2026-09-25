@@ -84,6 +84,32 @@ test('HeadlessProcessRunner preserves the workspace and parent environment while
   }
 });
 
+test('HeadlessProcessRunner attaches Provider failure classifications to failed outcomes', async () => {
+  const adapter: AgentAdapter = {
+    ...noOutputAdapter,
+    classifyFailure: (error) => error.includes('session limit')
+      ? { kind: 'session_limit', retryAt: '2099-01-01T00:00:00.000Z' }
+      : null,
+  };
+  const outcome = await new HeadlessProcessRunner().run({
+    invocation: {
+      command: process.execPath,
+      args: ['-e', "process.stderr.write('session limit'); process.exit(1)"],
+      input: '',
+    },
+    adapter,
+    workspaceRoot: process.cwd(),
+    timeoutMs: 30_000,
+    maxOutputBytes: 1024,
+  });
+
+  assert.equal(outcome.status, 'failed');
+  assert.deepEqual(outcome.providerLimit, {
+    kind: 'session_limit',
+    retryAt: '2099-01-01T00:00:00.000Z',
+  });
+});
+
 test('HeadlessProcessRunner kills descendant tool processes before completing a cancelled Run', async () => {
   const grandchildScript = [
     "process.on('SIGTERM', () => undefined);",

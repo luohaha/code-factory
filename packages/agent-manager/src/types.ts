@@ -26,6 +26,18 @@ export type ReviewRequestStatus = 'running' | 'succeeded' | 'failed' | 'cancelle
 export type AgentTimerSchedule = 'once' | 'recurring';
 export type AgentTimerStatus = 'active' | 'completed' | 'cancelled';
 export type SearchDocumentKind = 'requirement' | 'message' | 'pull_request';
+export type ProviderLimitKind = 'session_limit';
+
+export interface ProviderLimitClassification {
+  kind: ProviderLimitKind;
+  retryAt: string;
+}
+
+export interface ProviderLimit extends ProviderLimitClassification {
+  provider: AgentProvider;
+  detectedAt: string;
+  sourceRunId: string | null;
+}
 
 export interface AgentModel {
   id: string;
@@ -189,6 +201,7 @@ export interface AgentTimer {
 
 export interface RequirementWithSession extends Requirement {
   session: AgentSession;
+  providerLimit: ProviderLimit | null;
 }
 
 export interface RelatedRequirements {
@@ -244,4 +257,5 @@ export interface RunOutcome {
   nativeSessionId: string | null;
   finalMessage: string | null;
   error: string | null;
+  providerLimit?: ProviderLimitClassification;
 }

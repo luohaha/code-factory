@@ -117,6 +117,14 @@ Every headless RD and Reviewer invocation skips interactive approval and CLI san
 - follows `active | completed | cancelled`; a one-time occurrence completes automatically, while a recurring occurrence advances to its next future time;
 - survives Agent Manager restarts and is cancelled automatically when its Requirement becomes DONE or CANCELLED.
 
+### ProviderLimit
+
+- is keyed by Provider and records a normalized quota kind, detection time, explicit retry time, and source Run;
+- currently classifies Claude Code's `session_limit` response when it includes a parseable reset time and IANA time zone;
+- applies to every Requirement using that Provider, while a persisted deferred-Requirement set records failed or suppressed start intents;
+- pauses only automatic starts. Human start and reply actions are explicit immediate retries;
+- is cleared at the reset time or by a successful human retry, then resumes each failed/deferred or message-pending Requirement once.
+
 ## 4. The Requirement Conversation Is the RD Message Stream
 
 The system does not maintain a separate RD message-queue table. `requirement_messages` is the single source of truth for both display and delivery:
@@ -137,6 +145,7 @@ Each message has a monotonically increasing `sequence` and a `deliverToRd` flag.
 5. A failed or interrupted Run does not advance the cursor, so retrying or corrective resumption cannot lose messages. Only messages arriving after the interrupted Run started trigger its automatic replacement.
 6. A Requirement's own RD output is never delivered back to that RD Agent as normal next-turn input. An explicit message from a directly related Requirement is external input and is delivered to the target RD Agent.
 7. A human reply or related-Agent message to a DONE Requirement reactivates it as DOING, clears its completion timestamp, and starts a new Run in the same long-lived RD Session. CANCELLED Requirements remain terminal.
+8. A Provider quota failure with an explicit reset time leaves the input range pending and creates a ProviderLimit. Automatic message and Timer wake-ups continue to persist input but do not create Runs before retryAt; recovery coalesces that input into one Run per eligible Requirement. Provider limits and deferred Requirements are durable across Manager restarts.
 
 Only when the native session is lost and must be recovered may Agent Manager rebuild context from a compact conversation summary. Normal execution never replays all previous RD output.
 

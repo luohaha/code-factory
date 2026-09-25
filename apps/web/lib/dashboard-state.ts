@@ -260,6 +260,9 @@ export function refreshTargetsForManagerEvent(event: ManagerEventDto): Dashboard
       return event.payload.configuration ? [] : [{ scope: 'configuration' }];
     case 'agent_models.updated':
       return event.payload.modelCatalog ? [] : [{ scope: 'models' }];
+    case 'provider.limit.detected':
+    case 'provider.limit.cleared':
+      return [{ scope: 'requirements' }];
     default:
       return [];
   }

@@ -122,6 +122,18 @@ export const schemaStatements = [
     updated_at TEXT NOT NULL,
     CHECK ((status = 'active' AND next_fire_at IS NOT NULL) OR (status != 'active' AND next_fire_at IS NULL))
   ) STRICT`,
+  `CREATE TABLE IF NOT EXISTS provider_limits (
+    provider TEXT PRIMARY KEY CHECK (provider IN ('codex', 'claude-code')),
+    kind TEXT NOT NULL CHECK (kind IN ('session_limit')),
+    retry_at TEXT NOT NULL,
+    detected_at TEXT NOT NULL,
+    source_run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL
+  ) STRICT`,
+  `CREATE TABLE IF NOT EXISTS provider_limit_requirements (
+    provider TEXT NOT NULL REFERENCES provider_limits(provider) ON DELETE CASCADE,
+    requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+    PRIMARY KEY (provider, requirement_id)
+  ) STRICT`,
   `CREATE TABLE IF NOT EXISTS review_requests (
     id TEXT PRIMARY KEY,
     pull_request_id TEXT NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
@@ -177,6 +189,8 @@ export const schemaStatements = [
     ON agent_timers (status, next_fire_at)`,
   `CREATE INDEX IF NOT EXISTS agent_timers_requirement
     ON agent_timers (requirement_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS provider_limits_retry
+    ON provider_limits (retry_at)`,
   `CREATE INDEX IF NOT EXISTS review_requests_pull_request_created
     ON review_requests (pull_request_id, created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS search_documents_requirement_updated

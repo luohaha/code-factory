@@ -378,7 +378,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           parentRequirementId: stringField(body, 'parentRequirementId') ?? source.requirementId,
         });
         if (start) {
-          void manager.runRequirement(item.id)
+          void manager.runRequirement(item.id, undefined, [], { bypassProviderLimit: false })
             .catch((error: unknown) => logger.error('RD run failed unexpectedly', {
               requirementId: item.id,
               error,

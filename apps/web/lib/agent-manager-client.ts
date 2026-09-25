@@ -35,6 +35,14 @@ export type RequirementStatus = 'todo' | 'doing' | 'waiting_confirmation' | 'don
 export type SessionState = 'idle' | 'running' | 'waiting_human' | 'failed' | 'completed';
 export type RunStatus = 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
 
+export interface ProviderLimitDto {
+  provider: AgentProvider;
+  kind: 'session_limit';
+  retryAt: string;
+  detectedAt: string;
+  sourceRunId: string | null;
+}
+
 export interface AgentSessionDto {
   id: string;
   requirementId: string;
@@ -63,6 +71,7 @@ export interface RequirementDto {
   updatedAt: string;
   completedAt: string | null;
   session: AgentSessionDto;
+  providerLimit: ProviderLimitDto | null;
 }
 
 export interface AgentRunDto {
@@ -149,6 +158,7 @@ export interface ManagerEventPayloadDto extends Record<string, unknown> {
   timers?: AgentTimerDto[];
   configuration?: AgentManagerConfigurationSnapshot;
   modelCatalog?: AgentModelCatalogDto;
+  providerLimit?: ProviderLimitDto | null;
 }
 
 export interface RequirementMessageDto {
