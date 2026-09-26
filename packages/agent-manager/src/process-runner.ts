@@ -82,6 +82,7 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
       let stderr = '';
       let nativeSessionId: string | null = null;
       let finalMessage: string | null = null;
+      let tokenUsage: RunOutcome['tokenUsage'];
       let protocolError: string | null = null;
       let termination: 'cancelled' | 'timed_out' | null = null;
       let forceKill: NodeJS.Timeout | null = null;
@@ -112,6 +113,7 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
           request.onNativeSession?.(event.nativeSessionId);
         }
         if (event.message) finalMessage = event.message;
+        if (event.tokenUsage) tokenUsage = event.tokenUsage;
       };
 
       const finishClose = (code: number | null, signal: NodeJS.Signals | null) => {
@@ -119,19 +121,19 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         settled = true;
         cleanup();
         if (termination === 'cancelled') {
-          resolve({ status: 'cancelled', exitCode: code, nativeSessionId, finalMessage, error: 'Agent Run interrupted by human' });
+          resolve({ status: 'cancelled', exitCode: code, nativeSessionId, finalMessage, error: 'Agent Run interrupted by human', ...(tokenUsage ? { tokenUsage } : {}) });
           return;
         }
         if (termination === 'timed_out') {
-          resolve({ status: 'timed_out', exitCode: code, nativeSessionId, finalMessage, error: timeoutError });
+          resolve({ status: 'timed_out', exitCode: code, nativeSessionId, finalMessage, error: timeoutError, ...(tokenUsage ? { tokenUsage } : {}) });
           return;
         }
         if (code === 0 && !protocolError) {
-          resolve({ status: 'succeeded', exitCode: 0, nativeSessionId, finalMessage, error: null });
+          resolve({ status: 'succeeded', exitCode: 0, nativeSessionId, finalMessage, error: null, ...(tokenUsage ? { tokenUsage } : {}) });
           return;
         }
         const detail = protocolError || stderr.trim() || `terminated by ${signal ?? 'unknown signal'}`;
-        resolve({ status: 'failed', exitCode: code, nativeSessionId, finalMessage, error: detail });
+        resolve({ status: 'failed', exitCode: code, nativeSessionId, finalMessage, error: detail, ...(tokenUsage ? { tokenUsage } : {}) });
       };
 
       const terminate = (reason: 'cancelled' | 'timed_out') => {
@@ -182,14 +184,14 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         settled = true;
         cleanup();
         if (termination === 'cancelled') {
-          resolve({ status: 'cancelled', exitCode: null, nativeSessionId, finalMessage, error: 'Agent Run interrupted by human' });
+          resolve({ status: 'cancelled', exitCode: null, nativeSessionId, finalMessage, error: 'Agent Run interrupted by human', ...(tokenUsage ? { tokenUsage } : {}) });
           return;
         }
         if (termination === 'timed_out') {
-          resolve({ status: 'timed_out', exitCode: null, nativeSessionId, finalMessage, error: timeoutError });
+          resolve({ status: 'timed_out', exitCode: null, nativeSessionId, finalMessage, error: timeoutError, ...(tokenUsage ? { tokenUsage } : {}) });
           return;
         }
-        resolve({ status: 'failed', exitCode: null, nativeSessionId, finalMessage, error: error.message });
+        resolve({ status: 'failed', exitCode: null, nativeSessionId, finalMessage, error: error.message, ...(tokenUsage ? { tokenUsage } : {}) });
       });
       child.once('close', (code, signal) => {
         if (settled) return;

@@ -215,6 +215,17 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         sendJson(response, 200, { items: manager.listRuns(url.searchParams.get('requirementId') ?? undefined) });
         return;
       }
+      if (request.method === 'GET' && url.pathname === '/api/statistics') {
+        const provider = url.searchParams.has('provider')
+          ? providerField(url.searchParams.get('provider'))
+          : undefined;
+        sendJson(response, 200, manager.getStatistics({
+          ...(url.searchParams.has('from') ? { from: url.searchParams.get('from')! } : {}),
+          ...(url.searchParams.has('to') ? { to: url.searchParams.get('to')! } : {}),
+          ...(provider ? { provider } : {}),
+        }));
+        return;
+      }
       const runTrace = url.pathname.match(/^\/api\/runs\/([^/]+)\/trace$/);
       if (request.method === 'GET' && runTrace) {
         const runId = decodeURIComponent(runTrace[1]!);

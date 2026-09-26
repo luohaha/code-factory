@@ -82,6 +82,48 @@ test('adapters normalize native session identifiers', () => {
   assert.equal(claude?.nativeSessionId, 'claude-1');
 });
 
+test('adapters normalize Provider token usage and preserve cache semantics', () => {
+  const codex = new CodexAdapter().parseLine(JSON.stringify({
+    type: 'turn.completed',
+    usage: { input_tokens: 120, cached_input_tokens: 40, cache_write_input_tokens: 10, output_tokens: 30 },
+  }));
+  assert.deepEqual(codex?.tokenUsage, {
+    scope: 'session',
+    inputTokens: 120,
+    cachedInputTokens: 40,
+    cacheCreationInputTokens: 10,
+    outputTokens: 30,
+  });
+
+  const claude = new ClaudeCodeAdapter().parseLine(JSON.stringify({
+    type: 'result',
+    result: 'done',
+    usage: {
+      input_tokens: 10,
+      cache_read_input_tokens: 60,
+      cache_creation_input_tokens: 20,
+      output_tokens: 15,
+    },
+  }));
+  assert.deepEqual(claude?.tokenUsage, {
+    scope: 'run',
+    inputTokens: 90,
+    cachedInputTokens: 60,
+    cacheCreationInputTokens: 20,
+    outputTokens: 15,
+  });
+
+  assert.equal(new CodexAdapter().parseLine(JSON.stringify({
+    type: 'turn.completed',
+    usage: {},
+  }))?.tokenUsage, undefined);
+  assert.equal(new ClaudeCodeAdapter().parseLine(JSON.stringify({
+    type: 'result',
+    result: 'done',
+    usage: {},
+  }))?.tokenUsage, undefined);
+});
+
 test('Codex normalizes commands, results, reasoning, and Agent messages into trace events', () => {
   const adapter = new CodexAdapter();
   const started = adapter.parseLine(JSON.stringify({

@@ -115,6 +115,38 @@ test('HTTP API exposes the cached provider model catalog', async () => {
   assert.equal(stopped, true);
 });
 
+test('HTTP API exposes time- and Provider-filtered statistics', async () => {
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    logger: createLogger({ level: 'silent' }),
+  });
+  manager.createRequirement({ title: 'Measure work', description: 'Expose statistics', provider: 'codex' });
+  manager.createRequirement({ title: 'Other provider', description: 'Filter me out', provider: 'claude-code' });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+
+  try {
+    const from = encodeURIComponent(new Date(Date.now() - 60_000).toISOString());
+    const response = await fetch(`http://127.0.0.1:${port}/api/statistics?from=${from}&provider=codex`);
+    assert.equal(response.status, 200);
+    const statistics = await response.json() as {
+      range: { provider: string };
+      summary: { requirementsCreated: number; humanCreatedRequirements: number };
+    };
+    assert.equal(statistics.range.provider, 'codex');
+    assert.equal(statistics.summary.requirementsCreated, 1);
+    assert.equal(statistics.summary.humanCreatedRequirements, 1);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
+
 test('SSE sends only live events initially and resumes from query or Last-Event-ID cursors', async () => {
   const manager = new AgentManager({
     workspaceRoot: process.cwd(),

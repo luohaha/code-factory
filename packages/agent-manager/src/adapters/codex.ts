@@ -6,6 +6,26 @@ import type {
   RdInvocationInput,
   ReviewInvocationInput,
 } from './types.js';
+import type { AgentTokenUsage } from '../types.js';
+
+function tokenCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function codexTokenUsage(value: unknown): AgentTokenUsage | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const usage = value as Record<string, unknown>;
+  const inputTokens = tokenCount(usage.input_tokens);
+  const outputTokens = tokenCount(usage.output_tokens);
+  if (inputTokens === undefined || outputTokens === undefined) return undefined;
+  return {
+    scope: 'session',
+    inputTokens,
+    cachedInputTokens: tokenCount(usage.cached_input_tokens) ?? 0,
+    cacheCreationInputTokens: tokenCount(usage.cache_write_input_tokens) ?? 0,
+    outputTokens,
+  };
+}
 
 function textFromItem(value: unknown): string | undefined {
   if (!value || typeof value !== 'object') return undefined;
@@ -222,9 +242,11 @@ export class CodexAdapter implements AgentAdapter {
       };
     }
     if (type === 'turn.completed') {
+      const tokenUsage = codexTokenUsage(raw.usage);
       return {
         kind: 'completed',
         traces: [{ kind: 'lifecycle', status: 'completed', title: 'Agent turn completed', nativeType: type }],
+        ...(tokenUsage ? { tokenUsage } : {}),
         raw,
       };
     }

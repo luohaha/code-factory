@@ -80,8 +80,68 @@ export interface AgentRunDto {
   error: string | null;
   inputFromSequence: number | null;
   inputToSequence: number | null;
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  cacheCreationInputTokens: number | null;
+  outputTokens: number | null;
   startedAt: string;
   finishedAt: string | null;
+}
+
+export interface AgentStatisticsDto {
+  provider: AgentProvider;
+  model: string | null;
+  rdRuns: number;
+  reviewerRuns: number;
+  succeededRuns: number;
+  failedRuns: number;
+  timedOutRuns: number;
+  cancelledRuns: number;
+  runsWithTokenUsage: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheCreationInputTokens: number;
+  outputTokens: number;
+}
+
+export interface StatisticsSnapshotDto {
+  generatedAt: string;
+  range: { from: string | null; to: string; provider: AgentProvider | null };
+  summary: {
+    rdRuns: number;
+    reviewerRuns: number;
+    humanMessages: number;
+    runsPerHumanMessage: number | null;
+    requirementsCreated: number;
+    humanCreatedRequirements: number;
+    agentCreatedRequirements: number;
+    succeededRuns: number;
+    failedRuns: number;
+    timedOutRuns: number;
+    cancelledRuns: number;
+    activeRuns: number;
+    maxConcurrentRuns: number;
+    successRate: number | null;
+  };
+  tokens: {
+    runsWithUsage: number;
+    inputTokens: number;
+    cachedInputTokens: number;
+    cacheCreationInputTokens: number;
+    outputTokens: number;
+    cacheHitRate: number | null;
+  };
+  byAgent: AgentStatisticsDto[];
+  activity: Array<{
+    date: string;
+    rdRuns: number;
+    humanMessages: number;
+    humanCreatedRequirements: number;
+    agentCreatedRequirements: number;
+    succeededRuns: number;
+    failedRuns: number;
+    maxConcurrentRuns: number;
+  }>;
 }
 
 export interface AgentTraceEventDto {
@@ -304,6 +364,15 @@ export class AgentManagerClient {
         : '/api/runs',
     );
     return response.items;
+  }
+
+  getStatistics(input: { from?: string; to?: string; provider?: AgentProvider } = {}): Promise<StatisticsSnapshotDto> {
+    const parameters = new URLSearchParams();
+    if (input.from) parameters.set('from', input.from);
+    if (input.to) parameters.set('to', input.to);
+    if (input.provider) parameters.set('provider', input.provider);
+    const query = parameters.size > 0 ? `?${parameters.toString()}` : '';
+    return this.request(`/api/statistics${query}`);
   }
 
   async listAgentTrace(runId: string): Promise<AgentTraceEventDto[]> {

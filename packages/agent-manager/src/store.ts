@@ -21,6 +21,7 @@ import type {
   RunOutcome,
   RunRole,
   SessionState,
+  StatisticsSnapshot,
 } from './types.js';
 
 export class StoreConflictError extends Error {}
@@ -169,6 +170,12 @@ export interface CompleteAgentTimerOccurrenceRecord {
   now: string;
 }
 
+export interface StatisticsQuery {
+  from?: string;
+  to: string;
+  provider?: AgentProvider;
+}
+
 /** Business-level persistence contract; PostgreSQL can implement this without leaking SQL upward. */
 export interface AgentManagerStore {
   close(): void;
@@ -180,6 +187,7 @@ export interface AgentManagerStore {
   search(query: string, limit?: number): SearchResult[];
   listSessions(): AgentSession[];
   listRuns(requirementId?: string): AgentRun[];
+  getStatistics(input: StatisticsQuery): StatisticsSnapshot;
   getRun(id: string): AgentRun | null;
   listAgentTrace(runId: string): AgentTraceEvent[];
   listRequirementAgentTrace(requirementId: string): AgentTraceEvent[];

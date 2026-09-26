@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import type { AgentAdapter } from '../src/adapters/types.ts';
+import { CodexAdapter } from '../src/adapters/codex.ts';
 import { HeadlessProcessRunner } from '../src/process-runner.ts';
 
 const noOutputAdapter: AgentAdapter = {
@@ -82,6 +83,33 @@ test('HeadlessProcessRunner preserves the workspace and parent environment while
     else process.env[parentContextName] = previousParentContext;
     rmSync(workspaceRoot, { recursive: true, force: true });
   }
+});
+
+test('HeadlessProcessRunner returns normalized token usage from the Provider stream', async () => {
+  const event = JSON.stringify({
+    type: 'turn.completed',
+    usage: { input_tokens: 100, cached_input_tokens: 75, cache_write_input_tokens: 5, output_tokens: 20 },
+  });
+  const outcome = await new HeadlessProcessRunner().run({
+    invocation: {
+      command: process.execPath,
+      args: ['-e', `process.stdout.write(${JSON.stringify(`${event}\n`)})`],
+      input: '',
+    },
+    adapter: new CodexAdapter(),
+    workspaceRoot: process.cwd(),
+    timeoutMs: 30_000,
+    maxOutputBytes: 1024,
+  });
+
+  assert.equal(outcome.status, 'succeeded');
+  assert.deepEqual(outcome.tokenUsage, {
+    scope: 'session',
+    inputTokens: 100,
+    cachedInputTokens: 75,
+    cacheCreationInputTokens: 5,
+    outputTokens: 20,
+  });
 });
 
 test('HeadlessProcessRunner kills descendant tool processes before completing a cancelled Run', async () => {
