@@ -1721,7 +1721,9 @@ function RequirementComposer({
     <div className="max-h-[60dvh] min-h-0 shrink-0 overflow-y-auto border-t border-border bg-card px-4 py-3 sm:px-6">
       {requirement.status === 'waiting_confirmation' ? (
         <div className="mb-2.5 flex items-center justify-between gap-3 rounded-xl border border-violet-500/15 bg-violet-500/7 px-3 py-2 text-[10px] text-violet-700 dark:text-violet-300">
-          <span>{t('The Agent reported completion. You can still ask follow-up questions.')}</span>
+          <span>{t(requirement.session.state === 'failed'
+            ? 'The RD Run failed. Review the error, retry, or confirm the Requirement if the work is complete.'
+            : 'The RD Run stopped. Review the work, reply to continue, or confirm completion.')}</span>
           <Button size="xs" className="shrink-0" disabled={busy} onClick={() => void onConfirm().catch(() => undefined)}><Check data-icon="inline-start" />{t('Complete')}</Button>
         </div>
       ) : null}

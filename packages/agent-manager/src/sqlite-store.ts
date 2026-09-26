@@ -872,14 +872,19 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
           updated_at = ? WHERE id = ?`)
           .run(outcome.nativeSessionId, run.inputToSequence, now, run.sessionId);
       } else if (outcome.status === 'cancelled') {
+        const hasNewMessages = this.#db.prepare(`SELECT 1 FROM requirement_messages
+          WHERE requirement_id = ? AND deliver_to_rd = 1 AND sequence > COALESCE(?, 0)
+            AND sequence > (SELECT last_consumed_message_sequence FROM agent_sessions WHERE id = ?)
+          LIMIT 1`)
+          .get(run.requirementId, run.inputToSequence, run.sessionId) !== undefined;
         this.#db.prepare("UPDATE agent_sessions SET state = 'waiting_human', last_error = NULL, native_session_id = COALESCE(?, native_session_id), updated_at = ? WHERE id = ?")
           .run(outcome.nativeSessionId, now, run.sessionId);
-        this.#db.prepare("UPDATE requirements SET status = 'doing', updated_at = ? WHERE id = ?")
-          .run(now, run.requirementId);
+        this.#db.prepare('UPDATE requirements SET status = ?, updated_at = ? WHERE id = ?')
+          .run(hasNewMessages ? 'doing' : 'waiting_confirmation', now, run.requirementId);
       } else {
         this.#db.prepare("UPDATE agent_sessions SET state = 'failed', last_error = ?, native_session_id = COALESCE(?, native_session_id), updated_at = ? WHERE id = ?")
           .run(outcome.error ?? `Run ${outcome.status}`, outcome.nativeSessionId, now, run.sessionId);
-        this.#db.prepare("UPDATE requirements SET status = 'doing', updated_at = ? WHERE id = ?")
+        this.#db.prepare("UPDATE requirements SET status = 'waiting_confirmation', updated_at = ? WHERE id = ?")
           .run(now, run.requirementId);
       }
       this.#db.exec('COMMIT');
@@ -1044,7 +1049,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
         this.#db.prepare(`UPDATE agent_sessions SET state = 'failed',
           last_error = 'Agent Manager restarted before the active Run completed', updated_at = ?
           WHERE requirement_id = ?`).run(now, requirementId);
-        this.#db.prepare("UPDATE requirements SET status = 'doing', updated_at = ? WHERE id = ? AND status NOT IN ('done', 'cancelled')")
+        this.#db.prepare("UPDATE requirements SET status = 'waiting_confirmation', updated_at = ? WHERE id = ? AND status NOT IN ('done', 'cancelled')")
           .run(now, requirementId);
       }
       this.#db.exec('COMMIT');
@@ -1178,6 +1183,11 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     this.#db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS messages_requirement_sequence
       ON requirement_messages (requirement_id, sequence)`);
     this.migrateLegacyAgentTraceEvents();
+    this.#db.prepare(`UPDATE requirements SET status = 'waiting_confirmation', updated_at = ?
+      WHERE status = 'doing' AND EXISTS (
+        SELECT 1 FROM agent_sessions session
+        WHERE session.requirement_id = requirements.id AND session.state IN ('waiting_human', 'failed')
+      )`).run(new Date().toISOString());
   }
 
   private migrateLegacyAgentTraceEvents(): void {
