@@ -237,18 +237,20 @@ The first implementation uses Node.js `node:sqlite`:
 - Expiry deletes the Requirement inside one SQLite transaction. Before foreign-key cascades remove its AgentSession, Runs, messages, attachment metadata, PRs, PR observations, ReviewRequests, trigger receipts, and related ManagerEvents, the transaction records attachment paths as pending-deletion tombstones; surviving child Requirements have parent and source-Session references cleared. Attachment files are removed after commit, and failed or interrupted file deletions remain discoverable for retry on the next sweep.
 - One-to-one relationships, message ordering, and active-Run constraints are enforced by SQLite.
 - Agent traces reuse the durable `manager_events` stream as their canonical storage. `run.trace.appended` rows are indexed by Run and projected as `AgentTraceEvent` resources for historical reads, avoiding a second copy of every tool call and result.
+- Provider terminal events are normalized into Run-level token counters. Total input includes cache reads and cache writes when a Provider reports those separately; cache-hit input and cache-write input remain explicit subsets, and output is recorded separately. Codex cumulative native-session counters are retained internally and differenced against the immediately preceding counters for the same native session; Claude Code per-invocation counters are stored directly. Missing usage or a missing Codex baseline remains null rather than being estimated.
 - Requirement text, conversation messages, and Pull Request metadata are copied into a unified search-document table as part of their owning Store writes. Full-text scores and persisted local word/character n-gram embeddings are combined at query time; an FTS5 trigram index accelerates and refines full-text ranking when the Node.js SQLite build includes FTS5, with deterministic in-process matching as the portable fallback. Existing records are backfilled idempotently when the Store opens.
 - The application depends on the business-level `AgentManagerStore` interface, allowing a later PostgreSQL implementation without changing domain workflows.
 - Configuration is validated before use and replaced atomically with file mode `0600`; it is operational state rather than a domain entity stored in SQLite.
 
 ## 9. Web Dashboard
 
-The Web application contains four boards:
+The Web application contains four boards and one analytical view:
 
 - Requirement: `TODO / DOING / Waiting for confirmation / DONE`;
 - Pull Request: `DRAFT / OPEN / CLOSED / MERGED`;
 - RD Session: `Idle / Running / Waiting for human / Failed / Completed`;
 - Timer: `Active / Completed / Cancelled`.
+- Statistics: parallel RD Session peaks, Runs versus human inputs, Requirement creation source, outcomes, and token usage by Provider/model.
 
 Requirement details form a Jira-like work surface containing the description, linked PRs, Run information, and a unified Human/RD/Reviewer/System conversation. A TODO card's Start action opens this work surface and focuses the message composer, allowing optional instructions and attachments to be captured as input to the initial Run; the work surface also offers an explicit start-without-instructions action. Before that first Run, a human can change the provider, model, and reasoning effort or restore either CLI default from the work surface. TODO cards offer an adjacent Delete action; deletion requires confirmation and is no longer available after execution starts. The input remains available while RD is running, and pending external-message counts appear on Requirement and Session cards. A clock control beside the chat attachment button creates and cancels one-time or recurring scheduled wake-ups using minute, hour, or day intervals.
 
@@ -260,7 +262,7 @@ Browser desktop notifications are enabled by default and the preference is store
 
 Dashboard synchronization is resource-scoped after initial load. Mutation responses and persisted SSE payloads are merged by resource ID and update time; Messages are additionally ordered and deduplicated by their Requirement-local sequence. Compatibility refreshes for incomplete events are routed only to the affected Requirement, Runs, PRs, ReviewRequests, or Timers and coalesced by that scope. A full workspace snapshot is reserved for initial connection and explicit manual refresh. SSE replay and newer local state win over an older in-flight snapshot, and ownership checks prevent a payload from entering another Requirement's conversation.
 
-All four boards share a time-range filter. It defaults to the last 7 days and also offers the last 24 hours, 30 days, 90 days, and all time. Requirement, Pull Request, and RD Session boards filter by creation time; the Timer board retains active timers by their upcoming occurrence and filters history by its latest update.
+All four boards and Statistics share a time-range filter. It defaults to the last 7 days and also offers the last 24 hours, 30 days, 90 days, and all time. Requirement, Pull Request, and RD Session boards filter by creation time; the Timer board retains active timers by their upcoming occurrence and filters history by its latest update. Statistics performs server-side aggregation for the selected interval and optional Provider filter. Its maximum-concurrency metric counts overlapping RD Runs (not ephemeral Reviewer Runs), while Run-success metrics exclude cancellations from the success-rate denominator.
 
 Their shared search box calls the Agent Manager hybrid-search endpoint. A match in a Requirement or any of its conversation messages exposes that Requirement and RD Session; a matching Pull Request title or metadata exposes the PR and its Requirement. Requirement cards show the highest-ranked match source and excerpt so conversation-only matches are explainable.
 

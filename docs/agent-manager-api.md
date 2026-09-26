@@ -60,6 +60,7 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/attachments/:id | Read or download an attachment |
 | GET | /api/sessions | List RD Sessions |
 | GET | /api/runs | List RD and Reviewer Runs |
+| GET | /api/statistics | Read workspace delivery, interaction, concurrency, and token aggregates |
 | GET | /api/runs/:id/trace | Read the normalized execution trace for one Run |
 | GET | /api/pull-requests | List registered Pull Requests |
 | POST | /api/pull-requests/:id/review-requests | Request a PR review |
@@ -145,14 +146,31 @@ interface AgentRun {
   error: string | null;
   inputFromSequence: number | null;
   inputToSequence: number | null;
+  inputTokens: number | null;             // total input, including reported cache reads/writes
+  cachedInputTokens: number | null;       // cache-hit subset of inputTokens
+  cacheCreationInputTokens: number | null;// cache-write subset of inputTokens
+  outputTokens: number | null;
   startedAt: string;
   finishedAt: string | null;
 }
 ~~~
 
 inputFromSequence and inputToSequence record the Requirement-message range captured by an RD Run. Both are null for Reviewer Runs.
+Token fields are populated only when the Provider emits terminal usage. Older Runs and Runs that terminate before usage is reported return null; Agent Manager does not estimate missing values. Codex reports cumulative native-session totals, so Agent Manager subtracts the immediately preceding counters for the same native session and exposes a per-Run delta. If that baseline is unavailable, the affected per-Run fields remain null. Claude Code reports per-invocation uncached input, cache reads, and cache writes separately, so Agent Manager sums those components for inputTokens while preserving the cache subsets.
 
-### 3.4 AgentTraceEvent
+### 3.4 StatisticsSnapshot
+
+`StatisticsSnapshot` is the workspace-scoped analytical projection returned by `/api/statistics`. It contains:
+
+- `range`: the normalized half-open interval `[from, to)` and optional Provider filter;
+- `summary`: RD and Reviewer Run counts, human-message count, Runs per human input, Requirement creation totals by creator, RD outcomes, current active RD Runs, maximum overlapping RD Runs, and success rate;
+- `tokens`: known Run count, total input/output, cache-hit/cache-write input, and cache-hit rate;
+- `byAgent`: the same Run and token totals grouped by Provider and model;
+- `activity`: UTC-day buckets for Runs, human inputs, Requirement creation source, outcomes, and maximum parallel RD Runs.
+
+Maximum concurrency counts RD Runs only because Reviewer Runs are ephemeral and are not Agent Sessions. Success rate is `succeeded / (succeeded + failed + timed_out)`; cancelled Runs are reported separately.
+
+### 3.5 AgentTraceEvent
 
 ~~~ts
 interface AgentTraceEvent {
@@ -172,7 +190,7 @@ interface AgentTraceEvent {
 
 Trace events preserve Provider-emitted progress such as reasoning summaries, tool calls, command output, tool results, Agent messages, and lifecycle/errors. They contain normalized fields rather than exposing the Provider's private JSON schema directly. Each trace is stored once as the payload of its durable `run.trace.appended` ManagerEvent; the Run and Requirement trace endpoints project those events instead of maintaining a second trace table.
 
-### 3.5 RequirementMessage
+### 3.6 RequirementMessage
 
 ~~~ts
 interface RequirementMessage {
@@ -203,7 +221,7 @@ interface MessageAttachment {
 
 sequence increases monotonically within a Requirement. deliverToRd=true means RD must consume the message. A Requirement's own RD output is never delivered back to itself. Messages explicitly sent by a directly related RD Agent have author=rd_agent, identify the sender through sourceRequirementId, and use deliverToRd=true in the target conversation.
 
-### 3.6 PullRequest
+### 3.7 PullRequest
 
 ~~~ts
 interface PullRequest {
@@ -224,7 +242,7 @@ interface PullRequest {
 
 The lowercase repository key + number is the idempotency key for a PR. Repository casing does not change identity or bypass Requirement ownership checks.
 
-### 3.7 ReviewRequest
+### 3.8 ReviewRequest
 
 ~~~ts
 interface ReviewRequest {
@@ -245,7 +263,7 @@ interface ReviewRequest {
 
 Agent Manager captures targetHeadSha when a review starts, so the ReviewRequest records the revision it represents. A timed-out Reviewer has AgentRun.status=timed_out and normalized ReviewRequest.status=failed.
 
-### 3.8 Agent model catalog
+### 3.9 Agent model catalog
 
 ~~~ts
 interface AgentModelCatalog {
@@ -265,7 +283,7 @@ interface AgentModelCatalog {
 
 `stale=true` means the latest provider refresh failed or has not completed. Previously discovered values, or provider-safe fallbacks, remain in `models`.
 
-### 3.9 AgentTimer
+### 3.10 AgentTimer
 
 ~~~ts
 interface AgentTimer {
@@ -280,7 +298,7 @@ interface AgentTimer {
   createdAt: string;
 An active timer always has `nextFireAt`. A one-time timer becomes completed after delivery. A recurring timer remains active and advances to its next future occurrence until it is cancelled or its Requirement becomes done or cancelled. `AgentTimer` is the persisted configuration resource; the built-in `timer` Agent Trigger executes due timers through the shared trigger-delivery framework.
 
-### 3.10 SearchResult
+### 3.11 SearchResult
 
 ~~~ts
 interface SearchResult {
@@ -412,6 +430,20 @@ Optional query parameters:
 | requirementId | string | Return only Runs for this Requirement |
 
 Success: 200 OK with {"items": AgentRun[]}. An unknown requirementId returns an empty array.
+
+### GET /api/statistics
+
+Returns one `StatisticsSnapshot` for a half-open time interval. All query parameters are optional:
+
+| Parameter | Type | Meaning |
+| --- | --- | --- |
+| from | ISO 8601 timestamp | Include records at or after this time; omit for all retained history |
+| to | ISO 8601 timestamp | Exclude records at or after this time; defaults to the server's current time |
+| provider | `codex` or `claude-code` | Restrict Runs, Requirements, and their human messages to one Provider |
+
+`from` must be earlier than `to`. Run, Requirement, and human-input counts use their start or creation timestamp. Maximum concurrency also includes RD Runs that began before `from` but overlapped the selected interval. `activeRuns` is the current number of running RD Runs for the selected Provider, independent of whether those Runs started inside the interval.
+
+Success: 200 OK with `StatisticsSnapshot`.
 
 ### GET /api/runs/:id/trace
 

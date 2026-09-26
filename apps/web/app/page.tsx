@@ -13,6 +13,7 @@ import {
   BellOff,
   BellRing,
   Bot,
+  ChartNoAxesCombined,
   Check,
   CircleDot,
   Clock3,
@@ -153,10 +154,11 @@ import { I18nProvider, useI18n } from '@/lib/i18n';
 import { useTheme } from '@/lib/theme';
 import type { TranslationKey } from '@/locales/zh-CN';
 import { RequirementTreeView } from '@/components/requirement-tree-view';
+import { StatisticsDashboard } from '@/components/statistics-dashboard';
 
 type ConnectionState = 'connecting' | 'online' | 'reconnecting' | 'offline';
 type TimeRange = '1d' | '7d' | '30d' | '90d' | 'all';
-type DashboardView = RequirementDetailSourceView;
+type DashboardView = RequirementDetailSourceView | 'statistics';
 
 const timeRangeOptions: Array<{ value: TimeRange; label: TranslationKey }> = [
   { value: '1d', label: 'Last 24 hours' },
@@ -3232,7 +3234,9 @@ function Dashboard() {
   const viewTitle: TranslationKey = view === 'requirements'
     ? 'Requirement workflow'
     : view === 'relationships' ? 'Requirement relationships'
-    : view === 'pull_requests' ? 'Pull Requests' : view === 'sessions' ? 'RD Agent Sessions' : 'Scheduled wake-ups';
+    : view === 'pull_requests' ? 'Pull Requests'
+    : view === 'sessions' ? 'RD Agent Sessions'
+    : view === 'timers' ? 'Scheduled wake-ups' : 'Statistics';
   const viewDescription: TranslationKey = view === 'requirements'
     ? 'The requirement conversation is the RD Agent message stream; messages remain available while it runs'
     : view === 'relationships'
@@ -3241,14 +3245,18 @@ function Dashboard() {
       ? 'A human can select Codex or Claude to run a one-off review on an Open PR'
       : view === 'sessions'
         ? 'Sessions inherit the Agent Manager working directory and native Skills'
-        : 'Track timers and the Requirements they will wake';
+        : view === 'timers'
+          ? 'Track timers and the Requirements they will wake'
+          : 'Measure parallel delivery, human leverage, reliability, and token efficiency';
   const searchLabel: TranslationKey = view === 'timers'
     ? 'Search timers or Requirements'
     : 'Search requirements, conversations, or PRs';
   const boardLabel: TranslationKey = view === 'requirements'
     ? 'Requirement board'
     : view === 'relationships' ? 'Requirement relationship tree'
-    : view === 'pull_requests' ? 'Pull Request board' : view === 'sessions' ? 'Agent Session board' : 'Timer board';
+    : view === 'pull_requests' ? 'Pull Request board'
+    : view === 'sessions' ? 'Agent Session board'
+    : view === 'timers' ? 'Timer board' : 'Statistics dashboard';
   const notificationButtonLabel: TranslationKey = notificationAvailability === 'insecure'
     ? 'Desktop notifications require HTTPS or localhost'
     : notificationAvailability === 'unsupported'
@@ -3279,6 +3287,7 @@ function Dashboard() {
             <Button variant="ghost" size="sm" className={view === 'pull_requests' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('pull_requests')}><GitPullRequest data-icon="inline-start" />PR</Button>
             <Button variant="ghost" size="sm" className={view === 'sessions' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('sessions')}><Activity data-icon="inline-start" />{t('Sessions')}</Button>
             <Button variant="ghost" size="sm" className={view === 'timers' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('timers')}><Clock3 data-icon="inline-start" />{t('Timers')}</Button>
+            <Button variant="ghost" size="sm" className={view === 'statistics' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('statistics')}><ChartNoAxesCombined data-icon="inline-start" />{t('Statistics')}</Button>
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
@@ -3351,6 +3360,11 @@ function Dashboard() {
                 <div><span className="mr-1.5 text-lg font-semibold tabular-nums">{oneTimeTimers}</span><span className="text-muted-foreground">{t('One time')}</span></div>
                 <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-violet-600">{recurringTimers}</span><span className="text-muted-foreground">{t('Recurring')}</span></div>
               </>
+            ) : view === 'statistics' ? (
+              <>
+                <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-emerald-600">{activeSessions}</span><span className="text-muted-foreground">{t('Running now')}</span></div>
+                <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-violet-600">{waitingHumans}</span><span className="text-muted-foreground">{t('Waiting for human')}</span></div>
+              </>
             ) : (
               <>
                 <div><span className="mr-1.5 text-lg font-semibold tabular-nums">{activeSessions}</span><span className="text-muted-foreground">{t('Running')}</span></div>
@@ -3358,13 +3372,17 @@ function Dashboard() {
                 <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-rose-600">{failures}</span><span className="text-muted-foreground">{t('Failed')}</span></div>
               </>
             )}
-            <div className="hidden h-7 w-px bg-border sm:block" />
-            <div className="relative hidden sm:block">
-              {view !== 'timers' && searching
-                ? <LoaderCircle className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 animate-spin text-muted-foreground" />
-                : <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />}
-              <Input aria-label={t(searchLabel)} value={query} onChange={(event) => setQuery(event.target.value)} className="w-64 pr-3 pl-8 text-xs" placeholder={t(searchLabel)} />
-            </div>
+            {view !== 'statistics' ? (
+              <>
+                <div className="hidden h-7 w-px bg-border sm:block" />
+                <div className="relative hidden sm:block">
+                  {view !== 'timers' && searching
+                    ? <LoaderCircle className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 animate-spin text-muted-foreground" />
+                    : <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />}
+                  <Input aria-label={t(searchLabel)} value={query} onChange={(event) => setQuery(event.target.value)} className="w-64 pr-3 pl-8 text-xs" placeholder={t(searchLabel)} />
+                </div>
+              </>
+            ) : null}
           </div>
         </div>
       </section>
@@ -3398,7 +3416,7 @@ function Dashboard() {
             size="sm"
             value={timeRange}
             onChange={(event) => setTimeRange(event.target.value as TimeRange)}
-            aria-label={view === 'timers' ? t('Timer activity within') : t('Created within')}
+            aria-label={view === 'timers' ? t('Timer activity within') : view === 'statistics' ? t('Statistics within') : t('Created within')}
             className="[&_select]:text-[10px]"
           >
             {timeRangeOptions.map((option) => (
@@ -3410,7 +3428,14 @@ function Dashboard() {
       </div>
 
       <section className="kanban-scroll overflow-x-auto" aria-label={t(boardLabel)}>
-        {view === 'requirements' ? (
+        {view === 'statistics' ? (
+          <StatisticsDashboard
+            client={client}
+            timeRange={timeRange}
+            provider={provider}
+            refreshKey={lastSynced?.getTime() ?? 0}
+          />
+        ) : view === 'requirements' ? (
           <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-4 gap-4 p-4 lg:p-5">
             {requirementColumns.map((column) => {
               const items = filteredRequirements.filter((item) => item.status === column.status);

@@ -27,6 +27,18 @@ export type AgentTimerSchedule = 'once' | 'recurring';
 export type AgentTimerStatus = 'active' | 'completed' | 'cancelled';
 export type SearchDocumentKind = 'requirement' | 'message' | 'pull_request';
 
+export interface AgentTokenUsage {
+  /** Codex reports cumulative native-session totals; Claude Code reports one invocation. */
+  scope: 'run' | 'session';
+  /** Total prompt/input tokens, including cache reads and cache writes when the Provider reports them separately. */
+  inputTokens: number;
+  /** Input tokens served from a Provider cache. */
+  cachedInputTokens: number;
+  /** Input tokens written to a Provider cache. */
+  cacheCreationInputTokens: number;
+  outputTokens: number;
+}
+
 export interface AgentModel {
   id: string;
   displayName: string;
@@ -89,8 +101,74 @@ export interface AgentRun {
   error: string | null;
   inputFromSequence: number | null;
   inputToSequence: number | null;
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  cacheCreationInputTokens: number | null;
+  outputTokens: number | null;
   startedAt: string;
   finishedAt: string | null;
+}
+
+export interface AgentStatistics {
+  provider: AgentProvider;
+  model: string | null;
+  rdRuns: number;
+  reviewerRuns: number;
+  succeededRuns: number;
+  failedRuns: number;
+  timedOutRuns: number;
+  cancelledRuns: number;
+  runsWithTokenUsage: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheCreationInputTokens: number;
+  outputTokens: number;
+}
+
+export interface StatisticsActivityPoint {
+  date: string;
+  rdRuns: number;
+  humanMessages: number;
+  humanCreatedRequirements: number;
+  agentCreatedRequirements: number;
+  succeededRuns: number;
+  failedRuns: number;
+  maxConcurrentRuns: number;
+}
+
+export interface StatisticsSnapshot {
+  generatedAt: string;
+  range: {
+    from: string | null;
+    to: string;
+    provider: AgentProvider | null;
+  };
+  summary: {
+    rdRuns: number;
+    reviewerRuns: number;
+    humanMessages: number;
+    runsPerHumanMessage: number | null;
+    requirementsCreated: number;
+    humanCreatedRequirements: number;
+    agentCreatedRequirements: number;
+    succeededRuns: number;
+    failedRuns: number;
+    timedOutRuns: number;
+    cancelledRuns: number;
+    activeRuns: number;
+    maxConcurrentRuns: number;
+    successRate: number | null;
+  };
+  tokens: {
+    runsWithUsage: number;
+    inputTokens: number;
+    cachedInputTokens: number;
+    cacheCreationInputTokens: number;
+    outputTokens: number;
+    cacheHitRate: number | null;
+  };
+  byAgent: AgentStatistics[];
+  activity: StatisticsActivityPoint[];
 }
 
 export interface AgentTraceEvent {
@@ -244,4 +322,5 @@ export interface RunOutcome {
   nativeSessionId: string | null;
   finalMessage: string | null;
   error: string | null;
+  tokenUsage?: AgentTokenUsage;
 }

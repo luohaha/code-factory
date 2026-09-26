@@ -36,6 +36,152 @@ test('a requirement is created atomically with exactly one RD session', () => {
   }
 });
 
+test('statistics aggregate human leverage, concurrency, outcomes, creators, and token usage', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-human',
+      sessionId: 'ses-human',
+      title: 'Human-created work',
+      description: 'First task',
+      provider: 'codex',
+      model: 'gpt-test',
+      createdBy: 'human',
+      now: '2026-09-10T10:00:00.000Z',
+    });
+    store.createRequirement({
+      requirementId: 'req-agent',
+      sessionId: 'ses-agent',
+      title: 'Agent-created work',
+      description: 'Follow-up task',
+      provider: 'claude-code',
+      model: 'claude-test',
+      createdBy: 'rd_agent',
+      now: '2026-09-10T10:05:00.000Z',
+    });
+    store.appendMessage({
+      id: 'msg-human-1', requirementId: 'req-human', sessionId: 'ses-human', author: 'human',
+      body: 'Please start', deliverToRd: true, now: '2026-09-10T10:06:00.000Z',
+    });
+    store.appendMessage({
+      id: 'msg-human-2', requirementId: 'req-agent', sessionId: 'ses-agent', author: 'human',
+      body: 'One correction', deliverToRd: true, now: '2026-09-10T10:07:00.000Z',
+    });
+    store.beginRun({
+      runId: 'run-codex', requirementId: 'req-human', role: 'rd', provider: 'codex', model: 'gpt-test',
+      taskSummary: 'First run', now: '2026-09-10T10:10:00.000Z',
+    });
+    store.beginRun({
+      runId: 'run-claude', requirementId: 'req-agent', role: 'rd', provider: 'claude-code', model: 'claude-test',
+      taskSummary: 'Second run', now: '2026-09-10T10:20:00.000Z',
+    });
+    store.finishRdRun('run-codex', {
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'thread-1', finalMessage: 'done', error: null,
+      tokenUsage: { scope: 'session', inputTokens: 100, cachedInputTokens: 40, cacheCreationInputTokens: 0, outputTokens: 20 },
+    }, '2026-09-10T10:30:00.000Z');
+    store.finishRdRun('run-claude', {
+      status: 'failed', exitCode: 1, nativeSessionId: 'session-1', finalMessage: null, error: 'failed',
+      tokenUsage: { scope: 'run', inputTokens: 90, cachedInputTokens: 60, cacheCreationInputTokens: 20, outputTokens: 15 },
+    }, '2026-09-10T10:40:00.000Z');
+
+    const statistics = store.getStatistics({
+      from: '2026-09-10T09:00:00.000Z',
+      to: '2026-09-10T11:00:00.000Z',
+    });
+    assert.deepEqual(statistics.summary, {
+      rdRuns: 2,
+      reviewerRuns: 0,
+      humanMessages: 2,
+      runsPerHumanMessage: 1,
+      requirementsCreated: 2,
+      humanCreatedRequirements: 1,
+      agentCreatedRequirements: 1,
+      succeededRuns: 1,
+      failedRuns: 1,
+      timedOutRuns: 0,
+      cancelledRuns: 0,
+      activeRuns: 0,
+      maxConcurrentRuns: 2,
+      successRate: 0.5,
+    });
+    assert.deepEqual(statistics.tokens, {
+      runsWithUsage: 2,
+      inputTokens: 190,
+      cachedInputTokens: 100,
+      cacheCreationInputTokens: 20,
+      outputTokens: 35,
+      cacheHitRate: 100 / 190,
+    });
+    assert.equal(statistics.byAgent.length, 2);
+    assert.deepEqual(statistics.activity, [{
+      date: '2026-09-10',
+      rdRuns: 2,
+      humanMessages: 2,
+      humanCreatedRequirements: 1,
+      agentCreatedRequirements: 1,
+      succeededRuns: 1,
+      failedRuns: 1,
+      maxConcurrentRuns: 2,
+    }]);
+    assert.equal(store.getRun('run-codex')?.cachedInputTokens, 40);
+  } finally {
+    store.close();
+  }
+});
+
+test('Codex cumulative session usage is stored as per-run token usage', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-codex-usage',
+      sessionId: 'ses-codex-usage',
+      title: 'Continue one Codex thread',
+      description: 'Measure each invocation independently',
+      provider: 'codex',
+      model: 'gpt-test',
+      createdBy: 'human',
+      now: '2026-09-10T10:00:00.000Z',
+    });
+    store.beginRun({
+      runId: 'run-codex-first', requirementId: 'req-codex-usage', role: 'rd', provider: 'codex',
+      model: 'gpt-test', taskSummary: 'First invocation', now: '2026-09-10T10:05:00.000Z',
+    });
+    store.finishRdRun('run-codex-first', {
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'thread-usage', finalMessage: 'first', error: null,
+      tokenUsage: { scope: 'session', inputTokens: 100, cachedInputTokens: 40, cacheCreationInputTokens: 5, outputTokens: 20 },
+    }, '2026-09-10T10:10:00.000Z');
+    store.beginRun({
+      runId: 'run-codex-second', requirementId: 'req-codex-usage', role: 'rd', provider: 'codex',
+      model: 'gpt-test', taskSummary: 'Second invocation', now: '2026-09-10T10:15:00.000Z',
+    });
+    store.finishRdRun('run-codex-second', {
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'thread-usage', finalMessage: 'second', error: null,
+      tokenUsage: { scope: 'session', inputTokens: 175, cachedInputTokens: 100, cacheCreationInputTokens: 5, outputTokens: 35 },
+    }, '2026-09-10T10:20:00.000Z');
+
+    const first = store.getRun('run-codex-first');
+    const second = store.getRun('run-codex-second');
+    assert.deepEqual(
+      [first?.inputTokens, first?.cachedInputTokens, first?.cacheCreationInputTokens, first?.outputTokens],
+      [100, 40, 5, 20],
+    );
+    assert.deepEqual(
+      [second?.inputTokens, second?.cachedInputTokens, second?.cacheCreationInputTokens, second?.outputTokens],
+      [75, 60, 0, 15],
+    );
+    assert.deepEqual(store.getStatistics({ to: '2026-09-11T00:00:00.000Z' }).tokens, {
+      runsWithUsage: 2,
+      inputTokens: 175,
+      cachedInputTokens: 100,
+      cacheCreationInputTokens: 5,
+      outputTokens: 35,
+      cacheHitRate: 100 / 175,
+    });
+  } finally {
+    store.close();
+  }
+});
+
 test('Agent trace events are derived from the durable Manager event stream', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {

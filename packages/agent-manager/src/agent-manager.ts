@@ -748,6 +748,19 @@ export class AgentManager extends EventEmitter {
     return this.#store.listRuns(requirementId);
   }
 
+  getStatistics(input: { from?: string; to?: string; provider?: AgentProvider } = {}) {
+    const to = input.to ? new Date(input.to) : new Date();
+    if (!Number.isFinite(to.getTime())) throw new TypeError('to must be a valid ISO 8601 timestamp');
+    const from = input.from ? new Date(input.from) : null;
+    if (from && !Number.isFinite(from.getTime())) throw new TypeError('from must be a valid ISO 8601 timestamp');
+    if (from && from.getTime() >= to.getTime()) throw new RangeError('from must be earlier than to');
+    return this.#store.getStatistics({
+      ...(from ? { from: from.toISOString() } : {}),
+      to: to.toISOString(),
+      ...(input.provider ? { provider: input.provider } : {}),
+    });
+  }
+
   listAgentTrace(runId: string) {
     if (!this.#store.getRun(runId)) throw new StoreNotFoundError(`Run ${runId} not found`);
     return this.#store.listAgentTrace(runId);

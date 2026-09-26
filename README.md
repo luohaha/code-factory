@@ -62,12 +62,13 @@ For the complete domain model, state machines, concurrency rules, and delivery s
 
 ## Web Dashboard
 
-The bundled dashboard provides four views:
+The bundled dashboard provides five operational views:
 
 - Requirement board: `TODO / DOING / Waiting for confirmation / DONE`
 - Pull Request board: `DRAFT / OPEN / CLOSED / MERGED`
 - RD Session board: `Idle / Running / Waiting for human / Failed / Completed`
 - Timer board: `Active / Completed / Cancelled`, with each timer linked to its Requirement
+- Statistics: parallel RD Session peaks, Runs versus human inputs, Requirement creation source, Run outcomes, and Provider/model token usage
 
 Opening a Requirement shows its description, linked PRs, run information, per-Run Agent trace, and unified Human/RD/Reviewer conversation. Requirement descriptions and conversation messages render GitHub Flavored Markdown, including tables, lists, links, and code blocks. The Session board cards open this work surface directly; the latest Run trace is selected by default and shows Provider-emitted reasoning summaries, tool calls, command/tool results, messages, and errors in real time. Starting a TODO card opens that conversation first, so optional instructions and attachments can be included in the initial Run; it also offers an explicit start-without-instructions action. Before execution starts, a human can change the TODO Requirement's Agent provider, model, and reasoning effort or restore the CLI defaults from this work surface. TODO cards can be deleted before execution; the action requires confirmation and removes the Requirement from active lists. Messages support images and file attachments. The chat composer can create and cancel one-time or recurring scheduled wake-ups in minutes, hours, or days, while the Timer board shows timers across the workspace and opens their associated Requirements. New input can be queued while RD is running, or the current run can be interrupted so the same session handles the correction immediately. Replying to a completed Requirement reactivates it and resumes its original RD Session in a new Run. Requirement and Reviewer forms provide provider-specific model dropdowns populated by an Agent Manager catalog that refreshes every 24 hours.
 
@@ -75,7 +76,9 @@ The dashboard supports light and dark modes from the top-right theme control, re
 
 Browser notifications default to enabled and can be changed immediately in the settings dialog or from the header bell. A browser still requires an explicit permission grant before it can display notifications. In a Windows browser reached through port forwarding, open the dashboard at `http://localhost:<forwarded-port>`, use either notification control, and allow notifications for that site. Successful, failed, timed-out, and cancelled RD Runs show their Requirement title and outcome; clicking a notification opens the Requirement. The browser stores the preference locally. Keep the dashboard tab open to receive notifications; browsers require a secure context such as localhost or HTTPS, and the site's notification permission must remain granted.
 
-All four boards share a time-range filter with options for the last 24 hours, 7 days, 30 days, 90 days, or all time. Requirement, PR, and Session boards filter by creation time. The Timer board always retains active timers by their upcoming wake-up and filters completed or cancelled history by its latest update. The default range is 7 days.
+All four boards and the Statistics view share a time-range filter with options for the last 24 hours, 7 days, 30 days, 90 days, or all time. Requirement, PR, and Session boards filter by creation time. The Timer board always retains active timers by their upcoming wake-up and filters completed or cancelled history by its latest update. Statistics aggregates the selected period and can also be filtered to Codex or Claude Code. The default range is 7 days.
+
+Agent Manager records normalized input, cache-hit input, cache-write input, and output token counts when a Provider reports them at the end of a Run. Codex native-session cumulative counters are converted to per-Run deltas before aggregation; Claude Code invocation counters are stored directly. Existing Runs and Runs that terminate before the Provider reports usage remain visible but do not contribute guessed token values. The Statistics view groups known usage by Provider and model and shows how many Runs supplied token data.
 
 The shared search box uses a local hybrid index over Requirement titles and descriptions, complete conversation messages, and Pull Request titles and metadata. Persisted word and character n-gram vectors add similarity ranking to full-text matching, including useful partial and fuzzy matches; Agent Manager also uses SQLite FTS5 ranking when the installed Node.js SQLite build provides it. Search indexing and ranking stay inside the workspace's Agent Manager process and do not call an external embedding service.
 

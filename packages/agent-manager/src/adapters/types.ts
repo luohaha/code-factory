@@ -1,6 +1,7 @@
 import type {
   AgentProvider,
   AgentReasoningEffort,
+  AgentTokenUsage,
   AgentTraceKind,
   AgentTraceStatus,
 } from '../types.js';
@@ -16,6 +17,7 @@ export interface NormalizedAgentEvent {
   nativeSessionId?: string;
   message?: string;
   traces?: NormalizedAgentTrace[];
+  tokenUsage?: AgentTokenUsage;
   raw: Record<string, unknown>;
 }
 

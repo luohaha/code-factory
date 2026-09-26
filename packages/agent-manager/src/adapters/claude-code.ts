@@ -8,6 +8,28 @@ import type {
   RdInvocationInput,
   ReviewInvocationInput,
 } from './types.js';
+import type { AgentTokenUsage } from '../types.js';
+
+function tokenCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function claudeTokenUsage(value: unknown): AgentTokenUsage | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const usage = value as Record<string, unknown>;
+  const uncachedInputTokens = tokenCount(usage.input_tokens);
+  const outputTokens = tokenCount(usage.output_tokens);
+  if (uncachedInputTokens === undefined || outputTokens === undefined) return undefined;
+  const cachedInputTokens = tokenCount(usage.cache_read_input_tokens) ?? 0;
+  const cacheCreationInputTokens = tokenCount(usage.cache_creation_input_tokens) ?? 0;
+  return {
+    scope: 'run',
+    inputTokens: uncachedInputTokens + cachedInputTokens + cacheCreationInputTokens,
+    cachedInputTokens,
+    cacheCreationInputTokens,
+    outputTokens,
+  };
+}
 
 function assistantText(value: unknown): string | undefined {
   if (typeof value === 'string') return value;
@@ -163,10 +185,12 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     if (type === 'result') {
       const message = typeof raw.result === 'string' ? raw.result : undefined;
       const failed = raw.is_error === true;
+      const tokenUsage = claudeTokenUsage(raw.usage);
       return {
         kind: failed ? 'error' : 'completed',
         ...(nativeSessionId ? { nativeSessionId } : {}),
         ...(message ? { message } : {}),
+        ...(tokenUsage ? { tokenUsage } : {}),
         traces: [{
           kind: failed ? 'error' : 'lifecycle',
           status: failed ? 'failed' : 'completed',

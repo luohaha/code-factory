@@ -28,6 +28,7 @@ import {
   type PurgeExpiredRequirementsRecord,
   type PurgeExpiredRequirementsResult,
   type PullRequestObservation,
+  type StatisticsQuery,
   type UpsertPullRequestRecord,
   StoreConflictError,
   StoreNotFoundError,
@@ -49,6 +50,7 @@ import type {
   RequirementWithSession,
   RunOutcome,
   SessionState,
+  StatisticsSnapshot,
 } from './types.js';
 
 type Row = Record<string, SQLInputValue>;
@@ -102,6 +104,10 @@ function runFrom(row: Row): AgentRun {
     error: row.error === null ? null : String(row.error),
     inputFromSequence: row.input_from_sequence === null ? null : Number(row.input_from_sequence),
     inputToSequence: row.input_to_sequence === null ? null : Number(row.input_to_sequence),
+    inputTokens: row.input_tokens === null ? null : Number(row.input_tokens),
+    cachedInputTokens: row.cached_input_tokens === null ? null : Number(row.cached_input_tokens),
+    cacheCreationInputTokens: row.cache_creation_input_tokens === null ? null : Number(row.cache_creation_input_tokens),
+    outputTokens: row.output_tokens === null ? null : Number(row.output_tokens),
     startedAt: String(row.started_at),
     finishedAt: row.finished_at === null ? null : String(row.finished_at),
   };
@@ -467,6 +473,179 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       ? this.#db.prepare('SELECT * FROM agent_runs WHERE requirement_id = ? ORDER BY started_at DESC').all(requirementId)
       : this.#db.prepare('SELECT * FROM agent_runs ORDER BY started_at DESC').all();
     return (rows as Row[]).map(runFrom);
+  }
+
+  getStatistics(input: StatisticsQuery): StatisticsSnapshot {
+    const fromTime = input.from ? Date.parse(input.from) : null;
+    const toTime = Date.parse(input.to);
+    const providerMatches = (provider: string) => !input.provider || provider === input.provider;
+    const withinRange = (timestamp: string) => {
+      const value = Date.parse(timestamp);
+      return Number.isFinite(value) && value < toTime && (fromTime === null || value >= fromTime);
+    };
+    const requirements = (this.#db.prepare('SELECT created_by, provider, created_at FROM requirements').all() as Row[])
+      .filter((row) => providerMatches(String(row.provider)) && withinRange(String(row.created_at)));
+    const messages = (this.#db.prepare(`SELECT message.created_at, requirement.provider
+      FROM requirement_messages message
+      JOIN requirements requirement ON requirement.id = message.requirement_id
+      WHERE message.author = 'human'`).all() as Row[])
+      .filter((row) => providerMatches(String(row.provider)) && withinRange(String(row.created_at)));
+    const allRuns = (this.#db.prepare('SELECT * FROM agent_runs').all() as Row[])
+      .map(runFrom)
+      .filter((run) => providerMatches(run.provider));
+    const runs = allRuns.filter((run) => withinRange(run.startedAt));
+    const rdRuns = runs.filter((run) => run.role === 'rd');
+    const reviewerRuns = runs.filter((run) => run.role === 'reviewer');
+
+    const maximumConcurrentRuns = (candidates: AgentRun[], start: number | null, end: number): number => {
+      const events: Array<{ time: number; delta: 1 | -1 }> = [];
+      for (const run of candidates) {
+        const rawStart = Date.parse(run.startedAt);
+        const rawEnd = run.finishedAt ? Date.parse(run.finishedAt) : end;
+        if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) continue;
+        const runStart = start === null ? rawStart : Math.max(rawStart, start);
+        const runEnd = Math.min(Math.max(rawEnd, rawStart + 1), end);
+        if (runStart >= end || runEnd <= (start ?? Number.NEGATIVE_INFINITY)) continue;
+        events.push({ time: runStart, delta: 1 }, { time: runEnd, delta: -1 });
+      }
+      events.sort((left, right) => left.time - right.time || left.delta - right.delta);
+      let concurrent = 0;
+      let maximum = 0;
+      for (const event of events) {
+        concurrent += event.delta;
+        maximum = Math.max(maximum, concurrent);
+      }
+      return maximum;
+    };
+
+    const agentBuckets = new Map<string, StatisticsSnapshot['byAgent'][number]>();
+    for (const run of runs) {
+      const key = `${run.provider}\u0000${run.model ?? ''}`;
+      const bucket = agentBuckets.get(key) ?? {
+        provider: run.provider,
+        model: run.model,
+        rdRuns: 0,
+        reviewerRuns: 0,
+        succeededRuns: 0,
+        failedRuns: 0,
+        timedOutRuns: 0,
+        cancelledRuns: 0,
+        runsWithTokenUsage: 0,
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        outputTokens: 0,
+      };
+      if (run.role === 'rd') bucket.rdRuns += 1;
+      else bucket.reviewerRuns += 1;
+      if (run.status === 'succeeded') bucket.succeededRuns += 1;
+      else if (run.status === 'failed') bucket.failedRuns += 1;
+      else if (run.status === 'timed_out') bucket.timedOutRuns += 1;
+      else if (run.status === 'cancelled') bucket.cancelledRuns += 1;
+      if (run.inputTokens !== null || run.outputTokens !== null) {
+        bucket.runsWithTokenUsage += 1;
+        bucket.inputTokens += run.inputTokens ?? 0;
+        bucket.cachedInputTokens += run.cachedInputTokens ?? 0;
+        bucket.cacheCreationInputTokens += run.cacheCreationInputTokens ?? 0;
+        bucket.outputTokens += run.outputTokens ?? 0;
+      }
+      agentBuckets.set(key, bucket);
+    }
+    const byAgent = [...agentBuckets.values()].sort((left, right) => (
+      right.inputTokens + right.outputTokens - left.inputTokens - left.outputTokens
+        || left.provider.localeCompare(right.provider)
+        || (left.model ?? '').localeCompare(right.model ?? '')
+    ));
+    const tokens = byAgent.reduce((total, agent) => ({
+      runsWithUsage: total.runsWithUsage + agent.runsWithTokenUsage,
+      inputTokens: total.inputTokens + agent.inputTokens,
+      cachedInputTokens: total.cachedInputTokens + agent.cachedInputTokens,
+      cacheCreationInputTokens: total.cacheCreationInputTokens + agent.cacheCreationInputTokens,
+      outputTokens: total.outputTokens + agent.outputTokens,
+      cacheHitRate: null,
+    }), {
+      runsWithUsage: 0,
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      outputTokens: 0,
+      cacheHitRate: null as number | null,
+    });
+    tokens.cacheHitRate = tokens.inputTokens > 0 ? tokens.cachedInputTokens / tokens.inputTokens : null;
+
+    const activityByDate = new Map<string, StatisticsSnapshot['activity'][number]>();
+    const activityPoint = (timestamp: string) => {
+      const date = timestamp.slice(0, 10);
+      const current = activityByDate.get(date) ?? {
+        date,
+        rdRuns: 0,
+        humanMessages: 0,
+        humanCreatedRequirements: 0,
+        agentCreatedRequirements: 0,
+        succeededRuns: 0,
+        failedRuns: 0,
+        maxConcurrentRuns: 0,
+      };
+      activityByDate.set(date, current);
+      return current;
+    };
+    for (const requirement of requirements) {
+      const point = activityPoint(String(requirement.created_at));
+      if (String(requirement.created_by) === 'rd_agent') point.agentCreatedRequirements += 1;
+      else point.humanCreatedRequirements += 1;
+    }
+    for (const message of messages) activityPoint(String(message.created_at)).humanMessages += 1;
+    for (const run of rdRuns) {
+      const point = activityPoint(run.startedAt);
+      point.rdRuns += 1;
+      if (run.status === 'succeeded') point.succeededRuns += 1;
+      else if (run.status === 'failed' || run.status === 'timed_out') point.failedRuns += 1;
+    }
+    for (const point of activityByDate.values()) {
+      const dayStart = Date.parse(`${point.date}T00:00:00.000Z`);
+      const dayEnd = dayStart + 24 * 60 * 60 * 1_000;
+      point.maxConcurrentRuns = maximumConcurrentRuns(
+        allRuns.filter((run) => run.role === 'rd'),
+        Math.max(dayStart, fromTime ?? dayStart),
+        Math.min(dayEnd, toTime),
+      );
+    }
+
+    const succeededRuns = rdRuns.filter((run) => run.status === 'succeeded').length;
+    const failedRuns = rdRuns.filter((run) => run.status === 'failed').length;
+    const timedOutRuns = rdRuns.filter((run) => run.status === 'timed_out').length;
+    const cancelledRuns = rdRuns.filter((run) => run.status === 'cancelled').length;
+    const terminalRuns = succeededRuns + failedRuns + timedOutRuns;
+    const humanCreatedRequirements = requirements.filter((row) => String(row.created_by) === 'human').length;
+    const agentCreatedRequirements = requirements.length - humanCreatedRequirements;
+    const activeRuns = allRuns.filter((run) => run.role === 'rd' && run.status === 'running').length;
+    return {
+      generatedAt: input.to,
+      range: { from: input.from ?? null, to: input.to, provider: input.provider ?? null },
+      summary: {
+        rdRuns: rdRuns.length,
+        reviewerRuns: reviewerRuns.length,
+        humanMessages: messages.length,
+        runsPerHumanMessage: messages.length > 0 ? rdRuns.length / messages.length : null,
+        requirementsCreated: requirements.length,
+        humanCreatedRequirements,
+        agentCreatedRequirements,
+        succeededRuns,
+        failedRuns,
+        timedOutRuns,
+        cancelledRuns,
+        activeRuns,
+        maxConcurrentRuns: maximumConcurrentRuns(
+          allRuns.filter((run) => run.role === 'rd'),
+          fromTime,
+          toTime,
+        ),
+        successRate: terminalRuns > 0 ? succeededRuns / terminalRuns : null,
+      },
+      tokens,
+      byAgent,
+      activity: [...activityByDate.values()].sort((left, right) => left.date.localeCompare(right.date)),
+    };
   }
 
   getRun(id: string): AgentRun | null {
@@ -1106,6 +1285,14 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     ensureColumn('agent_runs', 'reasoning_effort', "TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max'))");
     ensureColumn('agent_runs', 'input_from_sequence', 'INTEGER');
     ensureColumn('agent_runs', 'input_to_sequence', 'INTEGER');
+    ensureColumn('agent_runs', 'input_tokens', 'INTEGER CHECK (input_tokens >= 0)');
+    ensureColumn('agent_runs', 'cached_input_tokens', 'INTEGER CHECK (cached_input_tokens >= 0)');
+    ensureColumn('agent_runs', 'cache_creation_input_tokens', 'INTEGER CHECK (cache_creation_input_tokens >= 0)');
+    ensureColumn('agent_runs', 'output_tokens', 'INTEGER CHECK (output_tokens >= 0)');
+    ensureColumn('agent_runs', 'provider_input_tokens', 'INTEGER CHECK (provider_input_tokens >= 0)');
+    ensureColumn('agent_runs', 'provider_cached_input_tokens', 'INTEGER CHECK (provider_cached_input_tokens >= 0)');
+    ensureColumn('agent_runs', 'provider_cache_creation_input_tokens', 'INTEGER CHECK (provider_cache_creation_input_tokens >= 0)');
+    ensureColumn('agent_runs', 'provider_output_tokens', 'INTEGER CHECK (provider_output_tokens >= 0)');
     const sequenceAdded = ensureColumn('requirement_messages', 'sequence', 'INTEGER NOT NULL DEFAULT 0');
     ensureColumn('requirement_messages', 'source_requirement_id', 'TEXT REFERENCES requirements(id) ON DELETE SET NULL');
     ensureColumn('requirement_messages', 'deliver_to_rd', 'INTEGER NOT NULL DEFAULT 0 CHECK (deliver_to_rd IN (0, 1))');
@@ -1380,9 +1567,60 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
   }
 
   private updateRun(runId: string, outcome: RunOutcome, now: string): void {
-    const result = this.#db.prepare(`UPDATE agent_runs SET status = ?, native_session_id = ?, exit_code = ?, error = ?, finished_at = ?
+    const run = this.requireRun(runId);
+    const reportedUsage = outcome.tokenUsage;
+    let usage = reportedUsage;
+    if (reportedUsage?.scope === 'session' && run.sessionId) {
+      const previous = this.#db.prepare(`SELECT native_session_id, provider_input_tokens,
+        provider_cached_input_tokens, provider_cache_creation_input_tokens, provider_output_tokens
+        FROM agent_runs WHERE session_id = ? AND id != ? AND started_at <= ?
+        ORDER BY started_at DESC, id DESC LIMIT 1`).get(run.sessionId, runId, run.startedAt) as Row | undefined;
+      if (previous) {
+        const session = this.#db.prepare('SELECT native_session_id FROM agent_sessions WHERE id = ?')
+          .get(run.sessionId) as Row | undefined;
+        const currentNativeSessionId = outcome.nativeSessionId
+          ?? (session?.native_session_id === null || session?.native_session_id === undefined
+            ? null
+            : String(session.native_session_id));
+        const previousNativeSessionId = previous.native_session_id === null ? null : String(previous.native_session_id);
+        if (currentNativeSessionId && previousNativeSessionId === currentNativeSessionId) {
+          const previousValues = [
+            previous.provider_input_tokens,
+            previous.provider_cached_input_tokens,
+            previous.provider_cache_creation_input_tokens,
+            previous.provider_output_tokens,
+          ];
+          if (previousValues.every((value) => value !== null)) {
+            const deltas = [
+              reportedUsage.inputTokens - Number(previousValues[0]),
+              reportedUsage.cachedInputTokens - Number(previousValues[1]),
+              reportedUsage.cacheCreationInputTokens - Number(previousValues[2]),
+              reportedUsage.outputTokens - Number(previousValues[3]),
+            ];
+            usage = deltas.every((value) => value >= 0) ? {
+              scope: 'run',
+              inputTokens: deltas[0]!,
+              cachedInputTokens: deltas[1]!,
+              cacheCreationInputTokens: deltas[2]!,
+              outputTokens: deltas[3]!,
+            } : undefined;
+          } else {
+            usage = undefined;
+          }
+        }
+      }
+    }
+    const result = this.#db.prepare(`UPDATE agent_runs SET status = ?, native_session_id = ?, exit_code = ?, error = ?,
+      input_tokens = ?, cached_input_tokens = ?, cache_creation_input_tokens = ?, output_tokens = ?,
+      provider_input_tokens = ?, provider_cached_input_tokens = ?, provider_cache_creation_input_tokens = ?,
+      provider_output_tokens = ?, finished_at = ?
       WHERE id = ? AND status = 'running'`)
-      .run(outcome.status, outcome.nativeSessionId, outcome.exitCode, outcome.error, now, runId);
+      .run(outcome.status, outcome.nativeSessionId, outcome.exitCode, outcome.error,
+        usage?.inputTokens ?? null, usage?.cachedInputTokens ?? null,
+        usage?.cacheCreationInputTokens ?? null, usage?.outputTokens ?? null,
+        reportedUsage?.inputTokens ?? null, reportedUsage?.cachedInputTokens ?? null,
+        reportedUsage?.cacheCreationInputTokens ?? null, reportedUsage?.outputTokens ?? null,
+        now, runId);
     if (result.changes === 0) throw new StoreConflictError(`Run ${runId} is not active`);
   }
 }
