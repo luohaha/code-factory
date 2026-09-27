@@ -19,7 +19,7 @@ export type RunRole = 'rd' | 'reviewer';
 export type RunStatus = 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
 export type AgentTraceKind = 'lifecycle' | 'reasoning' | 'assistant_message' | 'tool_call' | 'tool_result' | 'error';
 export type AgentTraceStatus = 'started' | 'completed' | 'failed';
-export type MessageAuthor = 'human' | 'rd_agent' | 'reviewer' | 'system';
+export type MessageAuthor = 'human' | 'rd_agent' | 'reviewer' | 'system' | 'jev';
 export type RequirementCreator = 'human' | 'rd_agent';
 export type PullRequestStatus = 'draft' | 'open' | 'closed' | 'merged';
 export type ReviewRequestStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
@@ -178,6 +178,7 @@ export interface AgentTimer {
   id: string;
   requirementId: string;
   description: string;
+  messageAuthor: 'system' | 'jev';
   schedule: AgentTimerSchedule;
   intervalSeconds: number;
   status: AgentTimerStatus;

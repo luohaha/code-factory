@@ -57,6 +57,7 @@ import type {
   AgentReasoningEffort,
   CreateRequirementInput,
   ManagerEvent,
+  MessageAuthor,
   MessageAttachment,
   PullRequest,
   RelatedRequirements,
@@ -784,7 +785,7 @@ export class AgentManager extends EventEmitter {
 
   createAgentTimer(
     requirementId: string,
-    input: { description: string; schedule: AgentTimerSchedule; intervalSeconds: number },
+    input: { description: string; schedule: AgentTimerSchedule; intervalSeconds: number; messageAuthor?: 'system' | 'jev' },
   ): AgentTimer {
     const requirement = this.requireRequirement(requirementId);
     if (requirement.status === 'done' || requirement.status === 'cancelled') {
@@ -809,6 +810,7 @@ export class AgentManager extends EventEmitter {
       id: `tmr_${randomUUID()}`,
       requirementId,
       description,
+      messageAuthor: input.messageAuthor ?? 'system',
       schedule: input.schedule,
       intervalSeconds: input.intervalSeconds,
       nextFireAt: new Date(now.getTime() + input.intervalSeconds * 1_000).toISOString(),
@@ -1352,17 +1354,17 @@ export class AgentManager extends EventEmitter {
     if (!apiKey || !latestReply.trim() || !this.canJevWake(requirementId, runId)) return;
     const requirement = this.#store.getRequirement(requirementId);
     if (!requirement) return;
-    const replies = this.#store.listRecentRdReplies(requirementId, 3);
-    const recentReplies = replies.map((reply) => reply.body);
-    if (!replies.some((reply) => reply.runId === runId)) {
-      recentReplies.push(latestReply.trim());
-      if (recentReplies.length > 3) recentReplies.shift();
+    const messages = this.#store.listRecentConversationMessages(requirementId, 3);
+    const recentMessages = messages.map(({ author, body }) => ({ author, body }));
+    if (!messages.some((message) => message.runId === runId && message.author === 'rd_agent')) {
+      recentMessages.push({ author: 'rd_agent', body: latestReply.trim() });
+      if (recentMessages.length > 3) recentMessages.shift();
     }
     let decision: JevWakeDecision;
     try {
       decision = await this.#jevWakeDecision(apiKey, {
         requirement: { title: requirement.title, description: requirement.description },
-        recentReplies,
+        recentMessages,
       });
     } catch (error) {
       this.logger.warn('Jev wake decision skipped', {
@@ -1378,13 +1380,14 @@ export class AgentManager extends EventEmitter {
           description: 'continue.',
           schedule: 'once',
           intervalSeconds: decision.minutes * 60,
+          messageAuthor: 'jev',
         });
       } else {
         const requirement = this.requireRequirement(requirementId);
         this.appendMessage({
           requirementId,
           sessionId: requirement.session.id,
-          author: 'system',
+          author: 'jev',
           body: 'continue.',
           deliverToRd: true,
         });
@@ -1408,6 +1411,7 @@ export class AgentManager extends EventEmitter {
       && requirement.session.state === 'waiting_human'
       && requirement.session.pendingMessageCount === 0
       && this.#store.listRuns(requirementId).find((run) => run.role === 'rd')?.id === runId
+      && !this.#store.listRuns(requirementId).some((run) => run.role === 'reviewer' && run.status === 'running')
       && !this.#store.listAgentTimers(requirementId).some((timer) => timer.status === 'active');
   }
 
@@ -1627,7 +1631,7 @@ export class AgentManager extends EventEmitter {
     sessionId: string;
     runId?: string;
     sourceRequirementId?: string;
-    author: 'human' | 'rd_agent' | 'reviewer' | 'system';
+    author: MessageAuthor;
     body: string;
     attachmentIds?: string[];
     deliverToRd: boolean;

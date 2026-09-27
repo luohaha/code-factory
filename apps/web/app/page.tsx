@@ -38,6 +38,7 @@ import {
   Send,
   Settings2,
   SlidersHorizontal,
+  Sparkles,
   Square,
   Sun,
   Terminal,
@@ -262,6 +263,7 @@ const authorLabel: Record<RequirementMessageDto['author'], TranslationKey> = {
   human: 'Human',
   rd_agent: 'RD Agent',
   reviewer: 'Reviewer',
+  jev: 'Jev',
   system: 'System',
 };
 
@@ -2294,6 +2296,7 @@ function RequirementDetail({
               const human = item.author === 'human';
               const system = item.author === 'system';
               const reviewer = item.author === 'reviewer';
+              const jev = item.author === 'jev';
               const relatedRd = item.author === 'rd_agent' && item.sourceRequirementId !== null;
               const attachments = item.attachments ?? [];
               if (system) {
@@ -2313,8 +2316,8 @@ function RequirementDetail({
               }
               return (
                 <article key={item.id} className={`flex gap-3 ${human ? 'flex-row-reverse' : ''}`}>
-                  <span className={`grid size-8 shrink-0 place-items-center rounded-xl ${human ? 'bg-primary text-primary-foreground' : reviewer ? 'bg-violet-500/12 text-violet-700 dark:text-violet-300' : relatedRd ? 'bg-amber-500/12 text-amber-700 dark:text-amber-300' : 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'}`}>
-                    {human ? <UserRound className="size-3.5" /> : <Bot className="size-3.5" />}
+                  <span className={`grid size-8 shrink-0 place-items-center rounded-xl ${human ? 'bg-primary text-primary-foreground' : reviewer ? 'bg-violet-500/12 text-violet-700 dark:text-violet-300' : jev ? 'bg-fuchsia-500/12 text-fuchsia-700 dark:text-fuchsia-300' : relatedRd ? 'bg-amber-500/12 text-amber-700 dark:text-amber-300' : 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'}`}>
+                    {human ? <UserRound className="size-3.5" /> : jev ? <Sparkles className="size-3.5" /> : <Bot className="size-3.5" />}
                   </span>
                   <div className={`min-w-0 max-w-[86%] ${human ? 'text-right' : ''}`}>
                     <div className={`flex items-center gap-2 ${human ? 'justify-end' : ''}`}>
@@ -2324,7 +2327,7 @@ function RequirementDetail({
                       </span>
                       <span className="text-[9px] text-muted-foreground">{formatTime(item.createdAt, locale)}</span>
                     </div>
-                    <div className={`mt-1.5 rounded-2xl px-3.5 py-2.5 text-left text-xs leading-5 break-words shadow-[0_1px_2px_oklch(0.18_0.02_255/0.04)] ${human ? 'rounded-tr-md bg-primary text-primary-foreground' : reviewer ? 'rounded-tl-md border border-violet-500/15 bg-violet-500/7' : 'rounded-tl-md border border-border/80 bg-card'}`}>
+                    <div className={`mt-1.5 rounded-2xl px-3.5 py-2.5 text-left text-xs leading-5 break-words shadow-[0_1px_2px_oklch(0.18_0.02_255/0.04)] ${human ? 'rounded-tr-md bg-primary text-primary-foreground' : reviewer ? 'rounded-tl-md border border-violet-500/15 bg-violet-500/7' : jev ? 'rounded-tl-md border border-fuchsia-500/15 bg-fuchsia-500/7' : 'rounded-tl-md border border-border/80 bg-card'}`}>
                       {item.body ? <MarkdownBody body={item.body} inverted={human} /> : null}
                       {attachments.length > 0 ? <div className={item.body ? 'mt-2.5' : ''}><MessageAttachments attachments={attachments} apiUrl={apiUrl} /></div> : null}
                     </div>

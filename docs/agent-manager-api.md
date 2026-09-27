@@ -181,7 +181,7 @@ interface RequirementMessage {
   sessionId: string;
   runId: string | null;
   sourceRequirementId: string | null; // sender for a related RD Agent message
-  author: 'human' | 'rd_agent' | 'reviewer' | 'system';
+  author: 'human' | 'rd_agent' | 'reviewer' | 'jev' | 'system';
   body: string;
   attachments: MessageAttachment[];
   sequence: number;
@@ -272,12 +272,17 @@ interface AgentTimer {
   id: string;                         // tmr_<uuid>
   requirementId: string;
   description: string;                // follow-up delivered to the RD Agent
+  messageAuthor: 'system' | 'jev';     // author of the delivered message
   schedule: 'once' | 'recurring';
   intervalSeconds: number;
   status: 'active' | 'completed' | 'cancelled';
   nextFireAt: string | null;
   lastFiredAt: string | null;
   createdAt: string;
+  updatedAt: string;
+}
+~~~
+
 An active timer always has `nextFireAt`. A one-time timer becomes completed after delivery. A recurring timer remains active and advances to its next future occurrence until it is cancelled or its Requirement becomes done or cancelled. `AgentTimer` is the persisted configuration resource; the built-in `timer` Agent Trigger executes due timers through the shared trigger-delivery framework.
 
 ### 3.10 SearchResult
@@ -370,7 +375,7 @@ curl -X PATCH http://127.0.0.1:4310/api/configuration \
 
 `port` must be an integer from 1 to 65535. The reconcile interval must be an integer from 0 to 2147483 seconds, the largest whole-second delay supported by Node.js timers. Each Requirement retention value must be an integer from 0 to 36500 days; `0` deletes matching Requirements as they become terminal. Updating either retention value triggers a scan immediately, in addition to the startup and daily scans. A terminal Requirement with any running Run is deferred; a zero-day purge is retried immediately when that Run finishes. Requirement-linked domain records are deleted in one transaction; pending attachment-file deletions are persisted as tombstones and retried until the file is absent. `logLevel` accepts `debug`, `info`, `warn`, `error`, or `silent`. Paths and origins accept a non-empty string or `null`; a null database or log path selects its workspace default, while a null origin disables CORS. Unknown fields return 400 Bad Request.
 
-Set `jevApiKey` to a non-empty string to enable Jev decisions, or to `null` or `""` to disable them. The key is stored in the workspace configuration file and never echoed by this API. When a successful RD Run leaves a Requirement waiting for confirmation, Jev evaluates the Requirement title and description together with up to three most recent replies from its RD Agent if there are no queued messages or active timers. It can leave the session waiting, send `continue.` immediately, or create a one-time timer to send `continue.` after 1–60 minutes. Jev failures leave the normal waiting flow intact.
+Set `jevApiKey` to a non-empty string to enable Jev decisions, or to `null` or `""` to disable them. The key is stored in the workspace configuration file and never echoed by this API. When a successful RD Run leaves a Requirement waiting for confirmation, Jev evaluates the Requirement title and description together with the three latest conversation messages, including each author's identity, if there are no queued messages, active Reviewer Runs, or active timers. It can leave the session waiting, send `continue.` immediately as Jev, or create a one-time timer to send `continue.` as Jev after 1–60 minutes. Jev failures leave the normal waiting flow intact.
 
 ### GET /api/agent-models
 
@@ -656,7 +661,7 @@ Success: 200 OK with the updated Requirement. Returns 404 for an unknown Require
 
 ### POST /api/requirements/:id/timers
 
-Creates a persistent timer for an active Requirement. The first occurrence is the requested interval after creation. Each occurrence appends a System message containing the timer ID, schedule, and description; an idle RD Session starts immediately and a running Session queues the message for its next Run. Recurring messages also tell the RD Agent how to cancel the timer when the follow-up is complete.
+Creates a persistent timer for an active Requirement. The first occurrence is the requested interval after creation. Each occurrence appends a System message containing the timer ID, schedule, and description; an idle RD Session starts immediately and a running Session queues the message for its next Run. Recurring messages also tell the RD Agent how to cancel the timer when the follow-up is complete. Jev-created one-time timers use `messageAuthor='jev'` and deliver `continue.` directly; timers created through this endpoint use `messageAuthor='system'`.
 
 ~~~json
 {

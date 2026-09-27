@@ -159,7 +159,7 @@ export interface RequirementMessageDto {
   sessionId: string;
   runId: string | null;
   sourceRequirementId: string | null;
-  author: 'human' | 'rd_agent' | 'reviewer' | 'system';
+  author: 'human' | 'rd_agent' | 'reviewer' | 'system' | 'jev';
   body: string;
   attachments: MessageAttachmentDto[];
   sequence: number;
@@ -214,6 +214,7 @@ export interface AgentTimerDto {
   id: string;
   requirementId: string;
   description: string;
+  messageAuthor: 'system' | 'jev';
   schedule: 'once' | 'recurring';
   intervalSeconds: number;
   status: 'active' | 'completed' | 'cancelled';

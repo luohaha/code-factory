@@ -115,7 +115,7 @@ test('one-time continue timer delivers the continuation message directly', async
   const scheduledFor = new Date(Date.now() - 1_000).toISOString();
   store.createAgentTimer({
     id: 'tmr-continue', requirementId: 'req-scheduled', description: 'continue.',
-    schedule: 'once', intervalSeconds: 60, nextFireAt: scheduledFor, now: scheduledFor,
+    messageAuthor: 'jev', schedule: 'once', intervalSeconds: 60, nextFireAt: scheduledFor, now: scheduledFor,
   });
   const messages: AgentTriggerMessage[] = [];
   const trigger = new TimerAgentTrigger({ store, logger: silentLogger });
@@ -123,6 +123,8 @@ test('one-time continue timer delivers the continuation message directly', async
     trigger.start({ deliver: (message) => { messages.push(message); return null; } });
     await waitFor(() => messages.length === 1);
     assert.equal(messages[0]?.body, 'continue.');
+    assert.equal(messages[0]?.author, 'jev');
+    assert.equal(store.getAgentTimer('tmr-continue')?.messageAuthor, 'jev');
     assert.equal(store.getAgentTimer('tmr-continue')?.status, 'completed');
   } finally {
     trigger.stop();

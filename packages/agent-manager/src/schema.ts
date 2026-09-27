@@ -1,3 +1,16 @@
+export const requirementMessagesTableSql = `CREATE TABLE IF NOT EXISTS requirement_messages (
+    id TEXT PRIMARY KEY,
+    requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+    source_requirement_id TEXT REFERENCES requirements(id) ON DELETE SET NULL,
+    author TEXT NOT NULL CHECK (author IN ('human', 'rd_agent', 'reviewer', 'system', 'jev')),
+    body TEXT NOT NULL,
+    sequence INTEGER NOT NULL DEFAULT 0,
+    deliver_to_rd INTEGER NOT NULL DEFAULT 0 CHECK (deliver_to_rd IN (0, 1)),
+    created_at TEXT NOT NULL
+  ) STRICT`;
+
 export const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS requirements (
     id TEXT PRIMARY KEY,
@@ -54,18 +67,7 @@ export const schemaStatements = [
     idempotency_key TEXT UNIQUE,
     created_at TEXT NOT NULL
   ) STRICT`,
-  `CREATE TABLE IF NOT EXISTS requirement_messages (
-    id TEXT PRIMARY KEY,
-    requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
-    session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
-    run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
-    source_requirement_id TEXT REFERENCES requirements(id) ON DELETE SET NULL,
-    author TEXT NOT NULL CHECK (author IN ('human', 'rd_agent', 'reviewer', 'system')),
-    body TEXT NOT NULL,
-    sequence INTEGER NOT NULL DEFAULT 0,
-    deliver_to_rd INTEGER NOT NULL DEFAULT 0 CHECK (deliver_to_rd IN (0, 1)),
-    created_at TEXT NOT NULL
-  ) STRICT`,
+  requirementMessagesTableSql,
   `CREATE TABLE IF NOT EXISTS message_attachments (
     id TEXT PRIMARY KEY,
     requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
@@ -113,6 +115,7 @@ export const schemaStatements = [
     id TEXT PRIMARY KEY,
     requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
     description TEXT NOT NULL CHECK (length(trim(description)) BETWEEN 1 AND 500),
+    message_author TEXT NOT NULL DEFAULT 'system' CHECK (message_author IN ('system', 'jev')),
     schedule TEXT NOT NULL CHECK (schedule IN ('once', 'recurring')),
     interval_seconds INTEGER NOT NULL CHECK (interval_seconds > 0),
     status TEXT NOT NULL CHECK (status IN ('active', 'completed', 'cancelled')),

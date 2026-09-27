@@ -156,6 +156,7 @@ export interface CreateAgentTimerRecord {
   id: string;
   requirementId: string;
   description: string;
+  messageAuthor?: 'system' | 'jev';
   schedule: AgentTimerSchedule;
   intervalSeconds: number;
   nextFireAt: string;
@@ -190,7 +191,11 @@ export interface AgentManagerStore {
   /** @deprecated Use appendAgentTriggerMessage for source-neutral trigger delivery. */
   appendExternalMessage(input: AppendExternalMessageRecord): RequirementMessage | null;
   listMessages(requirementId: string): RequirementMessage[];
-  listRecentRdReplies(requirementId: string, limit: number): Array<{ runId: string; body: string }>;
+  listRecentConversationMessages(requirementId: string, limit: number): Array<{
+    author: MessageAuthor;
+    body: string;
+    runId: string | null;
+  }>;
   listPendingRdMessages(requirementId: string): RequirementMessage[];
   createAgentTimer(input: CreateAgentTimerRecord): AgentTimer;
   getAgentTimer(id: string): AgentTimer | null;

@@ -57,6 +57,7 @@ export const zhCN = {
   'Turn on desktop notifications': '开启桌面通知',
   'Human': '人工',
   'RD Agent': 'RD Agent',
+  'Jev': 'Jev',
   'Model': '模型',
   'Reasoning effort': '思考强度',
   'Use CLI default model': '使用 CLI 默认模型',

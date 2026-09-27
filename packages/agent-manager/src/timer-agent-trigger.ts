@@ -79,7 +79,7 @@ export class TimerAgentTrigger implements AgentTrigger {
         context.deliver({
           requirementId: timer.requirementId,
           idempotencyKey: `${timer.id}:${scheduledFor}`,
-          author: 'system',
+          author: timer.messageAuthor,
           body: timerMessage(timer),
           metadata: {
             timerId: timer.id,
@@ -131,7 +131,7 @@ export class TimerAgentTrigger implements AgentTrigger {
 }
 
 function timerMessage(timer: AgentTimer): string {
-  if (timer.schedule === 'once' && timer.description === 'continue.') return 'continue.';
+  if (timer.messageAuthor === 'jev' || (timer.schedule === 'once' && timer.description === 'continue.')) return 'continue.';
   return [
     'Timer fired.',
     `Timer ID: ${timer.id}`,
