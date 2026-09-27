@@ -1491,9 +1491,11 @@ export class AgentManager extends EventEmitter {
         ? 'Human'
         : message.author === 'reviewer'
           ? 'Reviewer'
-          : message.author === 'rd_agent' && message.sourceRequirementId
-            ? `Related RD Agent from ${sourceRequirement?.title ?? 'deleted Requirement'} (${message.sourceRequirementId})`
-            : 'System';
+          : message.author === 'jev'
+            ? 'Jev'
+            : message.author === 'rd_agent' && message.sourceRequirementId
+              ? `Related RD Agent from ${sourceRequirement?.title ?? 'deleted Requirement'} (${message.sourceRequirementId})`
+              : 'System';
       const attachments = message.attachments.map((attachment, index) =>
         `- Attachment ${index + 1} "${attachment.fileName}": ${attachment.localPath} (${attachment.mediaType}, ${attachment.byteSize} bytes)`).join('\n');
       return [

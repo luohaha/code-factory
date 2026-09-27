@@ -131,7 +131,7 @@ export class TimerAgentTrigger implements AgentTrigger {
 }
 
 function timerMessage(timer: AgentTimer): string {
-  if (timer.messageAuthor === 'jev' || (timer.schedule === 'once' && timer.description === 'continue.')) return 'continue.';
+  if (timer.messageAuthor === 'jev') return 'continue.';
   return [
     'Timer fired.',
     `Timer ID: ${timer.id}`,

@@ -75,7 +75,8 @@ test('Jev key updates dynamically, remains redacted, and immediate choice resume
     ]);
     assert.deepEqual(manager.listMessages(requirement.id).map((message) => message.author),
       ['rd_agent', 'jev', 'rd_agent']);
-    assert.match(runner.requests[2]?.invocation.input ?? '', /continue\./);
+    assert.match(runner.requests[2]?.invocation.input ?? '', /\[Jev #2\]\ncontinue\./);
+    assert.doesNotMatch(runner.requests[2]?.invocation.input ?? '', /\[System #2\]/);
 
     const cleared = manager.updateConfiguration({ jevApiKey: null });
     assert.equal(cleared.jevApiKeyConfigured, false);
