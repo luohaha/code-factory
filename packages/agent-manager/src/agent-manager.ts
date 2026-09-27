@@ -78,7 +78,7 @@ export interface AgentManagerOptions {
   store?: AgentManagerStore;
   runner?: AgentProcessRunner;
   githubClient?: GitHubClient;
-  jevWakeDecision?: (apiKey: string, context: JevWakeContext) => Promise<JevWakeDecision>;
+  jevWakeDecision?: (apiKey: string, context: JevWakeContext, signal: AbortSignal) => Promise<JevWakeDecision>;
   logger?: Logger;
   logLevel?: LogLevel;
   logFilePath?: string;
@@ -154,11 +154,12 @@ export class AgentManager extends EventEmitter {
   readonly #agentCliBinDirectory: string | null;
   readonly #modelCatalog: AgentModelCatalogService;
   readonly #activeRdRuns = new Map<string, { runId: string; controller: AbortController }>();
+  readonly #pendingJevDecisions = new Set<AbortController>();
   readonly #agentTriggers = new Map<string, AgentTrigger>();
   readonly #pullRequestReconciler: PullRequestReconciler;
   readonly #pullRequestTriggers: readonly PullRequestSnapshotTrigger[];
   readonly #timerAgentTrigger: TimerAgentTrigger;
-  readonly #jevWakeDecision: (apiKey: string, context: JevWakeContext) => Promise<JevWakeDecision>;
+  readonly #jevWakeDecision: (apiKey: string, context: JevWakeContext, signal: AbortSignal) => Promise<JevWakeDecision>;
   readonly #configurationFilePath: string | null;
   readonly #startupConfiguration: AgentManagerConfiguration;
   #configuration: AgentManagerConfiguration;
@@ -356,6 +357,7 @@ export class AgentManager extends EventEmitter {
     if (this.#closePromise) return this.#closePromise;
     if (this.#closed) return Promise.resolve();
     this.#closed = true;
+    for (const controller of this.#pendingJevDecisions) controller.abort();
     this.#modelCatalog.stop();
     this.#pullRequestReconciler.stop();
     if (this.#requirementRetentionTimer) clearInterval(this.#requirementRetentionTimer);
@@ -1360,19 +1362,23 @@ export class AgentManager extends EventEmitter {
       recentMessages.push({ author: 'rd_agent', body: latestReply.trim() });
       if (recentMessages.length > 3) recentMessages.shift();
     }
+    const controller = new AbortController();
+    this.#pendingJevDecisions.add(controller);
     let decision: JevWakeDecision;
     try {
       decision = await this.#jevWakeDecision(apiKey, {
         requirement: { title: requirement.title, description: requirement.description },
         recentMessages,
-      });
+      }, controller.signal);
     } catch (error) {
-      this.logger.warn('Jev wake decision skipped', {
+      if (!this.#closed) this.logger.warn('Jev wake decision skipped', {
         requirementId, runId, error: error instanceof Error ? error.name : 'UnknownError',
       });
       return;
+    } finally {
+      this.#pendingJevDecisions.delete(controller);
     }
-    if (decision.kind === 'wait' || this.#configuration.jevApiKey !== apiKey
+    if (this.#closed || decision.kind === 'wait' || this.#configuration.jevApiKey !== apiKey
       || !this.canJevWake(requirementId, runId)) return;
     try {
       if (decision.kind === 'delayed') {
@@ -1405,9 +1411,9 @@ export class AgentManager extends EventEmitter {
   }
 
   private canJevWake(requirementId: string, runId: string): boolean {
+    if (this.#closed) return false;
     const requirement = this.#store.getRequirement(requirementId);
-    return !this.#closed
-      && requirement?.status === 'waiting_confirmation'
+    return requirement?.status === 'waiting_confirmation'
       && requirement.session.state === 'waiting_human'
       && requirement.session.pendingMessageCount === 0
       && this.#store.listRuns(requirementId).find((run) => run.role === 'rd')?.id === runId
@@ -1416,7 +1422,9 @@ export class AgentManager extends EventEmitter {
   }
 
   private schedulePendingRdMessages(requirementId: string, afterSequence = 0): void {
+    if (this.#closed) return;
     queueMicrotask(() => {
+      if (this.#closed) return;
       const current = this.#store.getRequirement(requirementId);
       if (!current) return;
       if (current.status === 'done' || current.status === 'cancelled' || current.session.state === 'running') return;

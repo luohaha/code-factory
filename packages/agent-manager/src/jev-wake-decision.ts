@@ -12,11 +12,11 @@ const ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 const TIMEOUT_MS = 10_000;
 const DELAY_LEVELS = [1, 2, 5, 10, 30, 60] as const;
 
-export async function decideJevWake(apiKey: string, context: JevWakeContext): Promise<JevWakeDecision> {
+export async function decideJevWake(apiKey: string, context: JevWakeContext, signal?: AbortSignal): Promise<JevWakeDecision> {
   const response = await fetch(ENDPOINT, {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) : AbortSignal.timeout(TIMEOUT_MS),
     body: JSON.stringify({
       model: 'jev-latest',
       state: { requirement: context.requirement, recent_messages: context.recentMessages },

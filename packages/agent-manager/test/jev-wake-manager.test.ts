@@ -333,3 +333,38 @@ test('Jev skips its request when Reviewer is already running', async () => {
     await manager.close();
   }
 });
+
+test('closing during a pending Jev decision ignores late answers without reading the closed store', async () => {
+  const answers: JevWakeDecision[] = [
+    { kind: 'wait' }, { kind: 'immediate' }, { kind: 'delayed', minutes: 1 },
+  ];
+  for (const answer of answers) {
+    const runner = new ReplyRunner();
+    let finishDecision: ((choice: JevWakeDecision) => void) | undefined;
+    let decisionSignal: AbortSignal | undefined;
+    const manager = new AgentManager({
+      workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(':memory:'),
+      runner, logger: silentLogger,
+      jevWakeDecision: async (_key, _context, signal) => {
+        decisionSignal = signal;
+        return new Promise<JevWakeDecision>((resolve) => { finishDecision = resolve; });
+      },
+    });
+    try {
+      manager.updateConfiguration({ jevApiKey: 'secret' });
+      const requirement = manager.createRequirement({ title: 'Close during Jev', description: 'Work', provider: 'codex' });
+      const run = manager.runRequirement(requirement.id);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(decisionSignal?.aborted, false);
+      await manager.close();
+      assert.equal(decisionSignal?.aborted, true);
+      finishDecision?.(answer);
+      assert.equal((await run).status, 'waiting_confirmation');
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(runner.requests.length, 1);
+    } finally {
+      finishDecision?.({ kind: 'wait' });
+      await manager.close();
+    }
+  }
+});

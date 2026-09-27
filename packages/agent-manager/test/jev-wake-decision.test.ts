@@ -60,3 +60,27 @@ test('Jev rejects malformed answers and unsuccessful requests', async () => {
     globalThis.fetch = previous;
   }
 });
+
+test('Jev request forwards the caller abort signal', async () => {
+  const previous = globalThis.fetch;
+  try {
+    let requestSignal: AbortSignal | undefined;
+    globalThis.fetch = async (_input, init) => {
+      requestSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        requestSignal?.addEventListener('abort', () => reject(requestSignal?.reason), { once: true });
+      });
+    };
+    const controller = new AbortController();
+    const decision = decideJevWake('secret', {
+      requirement: { title: 'Task', description: 'Work' },
+      recentMessages: [{ author: 'rd_agent', body: 'Still working.' }],
+    }, controller.signal);
+    assert.equal(requestSignal?.aborted, false);
+    controller.abort();
+    assert.equal(requestSignal?.aborted, true);
+    await assert.rejects(decision, { name: 'AbortError' });
+  } finally {
+    globalThis.fetch = previous;
+  }
+});
