@@ -38,6 +38,7 @@ import {
   Send,
   Settings2,
   SlidersHorizontal,
+  Sparkles,
   Square,
   Sun,
   Terminal,
@@ -262,6 +263,7 @@ const authorLabel: Record<RequirementMessageDto['author'], TranslationKey> = {
   human: 'Human',
   rd_agent: 'RD Agent',
   reviewer: 'Reviewer',
+  jev: 'Jev',
   system: 'System',
 };
 
@@ -1251,6 +1253,8 @@ function ManagerConfigurationDialog({
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [values, setValues] = useState<AgentManagerConfiguration | null>(configuration?.values ?? null);
+  const [jevApiKey, setJevApiKey] = useState('');
+  const [clearJevApiKey, setClearJevApiKey] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1266,10 +1270,13 @@ function ManagerConfigurationDialog({
         .filter((field) => values[field] !== configuration.values[field])
         .map((field) => [field, values[field]]),
     ) as Partial<AgentManagerConfiguration>;
+    if (jevApiKey.trim()) patch.jevApiKey = jevApiKey.trim();
+    else if (clearJevApiKey) patch.jevApiKey = null;
     setSubmitting(true);
     setError(null);
     try {
       if (Object.keys(patch).length > 0) await onSave(patch);
+      setJevApiKey('');
       setOpen(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t('Failed to save configuration'));
@@ -1285,6 +1292,8 @@ function ManagerConfigurationDialog({
         setOpen(next);
         if (next) {
           setValues(configuration?.values ?? null);
+          setJevApiKey('');
+          setClearJevApiKey(false);
           setError(null);
         }
       }}
@@ -1296,7 +1305,7 @@ function ManagerConfigurationDialog({
         <form onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>{t('Agent Manager configuration')}</DialogTitle>
-            <DialogDescription>{t('Reconciliation, requirement retention, commit attribution, and log level changes apply immediately. Other settings take effect after restart.')}</DialogDescription>
+            <DialogDescription>{t('Reconciliation, requirement retention, commit attribution, Jev, and log level changes apply immediately. Other settings take effect after restart.')}</DialogDescription>
           </DialogHeader>
           {configuration?.restartRequired ? (
             <Alert className="mt-4">
@@ -1347,6 +1356,14 @@ function ManagerConfigurationDialog({
               <div>
                 <p className="mb-3 text-xs font-semibold">{t('Runtime settings')}</p>
                 <div className="grid gap-4 sm:grid-cols-2">
+                  <Field className="sm:col-span-2">
+                    <FieldLabel htmlFor="configuration-jev-key">{t('Jev API key')}</FieldLabel>
+                    <div className="flex gap-2">
+                      <Input id="configuration-jev-key" type="password" autoComplete="off" value={jevApiKey} onChange={(event) => { setJevApiKey(event.target.value); setClearJevApiKey(false); }} placeholder={configuration?.jevApiKeyConfigured && !clearJevApiKey ? t('Key configured; leave blank to keep it') : t('Leave blank to disable Jev')} />
+                      {configuration?.jevApiKeyConfigured && !clearJevApiKey ? <Button type="button" variant="outline" onClick={() => { setJevApiKey(''); setClearJevApiKey(true); }}>{t('Remove key')}</Button> : null}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">{t('Jev may continue an RD Agent after a successful Run. The key is stored in the workspace configuration file and hidden from API responses.')}</p>
+                  </Field>
                   <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-3 sm:col-span-2">
                     <div>
                       <p className="text-xs font-medium">{t('Code Factory commit attribution')}</p>
@@ -2279,6 +2296,7 @@ function RequirementDetail({
               const human = item.author === 'human';
               const system = item.author === 'system';
               const reviewer = item.author === 'reviewer';
+              const jev = item.author === 'jev';
               const relatedRd = item.author === 'rd_agent' && item.sourceRequirementId !== null;
               const attachments = item.attachments ?? [];
               if (system) {
@@ -2298,8 +2316,8 @@ function RequirementDetail({
               }
               return (
                 <article key={item.id} className={`flex gap-3 ${human ? 'flex-row-reverse' : ''}`}>
-                  <span className={`grid size-8 shrink-0 place-items-center rounded-xl ${human ? 'bg-primary text-primary-foreground' : reviewer ? 'bg-violet-500/12 text-violet-700 dark:text-violet-300' : relatedRd ? 'bg-amber-500/12 text-amber-700 dark:text-amber-300' : 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'}`}>
-                    {human ? <UserRound className="size-3.5" /> : <Bot className="size-3.5" />}
+                  <span className={`grid size-8 shrink-0 place-items-center rounded-xl ${human ? 'bg-primary text-primary-foreground' : reviewer ? 'bg-violet-500/12 text-violet-700 dark:text-violet-300' : jev ? 'bg-fuchsia-500/12 text-fuchsia-700 dark:text-fuchsia-300' : relatedRd ? 'bg-amber-500/12 text-amber-700 dark:text-amber-300' : 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'}`}>
+                    {human ? <UserRound className="size-3.5" /> : jev ? <Sparkles className="size-3.5" /> : <Bot className="size-3.5" />}
                   </span>
                   <div className={`min-w-0 max-w-[86%] ${human ? 'text-right' : ''}`}>
                     <div className={`flex items-center gap-2 ${human ? 'justify-end' : ''}`}>
@@ -2309,7 +2327,7 @@ function RequirementDetail({
                       </span>
                       <span className="text-[9px] text-muted-foreground">{formatTime(item.createdAt, locale)}</span>
                     </div>
-                    <div className={`mt-1.5 rounded-2xl px-3.5 py-2.5 text-left text-xs leading-5 break-words shadow-[0_1px_2px_oklch(0.18_0.02_255/0.04)] ${human ? 'rounded-tr-md bg-primary text-primary-foreground' : reviewer ? 'rounded-tl-md border border-violet-500/15 bg-violet-500/7' : 'rounded-tl-md border border-border/80 bg-card'}`}>
+                    <div className={`mt-1.5 rounded-2xl px-3.5 py-2.5 text-left text-xs leading-5 break-words shadow-[0_1px_2px_oklch(0.18_0.02_255/0.04)] ${human ? 'rounded-tr-md bg-primary text-primary-foreground' : reviewer ? 'rounded-tl-md border border-violet-500/15 bg-violet-500/7' : jev ? 'rounded-tl-md border border-fuchsia-500/15 bg-fuchsia-500/7' : 'rounded-tl-md border border-border/80 bg-card'}`}>
                       {item.body ? <MarkdownBody body={item.body} inverted={human} /> : null}
                       {attachments.length > 0 ? <div className={item.body ? 'mt-2.5' : ''}><MessageAttachments attachments={attachments} apiUrl={apiUrl} /></div> : null}
                     </div>

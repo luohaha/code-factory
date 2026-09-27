@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 
 import { normalizeRepositoryKey } from './repository-key.js';
-import { postMigrationSchemaStatements, schemaStatements } from './schema.js';
+import { postMigrationSchemaStatements, requirementMessagesTableSql, schemaStatements } from './schema.js';
 import {
   SEARCH_EMBEDDING_VERSION,
   createSearchEmbedding,
@@ -266,6 +266,7 @@ function agentTimerFrom(row: Row): AgentTimer {
     id: String(row.id),
     requirementId: String(row.requirement_id),
     description: String(row.description),
+    messageAuthor: String(row.message_author) as AgentTimer['messageAuthor'],
     schedule: String(row.schedule) as AgentTimer['schedule'],
     intervalSeconds: Number(row.interval_seconds),
     status: String(row.status) as AgentTimer['status'],
@@ -464,8 +465,8 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
 
   listRuns(requirementId?: string): AgentRun[] {
     const rows = requirementId
-      ? this.#db.prepare('SELECT * FROM agent_runs WHERE requirement_id = ? ORDER BY started_at DESC').all(requirementId)
-      : this.#db.prepare('SELECT * FROM agent_runs ORDER BY started_at DESC').all();
+      ? this.#db.prepare('SELECT * FROM agent_runs WHERE requirement_id = ? ORDER BY started_at DESC, rowid DESC').all(requirementId)
+      : this.#db.prepare('SELECT * FROM agent_runs ORDER BY started_at DESC, rowid DESC').all();
     return (rows as Row[]).map(runFrom);
   }
 
@@ -607,6 +608,20 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       .map((row) => messageFrom(row, this.listMessageAttachments(String(row.id))));
   }
 
+  listRecentConversationMessages(requirementId: string, limit: number): Array<{
+    author: RequirementMessage['author']; body: string; runId: string | null;
+  }> {
+    if (!this.getRequirement(requirementId)) throw new StoreNotFoundError(`Requirement ${requirementId} not found`);
+    const rows = this.#db.prepare(`SELECT author, body, run_id FROM requirement_messages
+      WHERE requirement_id = ?
+      ORDER BY sequence DESC LIMIT ?`).all(requirementId, limit) as Row[];
+    return rows.reverse().map((row) => ({
+      author: String(row.author) as RequirementMessage['author'],
+      body: String(row.body),
+      runId: row.run_id === null ? null : String(row.run_id),
+    }));
+  }
+
   listPendingRdMessages(requirementId: string): RequirementMessage[] {
     const bundle = this.requireBundle(requirementId);
     return (this.#db.prepare(`SELECT * FROM requirement_messages
@@ -625,11 +640,12 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       throw new TypeError('intervalSeconds must be a positive integer');
     }
     this.#db.prepare(`INSERT INTO agent_timers
-      (id, requirement_id, description, schedule, interval_seconds, status, next_fire_at, last_fired_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 'active', ?, NULL, ?, ?)`).run(
+      (id, requirement_id, description, message_author, schedule, interval_seconds, status, next_fire_at, last_fired_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'active', ?, NULL, ?, ?)`).run(
       input.id,
       input.requirementId,
       description,
+      input.messageAuthor ?? 'system',
       input.schedule,
       input.intervalSeconds,
       input.nextFireAt,
@@ -1109,6 +1125,32 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     const sequenceAdded = ensureColumn('requirement_messages', 'sequence', 'INTEGER NOT NULL DEFAULT 0');
     ensureColumn('requirement_messages', 'source_requirement_id', 'TEXT REFERENCES requirements(id) ON DELETE SET NULL');
     ensureColumn('requirement_messages', 'deliver_to_rd', 'INTEGER NOT NULL DEFAULT 0 CHECK (deliver_to_rd IN (0, 1))');
+    ensureColumn('agent_timers', 'message_author', "TEXT NOT NULL DEFAULT 'system' CHECK (message_author IN ('system', 'jev'))");
+    const messageTable = this.#db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'requirement_messages'").get() as Row;
+    if (!String(messageTable.sql).includes("'jev'")) {
+      this.#db.exec('PRAGMA foreign_keys = OFF');
+      try {
+        this.#db.exec('BEGIN IMMEDIATE');
+        this.#db.exec(requirementMessagesTableSql.replace('requirement_messages (', 'requirement_messages_jev ('));
+        this.#db.exec(`INSERT INTO requirement_messages_jev
+          (id, requirement_id, session_id, run_id, source_requirement_id, author, body, sequence, deliver_to_rd, created_at)
+          SELECT id, requirement_id, session_id, run_id, source_requirement_id, author, body, sequence, deliver_to_rd, created_at
+          FROM requirement_messages`);
+        this.#db.exec('DROP TABLE requirement_messages');
+        this.#db.exec('ALTER TABLE requirement_messages_jev RENAME TO requirement_messages');
+        this.#db.exec(`CREATE INDEX messages_requirement_created
+          ON requirement_messages (requirement_id, created_at, id)`);
+        if (this.#db.prepare('PRAGMA foreign_key_check').all().length > 0) {
+          throw new Error('Requirement message migration violated a foreign key');
+        }
+        this.#db.exec('COMMIT');
+      } catch (error) {
+        this.#db.exec('ROLLBACK');
+        throw error;
+      } finally {
+        this.#db.exec('PRAGMA foreign_keys = ON');
+      }
+    }
     ensureColumn('review_requests', 'model', 'TEXT');
     ensureColumn('review_requests', 'reasoning_effort', "TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max'))");
     const legacyReceiptTable = this.#db.prepare(

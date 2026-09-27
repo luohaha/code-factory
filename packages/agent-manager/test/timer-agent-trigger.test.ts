@@ -108,3 +108,50 @@ test('recurring Agent Timer skips missed intervals and tells the Agent how to ca
     store.close();
   }
 });
+
+test('one-time continue timer delivers the continuation message directly', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  createRequirement(store);
+  const scheduledFor = new Date(Date.now() - 1_000).toISOString();
+  store.createAgentTimer({
+    id: 'tmr-continue', requirementId: 'req-scheduled', description: 'continue.',
+    messageAuthor: 'jev', schedule: 'once', intervalSeconds: 60, nextFireAt: scheduledFor, now: scheduledFor,
+  });
+  const messages: AgentTriggerMessage[] = [];
+  const trigger = new TimerAgentTrigger({ store, logger: silentLogger });
+  try {
+    trigger.start({ deliver: (message) => { messages.push(message); return null; } });
+    await waitFor(() => messages.length === 1);
+    assert.equal(messages[0]?.body, 'continue.');
+    assert.equal(messages[0]?.author, 'jev');
+    assert.equal(store.getAgentTimer('tmr-continue')?.messageAuthor, 'jev');
+    assert.equal(store.getAgentTimer('tmr-continue')?.status, 'completed');
+  } finally {
+    trigger.stop();
+    store.close();
+  }
+});
+
+test('system one-time timer named continue. retains its timer envelope', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  createRequirement(store);
+  const scheduledFor = new Date(Date.now() - 1_000).toISOString();
+  store.createAgentTimer({
+    id: 'tmr-user-continue', requirementId: 'req-scheduled', description: 'continue.',
+    schedule: 'once', intervalSeconds: 60, nextFireAt: scheduledFor, now: scheduledFor,
+  });
+  const messages: AgentTriggerMessage[] = [];
+  const trigger = new TimerAgentTrigger({ store, logger: silentLogger });
+  try {
+    trigger.start({ deliver: (message) => { messages.push(message); return null; } });
+    await waitFor(() => messages.length === 1);
+    assert.equal(messages[0]?.author, 'system');
+    assert.match(messages[0]?.body ?? '', /^Timer fired\./);
+    assert.match(messages[0]?.body ?? '', /Timer ID: tmr-user-continue/);
+    assert.match(messages[0]?.body ?? '', /Schedule: once/);
+    assert.match(messages[0]?.body ?? '', /Description: continue\./);
+  } finally {
+    trigger.stop();
+    store.close();
+  }
+});

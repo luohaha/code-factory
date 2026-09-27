@@ -111,6 +111,7 @@ export interface AgentManagerConfiguration {
   openDashboard: boolean;
   databasePath: string | null;
   commitCoAuthorEnabled: boolean;
+  jevApiKey: string | null;
   pullRequestReconcileIntervalSeconds: number;
   cancelledRequirementRetentionDays: number;
   doneRequirementRetentionDays: number;
@@ -123,6 +124,7 @@ export interface AgentManagerConfiguration {
 export interface AgentManagerConfigurationSnapshot {
   path: string | null;
   values: AgentManagerConfiguration;
+  jevApiKeyConfigured: boolean;
   restartRequired: boolean;
   restartRequiredFields: Array<keyof AgentManagerConfiguration>;
 }
@@ -157,7 +159,7 @@ export interface RequirementMessageDto {
   sessionId: string;
   runId: string | null;
   sourceRequirementId: string | null;
-  author: 'human' | 'rd_agent' | 'reviewer' | 'system';
+  author: 'human' | 'rd_agent' | 'reviewer' | 'system' | 'jev';
   body: string;
   attachments: MessageAttachmentDto[];
   sequence: number;
@@ -212,6 +214,7 @@ export interface AgentTimerDto {
   id: string;
   requirementId: string;
   description: string;
+  messageAuthor: 'system' | 'jev';
   schedule: 'once' | 'recurring';
   intervalSeconds: number;
   status: 'active' | 'completed' | 'cancelled';

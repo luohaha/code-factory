@@ -1191,8 +1191,22 @@ test('legacy requirement messages add related Requirement provenance', () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-message-source-test-'));
   const databasePath = join(directory, 'factory.sqlite');
   const initial = new SqliteAgentManagerStore(databasePath);
+  initial.createRequirement({
+    requirementId: 'req-legacy-message', sessionId: 'ses-legacy-message',
+    title: 'Legacy message', description: 'Preserve data', provider: 'codex', now,
+  });
+  initial.createMessageAttachment({
+    id: 'att-legacy-message', requirementId: 'req-legacy-message', fileName: 'note.txt',
+    kind: 'file', mediaType: 'text/plain', byteSize: 4, localPath: join(directory, 'note.txt'), now,
+  });
+  initial.appendMessage({
+    id: 'msg-legacy', requirementId: 'req-legacy-message', sessionId: 'ses-legacy-message',
+    author: 'human', body: 'Original message', attachmentIds: ['att-legacy-message'], now,
+  });
   initial.close();
   const legacy = new DatabaseSync(databasePath);
+  const original = legacy.prepare('SELECT * FROM requirement_messages WHERE id = ?').get('msg-legacy') as Record<string, string | number | null>;
+  legacy.exec('PRAGMA foreign_keys = OFF');
   legacy.exec(`
     DROP TABLE requirement_messages;
     CREATE TABLE requirement_messages (
@@ -1207,9 +1221,22 @@ test('legacy requirement messages add related Requirement provenance', () => {
       created_at TEXT NOT NULL
     ) STRICT;
   `);
+  legacy.prepare(`INSERT INTO requirement_messages
+    (id, requirement_id, session_id, run_id, author, body, sequence, deliver_to_rd, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    original.id, original.requirement_id, original.session_id, original.run_id,
+    original.author, original.body, original.sequence, original.deliver_to_rd, original.created_at,
+  );
   legacy.close();
 
   const migratedStore = new SqliteAgentManagerStore(databasePath);
+  assert.equal(migratedStore.listMessages('req-legacy-message')[0]?.body, 'Original message');
+  assert.equal(migratedStore.listMessages('req-legacy-message')[0]?.attachments[0]?.id, 'att-legacy-message');
+  migratedStore.appendMessage({
+    id: 'msg-jev', requirementId: 'req-legacy-message', sessionId: 'ses-legacy-message',
+    author: 'jev', body: 'continue.', deliverToRd: true, now,
+  });
+  assert.equal(migratedStore.listMessages('req-legacy-message')[1]?.author, 'jev');
   migratedStore.close();
   const migrated = new DatabaseSync(databasePath);
   try {

@@ -293,6 +293,31 @@ test('HTTP API reports its version and reads, validates, persists, and applies c
     assert.equal(manager.logger.level, 'warn');
     assert.deepEqual(JSON.parse(readFileSync(configurationFilePath, 'utf8')), updated.values);
 
+    const keyResponse = await fetch(`${baseUrl}/api/configuration`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jevApiKey: 'private-jev-key' }),
+    });
+    assert.equal(keyResponse.status, 200);
+    const keySnapshot = await keyResponse.json() as {
+      values: { jevApiKey: string | null };
+      jevApiKeyConfigured: boolean;
+      restartRequired: boolean;
+    };
+    assert.equal(keySnapshot.values.jevApiKey, null);
+    assert.equal(keySnapshot.jevApiKeyConfigured, true);
+    assert.equal(keySnapshot.restartRequired, false);
+    assert.equal((JSON.parse(readFileSync(configurationFilePath, 'utf8')) as { jevApiKey: string }).jevApiKey, 'private-jev-key');
+    assert.equal(JSON.stringify(manager.listEvents()).includes('private-jev-key'), false);
+    const readBack = await fetch(`${baseUrl}/api/configuration`);
+    assert.equal((await readBack.json() as { values: { jevApiKey: string | null } }).values.jevApiKey, null);
+    const clearKeyResponse = await fetch(`${baseUrl}/api/configuration`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jevApiKey: '' }),
+    });
+    assert.equal((await clearKeyResponse.json() as { jevApiKeyConfigured: boolean }).jevApiKeyConfigured, false);
+
     const restartResponse = await fetch(`${baseUrl}/api/configuration`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
