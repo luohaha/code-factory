@@ -9,15 +9,21 @@ import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
 
 class ReplyRunner implements AgentProcessRunner {
   readonly requests: ProcessRunRequest[] = [];
+  readonly #replies: string[];
+
+  constructor(replies: string[] = []) {
+    this.#replies = replies;
+  }
 
   async run(request: ProcessRunRequest) {
     this.requests.push(request);
-    request.onEvent?.({ kind: 'message', message: 'Still working.', raw: {} });
+    const reply = this.#replies[this.requests.length - 1] ?? 'Still working.';
+    request.onEvent?.({ kind: 'message', message: reply, raw: {} });
     return {
       status: 'succeeded' as const,
       exitCode: 0,
       nativeSessionId: 'thread-1',
-      finalMessage: 'Still working.',
+      finalMessage: reply,
       error: null,
     };
   }
@@ -25,7 +31,7 @@ class ReplyRunner implements AgentProcessRunner {
 
 test('Jev key updates dynamically, remains redacted, and immediate choice resumes with continue.', async () => {
   const runner = new ReplyRunner();
-  const calls: string[] = [];
+  const calls: string[][] = [];
   const manager = new AgentManager({
     workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(':memory:'),
     runner, logger: silentLogger,
@@ -33,7 +39,7 @@ test('Jev key updates dynamically, remains redacted, and immediate choice resume
       assert.equal(key, 'secret');
       assert.equal(context.requirement.title, 'Continue');
       assert.equal(context.requirement.description, 'Work');
-      calls.push(context.latestReply);
+      calls.push(context.recentReplies);
       return calls.length === 1 ? { kind: 'immediate' } : { kind: 'wait' };
     },
   });
@@ -52,6 +58,7 @@ test('Jev key updates dynamically, remains redacted, and immediate choice resume
     await manager.runRequirement(requirement.id);
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(calls.length, 2);
+    assert.deepEqual(calls, [['Still working.'], ['Still working.', 'Still working.']]);
     assert.equal(runner.requests.length, 3);
     assert.deepEqual(manager.listMessages(requirement.id).map((message) => message.body), [
       'Still working.', 'continue.', 'Still working.',
@@ -63,6 +70,66 @@ test('Jev key updates dynamically, remains redacted, and immediate choice resume
     const disabled = manager.createRequirement({ title: 'Disabled', description: 'Work', provider: 'codex' });
     await manager.runRequirement(disabled.id);
     assert.equal(calls.length, 2);
+  } finally {
+    await manager.close();
+  }
+});
+
+test('Jev receives only the latest three replies from this Requirement RD Agent', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new ReplyRunner(['First reply', 'Second reply', 'Third reply', 'Fourth reply']);
+  const seen: string[][] = [];
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(), store, runner, logger: silentLogger,
+    jevWakeDecision: async (_key, context) => {
+      seen.push(context.recentReplies);
+      return { kind: 'wait' };
+    },
+  });
+  try {
+    const requirement = manager.createRequirement({ title: 'Long task', description: 'Work', provider: 'codex' });
+    for (let index = 0; index < 3; index += 1) await manager.runRequirement(requirement.id);
+    const source = manager.createRequirement({ title: 'Related task', description: 'Work', provider: 'codex' });
+    store.appendMessage({
+      id: 'msg-related-agent', requirementId: requirement.id, sessionId: requirement.session.id,
+      sourceRequirementId: source.id, author: 'rd_agent', body: 'Another agent reply',
+      deliverToRd: false, now: new Date().toISOString(),
+    });
+    manager.updateConfiguration({ jevApiKey: 'secret' });
+    await manager.runRequirement(requirement.id);
+    assert.deepEqual(seen, [['Second reply', 'Third reply', 'Fourth reply']]);
+  } finally {
+    await manager.close();
+  }
+});
+
+test('Jev includes the current final reply when the provider emitted no message event', async () => {
+  let runNumber = 0;
+  const runner: AgentProcessRunner = {
+    async run(request) {
+      runNumber += 1;
+      if (runNumber === 1) request.onEvent?.({ kind: 'message', message: 'Earlier reply', raw: {} });
+      return {
+        status: 'succeeded' as const, exitCode: 0, nativeSessionId: 'thread-1',
+        finalMessage: runNumber === 1 ? 'Earlier reply' : 'Final reply without event', error: null,
+      };
+    },
+  };
+  const seen: string[][] = [];
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(':memory:'),
+    runner, logger: silentLogger,
+    jevWakeDecision: async (_key, context) => {
+      seen.push(context.recentReplies);
+      return { kind: 'wait' };
+    },
+  });
+  try {
+    const requirement = manager.createRequirement({ title: 'No event', description: 'Work', provider: 'codex' });
+    await manager.runRequirement(requirement.id);
+    manager.updateConfiguration({ jevApiKey: 'secret' });
+    await manager.runRequirement(requirement.id);
+    assert.deepEqual(seen, [['Earlier reply', 'Final reply without event']]);
   } finally {
     await manager.close();
   }

@@ -607,6 +607,14 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       .map((row) => messageFrom(row, this.listMessageAttachments(String(row.id))));
   }
 
+  listRecentRdReplies(requirementId: string, limit: number): Array<{ runId: string; body: string }> {
+    if (!this.getRequirement(requirementId)) throw new StoreNotFoundError(`Requirement ${requirementId} not found`);
+    const rows = this.#db.prepare(`SELECT run_id, body FROM requirement_messages
+      WHERE requirement_id = ? AND author = 'rd_agent' AND run_id IS NOT NULL
+      ORDER BY sequence DESC LIMIT ?`).all(requirementId, limit) as Row[];
+    return rows.reverse().map((row) => ({ runId: String(row.run_id), body: String(row.body) }));
+  }
+
   listPendingRdMessages(requirementId: string): RequirementMessage[] {
     const bundle = this.requireBundle(requirementId);
     return (this.#db.prepare(`SELECT * FROM requirement_messages

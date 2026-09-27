@@ -190,6 +190,7 @@ export interface AgentManagerStore {
   /** @deprecated Use appendAgentTriggerMessage for source-neutral trigger delivery. */
   appendExternalMessage(input: AppendExternalMessageRecord): RequirementMessage | null;
   listMessages(requirementId: string): RequirementMessage[];
+  listRecentRdReplies(requirementId: string, limit: number): Array<{ runId: string; body: string }>;
   listPendingRdMessages(requirementId: string): RequirementMessage[];
   createAgentTimer(input: CreateAgentTimerRecord): AgentTimer;
   getAgentTimer(id: string): AgentTimer | null;

@@ -1352,11 +1352,17 @@ export class AgentManager extends EventEmitter {
     if (!apiKey || !latestReply.trim() || !this.canJevWake(requirementId, runId)) return;
     const requirement = this.#store.getRequirement(requirementId);
     if (!requirement) return;
+    const replies = this.#store.listRecentRdReplies(requirementId, 3);
+    const recentReplies = replies.map((reply) => reply.body);
+    if (!replies.some((reply) => reply.runId === runId)) {
+      recentReplies.push(latestReply.trim());
+      if (recentReplies.length > 3) recentReplies.shift();
+    }
     let decision: JevWakeDecision;
     try {
       decision = await this.#jevWakeDecision(apiKey, {
         requirement: { title: requirement.title, description: requirement.description },
-        latestReply,
+        recentReplies,
       });
     } catch (error) {
       this.logger.warn('Jev wake decision skipped', {

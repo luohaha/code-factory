@@ -11,16 +11,17 @@ test('Jev sends a typed Choice and Score and maps delayed scores to minutes', as
       assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer secret');
       const body = JSON.parse(String(init?.body)) as {
         model: string;
-        state: { requirement: { title: string; description: string }; latest_reply: string };
+        state: { requirement: { title: string; description: string }; recent_replies: string[] };
         questions: { wake_action: { type: string; instructions: string }; delay: { type: string } };
       };
       assert.equal(body.model, 'jev-latest');
-      assert.equal(body.state.latest_reply, 'A build is still running.');
+      assert.deepEqual(body.state.recent_replies, ['The report is implemented.', 'A build is still running.']);
       assert.deepEqual(body.state.requirement, {
         title: 'Add a report', description: 'Implement the report and test it.',
       });
       assert.equal(body.questions.wake_action.type, 'choice');
       assert.match(body.questions.wake_action.instructions, /requirement\.description/);
+      assert.match(body.questions.wake_action.instructions, /recent_replies/);
       assert.equal(body.questions.delay.type, 'score');
       return new Response(JSON.stringify({ answers: {
         wake_action: { type: 'choice', choice: 'delayed' },
@@ -29,7 +30,7 @@ test('Jev sends a typed Choice and Score and maps delayed scores to minutes', as
     };
     assert.deepEqual(await decideJevWake('secret', {
       requirement: { title: 'Add a report', description: 'Implement the report and test it.' },
-      latestReply: 'A build is still running.',
+      recentReplies: ['The report is implemented.', 'A build is still running.'],
     }), {
       kind: 'delayed', minutes: 20,
     });
@@ -44,7 +45,7 @@ test('Jev rejects malformed answers and unsuccessful requests', async () => {
     globalThis.fetch = async () => new Response(JSON.stringify({ answers: {
       wake_action: { type: 'choice', choice: 'unknown' },
     } }), { status: 200 });
-    const context = { requirement: { title: 'Task', description: 'Finish work' }, latestReply: 'done' };
+    const context = { requirement: { title: 'Task', description: 'Finish work' }, recentReplies: ['done'] };
     await assert.rejects(decideJevWake('secret', context), /Invalid Jev choice/);
     globalThis.fetch = async () => new Response('{}', { status: 429 });
     await assert.rejects(decideJevWake('secret', context), /HTTP 429/);
