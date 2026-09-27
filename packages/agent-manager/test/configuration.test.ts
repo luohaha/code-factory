@@ -41,6 +41,8 @@ test('configuration file fills omitted defaults and rejects unknown or invalid f
       commitCoAuthorEnabled: false,
     });
     assert.throws(() => validateAgentManagerConfigurationPatch({ commitCoAuthorEnabled: 'yes' }), /commitCoAuthorEnabled/);
+    assert.deepEqual(validateAgentManagerConfigurationPatch({ jevApiKey: '  ' }), { jevApiKey: null });
+    assert.throws(() => validateAgentManagerConfigurationPatch({ jevApiKey: 123 }), /jevApiKey/);
     assert.throws(() => validateAgentManagerConfigurationPatch({
       pullRequestReconcileIntervalSeconds: -1,
     }), /pullRequestReconcileIntervalSeconds/);

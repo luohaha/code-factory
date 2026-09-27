@@ -332,6 +332,8 @@ logFilePath is a stable symlink to the active log; physical files rotate by date
 
 Returns the configuration file path, file-backed desired values, and any fields saved for the next restart. Process-local CLI and environment overrides are effective for the current launch but do not replace these values.
 
+`jevApiKey` is always returned as `null`; `jevApiKeyConfigured` reports whether a key is present. The key is also redacted from configuration SSE events.
+
 ~~~json
 {
   "path": "/home/user/.code-factory/workspaces/7a60b5f8c3d94945/config.json",
@@ -341,6 +343,7 @@ Returns the configuration file path, file-backed desired values, and any fields 
     "allowedOrigin": "http://localhost:3000",
     "openDashboard": false,
     "databasePath": null,
+    "jevApiKey": null,
     "pullRequestReconcileIntervalSeconds": 30,
     "cancelledRequirementRetentionDays": 7,
     "doneRequirementRetentionDays": 365,
@@ -349,6 +352,7 @@ Returns the configuration file path, file-backed desired values, and any fields 
     "logMaxSize": "20m",
     "logMaxFiles": "14d"
   },
+  "jevApiKeyConfigured": false,
   "restartRequired": false,
   "restartRequiredFields": []
 }
@@ -356,7 +360,7 @@ Returns the configuration file path, file-backed desired values, and any fields 
 
 ### PATCH /api/configuration
 
-Accepts any subset of `values`. The patch is merged into the file-backed desired values and the complete validated document is atomically written; unrelated launch-only overrides are never persisted. `pullRequestReconcileIntervalSeconds`, `cancelledRequirementRetentionDays`, `doneRequirementRetentionDays`, and `logLevel` apply immediately. All other fields are persisted, returned in `restartRequiredFields`, and apply on restart.
+Accepts any subset of `values`. The patch is merged into the file-backed desired values and the complete validated document is atomically written; unrelated launch-only overrides are never persisted. `pullRequestReconcileIntervalSeconds`, `cancelledRequirementRetentionDays`, `doneRequirementRetentionDays`, `logLevel`, and `jevApiKey` apply immediately. All other fields are persisted, returned in `restartRequiredFields`, and apply on restart.
 
 ~~~bash
 curl -X PATCH http://127.0.0.1:4310/api/configuration \
@@ -365,6 +369,8 @@ curl -X PATCH http://127.0.0.1:4310/api/configuration \
 ~~~
 
 `port` must be an integer from 1 to 65535. The reconcile interval must be an integer from 0 to 2147483 seconds, the largest whole-second delay supported by Node.js timers. Each Requirement retention value must be an integer from 0 to 36500 days; `0` deletes matching Requirements as they become terminal. Updating either retention value triggers a scan immediately, in addition to the startup and daily scans. A terminal Requirement with any running Run is deferred; a zero-day purge is retried immediately when that Run finishes. Requirement-linked domain records are deleted in one transaction; pending attachment-file deletions are persisted as tombstones and retried until the file is absent. `logLevel` accepts `debug`, `info`, `warn`, `error`, or `silent`. Paths and origins accept a non-empty string or `null`; a null database or log path selects its workspace default, while a null origin disables CORS. Unknown fields return 400 Bad Request.
+
+Set `jevApiKey` to a non-empty string to enable Jev decisions, or to `null` or `""` to disable them. The key is stored in the workspace configuration file and never echoed by this API. When a successful RD Run leaves a Requirement waiting for confirmation, Jev evaluates its latest reply if there are no queued messages or active timers. It can leave the session waiting, send `continue.` immediately, or create a one-time timer to send `continue.` after 1–60 minutes. Jev failures leave the normal waiting flow intact.
 
 ### GET /api/agent-models
 

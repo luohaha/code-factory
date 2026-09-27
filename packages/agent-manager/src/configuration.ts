@@ -12,6 +12,7 @@ export interface AgentManagerConfiguration {
   openDashboard: boolean;
   databasePath: string | null;
   commitCoAuthorEnabled: boolean;
+  jevApiKey: string | null;
   pullRequestReconcileIntervalSeconds: number;
   cancelledRequirementRetentionDays: number;
   doneRequirementRetentionDays: number;
@@ -26,6 +27,7 @@ export type AgentManagerConfigurationPatch = Partial<AgentManagerConfiguration>;
 export interface AgentManagerConfigurationSnapshot {
   path: string | null;
   values: AgentManagerConfiguration;
+  jevApiKeyConfigured: boolean;
   restartRequired: boolean;
   restartRequiredFields: Array<keyof AgentManagerConfiguration>;
 }
@@ -40,6 +42,7 @@ export const DEFAULT_AGENT_MANAGER_CONFIGURATION: Readonly<AgentManagerConfigura
   openDashboard: false,
   databasePath: null,
   commitCoAuthorEnabled: true,
+  jevApiKey: null,
   pullRequestReconcileIntervalSeconds: 30,
   cancelledRequirementRetentionDays: 7,
   doneRequirementRetentionDays: 365,
@@ -51,6 +54,7 @@ export const DEFAULT_AGENT_MANAGER_CONFIGURATION: Readonly<AgentManagerConfigura
 
 export const DYNAMIC_CONFIGURATION_FIELDS: ReadonlySet<keyof AgentManagerConfiguration> = new Set([
   'commitCoAuthorEnabled',
+  'jevApiKey',
   'pullRequestReconcileIntervalSeconds',
   'cancelledRequirementRetentionDays',
   'doneRequirementRetentionDays',
@@ -131,6 +135,12 @@ export function validateAgentManagerConfigurationPatch(value: unknown): AgentMan
   if (input.commitCoAuthorEnabled !== undefined) {
     if (typeof input.commitCoAuthorEnabled !== 'boolean') throw new TypeError('commitCoAuthorEnabled must be a boolean');
     output.commitCoAuthorEnabled = input.commitCoAuthorEnabled;
+  }
+  if (input.jevApiKey !== undefined) {
+    if (input.jevApiKey !== null && typeof input.jevApiKey !== 'string') {
+      throw new TypeError('jevApiKey must be a string or null');
+    }
+    output.jevApiKey = typeof input.jevApiKey === 'string' ? input.jevApiKey.trim() || null : null;
   }
   if (input.pullRequestReconcileIntervalSeconds !== undefined) {
     output.pullRequestReconcileIntervalSeconds = integerInRange(

@@ -1251,6 +1251,8 @@ function ManagerConfigurationDialog({
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [values, setValues] = useState<AgentManagerConfiguration | null>(configuration?.values ?? null);
+  const [jevApiKey, setJevApiKey] = useState('');
+  const [clearJevApiKey, setClearJevApiKey] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1266,10 +1268,13 @@ function ManagerConfigurationDialog({
         .filter((field) => values[field] !== configuration.values[field])
         .map((field) => [field, values[field]]),
     ) as Partial<AgentManagerConfiguration>;
+    if (jevApiKey.trim()) patch.jevApiKey = jevApiKey.trim();
+    else if (clearJevApiKey) patch.jevApiKey = null;
     setSubmitting(true);
     setError(null);
     try {
       if (Object.keys(patch).length > 0) await onSave(patch);
+      setJevApiKey('');
       setOpen(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t('Failed to save configuration'));
@@ -1285,6 +1290,8 @@ function ManagerConfigurationDialog({
         setOpen(next);
         if (next) {
           setValues(configuration?.values ?? null);
+          setJevApiKey('');
+          setClearJevApiKey(false);
           setError(null);
         }
       }}
@@ -1296,7 +1303,7 @@ function ManagerConfigurationDialog({
         <form onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>{t('Agent Manager configuration')}</DialogTitle>
-            <DialogDescription>{t('Reconciliation, requirement retention, commit attribution, and log level changes apply immediately. Other settings take effect after restart.')}</DialogDescription>
+            <DialogDescription>{t('Reconciliation, requirement retention, commit attribution, Jev, and log level changes apply immediately. Other settings take effect after restart.')}</DialogDescription>
           </DialogHeader>
           {configuration?.restartRequired ? (
             <Alert className="mt-4">
@@ -1347,6 +1354,14 @@ function ManagerConfigurationDialog({
               <div>
                 <p className="mb-3 text-xs font-semibold">{t('Runtime settings')}</p>
                 <div className="grid gap-4 sm:grid-cols-2">
+                  <Field className="sm:col-span-2">
+                    <FieldLabel htmlFor="configuration-jev-key">{t('Jev API key')}</FieldLabel>
+                    <div className="flex gap-2">
+                      <Input id="configuration-jev-key" type="password" autoComplete="off" value={jevApiKey} onChange={(event) => { setJevApiKey(event.target.value); setClearJevApiKey(false); }} placeholder={configuration?.jevApiKeyConfigured && !clearJevApiKey ? t('Key configured; leave blank to keep it') : t('Leave blank to disable Jev')} />
+                      {configuration?.jevApiKeyConfigured && !clearJevApiKey ? <Button type="button" variant="outline" onClick={() => { setJevApiKey(''); setClearJevApiKey(true); }}>{t('Remove key')}</Button> : null}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">{t('Jev may continue an RD Agent after a successful Run. The key is stored in the workspace configuration file and hidden from API responses.')}</p>
+                  </Field>
                   <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-3 sm:col-span-2">
                     <div>
                       <p className="text-xs font-medium">{t('Code Factory commit attribution')}</p>

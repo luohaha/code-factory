@@ -464,8 +464,8 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
 
   listRuns(requirementId?: string): AgentRun[] {
     const rows = requirementId
-      ? this.#db.prepare('SELECT * FROM agent_runs WHERE requirement_id = ? ORDER BY started_at DESC').all(requirementId)
-      : this.#db.prepare('SELECT * FROM agent_runs ORDER BY started_at DESC').all();
+      ? this.#db.prepare('SELECT * FROM agent_runs WHERE requirement_id = ? ORDER BY started_at DESC, rowid DESC').all(requirementId)
+      : this.#db.prepare('SELECT * FROM agent_runs ORDER BY started_at DESC, rowid DESC').all();
     return (rows as Row[]).map(runFrom);
   }
 

@@ -1,0 +1,46 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { decideJevWake } from '../src/jev-wake-decision.ts';
+
+test('Jev sends a typed Choice and Score and maps delayed scores to minutes', async () => {
+  const previous = globalThis.fetch;
+  try {
+    globalThis.fetch = async (input, init) => {
+      assert.equal(input, 'https://api.typesafe.ai/v1/systemone');
+      assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer secret');
+      const body = JSON.parse(String(init?.body)) as {
+        model: string;
+        state: { latest_reply: string };
+        questions: { wake_action: { type: string }; delay: { type: string } };
+      };
+      assert.equal(body.model, 'jev-latest');
+      assert.equal(body.state.latest_reply, 'A build is still running.');
+      assert.equal(body.questions.wake_action.type, 'choice');
+      assert.equal(body.questions.delay.type, 'score');
+      return new Response(JSON.stringify({ answers: {
+        wake_action: { type: 'choice', choice: 'delayed' },
+        delay: { type: 'score', score: 3.5 },
+      } }), { status: 200 });
+    };
+    assert.deepEqual(await decideJevWake('secret', 'A build is still running.'), {
+      kind: 'delayed', minutes: 20,
+    });
+  } finally {
+    globalThis.fetch = previous;
+  }
+});
+
+test('Jev rejects malformed answers and unsuccessful requests', async () => {
+  const previous = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({ answers: {
+      wake_action: { type: 'choice', choice: 'unknown' },
+    } }), { status: 200 });
+    await assert.rejects(decideJevWake('secret', 'done'), /Invalid Jev choice/);
+    globalThis.fetch = async () => new Response('{}', { status: 429 });
+    await assert.rejects(decideJevWake('secret', 'done'), /HTTP 429/);
+  } finally {
+    globalThis.fetch = previous;
+  }
+});

@@ -30,6 +30,7 @@ import {
   type CodeFactoryCliInvocation,
 } from './code-factory-cli-launcher.js';
 import { GhCliGitHubClient, type GitHubClient } from './github-client.js';
+import { decideJevWake, type JevWakeDecision } from './jev-wake-decision.js';
 import { createFileLogger, type Logger, type LogLevel } from './logger.js';
 import {
   ClaudeCodeModelDiscoverer,
@@ -76,6 +77,7 @@ export interface AgentManagerOptions {
   store?: AgentManagerStore;
   runner?: AgentProcessRunner;
   githubClient?: GitHubClient;
+  jevWakeDecision?: (apiKey: string, latestReply: string) => Promise<JevWakeDecision>;
   logger?: Logger;
   logLevel?: LogLevel;
   logFilePath?: string;
@@ -155,6 +157,7 @@ export class AgentManager extends EventEmitter {
   readonly #pullRequestReconciler: PullRequestReconciler;
   readonly #pullRequestTriggers: readonly PullRequestSnapshotTrigger[];
   readonly #timerAgentTrigger: TimerAgentTrigger;
+  readonly #jevWakeDecision: (apiKey: string, latestReply: string) => Promise<JevWakeDecision>;
   readonly #configurationFilePath: string | null;
   readonly #startupConfiguration: AgentManagerConfiguration;
   #configuration: AgentManagerConfiguration;
@@ -184,6 +187,7 @@ export class AgentManager extends EventEmitter {
     const configuredLogLevel = effectiveConfiguration.logLevel ?? options.logger?.level
       ?? DEFAULT_AGENT_MANAGER_CONFIGURATION.logLevel;
     this.#startupConfiguration = { ...this.#configuration };
+    this.#jevWakeDecision = options.jevWakeDecision ?? decideJevWake;
     this.#initialPullRequestReconcileIntervalSeconds = effectiveConfiguration.pullRequestReconcileIntervalSeconds;
     this.#configurationFilePath = options.configurationFilePath ? resolve(options.configurationFilePath) : null;
     this.databasePath = effectiveConfiguration.databasePath ?? defaultDatabasePath(this.workspaceRoot);
@@ -282,7 +286,8 @@ export class AgentManager extends EventEmitter {
       .filter((field) => this.#configuration[field] !== this.#startupConfiguration[field]);
     return {
       path: this.#configurationFilePath,
-      values: { ...this.#configuration },
+      values: { ...this.#configuration, jevApiKey: null },
+      jevApiKeyConfigured: Boolean(this.#configuration.jevApiKey),
       restartRequired: restartRequiredFields.length > 0,
       restartRequiredFields,
     };
@@ -1317,7 +1322,7 @@ export class AgentManager extends EventEmitter {
           deliverToRd: false,
         });
       },
-    }).then((outcome) => {
+    }).then(async (outcome) => {
       const active = this.#activeRdRuns.get(requirementId);
       if (active?.runId === runId) this.#activeRdRuns.delete(requirementId);
       const current = this.#store.finishRdRun(runId, outcome, new Date().toISOString());
@@ -1333,10 +1338,66 @@ export class AgentManager extends EventEmitter {
       }
       this.publishOutcome(requirementId, current.session.id, runId, 'rd', outcome);
       this.logRunOutcome(requirementId, runId, 'rd', outcome, performance.now() - startedAt);
+      if (outcome.status === 'succeeded') {
+        await this.considerJevWake(requirementId, runId, lastAgentMessage || outcome.finalMessage || '');
+      }
       if (outcome.status === 'succeeded') this.schedulePendingRdMessages(requirementId);
       if (outcome.status === 'cancelled') this.schedulePendingRdMessages(requirementId, inputToSequence ?? 0);
       return current;
     });
+  }
+
+  private async considerJevWake(requirementId: string, runId: string, latestReply: string): Promise<void> {
+    const apiKey = this.#configuration.jevApiKey;
+    if (!apiKey || !latestReply.trim() || !this.canJevWake(requirementId, runId)) return;
+    let decision: JevWakeDecision;
+    try {
+      decision = await this.#jevWakeDecision(apiKey, latestReply);
+    } catch (error) {
+      this.logger.warn('Jev wake decision skipped', {
+        requirementId, runId, error: error instanceof Error ? error.name : 'UnknownError',
+      });
+      return;
+    }
+    if (decision.kind === 'wait' || this.#configuration.jevApiKey !== apiKey
+      || !this.canJevWake(requirementId, runId)) return;
+    try {
+      if (decision.kind === 'delayed') {
+        this.createAgentTimer(requirementId, {
+          description: 'continue.',
+          schedule: 'once',
+          intervalSeconds: decision.minutes * 60,
+        });
+      } else {
+        const requirement = this.requireRequirement(requirementId);
+        this.appendMessage({
+          requirementId,
+          sessionId: requirement.session.id,
+          author: 'system',
+          body: 'continue.',
+          deliverToRd: true,
+        });
+      }
+    } catch (error) {
+      this.logger.warn('Jev wake decision skipped', {
+        requirementId, runId, error: error instanceof Error ? error.name : 'UnknownError',
+      });
+      return;
+    }
+    this.logger.info('Jev wake decision applied', {
+      requirementId, runId, decision: decision.kind,
+      ...(decision.kind === 'delayed' ? { minutes: decision.minutes } : {}),
+    });
+  }
+
+  private canJevWake(requirementId: string, runId: string): boolean {
+    const requirement = this.#store.getRequirement(requirementId);
+    return !this.#closed
+      && requirement?.status === 'waiting_confirmation'
+      && requirement.session.state === 'waiting_human'
+      && requirement.session.pendingMessageCount === 0
+      && this.#store.listRuns(requirementId).find((run) => run.role === 'rd')?.id === runId
+      && !this.#store.listAgentTimers(requirementId).some((timer) => timer.status === 'active');
   }
 
   private schedulePendingRdMessages(requirementId: string, afterSequence = 0): void {

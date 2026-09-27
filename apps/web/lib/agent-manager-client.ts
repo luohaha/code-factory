@@ -111,6 +111,7 @@ export interface AgentManagerConfiguration {
   openDashboard: boolean;
   databasePath: string | null;
   commitCoAuthorEnabled: boolean;
+  jevApiKey: string | null;
   pullRequestReconcileIntervalSeconds: number;
   cancelledRequirementRetentionDays: number;
   doneRequirementRetentionDays: number;
@@ -123,6 +124,7 @@ export interface AgentManagerConfiguration {
 export interface AgentManagerConfigurationSnapshot {
   path: string | null;
   values: AgentManagerConfiguration;
+  jevApiKeyConfigured: boolean;
   restartRequired: boolean;
   restartRequiredFields: Array<keyof AgentManagerConfiguration>;
 }
