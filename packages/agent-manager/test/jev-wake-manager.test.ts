@@ -159,6 +159,129 @@ test('Jev includes the current final reply when the provider emitted no message 
   }
 });
 
+test('Jev can immediately retry a failed RD Run without an RD reply', async () => {
+  const requests: ProcessRunRequest[] = [];
+  const seen: Array<{ status: string; messages: SeenMessage[] }> = [];
+  const runner: AgentProcessRunner = {
+    async run(request) {
+      requests.push(request);
+      return requests.length === 1
+        ? { status: 'failed', exitCode: 1, nativeSessionId: 'thread-1', finalMessage: null, error: 'Transient provider error' }
+        : { status: 'succeeded', exitCode: 0, nativeSessionId: 'thread-1', finalMessage: 'Recovered', error: null };
+    },
+  };
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(':memory:'),
+    runner, logger: silentLogger,
+    jevWakeDecision: async (_key, context) => {
+      seen.push({ status: context.runStatus, messages: context.recentMessages });
+      return seen.length === 1 ? { kind: 'immediate' } : { kind: 'wait' };
+    },
+  });
+  try {
+    manager.updateConfiguration({ jevApiKey: 'secret' });
+    const requirement = manager.createRequirement({ title: 'Retry failure', description: 'Work', provider: 'codex' });
+    await manager.runRequirement(requirement.id);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(seen, [
+      { status: 'failed', messages: [{ author: 'system', body: 'Transient provider error' }] },
+      { status: 'succeeded', messages: [
+        { author: 'system', body: 'Transient provider error' },
+        { author: 'jev', body: 'continue.' },
+        { author: 'rd_agent', body: 'Recovered' },
+      ] },
+    ]);
+    assert.equal(requests.length, 2);
+    assert.match(requests[1]?.invocation.input ?? '', /\[Jev #2\]\ncontinue\./);
+    assert.deepEqual(manager.listRuns(requirement.id).map((run) => run.status), ['succeeded', 'failed']);
+    assert.equal(manager.getRequirement(requirement.id)?.session.state, 'waiting_human');
+  } finally {
+    await manager.close();
+  }
+});
+
+test('Jev can delay a timed-out RD Run and leaves failed Runs waiting when it chooses wait', async () => {
+  let status: 'timed_out' | 'failed' = 'timed_out';
+  const seen: Array<{ status: string; messages: SeenMessage[] }> = [];
+  const runner: AgentProcessRunner = {
+    async run() {
+      return { status, exitCode: null, nativeSessionId: null, finalMessage: null,
+        error: status === 'timed_out' ? 'Provider timed out' : 'Permanent failure' };
+    },
+  };
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(':memory:'),
+    runner, logger: silentLogger,
+    jevWakeDecision: async (_key, context) => {
+      seen.push({ status: context.runStatus, messages: context.recentMessages });
+      return context.runStatus === 'timed_out' ? { kind: 'delayed', minutes: 5 } : { kind: 'wait' };
+    },
+  });
+  try {
+    manager.updateConfiguration({ jevApiKey: 'secret' });
+    const timedOut = manager.createRequirement({ title: 'Timeout', description: 'Work', provider: 'codex' });
+    const first = await manager.runRequirement(timedOut.id);
+    assert.equal(first.session.state, 'failed');
+    assert.deepEqual(seen[0], { status: 'timed_out', messages: [{ author: 'system', body: 'Provider timed out' }] });
+    const timer = manager.listAgentTimers(timedOut.id)[0];
+    assert.equal(timer?.intervalSeconds, 300);
+    assert.equal(timer?.messageAuthor, 'jev');
+    assert.equal(timer?.description, 'continue.');
+
+    status = 'failed';
+    const failed = manager.createRequirement({ title: 'Failure', description: 'Work', provider: 'codex' });
+    await manager.runRequirement(failed.id);
+    assert.deepEqual(seen[1], { status: 'failed', messages: [{ author: 'system', body: 'Permanent failure' }] });
+    assert.equal(manager.getRequirement(failed.id)?.session.state, 'failed');
+    assert.equal(manager.listAgentTimers(failed.id).length, 0);
+    assert.equal(manager.listMessages(failed.id).some((message) => message.author === 'jev'), false);
+  } finally {
+    await manager.close();
+  }
+});
+
+test('Jev ignores a failed-Run decision after a human starts a retry', async () => {
+  let finishDecision: ((choice: JevWakeDecision) => void) | undefined;
+  let calls = 0;
+  const runner = new ReplyRunner();
+  const failingRunner: AgentProcessRunner = {
+    async run(request) {
+      if (runner.requests.length === 0) {
+        runner.requests.push(request);
+        return { status: 'failed', exitCode: 1, nativeSessionId: 'thread-1',
+          finalMessage: null, error: 'Temporary failure' };
+      }
+      return runner.run(request);
+    },
+  };
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(':memory:'),
+    runner: failingRunner, logger: silentLogger,
+    jevWakeDecision: async () => {
+      calls += 1;
+      return calls === 1
+        ? new Promise<JevWakeDecision>((resolve) => { finishDecision = resolve; })
+        : { kind: 'wait' };
+    },
+  });
+  try {
+    manager.updateConfiguration({ jevApiKey: 'secret' });
+    const requirement = manager.createRequirement({ title: 'Manual retry', description: 'Work', provider: 'codex' });
+    const first = manager.runRequirement(requirement.id);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    manager.postHumanMessage(requirement.id, 'I fixed the provider. Retry now.');
+    finishDecision?.({ kind: 'immediate' });
+    await first;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(runner.requests.length, 2);
+    assert.equal(manager.listMessages(requirement.id).some((message) => message.author === 'jev'), false);
+    assert.equal(manager.listAgentTimers(requirement.id).length, 0);
+  } finally {
+    finishDecision?.({ kind: 'wait' });
+    await manager.close();
+  }
+});
+
 test('Jev delay creates a one-time timer; existing timers and errors preserve waiting', async () => {
   const runner = new ReplyRunner();
   let decision: JevWakeDecision | Error = { kind: 'delayed', minutes: 10 };

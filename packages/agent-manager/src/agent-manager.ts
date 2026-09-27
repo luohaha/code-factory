@@ -1342,8 +1342,9 @@ export class AgentManager extends EventEmitter {
       }
       this.publishOutcome(requirementId, current.session.id, runId, 'rd', outcome);
       this.logRunOutcome(requirementId, runId, 'rd', outcome, performance.now() - startedAt);
-      if (outcome.status === 'succeeded') {
-        await this.considerJevWake(requirementId, runId, lastAgentMessage || outcome.finalMessage || '');
+      if (outcome.status !== 'cancelled') {
+        await this.considerJevWake(requirementId, runId, outcome.status,
+          outcome.status === 'succeeded' ? lastAgentMessage || outcome.finalMessage || '' : '');
       }
       if (outcome.status === 'succeeded') this.schedulePendingRdMessages(requirementId);
       if (outcome.status === 'cancelled') this.schedulePendingRdMessages(requirementId, inputToSequence ?? 0);
@@ -1351,14 +1352,20 @@ export class AgentManager extends EventEmitter {
     });
   }
 
-  private async considerJevWake(requirementId: string, runId: string, latestReply: string): Promise<void> {
+  private async considerJevWake(
+    requirementId: string,
+    runId: string,
+    runStatus: JevWakeContext['runStatus'],
+    latestReply: string,
+  ): Promise<void> {
     const apiKey = this.#configuration.jevApiKey;
-    if (!apiKey || !latestReply.trim() || !this.canJevWake(requirementId, runId)) return;
+    if (!apiKey || (runStatus === 'succeeded' && !latestReply.trim())
+      || !this.canJevWake(requirementId, runId, runStatus)) return;
     const requirement = this.#store.getRequirement(requirementId);
     if (!requirement) return;
     const messages = this.#store.listRecentConversationMessages(requirementId, 3);
     const recentMessages = messages.map(({ author, body }) => ({ author, body }));
-    if (!messages.some((message) => message.runId === runId && message.author === 'rd_agent')) {
+    if (latestReply && !messages.some((message) => message.runId === runId && message.author === 'rd_agent')) {
       recentMessages.push({ author: 'rd_agent', body: latestReply.trim() });
       if (recentMessages.length > 3) recentMessages.shift();
     }
@@ -1368,6 +1375,7 @@ export class AgentManager extends EventEmitter {
     try {
       decision = await this.#jevWakeDecision(apiKey, {
         requirement: { title: requirement.title, description: requirement.description },
+        runStatus,
         recentMessages,
       }, controller.signal);
     } catch (error) {
@@ -1379,7 +1387,7 @@ export class AgentManager extends EventEmitter {
       this.#pendingJevDecisions.delete(controller);
     }
     if (this.#closed || decision.kind === 'wait' || this.#configuration.jevApiKey !== apiKey
-      || !this.canJevWake(requirementId, runId)) return;
+      || !this.canJevWake(requirementId, runId, runStatus)) return;
     try {
       if (decision.kind === 'delayed') {
         this.createAgentTimer(requirementId, {
@@ -1397,6 +1405,7 @@ export class AgentManager extends EventEmitter {
           body: 'continue.',
           deliverToRd: true,
         });
+        if (runStatus !== 'succeeded') this.schedulePendingRdMessages(requirementId);
       }
     } catch (error) {
       this.logger.warn('Jev wake decision skipped', {
@@ -1410,13 +1419,15 @@ export class AgentManager extends EventEmitter {
     });
   }
 
-  private canJevWake(requirementId: string, runId: string): boolean {
+  private canJevWake(requirementId: string, runId: string, runStatus: JevWakeContext['runStatus']): boolean {
     if (this.#closed) return false;
     const requirement = this.#store.getRequirement(requirementId);
+    const latestRdRun = this.#store.listRuns(requirementId).find((run) => run.role === 'rd');
     return requirement?.status === 'waiting_confirmation'
-      && requirement.session.state === 'waiting_human'
+      && requirement.session.state === (runStatus === 'succeeded' ? 'waiting_human' : 'failed')
       && requirement.session.pendingMessageCount === 0
-      && this.#store.listRuns(requirementId).find((run) => run.role === 'rd')?.id === runId
+      && latestRdRun?.id === runId
+      && latestRdRun.status === runStatus
       && !this.#store.listRuns(requirementId).some((run) => run.role === 'reviewer' && run.status === 'running')
       && !this.#store.listAgentTimers(requirementId).some((timer) => timer.status === 'active');
   }
