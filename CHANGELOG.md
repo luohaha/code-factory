@@ -6,6 +6,23 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-09-27
+
+### Added
+
+- Added optional Jev-powered wake decisions after successful RD Runs, allowing immediate continuation, a scheduled one-time continuation, or continued waiting.
+- Allowed humans to change a TODO Requirement's Agent provider, model, and reasoning effort together before its first run.
+
+### Changed
+
+- Clarified inactive daemon `status` and `stop` output with the current workspace and workspace-scoped command guidance.
+- Upgraded the checkout and Node.js setup actions used by CI and release workflows off their Node.js 20 runtimes.
+
+### Fixed
+
+- Moved paused, failed, timed-out, and restart-orphaned RD Runs to waiting for human confirmation while preserving queued-input resumption and retry paths.
+- Prevented overlapping pull-request reconciliation ticks and duplicate aggregate error logs after pull-request-specific failures.
+
 ## [0.1.11] - 2026-09-24
 
 ### Added
