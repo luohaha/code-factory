@@ -1422,13 +1422,19 @@ export class AgentManager extends EventEmitter {
   private canJevWake(requirementId: string, runId: string, runStatus: JevWakeContext['runStatus']): boolean {
     if (this.#closed) return false;
     const requirement = this.#store.getRequirement(requirementId);
-    const latestRdRun = this.#store.listRuns(requirementId).find((run) => run.role === 'rd');
-    return requirement?.status === 'waiting_confirmation'
+    const runs = this.#store.listRuns(requirementId);
+    const latestRdRun = runs.find((run) => run.role === 'rd');
+    if (!requirement || !latestRdRun) return false;
+    const hasNewMessages = runStatus === 'succeeded'
+      ? requirement.session.pendingMessageCount > 0
+      : this.#store.listPendingRdMessages(requirementId)
+        .some((message) => message.sequence > (latestRdRun.inputToSequence ?? 0));
+    return requirement.status === 'waiting_confirmation'
       && requirement.session.state === (runStatus === 'succeeded' ? 'waiting_human' : 'failed')
-      && requirement.session.pendingMessageCount === 0
-      && latestRdRun?.id === runId
+      && !hasNewMessages
+      && latestRdRun.id === runId
       && latestRdRun.status === runStatus
-      && !this.#store.listRuns(requirementId).some((run) => run.role === 'reviewer' && run.status === 'running')
+      && !runs.some((run) => run.role === 'reviewer' && run.status === 'running')
       && !this.#store.listAgentTimers(requirementId).some((timer) => timer.status === 'active');
   }
 

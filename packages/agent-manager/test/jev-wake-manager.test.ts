@@ -200,6 +200,83 @@ test('Jev can immediately retry a failed RD Run without an RD reply', async () =
   }
 });
 
+test('Jev can decide again after a failed retry retains human and Jev input', async () => {
+  const requests: ProcessRunRequest[] = [];
+  const decisions: Array<{ status: string; messages: SeenMessage[] }> = [];
+  const runner: AgentProcessRunner = {
+    async run(request) {
+      requests.push(request);
+      const attempt = requests.length;
+      return attempt < 3
+        ? { status: 'failed', exitCode: 1, nativeSessionId: 'thread-1',
+          finalMessage: null, error: `Transient failure ${attempt}` }
+        : { status: 'succeeded', exitCode: 0, nativeSessionId: 'thread-1',
+          finalMessage: 'Recovered', error: null };
+    },
+  };
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(':memory:'),
+    runner, logger: silentLogger,
+    jevWakeDecision: async (_key, context) => {
+      decisions.push({ status: context.runStatus, messages: context.recentMessages });
+      return decisions.length < 3 ? { kind: 'immediate' } : { kind: 'wait' };
+    },
+  });
+  try {
+    manager.updateConfiguration({ jevApiKey: 'secret' });
+    const requirement = manager.createRequirement({ title: 'Repeated retry', description: 'Work', provider: 'codex' });
+    await manager.runRequirement(requirement.id, 'Please finish this task.');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(decisions.map((decision) => decision.status), ['failed', 'failed', 'succeeded']);
+    assert.deepEqual(decisions[1]?.messages, [
+      { author: 'system', body: 'Transient failure 1' },
+      { author: 'jev', body: 'continue.' },
+      { author: 'system', body: 'Transient failure 2' },
+    ]);
+    assert.equal(requests.length, 3);
+    assert.match(requests[1]?.invocation.input ?? '', /\[Human #1\]\nPlease finish this task\./);
+    assert.match(requests[1]?.invocation.input ?? '', /\[Jev #3\]\ncontinue\./);
+    assert.match(requests[2]?.invocation.input ?? '', /\[Jev #5\]\ncontinue\./);
+    assert.deepEqual(manager.listRuns(requirement.id).map((run) => run.status),
+      ['succeeded', 'failed', 'failed']);
+    assert.equal(manager.getRequirement(requirement.id)?.session.pendingMessageCount, 0);
+  } finally {
+    await manager.close();
+  }
+});
+
+test('Jev skips a failed Run when new input arrived after its captured boundary', async () => {
+  let finishRun: (() => void) | undefined;
+  let decisions = 0;
+  const runner: AgentProcessRunner = {
+    async run() {
+      await new Promise<void>((resolve) => { finishRun = resolve; });
+      return { status: 'failed', exitCode: 1, nativeSessionId: 'thread-1',
+        finalMessage: null, error: 'Provider failed' };
+    },
+  };
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(':memory:'),
+    runner, logger: silentLogger,
+    jevWakeDecision: async () => { decisions += 1; return { kind: 'immediate' }; },
+  });
+  try {
+    manager.updateConfiguration({ jevApiKey: 'secret' });
+    const requirement = manager.createRequirement({ title: 'New input', description: 'Work', provider: 'codex' });
+    const run = manager.runRequirement(requirement.id, 'Initial instruction');
+    manager.postHumanMessage(requirement.id, 'New correction during the Run');
+    finishRun?.();
+    await run;
+    assert.equal(decisions, 0);
+    assert.equal(manager.getRequirement(requirement.id)?.session.pendingMessageCount, 2);
+    assert.equal(manager.listMessages(requirement.id).some((message) => message.author === 'jev'), false);
+  } finally {
+    finishRun?.();
+    await manager.close();
+  }
+});
+
 test('Jev can delay a timed-out RD Run and leaves failed Runs waiting when it chooses wait', async () => {
   let status: 'timed_out' | 'failed' = 'timed_out';
   const seen: Array<{ status: string; messages: SeenMessage[] }> = [];
