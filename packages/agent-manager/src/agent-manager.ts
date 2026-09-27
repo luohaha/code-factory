@@ -30,7 +30,7 @@ import {
   type CodeFactoryCliInvocation,
 } from './code-factory-cli-launcher.js';
 import { GhCliGitHubClient, type GitHubClient } from './github-client.js';
-import { decideJevWake, type JevWakeDecision } from './jev-wake-decision.js';
+import { decideJevWake, type JevWakeContext, type JevWakeDecision } from './jev-wake-decision.js';
 import { createFileLogger, type Logger, type LogLevel } from './logger.js';
 import {
   ClaudeCodeModelDiscoverer,
@@ -77,7 +77,7 @@ export interface AgentManagerOptions {
   store?: AgentManagerStore;
   runner?: AgentProcessRunner;
   githubClient?: GitHubClient;
-  jevWakeDecision?: (apiKey: string, latestReply: string) => Promise<JevWakeDecision>;
+  jevWakeDecision?: (apiKey: string, context: JevWakeContext) => Promise<JevWakeDecision>;
   logger?: Logger;
   logLevel?: LogLevel;
   logFilePath?: string;
@@ -157,7 +157,7 @@ export class AgentManager extends EventEmitter {
   readonly #pullRequestReconciler: PullRequestReconciler;
   readonly #pullRequestTriggers: readonly PullRequestSnapshotTrigger[];
   readonly #timerAgentTrigger: TimerAgentTrigger;
-  readonly #jevWakeDecision: (apiKey: string, latestReply: string) => Promise<JevWakeDecision>;
+  readonly #jevWakeDecision: (apiKey: string, context: JevWakeContext) => Promise<JevWakeDecision>;
   readonly #configurationFilePath: string | null;
   readonly #startupConfiguration: AgentManagerConfiguration;
   #configuration: AgentManagerConfiguration;
@@ -1350,9 +1350,14 @@ export class AgentManager extends EventEmitter {
   private async considerJevWake(requirementId: string, runId: string, latestReply: string): Promise<void> {
     const apiKey = this.#configuration.jevApiKey;
     if (!apiKey || !latestReply.trim() || !this.canJevWake(requirementId, runId)) return;
+    const requirement = this.#store.getRequirement(requirementId);
+    if (!requirement) return;
     let decision: JevWakeDecision;
     try {
-      decision = await this.#jevWakeDecision(apiKey, latestReply);
+      decision = await this.#jevWakeDecision(apiKey, {
+        requirement: { title: requirement.title, description: requirement.description },
+        latestReply,
+      });
     } catch (error) {
       this.logger.warn('Jev wake decision skipped', {
         requirementId, runId, error: error instanceof Error ? error.name : 'UnknownError',

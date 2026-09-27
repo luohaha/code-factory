@@ -29,9 +29,11 @@ test('Jev key updates dynamically, remains redacted, and immediate choice resume
   const manager = new AgentManager({
     workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(':memory:'),
     runner, logger: silentLogger,
-    jevWakeDecision: async (key, reply): Promise<JevWakeDecision> => {
+    jevWakeDecision: async (key, context): Promise<JevWakeDecision> => {
       assert.equal(key, 'secret');
-      calls.push(reply);
+      assert.equal(context.requirement.title, 'Continue');
+      assert.equal(context.requirement.description, 'Work');
+      calls.push(context.latestReply);
       return calls.length === 1 ? { kind: 'immediate' } : { kind: 'wait' };
     },
   });
