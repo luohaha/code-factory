@@ -923,10 +923,10 @@ function AgentTimerDetails({ timer, requirement, showRequirement = false }: {
         </DialogDescription>
       </DialogHeader>
 
-      <div className="space-y-4">
-        <section>
+      <div className="min-w-0 space-y-4">
+        <section className="min-w-0">
           <h3 className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">{t('Timer description')}</h3>
-          <p className="mt-1.5 whitespace-pre-wrap break-words rounded-xl border border-border/70 bg-muted/30 px-3 py-2.5 text-xs leading-5">
+          <p className="mt-1.5 max-w-full whitespace-pre-wrap [overflow-wrap:anywhere] rounded-xl border border-border/70 bg-muted/30 px-3 py-2.5 text-xs leading-5">
             {timer.description}
           </p>
         </section>
