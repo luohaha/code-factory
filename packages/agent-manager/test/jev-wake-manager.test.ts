@@ -3,12 +3,20 @@ import test from 'node:test';
 
 import { AgentManager } from '../src/agent-manager.ts';
 import type { JevWakeDecision } from '../src/jev-wake-decision.ts';
-import { silentLogger } from '../src/logger.ts';
+import { createLogger, silentLogger, type LogWriter } from '../src/logger.ts';
 import type { AgentProcessRunner, ProcessRunRequest } from '../src/process-runner.ts';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
 import type { MessageAuthor } from '../src/types.ts';
 
 type SeenMessage = { author: MessageAuthor; body: string };
+
+class MemoryWriter implements LogWriter {
+  readonly lines: string[] = [];
+
+  write(value: string): void {
+    this.lines.push(value);
+  }
+}
 
 class ReplyRunner implements AgentProcessRunner {
   readonly requests: ProcessRunRequest[] = [];
@@ -31,6 +39,79 @@ class ReplyRunner implements AgentProcessRunner {
     };
   }
 }
+
+test('Jev logs precondition skips and every decision kind without sensitive decision input', async () => {
+  const stdout = new MemoryWriter();
+  const stderr = new MemoryWriter();
+  const decisions: JevWakeDecision[] = [
+    { kind: 'wait' },
+    { kind: 'delayed', minutes: 10 },
+    { kind: 'immediate' },
+    { kind: 'wait' },
+  ];
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(':memory:'),
+    runner: new ReplyRunner(), logger: createLogger({ level: 'info', stdout, stderr }),
+    jevWakeDecision: async () => decisions.shift() ?? { kind: 'wait' },
+  });
+  try {
+    const unconfigured = manager.createRequirement({
+      title: 'No Jev', description: 'private unconfigured description', provider: 'codex',
+    });
+    await manager.runRequirement(unconfigured.id);
+
+    manager.updateConfiguration({ jevApiKey: 'private-jev-key' });
+    const waiting = manager.createRequirement({
+      title: 'Wait', description: 'private waiting description', provider: 'codex',
+    });
+    await manager.runRequirement(waiting.id);
+
+    const delayed = manager.createRequirement({
+      title: 'Delay', description: 'private delayed description', provider: 'codex',
+    });
+    await manager.runRequirement(delayed.id);
+
+    const withTimer = manager.createRequirement({
+      title: 'Timer', description: 'private timer description', provider: 'codex',
+    });
+    manager.createAgentTimer(withTimer.id, {
+      description: 'private timer contents', schedule: 'once', intervalSeconds: 60,
+    });
+    await manager.runRequirement(withTimer.id);
+
+    const immediate = manager.createRequirement({
+      title: 'Immediate', description: 'private immediate description', provider: 'codex',
+    });
+    await manager.runRequirement(immediate.id);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const entries = [...stdout.lines, ...stderr.lines]
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const jevEntries = entries.filter((entry) => String(entry.message).startsWith('Jev wake decision'));
+    assert.ok(jevEntries.every((entry) => typeof entry.requirementId === 'string'
+      && typeof entry.runId === 'string' && typeof entry.stage === 'string'));
+
+    assert.ok(jevEntries.some((entry) => entry.requirementId === unconfigured.id
+      && entry.stage === 'precondition' && entry.skipReason === 'api_key_missing'));
+    assert.ok(jevEntries.some((entry) => entry.requirementId === withTimer.id
+      && entry.stage === 'precondition' && entry.skipReason === 'active_timer'));
+    assert.ok(jevEntries.some((entry) => entry.requirementId === waiting.id
+      && entry.stage === 'decision' && entry.decision === 'wait'));
+    assert.ok(jevEntries.some((entry) => entry.requirementId === delayed.id
+      && entry.stage === 'decision' && entry.decision === 'delayed' && entry.minutes === 10));
+    assert.ok(jevEntries.some((entry) => entry.requirementId === delayed.id
+      && entry.stage === 'application' && entry.decision === 'delayed'));
+    assert.ok(jevEntries.some((entry) => entry.requirementId === immediate.id
+      && entry.stage === 'decision' && entry.decision === 'immediate'));
+    assert.ok(jevEntries.some((entry) => entry.requirementId === immediate.id
+      && entry.stage === 'application' && entry.decision === 'immediate'));
+
+    const serializedEntries = JSON.stringify(entries);
+    assert.doesNotMatch(serializedEntries, /private-jev-key|private .* description|private timer contents|Still working\./);
+  } finally {
+    await manager.close();
+  }
+});
 
 test('Jev key updates dynamically, remains redacted, and immediate choice resumes with continue.', async () => {
   const runner = new ReplyRunner();
@@ -161,11 +242,13 @@ test('Jev includes the current final reply when the provider emitted no message 
 
 test('Jev delay creates a one-time timer; existing timers and errors preserve waiting', async () => {
   const runner = new ReplyRunner();
+  const stdout = new MemoryWriter();
+  const stderr = new MemoryWriter();
   let decision: JevWakeDecision | Error = { kind: 'delayed', minutes: 10 };
   let calls = 0;
   const manager = new AgentManager({
     workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(':memory:'),
-    runner, logger: silentLogger,
+    runner, logger: createLogger({ level: 'info', stdout, stderr }),
     jevWakeDecision: async () => {
       calls += 1;
       if (decision instanceof Error) throw decision;
@@ -196,6 +279,14 @@ test('Jev delay creates a one-time timer; existing timers and errors preserve wa
     assert.equal(result.status, 'waiting_confirmation');
     assert.equal(manager.listAgentTimers(failed.id).length, 0);
     assert.equal(calls, 2);
+    const requestFailure = stderr.lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((entry) => entry.requirementId === failed.id && entry.message === 'Jev wake decision skipped');
+    assert.equal(requestFailure?.runId, manager.listRuns(failed.id)[0]?.id);
+    assert.equal(requestFailure?.stage, 'request');
+    assert.equal(requestFailure?.skipReason, 'request_failed');
+    assert.equal(requestFailure?.error, 'Error');
+    assert.doesNotMatch(JSON.stringify([...stdout.lines, ...stderr.lines]), /API unavailable/);
   } finally {
     await manager.close();
   }
@@ -203,11 +294,12 @@ test('Jev delay creates a one-time timer; existing timers and errors preserve wa
 
 test('Jev ignores a stale decision after a human reply starts a newer Run', async () => {
   const runner = new ReplyRunner();
+  const stdout = new MemoryWriter();
   let finishDecision: ((choice: JevWakeDecision) => void) | undefined;
   let calls = 0;
   const manager = new AgentManager({
     workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(':memory:'),
-    runner, logger: silentLogger,
+    runner, logger: createLogger({ level: 'info', stdout, stderr: new MemoryWriter() }),
     jevWakeDecision: async () => {
       calls += 1;
       return calls === 1
@@ -220,12 +312,20 @@ test('Jev ignores a stale decision after a human reply starts a newer Run', asyn
     const requirement = manager.createRequirement({ title: 'Human reply', description: 'Work', provider: 'codex' });
     const first = manager.runRequirement(requirement.id);
     await new Promise<void>((resolve) => setImmediate(resolve));
+    const firstRunId = manager.listRuns(requirement.id)[0]?.id;
     manager.postHumanMessage(requirement.id, 'Please change the approach.');
     await new Promise<void>((resolve) => setImmediate(resolve));
     finishDecision?.({ kind: 'immediate' });
     await first;
     assert.equal(runner.requests.length, 2);
     assert.equal(manager.listMessages(requirement.id).some((message) => message.body === 'continue.'), false);
+    const revalidationSkip = stdout.lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((entry) => entry.message === 'Jev wake decision skipped' && entry.runId === firstRunId);
+    assert.equal(revalidationSkip?.requirementId, requirement.id);
+    assert.equal(revalidationSkip?.stage, 'revalidation');
+    assert.equal(revalidationSkip?.decision, 'immediate');
+    assert.equal(revalidationSkip?.skipReason, 'latest_rd_run_changed');
   } finally {
     await manager.close();
   }

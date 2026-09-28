@@ -117,6 +117,21 @@ const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
 const REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS = DAY_MILLISECONDS;
 const AGENT_TRACE_TRUNCATION_SUFFIX = '\n… trace output truncated';
 
+type JevWakeSkipReason =
+  | 'manager_closed'
+  | 'api_key_missing'
+  | 'rd_reply_missing'
+  | 'requirement_missing'
+  | 'requirement_not_waiting_confirmation'
+  | 'session_not_waiting_human'
+  | 'pending_messages'
+  | 'latest_rd_run_changed'
+  | 'reviewer_running'
+  | 'active_timer'
+  | 'api_key_changed'
+  | 'request_failed'
+  | 'application_failed';
+
 function truncateAgentTraceDetail(detail: string): string {
   if (Buffer.byteLength(detail) <= MAX_AGENT_TRACE_DETAIL_BYTES) return detail;
   const bytes = Buffer.from(detail);
@@ -1353,9 +1368,28 @@ export class AgentManager extends EventEmitter {
 
   private async considerJevWake(requirementId: string, runId: string, latestReply: string): Promise<void> {
     const apiKey = this.#configuration.jevApiKey;
-    if (!apiKey || !latestReply.trim() || !this.canJevWake(requirementId, runId)) return;
+    if (!apiKey) {
+      this.logger.info('Jev wake decision skipped', {
+        requirementId, runId, stage: 'precondition', skipReason: 'api_key_missing',
+      });
+      return;
+    }
+    const preconditionSkipReason = !latestReply.trim()
+      ? 'rd_reply_missing'
+      : this.jevWakeSkipReason(requirementId, runId);
+    if (preconditionSkipReason) {
+      this.logger.info('Jev wake decision skipped', {
+        requirementId, runId, stage: 'precondition', skipReason: preconditionSkipReason,
+      });
+      return;
+    }
     const requirement = this.#store.getRequirement(requirementId);
-    if (!requirement) return;
+    if (!requirement) {
+      this.logger.info('Jev wake decision skipped', {
+        requirementId, runId, stage: 'precondition', skipReason: 'requirement_missing',
+      });
+      return;
+    }
     const messages = this.#store.listRecentConversationMessages(requirementId, 3);
     const recentMessages = messages.map(({ author, body }) => ({ author, body }));
     if (!messages.some((message) => message.runId === runId && message.author === 'rd_agent')) {
@@ -1372,14 +1406,29 @@ export class AgentManager extends EventEmitter {
       }, controller.signal);
     } catch (error) {
       if (!this.#closed) this.logger.warn('Jev wake decision skipped', {
-        requirementId, runId, error: error instanceof Error ? error.name : 'UnknownError',
+        requirementId, runId, stage: 'request', skipReason: 'request_failed',
+        error: error instanceof Error ? error.name : 'UnknownError',
       });
       return;
     } finally {
       this.#pendingJevDecisions.delete(controller);
     }
-    if (this.#closed || decision.kind === 'wait' || this.#configuration.jevApiKey !== apiKey
-      || !this.canJevWake(requirementId, runId)) return;
+    if (this.#closed) return;
+    this.logger.info('Jev wake decision received', {
+      requirementId, runId, stage: 'decision', decision: decision.kind,
+      ...(decision.kind === 'delayed' ? { minutes: decision.minutes } : {}),
+    });
+    if (decision.kind === 'wait') return;
+    const revalidationSkipReason = this.#configuration.jevApiKey !== apiKey
+      ? 'api_key_changed'
+      : this.jevWakeSkipReason(requirementId, runId);
+    if (revalidationSkipReason) {
+      this.logger.info('Jev wake decision skipped', {
+        requirementId, runId, stage: 'revalidation', decision: decision.kind,
+        skipReason: revalidationSkipReason,
+      });
+      return;
+    }
     try {
       if (decision.kind === 'delayed') {
         this.createAgentTimer(requirementId, {
@@ -1400,25 +1449,29 @@ export class AgentManager extends EventEmitter {
       }
     } catch (error) {
       this.logger.warn('Jev wake decision skipped', {
-        requirementId, runId, error: error instanceof Error ? error.name : 'UnknownError',
+        requirementId, runId, stage: 'application', decision: decision.kind,
+        skipReason: 'application_failed', error: error instanceof Error ? error.name : 'UnknownError',
       });
       return;
     }
     this.logger.info('Jev wake decision applied', {
-      requirementId, runId, decision: decision.kind,
+      requirementId, runId, stage: 'application', decision: decision.kind,
       ...(decision.kind === 'delayed' ? { minutes: decision.minutes } : {}),
     });
   }
 
-  private canJevWake(requirementId: string, runId: string): boolean {
-    if (this.#closed) return false;
+  private jevWakeSkipReason(requirementId: string, runId: string): JevWakeSkipReason | null {
+    if (this.#closed) return 'manager_closed';
     const requirement = this.#store.getRequirement(requirementId);
-    return requirement?.status === 'waiting_confirmation'
-      && requirement.session.state === 'waiting_human'
-      && requirement.session.pendingMessageCount === 0
-      && this.#store.listRuns(requirementId).find((run) => run.role === 'rd')?.id === runId
-      && !this.#store.listRuns(requirementId).some((run) => run.role === 'reviewer' && run.status === 'running')
-      && !this.#store.listAgentTimers(requirementId).some((timer) => timer.status === 'active');
+    if (!requirement) return 'requirement_missing';
+    if (requirement.status !== 'waiting_confirmation') return 'requirement_not_waiting_confirmation';
+    if (requirement.session.state !== 'waiting_human') return 'session_not_waiting_human';
+    if (requirement.session.pendingMessageCount !== 0) return 'pending_messages';
+    const runs = this.#store.listRuns(requirementId);
+    if (runs.find((run) => run.role === 'rd')?.id !== runId) return 'latest_rd_run_changed';
+    if (runs.some((run) => run.role === 'reviewer' && run.status === 'running')) return 'reviewer_running';
+    if (this.#store.listAgentTimers(requirementId).some((timer) => timer.status === 'active')) return 'active_timer';
+    return null;
   }
 
   private schedulePendingRdMessages(requirementId: string, afterSequence = 0): void {
