@@ -27,6 +27,9 @@ test('Jev sends a typed Choice and Score and maps delayed scores to minutes', as
       assert.match(body.questions.wake_action.instructions, /requirement\.description/);
       assert.match(body.questions.wake_action.instructions, /recent_messages/);
       assert.match(body.questions.wake_action.instructions, /run_status/);
+      assert.match(body.questions.wake_action.instructions, /independent review or approval/);
+      assert.match(body.questions.wake_action.instructions, /repeat a status check/);
+      assert.match(body.questions.wake_action.instructions, /concrete action/);
       assert.equal(body.questions.delay.type, 'score');
       return new Response(JSON.stringify({ answers: {
         wake_action: { type: 'choice', choice: 'delayed' },
