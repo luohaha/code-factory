@@ -6,6 +6,18 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-09-29
+
+### Changed
+
+- Let Jev decide whether to resume after failed or timed-out RD Runs, retaining attempted input for retries and allowing immediate or delayed continuation.
+- Refined Jev's continuation guidance to wait when work is complete or external approval is pending.
+- Added structured diagnostics for Jev wake decisions and skipped decisions without logging conversation content.
+
+### Fixed
+
+- Wrapped long timer descriptions in the detail dialog so they remain visible on narrow screens.
+
 ## [0.1.12] - 2026-09-27
 
 ### Added
