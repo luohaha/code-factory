@@ -180,8 +180,8 @@ Every `gh` subprocess has a 30-second elapsed timeout and is force-terminated if
 
 - A native session ID is stored as soon as the CLI reports it.
 - After a successful Run, Agent Manager advances only the input message boundary captured by that Run. If external messages remain, it starts another Run; otherwise the Requirement enters `waiting_confirmation` and the Session enters `waiting_human`.
-- A failed Run, including an RD Run that produces no output for 60 minutes, leaves the Requirement in `doing` and moves the Session to `failed`.
-- A human-interrupted Run leaves the Requirement in `doing` and returns the Session to `waiting_human`. If corrective messages arrived after the Run started, Agent Manager immediately resumes the same Session.
+- A failed or timed-out Run leaves the Requirement in `waiting_confirmation` and moves the Session to `failed`. When configured, Jev may then decide to send `continue.` immediately or after 1–60 minutes to retry a recoverable failure.
+- A human-interrupted Run without newer input leaves the Requirement in `waiting_confirmation` and returns the Session to `waiting_human`. If corrective messages arrived after the Run started, Agent Manager immediately resumes the same Session.
 - A human retry or reply continues the same AgentSession. Agent Manager resumes an existing native session ID or creates a new native session if none exists.
 - On restart, Agent Manager never treats an old PID as a live process. Startup reconciliation marks orphaned RD Runs as failed and separately cleans up orphaned ReviewRequests without changing RD Session state.
 - With `start --daemon`, a detached workspace-scoped supervisor restarts an unexpectedly exited Agent Manager. Repeated early failures use exponential backoff from 1 to 30 seconds to avoid a busy crash loop. `stop` is intentional and does not trigger another restart.
