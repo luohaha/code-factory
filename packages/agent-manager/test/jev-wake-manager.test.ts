@@ -40,7 +40,7 @@ class ReplyRunner implements AgentProcessRunner {
   }
 }
 
-test('Jev logs precondition skips and every decision kind without sensitive decision input', async () => {
+test('Jev logs broad precondition skips and every decision kind without sensitive decision input', async () => {
   const stdout = new MemoryWriter();
   const stderr = new MemoryWriter();
   const decisions: JevWakeDecision[] = [
@@ -94,7 +94,7 @@ test('Jev logs precondition skips and every decision kind without sensitive deci
     assert.ok(jevEntries.some((entry) => entry.requirementId === unconfigured.id
       && entry.stage === 'precondition' && entry.skipReason === 'api_key_missing'));
     assert.ok(jevEntries.some((entry) => entry.requirementId === withTimer.id
-      && entry.stage === 'precondition' && entry.skipReason === 'active_timer'));
+      && entry.stage === 'precondition' && entry.skipReason === 'work_already_pending'));
     assert.ok(jevEntries.some((entry) => entry.requirementId === waiting.id
       && entry.stage === 'decision' && entry.decision === 'wait'));
     assert.ok(jevEntries.some((entry) => entry.requirementId === delayed.id
@@ -359,7 +359,7 @@ test('Jev skips a failed Run when new input arrived after its captured boundary'
     assert.equal(skip?.requirementId, requirement.id);
     assert.equal(skip?.runId, manager.listRuns(requirement.id)[0]?.id);
     assert.equal(skip?.stage, 'precondition');
-    assert.equal(skip?.skipReason, 'pending_messages');
+    assert.equal(skip?.skipReason, 'work_already_pending');
     assert.doesNotMatch(JSON.stringify(stdout.lines), /Initial instruction|New correction during the Run/);
   } finally {
     finishRun?.();
@@ -534,7 +534,7 @@ test('Jev ignores a stale decision after a human reply starts a newer Run', asyn
     assert.equal(revalidationSkip?.requirementId, requirement.id);
     assert.equal(revalidationSkip?.stage, 'revalidation');
     assert.equal(revalidationSkip?.decision, 'immediate');
-    assert.equal(revalidationSkip?.skipReason, 'latest_rd_run_changed');
+    assert.equal(revalidationSkip?.skipReason, 'state_changed');
   } finally {
     await manager.close();
   }

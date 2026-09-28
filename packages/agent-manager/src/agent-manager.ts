@@ -118,20 +118,10 @@ const REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS = DAY_MILLISECONDS;
 const AGENT_TRACE_TRUNCATION_SUFFIX = '\n… trace output truncated';
 
 type JevWakeSkipReason =
-  | 'manager_closed'
   | 'api_key_missing'
   | 'rd_reply_missing'
-  | 'requirement_missing'
-  | 'requirement_not_waiting_confirmation'
-  | 'session_not_waiting_human'
-  | 'session_not_failed'
-  | 'pending_messages'
-  | 'latest_rd_run_missing'
-  | 'latest_rd_run_changed'
-  | 'run_status_changed'
-  | 'reviewer_running'
-  | 'active_timer'
-  | 'api_key_changed'
+  | 'state_changed'
+  | 'work_already_pending'
   | 'request_failed'
   | 'application_failed';
 
@@ -1395,7 +1385,7 @@ export class AgentManager extends EventEmitter {
     const requirement = this.#store.getRequirement(requirementId);
     if (!requirement) {
       this.logger.info('Jev wake decision skipped', {
-        requirementId, runId, stage: 'precondition', skipReason: 'requirement_missing',
+        requirementId, runId, stage: 'precondition', skipReason: 'state_changed',
       });
       return;
     }
@@ -1430,7 +1420,7 @@ export class AgentManager extends EventEmitter {
     });
     if (decision.kind === 'wait') return;
     const revalidationSkipReason = this.#configuration.jevApiKey !== apiKey
-      ? 'api_key_changed'
+      ? 'state_changed'
       : this.jevWakeSkipReason(requirementId, runId, runStatus);
     if (revalidationSkipReason) {
       this.logger.info('Jev wake decision skipped', {
@@ -1476,25 +1466,28 @@ export class AgentManager extends EventEmitter {
     runId: string,
     runStatus: JevWakeContext['runStatus'],
   ): JevWakeSkipReason | null {
-    if (this.#closed) return 'manager_closed';
+    if (this.#closed) return 'state_changed';
     const requirement = this.#store.getRequirement(requirementId);
-    if (!requirement) return 'requirement_missing';
+    if (!requirement) return 'state_changed';
     const runs = this.#store.listRuns(requirementId);
     const latestRdRun = runs.find((run) => run.role === 'rd');
-    if (!latestRdRun) return 'latest_rd_run_missing';
+    if (!latestRdRun) return 'state_changed';
     const hasNewMessages = runStatus === 'succeeded'
       ? requirement.session.pendingMessageCount > 0
       : this.#store.listPendingRdMessages(requirementId)
         .some((message) => message.sequence > (latestRdRun.inputToSequence ?? 0));
-    if (requirement.status !== 'waiting_confirmation') return 'requirement_not_waiting_confirmation';
+    if (requirement.status !== 'waiting_confirmation') return 'state_changed';
     if (requirement.session.state !== (runStatus === 'succeeded' ? 'waiting_human' : 'failed')) {
-      return runStatus === 'succeeded' ? 'session_not_waiting_human' : 'session_not_failed';
+      return 'state_changed';
     }
-    if (hasNewMessages) return 'pending_messages';
-    if (latestRdRun.id !== runId) return 'latest_rd_run_changed';
-    if (latestRdRun.status !== runStatus) return 'run_status_changed';
-    if (runs.some((run) => run.role === 'reviewer' && run.status === 'running')) return 'reviewer_running';
-    if (this.#store.listAgentTimers(requirementId).some((timer) => timer.status === 'active')) return 'active_timer';
+    if (hasNewMessages) return 'work_already_pending';
+    if (latestRdRun.id !== runId || latestRdRun.status !== runStatus) return 'state_changed';
+    if (runs.some((run) => run.role === 'reviewer' && run.status === 'running')) {
+      return 'work_already_pending';
+    }
+    if (this.#store.listAgentTimers(requirementId).some((timer) => timer.status === 'active')) {
+      return 'work_already_pending';
+    }
     return null;
   }
 
