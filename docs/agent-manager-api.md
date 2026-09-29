@@ -645,7 +645,7 @@ Interrupts the current Requirement's RD Run without appending a message. The opt
 }
 ~~~
 
-Success: `202 Accepted`. Repeated calls are idempotent while the Run is still exiting. Returns `409 Conflict` when no RD Run is active or `steer` has no newer input to deliver. If pending messages arrived after the interrupted Run started, Agent Manager automatically resumes the same Session after exit; otherwise the Requirement moves to `waiting_confirmation` and waits for confirmation or a new message. Failed and timed-out RD Runs also move the Requirement to `waiting_confirmation` while the Session remains `failed` for inspection and retry.
+Success: `202 Accepted`. Repeated calls are idempotent while the Run is still exiting. Returns `409 Conflict` when no RD Run is active or `steer` has no newer input to deliver. If pending messages arrived after the interrupted Run started, Agent Manager automatically resumes the same Session after exit; otherwise the Requirement moves to `waiting_confirmation` and waits for confirmation or a new message. The replacement Run receives all unconsumed messages, including input captured by the interrupted Run. A message is stored once in the conversation but may be sent in more than one Run prompt. Failed and timed-out RD Runs also move the Requirement to `waiting_confirmation` while the Session remains `failed` for inspection and retry.
 
 ### POST /api/requirements/:id/confirm
 
