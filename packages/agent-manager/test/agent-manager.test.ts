@@ -1249,6 +1249,38 @@ test('a queued correction does not interrupt until a human explicitly interrupts
   }
 });
 
+test('steering does not cancel a Run that already received the latest human reply', async () => {
+  const runner = new InterruptibleRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    runner,
+    logger: silentLogger,
+  });
+  try {
+    const requirement = manager.createRequirement({ title: 'Steer safely', description: 'Task', provider: 'codex' });
+    const firstExecution = manager.runRequirement(requirement.id, 'First reply');
+    assert.throws(() => manager.interruptRdRun(requirement.id, 'steer'), /no newer input/);
+    assert.equal(runner.requests[0]?.signal?.aborted, false);
+
+    manager.postHumanMessage(requirement.id, 'New direction');
+    manager.interruptRdRun(requirement.id, 'steer');
+    assert.equal(runner.requests[0]?.signal?.aborted, true);
+    await firstExecution;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(runner.requests.length, 2);
+    assert.match(runner.requests[1]?.invocation.input ?? '', /New direction/);
+    assert.throws(() => manager.interruptRdRun(requirement.id, 'steer'), /no newer input/);
+    assert.equal(runner.requests[1]?.signal?.aborted, false);
+    runner.resolvers[1]?.({
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'native-thread-1', finalMessage: 'done', error: null,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  } finally {
+    manager.close();
+  }
+});
+
 test('interrupting an RD Run without a newer message stops instead of immediately restarting it', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new InterruptibleRunner();
