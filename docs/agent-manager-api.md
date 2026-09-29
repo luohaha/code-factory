@@ -634,7 +634,7 @@ message may be empty when attachmentIds is non-empty. requirement is the latest 
 
 ### POST /api/requirements/:id/interrupt
 
-Interrupts the current Requirement's RD Run without appending a message. The optional request body is `{"mode":"stop"|"steer"}`; omitted mode defaults to `stop`. `steer` interrupts only when an RD-deliverable message arrived after the active Run captured its input. This protects a newly started Run that already received the latest reply. `stop` interrupts the active Run even without newer input. Agent Manager terminates the CLI and its complete tool-process tree. POSIX platforms send `SIGTERM` first and then `SIGKILL` to the process group if descendants remain after two seconds. Windows uses `taskkill /T /F`. The Run becomes `cancelled` only after the process tree exits, and the Session returns to `waiting_human`.
+Interrupts the current Requirement's RD Run without appending a message. The optional request body is `{"mode":"stop"|"steer"}`; only an omitted mode defaults to `stop`, while an empty or invalid mode returns 400. `steer` interrupts only when an RD-deliverable message arrived after the active Run captured its input. This protects a newly started Run that already received the latest reply. `stop` interrupts the active Run even without newer input. Agent Manager terminates the CLI and its complete tool-process tree. POSIX platforms send `SIGTERM` first and then `SIGKILL` to the process group if descendants remain after two seconds. Windows uses `taskkill /T /F`. The Run becomes `cancelled` only after the process tree exits, and the Session returns to `waiting_human`.
 
 ~~~json
 {

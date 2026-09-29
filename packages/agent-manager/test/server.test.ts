@@ -692,6 +692,13 @@ test('HTTP reply queues by default and the interrupt action resumes the RD Agent
       body: JSON.stringify({ mode: 'unknown' }),
     });
     assert.equal(invalidModeResponse.status, 400);
+    const emptyModeResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/interrupt`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: '' }),
+    });
+    assert.equal(emptyModeResponse.status, 400);
+    assert.equal(runner.requests[0]?.signal?.aborted, false);
 
     const interruptResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/interrupt`, {
       method: 'POST',
