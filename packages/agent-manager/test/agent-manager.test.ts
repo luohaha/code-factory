@@ -1288,6 +1288,7 @@ test('steering replays interrupted input and delivers later replies once the rep
   try {
     const requirement = manager.createRequirement({ title: 'Message boundaries', description: 'Task', provider: 'codex' });
     const firstExecution = manager.runRequirement(requirement.id, 'First instruction');
+    runner.requests[0]?.onNativeSession?.('native-thread-1');
     manager.postHumanMessage(requirement.id, 'Second instruction');
     manager.postHumanMessage(requirement.id, 'Third instruction');
     manager.interruptRdRun(requirement.id, 'steer');
@@ -1298,7 +1299,20 @@ test('steering replays interrupted input and delivers later replies once the rep
     const replayRun = manager.listRuns(requirement.id).find((run) => run.status === 'running');
     assert.equal(replayRun?.inputFromSequence, 1);
     assert.equal(replayRun?.inputToSequence, 3);
+    assert.equal(replayRun?.taskSummary, 'Process 3 conversation messages (1 replayed from non-successful RD Runs)');
+    assert.equal(manager.getRequirement(requirement.id)?.session.nativeSessionId, 'native-thread-1');
+    const resumeIndex = runner.requests[1]?.invocation.args.indexOf('resume') ?? -1;
+    assert.notEqual(resumeIndex, -1);
+    assert.equal(runner.requests[1]?.invocation.args[resumeIndex + 1], 'native-thread-1');
     const replayPrompt = runner.requests[1]?.invocation.input ?? '';
+    assert.match(replayPrompt, /Replay warning: message sequence #1/);
+    assert.match(replayPrompt, /delivery is at-least-once, not exactly-once/);
+    assert.match(replayPrompt, /inspect the current repository and relevant external state/);
+    assert.match(replayPrompt, /\[Human #1 - REPLAYED INPUT\]/);
+    assert.match(replayPrompt, /\[Human #2\]/);
+    assert.doesNotMatch(replayPrompt, /\[Human #2 - REPLAYED INPUT\]/);
+    assert.match(replayPrompt, /\[Human #3\]/);
+    assert.doesNotMatch(replayPrompt, /\[Human #3 - REPLAYED INPUT\]/);
     for (const body of ['First instruction', 'Second instruction', 'Third instruction']) {
       assert.equal(replayPrompt.split(body).length - 1, 1);
     }
@@ -1346,6 +1360,46 @@ test('interrupting an RD Run without a newer message stops instead of immediatel
     assert.equal(runner.requests.length, 1);
     assert.throws(() => manager.interruptRdRun(requirement.id), /does not have a running RD Run/);
     assert.equal(manager.confirmRequirement(requirement.id).status, 'done');
+  } finally {
+    manager.close();
+  }
+});
+
+test('retrying interrupted input resumes its captured Claude Code session with a replay warning', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new InterruptibleRunner();
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
+  try {
+    const requirement = manager.createRequirement({
+      title: 'Resume interrupted provider session',
+      description: 'Continue safely after interruption',
+      provider: 'claude-code',
+    });
+    const firstExecution = manager.runRequirement(requirement.id, 'Apply the requested change.');
+    runner.requests[0]?.onNativeSession?.('claude-session-1');
+    manager.interruptRdRun(requirement.id, 'stop');
+    const interrupted = await firstExecution;
+
+    assert.equal(interrupted.session.lastConsumedMessageSequence, 0);
+    assert.equal(interrupted.session.pendingMessageCount, 1);
+    assert.equal(interrupted.session.nativeSessionId, 'claude-session-1');
+
+    const retry = manager.runRequirement(requirement.id);
+    const resumedRequest = runner.requests[1];
+    assert.ok(resumedRequest);
+    const resumeIndex = resumedRequest.invocation.args.indexOf('--resume');
+    assert.notEqual(resumeIndex, -1);
+    assert.equal(resumedRequest.invocation.args[resumeIndex + 1], 'claude-session-1');
+    assert.match(resumedRequest.invocation.input, /Replay warning: message sequence #1/);
+    assert.match(resumedRequest.invocation.input, /\[Human #1 - REPLAYED INPUT\]/);
+    assert.equal(resumedRequest.invocation.input.split('Apply the requested change.').length - 1, 1);
+
+    runner.resolvers[1]?.({
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'claude-session-1', finalMessage: 'done', error: null,
+    });
+    const completed = await retry;
+    assert.equal(completed.session.lastConsumedMessageSequence, 1);
+    assert.equal(completed.session.pendingMessageCount, 0);
   } finally {
     manager.close();
   }

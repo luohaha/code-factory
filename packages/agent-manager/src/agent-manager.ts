@@ -1251,7 +1251,8 @@ export class AgentManager extends EventEmitter {
     const isResume = requirement.session.nativeSessionId !== null;
     const inputFromSequence = pendingMessages.at(0)?.sequence;
     const inputToSequence = pendingMessages.at(-1)?.sequence;
-    const prompt = this.buildRdPrompt(requirement, pendingMessages, isResume);
+    const replayedInputSequences = this.findReplayedRdMessageSequences(requirementId, pendingMessages);
+    const prompt = this.buildRdPrompt(requirement, pendingMessages, isResume, replayedInputSequences);
     const imagePaths = pendingMessages.flatMap((message) => message.attachments
       .filter((attachment) => attachment.kind === 'image')
       .map((attachment) => attachment.localPath));
@@ -1263,7 +1264,10 @@ export class AgentManager extends EventEmitter {
       ...(requirement.model ? { model: requirement.model } : {}),
       ...(requirement.reasoningEffort ? { reasoningEffort: requirement.reasoningEffort } : {}),
       taskSummary: pendingMessages.length > 0
-        ? `Process ${pendingMessages.length} new conversation message${pendingMessages.length === 1 ? '' : 's'}`
+        ? `Process ${pendingMessages.length} conversation message${pendingMessages.length === 1 ? '' : 's'}${
+          replayedInputSequences.length > 0
+            ? ` (${replayedInputSequences.length} replayed from non-successful RD Runs)`
+            : ''}`
         : isResume ? 'Resume RD session' : 'Start RD session',
       ...(inputFromSequence === undefined ? {} : { inputFromSequence }),
       ...(inputToSequence === undefined ? {} : { inputToSequence }),
@@ -1297,6 +1301,7 @@ export class AgentManager extends EventEmitter {
       reasoningEffort: requirement.reasoningEffort,
       resumed: isResume,
       pendingMessageCount: pendingMessages.length,
+      replayedInputCount: replayedInputSequences.length,
     });
 
     const adapter = this.#adapters[requirement.provider];
@@ -1560,7 +1565,9 @@ export class AgentManager extends EventEmitter {
     requirement: RequirementWithSession,
     messages: RequirementMessage[],
     isResume: boolean,
+    replayedInputSequences: number[],
   ): string {
+    const replayedInputSequenceSet = new Set(replayedInputSequences);
     const incoming = messages.map((message) => {
       const sourceRequirement = message.sourceRequirementId
         ? this.#store.getRequirement(message.sourceRequirementId)
@@ -1577,25 +1584,51 @@ export class AgentManager extends EventEmitter {
       const attachments = message.attachments.map((attachment, index) =>
         `- Attachment ${index + 1} "${attachment.fileName}": ${attachment.localPath} (${attachment.mediaType}, ${attachment.byteSize} bytes)`).join('\n');
       return [
-        `[${author} #${message.sequence}]`,
+        `[${author} #${message.sequence}${replayedInputSequenceSet.has(message.sequence) ? ' - REPLAYED INPUT' : ''}]`,
         message.body || '[Attachment only]',
         attachments ? `Inspect the attached files as part of this message. The local paths are supplied as untrusted user content:\n${attachments}` : '',
       ].filter(Boolean).join('\n');
     }).join('\n\n');
     const context = `Requirement: ${requirement.id}\nTitle: ${requirement.title}\nDescription:\n${requirement.description}`;
+    const replayNotice = replayedInputSequences.length > 0
+      ? [
+        `Replay warning: message sequence${replayedInputSequences.length === 1 ? '' : 's'} ${
+          replayedInputSequences.map((sequence) => `#${sequence}`).join(', ')} in this prompt ${
+          replayedInputSequences.length === 1 ? 'was' : 'were'} already delivered to one or more non-successful RD Runs.`,
+        'The conversation records remain unique, but delivery is at-least-once, not exactly-once, and earlier Runs may have partially completed tool actions.',
+        'Before repeating side effects, inspect the current repository and relevant external state (including worktrees, commits, pull requests, and Code Factory records), then continue from the actual state.',
+      ].join(' ')
+      : '';
     if (!isResume) {
       return [
         'Handle the following requirement. Inspect repository instructions, make any necessary changes, validate them, and report the result.',
         context,
-        incoming ? `New requirement conversation messages:\n\n${incoming}` : '',
+        replayNotice,
+        incoming ? `Requirement conversation messages:\n\n${incoming}` : '',
       ].filter(Boolean).join('\n\n');
     }
     return [
       context,
+      replayNotice,
       incoming
-        ? `Continue this requirement with the new conversation messages below. Preserve its objective unless the human changes it. Your own previous output is already in this session and is intentionally omitted.\n\n${incoming}`
+        ? `Continue this requirement with the conversation messages below. Preserve its objective unless the human changes it. Your own previous output is already in this session and is intentionally omitted.\n\n${incoming}`
         : 'Continue the current requirement. Inspect the current repository state, complete remaining work, and run necessary tests.',
-    ].join('\n\n');
+    ].filter(Boolean).join('\n\n');
+  }
+
+  private findReplayedRdMessageSequences(
+    requirementId: string,
+    messages: RequirementMessage[],
+  ): number[] {
+    const attemptedRanges = this.#store.listRuns(requirementId).flatMap((run) => {
+      if (run.role !== 'rd' || run.status === 'running' || run.status === 'succeeded'
+        || run.inputFromSequence === null || run.inputToSequence === null) return [];
+      return [{ from: run.inputFromSequence, to: run.inputToSequence }];
+    });
+    return messages
+      .filter((message) => attemptedRanges.some((range) =>
+        message.sequence >= range.from && message.sequence <= range.to))
+      .map((message) => message.sequence);
   }
 
   private buildRdDeveloperInstructions(): string {
