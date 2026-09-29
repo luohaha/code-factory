@@ -1084,13 +1084,21 @@ export class AgentManager extends EventEmitter {
     return { message, queued, requirement: this.requireRequirement(target.id) };
   }
 
-  interruptRdRun(requirementId: string): { runId: string } {
+  interruptRdRun(requirementId: string, mode: 'stop' | 'steer' = 'stop'): { runId: string } {
     const requirement = this.requireRequirement(requirementId);
     if (requirement.session.state !== 'running') {
       throw new StoreConflictError(`Requirement ${requirementId} does not have a running RD Run`);
     }
     const active = this.#activeRdRuns.get(requirementId);
     if (!active) throw new StoreConflictError(`Requirement ${requirementId} RD Run cannot be interrupted`);
+    if (mode === 'steer') {
+      const run = this.#store.getRun(active.runId);
+      const inputToSequence = run?.inputToSequence ?? 0;
+      if (!this.#store.listPendingRdMessages(requirementId)
+        .some((message) => message.sequence > inputToSequence)) {
+        throw new StoreConflictError(`Requirement ${requirementId} has no newer input to steer into the next RD Run`);
+      }
+    }
     if (!active.controller.signal.aborted) {
       active.controller.abort();
       this.logger.info('RD run interruption requested', {

@@ -634,7 +634,7 @@ message may be empty when attachmentIds is non-empty. requirement is the latest 
 
 ### POST /api/requirements/:id/interrupt
 
-Interrupts the current Requirement's RD Run without appending a message. The request body may be omitted or be an empty object. Agent Manager terminates the CLI and its complete tool-process tree. POSIX platforms send `SIGTERM` first and then `SIGKILL` to the process group if descendants remain after two seconds. Windows uses `taskkill /T /F`. The Run becomes `cancelled` only after the process tree exits, and the Session returns to `waiting_human`.
+Interrupts the current Requirement's RD Run without appending a message. The optional request body is `{"mode":"stop"|"steer"}`; omitted mode defaults to `stop`. `steer` interrupts only when an RD-deliverable message arrived after the active Run captured its input. This protects a newly started Run that already received the latest reply. `stop` interrupts the active Run even without newer input. Agent Manager terminates the CLI and its complete tool-process tree. POSIX platforms send `SIGTERM` first and then `SIGKILL` to the process group if descendants remain after two seconds. Windows uses `taskkill /T /F`. The Run becomes `cancelled` only after the process tree exits, and the Session returns to `waiting_human`.
 
 ~~~json
 {
@@ -645,7 +645,7 @@ Interrupts the current Requirement's RD Run without appending a message. The req
 }
 ~~~
 
-Success: `202 Accepted`. Repeated calls are idempotent while the Run is still exiting. Returns `409 Conflict` when no RD Run is active. If pending messages arrived after the interrupted Run started, Agent Manager automatically resumes the same Session after exit; otherwise the Requirement moves to `waiting_confirmation` and waits for confirmation or a new message. Failed and timed-out RD Runs also move the Requirement to `waiting_confirmation` while the Session remains `failed` for inspection and retry.
+Success: `202 Accepted`. Repeated calls are idempotent while the Run is still exiting. Returns `409 Conflict` when no RD Run is active or `steer` has no newer input to deliver. If pending messages arrived after the interrupted Run started, Agent Manager automatically resumes the same Session after exit; otherwise the Requirement moves to `waiting_confirmation` and waits for confirmation or a new message. Failed and timed-out RD Runs also move the Requirement to `waiting_confirmation` while the Session remains `failed` for inspection and retry.
 
 ### POST /api/requirements/:id/confirm
 
@@ -976,7 +976,7 @@ curl -sS -X POST "$API/requirements/$requirement_id/reply" \
   -d '{"message":"Also verify that the child process exits after a timeout."}'
 ~~~
 
-When a message requires immediate course correction, append it normally and then explicitly interrupt the current Run:
+When a message requires immediate course correction, append it normally and request steering. If the reply already started a new Run, steering returns 409 and that Run continues with the reply:
 
 ~~~bash
 curl -sS -X POST "$API/requirements/$requirement_id/reply" \
@@ -985,7 +985,7 @@ curl -sS -X POST "$API/requirements/$requirement_id/reply" \
 
 curl -sS -X POST "$API/requirements/$requirement_id/interrupt" \
   -H 'Content-Type: application/json' \
-  -d '{}'
+  -d '{"mode":"steer"}'
 ~~~
 
 When /api/requirements reports waiting_confirmation, inspect the result and confirm completion:

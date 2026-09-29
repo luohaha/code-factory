@@ -2012,7 +2012,7 @@ function RequirementDetail({
   onUpdateAgentConfiguration: (input: RequirementAgentConfigurationUpdate) => Promise<void>;
   onReply: (message: string, attachments?: File[]) => Promise<void>;
   onDelete: () => void;
-  onInterrupt: () => Promise<void>;
+  onInterrupt: (mode: 'stop' | 'steer') => Promise<void>;
   onConfirm: () => Promise<void>;
   onReview: (pullRequestId: string, configuration: AgentConfiguration) => Promise<void>;
   onCreateAgentTimer: (
@@ -2035,6 +2035,11 @@ function RequirementDetail({
   const previousMessageIdsRef = useRef<Set<string>>(new Set());
   const open = requirement !== null;
   const requirementId = requirement?.id;
+  const activeRdRun = runs.find((run) => run.role === 'rd' && run.status === 'running');
+  const queuedMessageCount = activeRdRun
+    ? messages.filter((item) => item.deliverToRd && item.sequence > (activeRdRun.inputToSequence ?? 0)).length
+    : requirement?.session.pendingMessageCount ?? 0;
+  const hasNewerInput = activeRdRun !== undefined && queuedMessageCount > 0;
   const newMessageCount = newMessages && newMessages.requirementId === requirementId
     ? newMessages.count
     : 0;
@@ -2341,15 +2346,17 @@ function RequirementDetail({
               <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
                 <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-emerald-500/12 text-emerald-600"><Bot className="size-3.5" /></span>
                 <span className="flex min-w-0 flex-1 items-center gap-2"><LoaderCircle className="size-3.5 shrink-0 animate-spin" />{t('RD Agent is working; new messages are queued by default.')}</span>
-                <Button type="button" variant="ghost" size="xs" className="shrink-0 text-amber-700 dark:text-amber-300" disabled={busy} onClick={() => void onInterrupt().catch(() => undefined)}>
-                  <Square data-icon="inline-start" />{t('Steering')}
-                </Button>
+                {activeRdRun ? (
+                  <Button type="button" variant="ghost" size="xs" className="shrink-0 text-amber-700 dark:text-amber-300" disabled={busy} onClick={() => void onInterrupt(hasNewerInput ? 'steer' : 'stop').catch(() => undefined)}>
+                    <Square data-icon="inline-start" />{t(hasNewerInput ? 'Steering' : 'Stop Run')}
+                  </Button>
+                ) : null}
               </div>
             ) : null}
-            {requirement.session.pendingMessageCount > 0 ? (
+            {queuedMessageCount > 0 ? (
               <div className="mt-3 rounded-lg bg-amber-500/8 px-3 py-2 text-[10px] text-amber-700 dark:text-amber-300">
                 {t('{count} external messages will be processed by the RD Agent {when}.', {
-                  count: requirement.session.pendingMessageCount,
+                  count: queuedMessageCount,
                   when: t(requirement.session.state === 'running' ? 'after the current Run' : 'during the next Run'),
                 })}
               </div>
@@ -3191,10 +3198,10 @@ function Dashboard() {
     }
   }
 
-  async function interruptRequirement(requirementId: string): Promise<void> {
+  async function interruptRequirement(requirementId: string, mode: 'stop' | 'steer'): Promise<void> {
     setInterruptingRequirementIds((current) => new Set(current).add(requirementId));
     try {
-      await runAction(requirementId, () => client.interruptRequirement(requirementId));
+      await runAction(requirementId, () => client.interruptRequirement(requirementId, mode));
     } catch (caught) {
       setInterruptingRequirementIds((current) => {
         const next = new Set(current);
@@ -3639,8 +3646,8 @@ function Dashboard() {
             },
           ).catch(() => undefined);
         }}
-        onInterrupt={() => selectedRequirement
-          ? interruptRequirement(selectedRequirement.id)
+        onInterrupt={(mode) => selectedRequirement
+          ? interruptRequirement(selectedRequirement.id, mode)
           : Promise.resolve()}
         onConfirm={() => selectedRequirement ? runAction(
           selectedRequirement.id,

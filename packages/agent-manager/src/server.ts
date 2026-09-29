@@ -537,7 +537,9 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           return;
         }
         if (name === 'interrupt') {
-          const result = manager.interruptRdRun(requirementId);
+          const mode = stringField(body, 'mode');
+          if (mode && mode !== 'stop' && mode !== 'steer') throw new TypeError('mode must be stop or steer');
+          const result = manager.interruptRdRun(requirementId, mode === 'steer' ? 'steer' : 'stop');
           sendJson(response, 202, { accepted: true, requirementId, action: name, runId: result.runId });
           return;
         }

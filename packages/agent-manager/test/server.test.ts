@@ -686,15 +686,29 @@ test('HTTP reply queues by default and the interrupt action resumes the RD Agent
     assert.equal(body.requirement.session.pendingMessageCount, 1);
     assert.equal(runner.requests[0]?.signal?.aborted, false);
 
+    const invalidModeResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/interrupt`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'unknown' }),
+    });
+    assert.equal(invalidModeResponse.status, 400);
+
     const interruptResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/interrupt`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: '{}',
+      body: JSON.stringify({ mode: 'steer' }),
     });
     assert.equal(interruptResponse.status, 202);
     assert.equal(runner.requests[0]?.signal?.aborted, true);
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(runner.requests.length, 2);
+    const staleSteerResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/interrupt`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'steer' }),
+    });
+    assert.equal(staleSteerResponse.status, 409);
+    assert.equal(runner.requests[1]?.signal?.aborted, false);
     assert.match(runner.requests[1]?.invocation.input ?? '', /Use this corrected direction\./);
 
     const secondInterrupt = await fetch(`${baseUrl}/api/requirements/${created.id}/interrupt`, {
