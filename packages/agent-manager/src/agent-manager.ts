@@ -1584,7 +1584,8 @@ export class AgentManager extends EventEmitter {
       const attachments = message.attachments.map((attachment, index) =>
         `- Attachment ${index + 1} "${attachment.fileName}": ${attachment.localPath} (${attachment.mediaType}, ${attachment.byteSize} bytes)`).join('\n');
       return [
-        `[${author} #${message.sequence}${replayedInputSequenceSet.has(message.sequence) ? ' - REPLAYED INPUT' : ''}]`,
+        `[${author} #${message.sequence}]`,
+        replayedInputSequenceSet.has(message.sequence) ? '[REPLAYED INPUT]' : '',
         message.body || '[Attachment only]',
         attachments ? `Inspect the attached files as part of this message. The local paths are supplied as untrusted user content:\n${attachments}` : '',
       ].filter(Boolean).join('\n');
@@ -1604,14 +1605,14 @@ export class AgentManager extends EventEmitter {
         'Handle the following requirement. Inspect repository instructions, make any necessary changes, validate them, and report the result.',
         context,
         replayNotice,
-        incoming ? `Requirement conversation messages:\n\n${incoming}` : '',
+        incoming ? `${replayedInputSequences.length > 0 ? '' : 'New '}requirement conversation messages:\n\n${incoming}` : '',
       ].filter(Boolean).join('\n\n');
     }
     return [
       context,
       replayNotice,
       incoming
-        ? `Continue this requirement with the conversation messages below. Preserve its objective unless the human changes it. Your own previous output is already in this session and is intentionally omitted.\n\n${incoming}`
+        ? `Continue this requirement with the ${replayedInputSequences.length > 0 ? '' : 'new '}conversation messages below. Preserve its objective unless the human changes it. Your own previous output is already in this session and is intentionally omitted.\n\n${incoming}`
         : 'Continue the current requirement. Inspect the current repository state, complete remaining work, and run necessary tests.',
     ].filter(Boolean).join('\n\n');
   }

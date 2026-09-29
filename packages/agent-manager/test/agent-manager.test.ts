@@ -766,7 +766,9 @@ test('Agent Manager includes a human start message in the initial RD Run', async
     const requirement = manager.createRequirement({ title: 'First input', description: 'Initial task', provider: 'codex' });
     const execution = manager.runRequirement(requirement.id, 'Start here.');
 
+    assert.match(runner.requests[0]?.invocation.input ?? '', /New requirement conversation messages:/);
     assert.match(runner.requests[0]?.invocation.input ?? '', /Start here\./);
+    assert.doesNotMatch(runner.requests[0]?.invocation.input ?? '', /REPLAYED INPUT/);
     assert.equal(manager.listRuns(requirement.id)[0]?.inputFromSequence, 1);
     assert.equal(manager.listRuns(requirement.id)[0]?.inputToSequence, 1);
     const startedEvent = manager.listEvents().find((event) => event.type === 'run.started');
@@ -1085,7 +1087,9 @@ test('a human reply reactivates a completed requirement in its original RD sessi
     assert.equal(runner.requests.length, 2);
     assert.ok(runner.requests[1]?.invocation.args.includes('resume'));
     assert.ok(runner.requests[1]?.invocation.args.includes('native-thread-1'));
+    assert.match(runner.requests[1]?.invocation.input ?? '', /Continue this requirement with the new conversation messages below\./);
     assert.match(runner.requests[1]?.invocation.input ?? '', /Please add one more regression test\./);
+    assert.doesNotMatch(runner.requests[1]?.invocation.input ?? '', /REPLAYED INPUT/);
 
     const reactivated = manager.getRequirement(requirement.id);
     assert.equal(reactivated?.status, 'doing');
@@ -1308,11 +1312,11 @@ test('steering replays interrupted input and delivers later replies once the rep
     assert.match(replayPrompt, /Replay warning: message sequence #1/);
     assert.match(replayPrompt, /delivery is at-least-once, not exactly-once/);
     assert.match(replayPrompt, /inspect the current repository and relevant external state/);
-    assert.match(replayPrompt, /\[Human #1 - REPLAYED INPUT\]/);
+    assert.match(replayPrompt, /\[Human #1\]\n\[REPLAYED INPUT\]/);
     assert.match(replayPrompt, /\[Human #2\]/);
-    assert.doesNotMatch(replayPrompt, /\[Human #2 - REPLAYED INPUT\]/);
+    assert.doesNotMatch(replayPrompt, /\[Human #2\]\n\[REPLAYED INPUT\]/);
     assert.match(replayPrompt, /\[Human #3\]/);
-    assert.doesNotMatch(replayPrompt, /\[Human #3 - REPLAYED INPUT\]/);
+    assert.doesNotMatch(replayPrompt, /\[Human #3\]\n\[REPLAYED INPUT\]/);
     for (const body of ['First instruction', 'Second instruction', 'Third instruction']) {
       assert.equal(replayPrompt.split(body).length - 1, 1);
     }
@@ -1391,7 +1395,7 @@ test('retrying interrupted input resumes its captured Claude Code session with a
     assert.notEqual(resumeIndex, -1);
     assert.equal(resumedRequest.invocation.args[resumeIndex + 1], 'claude-session-1');
     assert.match(resumedRequest.invocation.input, /Replay warning: message sequence #1/);
-    assert.match(resumedRequest.invocation.input, /\[Human #1 - REPLAYED INPUT\]/);
+    assert.match(resumedRequest.invocation.input, /\[Human #1\]\n\[REPLAYED INPUT\]/);
     assert.equal(resumedRequest.invocation.input.split('Apply the requested change.').length - 1, 1);
 
     runner.resolvers[1]?.({
