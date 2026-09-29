@@ -1281,6 +1281,54 @@ test('steering does not cancel a Run that already received the latest human repl
   }
 });
 
+test('steering replays interrupted input and delivers later replies once the replay succeeds', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new InterruptibleRunner();
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
+  try {
+    const requirement = manager.createRequirement({ title: 'Message boundaries', description: 'Task', provider: 'codex' });
+    const firstExecution = manager.runRequirement(requirement.id, 'First instruction');
+    manager.postHumanMessage(requirement.id, 'Second instruction');
+    manager.postHumanMessage(requirement.id, 'Third instruction');
+    manager.interruptRdRun(requirement.id, 'steer');
+    await firstExecution;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(runner.requests.length, 2);
+    const replayRun = manager.listRuns(requirement.id).find((run) => run.status === 'running');
+    assert.equal(replayRun?.inputFromSequence, 1);
+    assert.equal(replayRun?.inputToSequence, 3);
+    const replayPrompt = runner.requests[1]?.invocation.input ?? '';
+    for (const body of ['First instruction', 'Second instruction', 'Third instruction']) {
+      assert.equal(replayPrompt.split(body).length - 1, 1);
+    }
+
+    manager.postHumanMessage(requirement.id, 'Fourth instruction');
+    runner.resolvers[1]?.({
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'native-thread-1', finalMessage: 'replayed', error: null,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(runner.requests.length, 3);
+    const nextPrompt = runner.requests[2]?.invocation.input ?? '';
+    assert.match(nextPrompt, /Fourth instruction/);
+    for (const body of ['First instruction', 'Second instruction', 'Third instruction']) {
+      assert.doesNotMatch(nextPrompt, new RegExp(body));
+    }
+    assert.deepEqual(manager.listMessages(requirement.id)
+      .filter((message) => message.author === 'human')
+      .map((message) => message.body),
+    ['First instruction', 'Second instruction', 'Third instruction', 'Fourth instruction']);
+    runner.resolvers[2]?.({
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'native-thread-1', finalMessage: 'done', error: null,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(store.listPendingRdMessages(requirement.id).length, 0);
+  } finally {
+    manager.close();
+  }
+});
+
 test('interrupting an RD Run without a newer message stops instead of immediately restarting it', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new InterruptibleRunner();
