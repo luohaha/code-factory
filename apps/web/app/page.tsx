@@ -2049,6 +2049,7 @@ function RequirementDetail({
   onDelete,
   onFork,
   onOpenRequirement,
+  sourceRequirementAvailable,
   onInterrupt,
   onConfirm,
   onReview,
@@ -2077,6 +2078,7 @@ function RequirementDetail({
   onDelete: () => void;
   onFork: (input: { title: string; description: string }) => Promise<void>;
   onOpenRequirement: (id: string) => void;
+  sourceRequirementAvailable: boolean;
   onInterrupt: (mode: 'stop' | 'steer') => Promise<void>;
   onConfirm: () => Promise<void>;
   onReview: (pullRequestId: string, configuration: AgentConfiguration) => Promise<void>;
@@ -2240,9 +2242,17 @@ function RequirementDetail({
           {requirement.forkedFromRequirementId || requirement.status === 'doing' || requirement.status === 'waiting_confirmation' ? (
             <div className="mt-2 flex flex-wrap items-center gap-2">
               {requirement.forkedFromRequirementId ? (
-                <Button size="xs" variant="ghost" onClick={() => onOpenRequirement(requirement.forkedFromRequirementId!)}>
-                  <GitFork data-icon="inline-start" />{t('Forked from {id}', { id: `REQ-${shortId(requirement.forkedFromRequirementId)}` })}
-                </Button>
+                sourceRequirementAvailable ? (
+                  <Button size="xs" variant="ghost" onClick={() => onOpenRequirement(requirement.forkedFromRequirementId!)}>
+                    <GitFork data-icon="inline-start" />{t('Forked from {id}', { id: `REQ-${shortId(requirement.forkedFromRequirementId)}` })}
+                  </Button>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                    <GitFork className="size-3" />
+                    {t('Forked from {id}', { id: `REQ-${shortId(requirement.forkedFromRequirementId)}` })}
+                    · {t('Source requirement unavailable')}
+                  </span>
+                )
               ) : null}
               {requirement.status === 'doing' || requirement.status === 'waiting_confirmation' ? (
                 <ForkRequirementDialog requirement={requirement} busy={busy} onFork={onFork} />
@@ -3735,6 +3745,8 @@ function Dashboard() {
           setView('requirements');
         }}
         onOpenRequirement={(id) => openRequirementDetail(id)}
+        sourceRequirementAvailable={Boolean(selectedRequirement?.forkedFromRequirementId
+          && requirementsById.has(selectedRequirement.forkedFromRequirementId))}
         onInterrupt={(mode) => selectedRequirement
           ? interruptRequirement(selectedRequirement.id, mode)
           : Promise.resolve()}

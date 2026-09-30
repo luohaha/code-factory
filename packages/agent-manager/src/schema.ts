@@ -23,7 +23,7 @@ export const schemaStatements = [
     created_by TEXT NOT NULL DEFAULT 'human' CHECK (created_by IN ('human', 'rd_agent')),
     parent_requirement_id TEXT REFERENCES requirements(id) ON DELETE SET NULL,
     source_session_id TEXT,
-    forked_from_requirement_id TEXT REFERENCES requirements(id) ON DELETE SET NULL,
+    fork_origin_requirement_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     completed_at TEXT

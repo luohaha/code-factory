@@ -160,6 +160,50 @@ test('a waiting Claude Requirement forks and retries without resuming the source
   }
 });
 
+test('a fork keeps provenance and historical attachment paths after source retention', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-fork-retention-'));
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(':memory:'),
+    runner, logger: silentLogger, attachmentDirectory: directory,
+  });
+  try {
+    const source = manager.createRequirement({ title: 'Source', description: 'Read notes', provider: 'codex' });
+    const original = manager.uploadMessageAttachment(source.id, {
+      fileName: 'notes.txt', data: Buffer.from('retained by the fork'),
+    });
+    const sourceRun = manager.runRequirement(source.id, 'Use the notes', [original.id]);
+    runner.resolvers[0]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'source-native', finalMessage: null, error: null });
+    await sourceRun;
+    const fork = manager.forkRequirement(source.id, { title: 'Other direction', description: 'Use prior context' });
+    const copyPath = manager.listMessages(fork.id)[0]?.attachments[0]?.localPath;
+    assert.ok(copyPath);
+    assert.equal(fork.session.pendingMessageCount, 0);
+
+    manager.updateConfiguration({ doneRequirementRetentionDays: 0 });
+    manager.confirmRequirement(source.id);
+    assert.equal(manager.getRequirement(source.id), null);
+    assert.equal(existsSync(original.localPath), false);
+    assert.equal(existsSync(copyPath), true);
+    assert.equal(manager.getRequirement(fork.id)?.parentRequirementId, null);
+    assert.equal(manager.getRequirement(fork.id)?.forkedFromRequirementId, source.id);
+
+    const forkRun = manager.runRequirement(fork.id);
+    const prompt = runner.requests[1]?.invocation.input ?? '';
+    assert.match(prompt, /fork-owned copies for historical attachments/);
+    assert.match(prompt, /Message #1, attachment 1 "notes.txt"/);
+    assert.ok(prompt.includes(copyPath));
+    assert.ok(!prompt.includes(original.localPath));
+    assert.doesNotMatch(prompt, /Use the notes/);
+    runner.resolvers[1]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'fork-native', finalMessage: null, error: null });
+    await forkRun;
+    assert.equal(readFileSync(copyPath, 'utf8'), 'retained by the fork');
+  } finally {
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('a fork retains its source native context across an Agent Manager restart', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-fork-restart-'));
   const databasePath = join(directory, 'manager.sqlite');

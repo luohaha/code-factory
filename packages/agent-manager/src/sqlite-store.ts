@@ -66,7 +66,7 @@ function requirementFrom(row: Row): Requirement {
     createdBy: String(row.created_by) as Requirement['createdBy'],
     parentRequirementId: row.parent_requirement_id === null ? null : String(row.parent_requirement_id),
     sourceSessionId: row.source_session_id === null ? null : String(row.source_session_id),
-    forkedFromRequirementId: row.forked_from_requirement_id === null ? null : String(row.forked_from_requirement_id),
+    forkedFromRequirementId: row.fork_origin_requirement_id === null ? null : String(row.fork_origin_requirement_id),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     completedAt: row.completed_at === null ? null : String(row.completed_at),
@@ -345,7 +345,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       }
       this.#db.prepare(`INSERT INTO requirements
         (id, title, description, status, provider, model, reasoning_effort, created_by,
-          parent_requirement_id, forked_from_requirement_id, created_at, updated_at)
+          parent_requirement_id, fork_origin_requirement_id, created_at, updated_at)
         VALUES (?, ?, ?, 'todo', ?, ?, ?, 'human', ?, ?, ?, ?)`).run(
         input.requirementId, input.title, input.description, source.provider, source.model,
         source.reasoningEffort, source.id, source.id, input.now, input.now,
@@ -1193,7 +1193,12 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     ensureColumn('requirements', 'created_by', "TEXT NOT NULL DEFAULT 'human' CHECK (created_by IN ('human', 'rd_agent'))");
     ensureColumn('requirements', 'parent_requirement_id', 'TEXT REFERENCES requirements(id) ON DELETE SET NULL');
     ensureColumn('requirements', 'source_session_id', 'TEXT');
-    ensureColumn('requirements', 'forked_from_requirement_id', 'TEXT REFERENCES requirements(id) ON DELETE SET NULL');
+    ensureColumn('requirements', 'fork_origin_requirement_id', 'TEXT');
+    if ((this.#db.prepare('PRAGMA table_info(requirements)').all() as Row[])
+      .some((column) => String(column.name) === 'forked_from_requirement_id')) {
+      this.#db.prepare(`UPDATE requirements SET fork_origin_requirement_id = forked_from_requirement_id
+        WHERE fork_origin_requirement_id IS NULL AND forked_from_requirement_id IS NOT NULL`).run();
+    }
     ensureColumn('requirements', 'model', 'TEXT');
     ensureColumn('requirements', 'reasoning_effort', "TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max'))");
     ensureColumn('agent_sessions', 'last_consumed_message_sequence', 'INTEGER NOT NULL DEFAULT 0');

@@ -67,6 +67,7 @@ export const zhCN = {
   'Fork and start': 'Fork 并启动',
   'Available after the native Session starts': '原生会话启动后即可使用',
   'Forked from {id}': 'Fork 自 {id}',
+  'Source requirement unavailable': '来源需求已不可用',
   'Copy the conversation and session context into a new RD Session. The two requirements can continue independently.': '将对话历史和会话上下文复制到新的 RD 会话。两个需求可以独立继续。',
   'Choose the Agent, model, and reasoning effort to use when this TODO requirement starts.': '选择此 TODO 需求启动时使用的 Agent、模型和思考强度。',
   'Failed to update Agent configuration': '修改 Agent 配置失败',
