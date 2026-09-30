@@ -91,10 +91,11 @@ test('HTTP fork creates and starts a separate Requirement and rejects unavailabl
     assert.equal(invalidResponse.status, 400);
     const response = await fetch(endpoint, { method: 'POST', body });
     assert.equal(response.status, 201);
-    const fork = await response.json() as { id: string; status: string; forkedFromRequirementId: string; session: { id: string } };
+    const fork = await response.json() as { id: string; status: string; parentRequirementId: string; forkedFromRequirementId: string; session: { id: string } };
     assert.notEqual(fork.id, source.id);
     assert.equal(fork.status, 'doing');
     assert.equal(fork.forkedFromRequirementId, source.id);
+    assert.equal(fork.parentRequirementId, source.id);
     assert.notEqual(fork.session.id, source.session.id);
     assert.equal(runner.requests.length, 2);
     assert.ok(runner.requests[1]?.invocation.args.includes('fork'));

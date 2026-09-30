@@ -348,7 +348,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
           parent_requirement_id, forked_from_requirement_id, created_at, updated_at)
         VALUES (?, ?, ?, 'todo', ?, ?, ?, 'human', ?, ?, ?, ?)`).run(
         input.requirementId, input.title, input.description, source.provider, source.model,
-        source.reasoningEffort, source.parentRequirementId, source.id, input.now, input.now,
+        source.reasoningEffort, source.id, source.id, input.now, input.now,
       );
       this.#db.prepare(`INSERT INTO agent_sessions
         (id, requirement_id, provider, fork_source_native_session_id, state,

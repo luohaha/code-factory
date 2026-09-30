@@ -36,7 +36,7 @@ class DeferredRunner implements AgentProcessRunner {
   }
 }
 
-test('a running Requirement forks its parent, conversation, attachments, and native context independently', async () => {
+test('a running Requirement forks a direct child with copied conversation, attachments, and native context', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-fork-'));
   const runner = new DeferredRunner();
   const store = new SqliteAgentManagerStore(':memory:');
@@ -68,8 +68,11 @@ test('a running Requirement forks its parent, conversation, attachments, and nat
     const fork = manager.forkRequirement(source.id, { title: '  Another way  ', description: '  New direction  ' });
     assert.equal(fork.status, 'todo');
     assert.equal(fork.createdBy, 'human');
-    assert.equal(fork.parentRequirementId, parent.id);
+    assert.equal(fork.parentRequirementId, source.id);
     assert.equal(fork.forkedFromRequirementId, source.id);
+    assert.deepEqual(manager.listRelatedRequirements(source.id, source.session.id).children.map((child) => child.id), [fork.id]);
+    assert.equal(manager.listRelatedRequirements(fork.id, fork.session.id).parent?.id, source.id);
+    assert.deepEqual(manager.listRelatedRequirements(parent.id, parent.session.id).children.map((child) => child.id), [source.id]);
     assert.equal(fork.sourceSessionId, null);
     assert.equal(fork.title, 'Another way');
     assert.equal(fork.description, 'New direction');
