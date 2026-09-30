@@ -23,6 +23,7 @@ export const schemaStatements = [
     created_by TEXT NOT NULL DEFAULT 'human' CHECK (created_by IN ('human', 'rd_agent')),
     parent_requirement_id TEXT REFERENCES requirements(id) ON DELETE SET NULL,
     source_session_id TEXT,
+    forked_from_requirement_id TEXT REFERENCES requirements(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     completed_at TEXT
@@ -32,6 +33,7 @@ export const schemaStatements = [
     requirement_id TEXT NOT NULL UNIQUE REFERENCES requirements(id) ON DELETE CASCADE,
     provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude-code')),
     native_session_id TEXT,
+    fork_source_native_session_id TEXT,
     state TEXT NOT NULL CHECK (state IN ('idle', 'running', 'waiting_human', 'waiting_review', 'failed', 'completed')),
     last_error TEXT,
     last_consumed_message_sequence INTEGER NOT NULL DEFAULT 0,

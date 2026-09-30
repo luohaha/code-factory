@@ -24,6 +24,7 @@ import {
   type CreateAgentTimerRecord,
   type CreateMessageAttachmentRecord,
   type CreateRequirementRecord,
+  type ForkRequirementRecord,
   type UpdateRequirementAgentConfigurationRecord,
   type PurgeExpiredRequirementsRecord,
   type PurgeExpiredRequirementsResult,
@@ -65,6 +66,7 @@ function requirementFrom(row: Row): Requirement {
     createdBy: String(row.created_by) as Requirement['createdBy'],
     parentRequirementId: row.parent_requirement_id === null ? null : String(row.parent_requirement_id),
     sourceSessionId: row.source_session_id === null ? null : String(row.source_session_id),
+    forkedFromRequirementId: row.forked_from_requirement_id === null ? null : String(row.forked_from_requirement_id),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     completedAt: row.completed_at === null ? null : String(row.completed_at),
@@ -77,6 +79,8 @@ function sessionFrom(row: Row, prefix = ''): AgentSession {
     requirementId: String(row[`${prefix}requirement_id`]),
     provider: String(row[`${prefix}provider`]) as AgentSession['provider'],
     nativeSessionId: row[`${prefix}native_session_id`] === null ? null : String(row[`${prefix}native_session_id`]),
+    forkSourceNativeSessionId: row[`${prefix}fork_source_native_session_id`] === null
+      ? null : String(row[`${prefix}fork_source_native_session_id`]),
     state: String(row[`${prefix}state`]) as AgentSession['state'],
     lastError: row[`${prefix}last_error`] === null ? null : String(row[`${prefix}last_error`]),
     lastConsumedMessageSequence: Number(row[`${prefix}last_consumed_message_sequence`] ?? 0),
@@ -326,6 +330,70 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     return this.requireBundle(input.requirementId);
   }
 
+  forkRequirement(input: ForkRequirementRecord): RequirementWithSession {
+    this.#db.exec('BEGIN IMMEDIATE');
+    try {
+      const source = this.requireBundle(input.sourceRequirementId);
+      if (source.status !== 'doing' && source.status !== 'waiting_confirmation') {
+        throw new StoreConflictError(`Requirement ${source.id} cannot be forked while ${source.status}`);
+      }
+      if (source.session.nativeSessionId !== input.sourceNativeSessionId) {
+        throw new StoreConflictError(`Requirement ${source.id} native session changed during fork`);
+      }
+      if (source.session.lastConsumedMessageSequence !== input.lastConsumedMessageSequence) {
+        throw new StoreConflictError(`Requirement ${source.id} conversation advanced during fork`);
+      }
+      this.#db.prepare(`INSERT INTO requirements
+        (id, title, description, status, provider, model, reasoning_effort, created_by,
+          parent_requirement_id, forked_from_requirement_id, created_at, updated_at)
+        VALUES (?, ?, ?, 'todo', ?, ?, ?, 'human', ?, ?, ?, ?)`).run(
+        input.requirementId, input.title, input.description, source.provider, source.model,
+        source.reasoningEffort, source.parentRequirementId, source.id, input.now, input.now,
+      );
+      this.#db.prepare(`INSERT INTO agent_sessions
+        (id, requirement_id, provider, fork_source_native_session_id, state,
+          last_consumed_message_sequence, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'idle', ?, ?, ?)`).run(
+        input.sessionId, input.requirementId, source.provider, input.sourceNativeSessionId,
+        input.lastConsumedMessageSequence, input.now, input.now,
+      );
+      for (const { source: message, id, attachments } of input.messages) {
+        this.#db.prepare(`INSERT INTO requirement_messages
+          (id, requirement_id, session_id, source_requirement_id, author, body, sequence, deliver_to_rd, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+          id, input.requirementId, input.sessionId, message.sourceRequirementId, message.author,
+          message.body, message.sequence, message.deliverToRd ? 1 : 0, message.createdAt,
+        );
+        this.upsertSearchDocument({
+          kind: 'message', sourceId: id, requirementId: input.requirementId,
+          title: `Message ${message.sequence} (${message.author})`, body: message.body,
+          keywords: `${id} ${input.requirementId} ${input.sessionId} ${message.author}`,
+          updatedAt: input.now,
+        });
+        for (const attachment of attachments) {
+          this.#db.prepare(`INSERT INTO message_attachments
+            (id, requirement_id, message_id, file_name, kind, media_type, byte_size, local_path, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+            attachment.id, input.requirementId, id, attachment.source.fileName,
+            attachment.source.kind, attachment.source.mediaType, attachment.source.byteSize,
+            attachment.localPath, attachment.source.createdAt,
+          );
+        }
+      }
+      this.upsertSearchDocument({
+        kind: 'requirement', sourceId: input.requirementId, requirementId: input.requirementId,
+        title: input.title, body: input.description,
+        keywords: `${input.requirementId} ${input.sessionId} ${source.provider} ${source.model ?? ''}`,
+        updatedAt: input.now,
+      });
+      this.#db.exec('COMMIT');
+    } catch (error) {
+      this.#db.exec('ROLLBACK');
+      throw error;
+    }
+    return this.requireBundle(input.requirementId);
+  }
+
   updateRequirementAgentConfiguration(
     input: UpdateRequirementAgentConfigurationRecord,
   ): RequirementWithSession {
@@ -363,7 +431,8 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
   getRequirement(id: string): RequirementWithSession | null {
     const row = this.#db.prepare(`SELECT
       r.*, s.id AS s_id, s.requirement_id AS s_requirement_id, s.provider AS s_provider,
-      s.native_session_id AS s_native_session_id, s.state AS s_state, s.last_error AS s_last_error,
+      s.native_session_id AS s_native_session_id, s.fork_source_native_session_id AS s_fork_source_native_session_id,
+      s.state AS s_state, s.last_error AS s_last_error,
       s.last_consumed_message_sequence AS s_last_consumed_message_sequence,
       (SELECT COUNT(*) FROM requirement_messages m WHERE m.requirement_id = r.id
         AND m.deliver_to_rd = 1 AND m.sequence > s.last_consumed_message_sequence) AS s_pending_message_count,
@@ -376,7 +445,8 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
   listRequirements(): RequirementWithSession[] {
     const rows = this.#db.prepare(`SELECT
       r.*, s.id AS s_id, s.requirement_id AS s_requirement_id, s.provider AS s_provider,
-      s.native_session_id AS s_native_session_id, s.state AS s_state, s.last_error AS s_last_error,
+      s.native_session_id AS s_native_session_id, s.fork_source_native_session_id AS s_fork_source_native_session_id,
+      s.state AS s_state, s.last_error AS s_last_error,
       s.last_consumed_message_sequence AS s_last_consumed_message_sequence,
       (SELECT COUNT(*) FROM requirement_messages m WHERE m.requirement_id = r.id
         AND m.deliver_to_rd = 1 AND m.sequence > s.last_consumed_message_sequence) AS s_pending_message_count,
@@ -389,7 +459,8 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
   listChildRequirements(parentRequirementId: string): RequirementWithSession[] {
     const rows = this.#db.prepare(`SELECT
       r.*, s.id AS s_id, s.requirement_id AS s_requirement_id, s.provider AS s_provider,
-      s.native_session_id AS s_native_session_id, s.state AS s_state, s.last_error AS s_last_error,
+      s.native_session_id AS s_native_session_id, s.fork_source_native_session_id AS s_fork_source_native_session_id,
+      s.state AS s_state, s.last_error AS s_last_error,
       s.last_consumed_message_sequence AS s_last_consumed_message_sequence,
       (SELECT COUNT(*) FROM requirement_messages m WHERE m.requirement_id = r.id
         AND m.deliver_to_rd = 1 AND m.sequence > s.last_consumed_message_sequence) AS s_pending_message_count,
@@ -884,22 +955,29 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
           .run(now, run.requirementId);
         this.#db.prepare(`UPDATE agent_sessions SET state = 'waiting_human', last_error = NULL,
           native_session_id = COALESCE(?, native_session_id),
+          fork_source_native_session_id = CASE WHEN ? IS NOT NULL THEN NULL ELSE fork_source_native_session_id END,
           last_consumed_message_sequence = MAX(last_consumed_message_sequence, COALESCE(?, last_consumed_message_sequence)),
           updated_at = ? WHERE id = ?`)
-          .run(outcome.nativeSessionId, run.inputToSequence, now, run.sessionId);
+          .run(outcome.nativeSessionId, outcome.nativeSessionId, run.inputToSequence, now, run.sessionId);
       } else if (outcome.status === 'cancelled') {
         const hasNewMessages = this.#db.prepare(`SELECT 1 FROM requirement_messages
           WHERE requirement_id = ? AND deliver_to_rd = 1 AND sequence > COALESCE(?, 0)
             AND sequence > (SELECT last_consumed_message_sequence FROM agent_sessions WHERE id = ?)
           LIMIT 1`)
           .get(run.requirementId, run.inputToSequence, run.sessionId) !== undefined;
-        this.#db.prepare("UPDATE agent_sessions SET state = 'waiting_human', last_error = NULL, native_session_id = COALESCE(?, native_session_id), updated_at = ? WHERE id = ?")
-          .run(outcome.nativeSessionId, now, run.sessionId);
+        this.#db.prepare(`UPDATE agent_sessions SET state = 'waiting_human', last_error = NULL,
+          native_session_id = COALESCE(?, native_session_id),
+          fork_source_native_session_id = CASE WHEN ? IS NOT NULL THEN NULL ELSE fork_source_native_session_id END,
+          updated_at = ? WHERE id = ?`)
+          .run(outcome.nativeSessionId, outcome.nativeSessionId, now, run.sessionId);
         this.#db.prepare('UPDATE requirements SET status = ?, updated_at = ? WHERE id = ?')
           .run(hasNewMessages ? 'doing' : 'waiting_confirmation', now, run.requirementId);
       } else {
-        this.#db.prepare("UPDATE agent_sessions SET state = 'failed', last_error = ?, native_session_id = COALESCE(?, native_session_id), updated_at = ? WHERE id = ?")
-          .run(outcome.error ?? `Run ${outcome.status}`, outcome.nativeSessionId, now, run.sessionId);
+        this.#db.prepare(`UPDATE agent_sessions SET state = 'failed', last_error = ?,
+          native_session_id = COALESCE(?, native_session_id),
+          fork_source_native_session_id = CASE WHEN ? IS NOT NULL THEN NULL ELSE fork_source_native_session_id END,
+          updated_at = ? WHERE id = ?`)
+          .run(outcome.error ?? `Run ${outcome.status}`, outcome.nativeSessionId, outcome.nativeSessionId, now, run.sessionId);
         this.#db.prepare("UPDATE requirements SET status = 'waiting_confirmation', updated_at = ? WHERE id = ?")
           .run(now, run.requirementId);
       }
@@ -919,7 +997,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
   }
 
   setNativeSessionId(sessionId: string, nativeSessionId: string, now: string): void {
-    const result = this.#db.prepare('UPDATE agent_sessions SET native_session_id = ?, updated_at = ? WHERE id = ?')
+    const result = this.#db.prepare('UPDATE agent_sessions SET native_session_id = ?, fork_source_native_session_id = NULL, updated_at = ? WHERE id = ?')
       .run(nativeSessionId, now, sessionId);
     if (result.changes === 0) throw new StoreNotFoundError(`Session ${sessionId} not found`);
   }
@@ -1115,9 +1193,11 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     ensureColumn('requirements', 'created_by', "TEXT NOT NULL DEFAULT 'human' CHECK (created_by IN ('human', 'rd_agent'))");
     ensureColumn('requirements', 'parent_requirement_id', 'TEXT REFERENCES requirements(id) ON DELETE SET NULL');
     ensureColumn('requirements', 'source_session_id', 'TEXT');
+    ensureColumn('requirements', 'forked_from_requirement_id', 'TEXT REFERENCES requirements(id) ON DELETE SET NULL');
     ensureColumn('requirements', 'model', 'TEXT');
     ensureColumn('requirements', 'reasoning_effort', "TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max'))");
     ensureColumn('agent_sessions', 'last_consumed_message_sequence', 'INTEGER NOT NULL DEFAULT 0');
+    ensureColumn('agent_sessions', 'fork_source_native_session_id', 'TEXT');
     ensureColumn('agent_runs', 'model', 'TEXT');
     ensureColumn('agent_runs', 'reasoning_effort', "TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max'))");
     ensureColumn('agent_runs', 'input_from_sequence', 'INTEGER');

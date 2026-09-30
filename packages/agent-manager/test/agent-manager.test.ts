@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -35,6 +35,161 @@ class DeferredRunner implements AgentProcessRunner {
     return new Promise((resolve) => this.resolvers.push(resolve));
   }
 }
+
+test('a running Requirement forks its parent, conversation, attachments, and native context independently', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-fork-'));
+  const runner = new DeferredRunner();
+  const store = new SqliteAgentManagerStore(':memory:');
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(), store, runner, logger: silentLogger,
+    attachmentDirectory: directory,
+  });
+  try {
+    const parent = manager.createRequirement({ title: 'Parent', description: 'Parent task', provider: 'codex' });
+    const source = manager.createRequirement({
+      title: 'Explore one way', description: 'Original direction', provider: 'codex',
+      model: 'gpt-test', reasoningEffort: 'high', createdBy: 'rd_agent',
+      parentRequirementId: parent.id, sourceSessionId: parent.session.id,
+    });
+    assert.throws(() => manager.forkRequirement(source.id, { title: 'Another way', description: 'New direction' }),
+      /only be forked/);
+    const attachment = manager.uploadMessageAttachment(source.id, {
+      fileName: 'notes.txt', data: Buffer.from('useful context'),
+    });
+    const sourceRun = manager.runRequirement(source.id, 'Read the notes', [attachment.id]);
+    assert.throws(() => manager.forkRequirement(source.id, { title: 'Another way', description: 'New direction' }),
+      /no native session/);
+    runner.requests[0]?.onNativeSession?.('native-original');
+    const nativeEvent = manager.listEvents().findLast((event) => event.type === 'requirement.updated');
+    assert.equal((nativeEvent?.payload.requirement as { session?: { nativeSessionId?: string } })
+      ?.session?.nativeSessionId, 'native-original');
+    runner.requests[0]?.onEvent?.({ kind: 'message', message: 'First direction.', raw: {} });
+
+    const fork = manager.forkRequirement(source.id, { title: '  Another way  ', description: '  New direction  ' });
+    assert.equal(fork.status, 'todo');
+    assert.equal(fork.createdBy, 'human');
+    assert.equal(fork.parentRequirementId, parent.id);
+    assert.equal(fork.forkedFromRequirementId, source.id);
+    assert.equal(fork.sourceSessionId, null);
+    assert.equal(fork.title, 'Another way');
+    assert.equal(fork.description, 'New direction');
+    assert.equal(fork.provider, source.provider);
+    assert.equal(fork.model, source.model);
+    assert.equal(fork.reasoningEffort, source.reasoningEffort);
+    assert.notEqual(fork.session.id, source.session.id);
+    assert.equal(fork.session.nativeSessionId, null);
+    assert.equal(fork.session.forkSourceNativeSessionId, 'native-original');
+
+    const sourceMessages = manager.listMessages(source.id);
+    const copiedMessages = manager.listMessages(fork.id);
+    assert.deepEqual(copiedMessages.map((message) => message.body), sourceMessages.map((message) => message.body));
+    assert.deepEqual(copiedMessages.map((message) => message.sequence), [1, 2]);
+    assert.ok(copiedMessages.every((message) => message.requirementId === fork.id && message.sessionId === fork.session.id));
+    assert.notEqual(copiedMessages[0]?.id, sourceMessages[0]?.id);
+    assert.equal(copiedMessages[0]?.runId, null);
+    assert.equal(copiedMessages[0]?.attachments[0]?.requirementId, fork.id);
+    assert.notEqual(copiedMessages[0]?.attachments[0]?.localPath, attachment.localPath);
+    assert.equal(readFileSync(copiedMessages[0]!.attachments[0]!.localPath, 'utf8'), 'useful context');
+    assert.equal(fork.session.pendingMessageCount, 1);
+
+    const forkRun = manager.runRequirement(fork.id);
+    assert.deepEqual(runner.requests[1]?.invocation.args.slice(-3), ['fork', 'native-original', '-']);
+    assert.match(runner.requests[1]?.invocation.input ?? '', /New direction/);
+    assert.match(runner.requests[1]?.invocation.input ?? '', /Read the notes/);
+    runner.requests[1]?.onNativeSession?.('native-fork');
+    runner.resolvers[1]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'native-fork', finalMessage: null, error: null });
+    const finishedFork = await forkRun;
+    assert.equal(finishedFork.session.nativeSessionId, 'native-fork');
+    assert.equal(finishedFork.session.forkSourceNativeSessionId, null);
+    assert.equal(finishedFork.session.lastConsumedMessageSequence, 1);
+    assert.equal(store.getRequirement(source.id)?.session.nativeSessionId, 'native-original');
+    assert.equal(manager.listMessages(source.id).length, 2);
+
+    runner.resolvers[0]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'native-original', finalMessage: null, error: null });
+    await sourceRun;
+  } finally {
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('a waiting Claude Requirement forks and retries without resuming the source session', async () => {
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(':memory:'),
+    runner, logger: silentLogger,
+  });
+  try {
+    const source = manager.createRequirement({ title: 'Explore', description: 'Initial direction', provider: 'claude-code' });
+    const sourceRun = manager.runRequirement(source.id);
+    runner.resolvers[0]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'claude-source', finalMessage: null, error: null });
+    await sourceRun;
+    const fork = manager.forkRequirement(source.id, { title: 'Explore B', description: 'Alternate direction' });
+    const firstRun = manager.runRequirement(fork.id);
+    const firstArgs = runner.requests[1]?.invocation.args ?? [];
+    assert.deepEqual(firstArgs.slice(firstArgs.indexOf('--resume'), firstArgs.indexOf('--resume') + 3),
+      ['--resume', 'claude-source', '--fork-session']);
+    runner.resolvers[1]?.({ status: 'failed', exitCode: 1, nativeSessionId: null, finalMessage: null, error: 'CLI failed before starting' });
+    const failed = await firstRun;
+    assert.equal(failed.session.nativeSessionId, null);
+    assert.equal(failed.session.forkSourceNativeSessionId, 'claude-source');
+
+    const retry = manager.runRequirement(fork.id);
+    const retryArgs = runner.requests[2]?.invocation.args ?? [];
+    assert.deepEqual(retryArgs.slice(retryArgs.indexOf('--resume'), retryArgs.indexOf('--resume') + 3),
+      ['--resume', 'claude-source', '--fork-session']);
+    runner.requests[2]?.onNativeSession?.('claude-fork');
+    runner.resolvers[2]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'claude-fork', finalMessage: null, error: null });
+    const finished = await retry;
+    assert.equal(finished.session.nativeSessionId, 'claude-fork');
+    assert.equal(finished.session.forkSourceNativeSessionId, null);
+
+    const continuation = manager.runRequirement(fork.id);
+    const continuationArgs = runner.requests[3]?.invocation.args ?? [];
+    assert.deepEqual(continuationArgs.slice(continuationArgs.indexOf('--resume'), continuationArgs.indexOf('--resume') + 2),
+      ['--resume', 'claude-fork']);
+    assert.ok(!continuationArgs.includes('--fork-session'));
+    runner.resolvers[3]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'claude-fork', finalMessage: null, error: null });
+    await continuation;
+    assert.equal(manager.getRequirement(source.id)?.session.nativeSessionId, 'claude-source');
+  } finally {
+    await manager.close();
+  }
+});
+
+test('a fork retains its source native context across an Agent Manager restart', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-fork-restart-'));
+  const databasePath = join(directory, 'manager.sqlite');
+  const initialRunner = new DeferredRunner();
+  const initial = new AgentManager({
+    workspaceRoot: process.cwd(), databasePath, runner: initialRunner, logger: silentLogger,
+  });
+  let forkId: string;
+  try {
+    const source = initial.createRequirement({ title: 'Source', description: 'Source task', provider: 'codex' });
+    const sourceRun = initial.runRequirement(source.id);
+    initialRunner.resolvers[0]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'source-thread', finalMessage: null, error: null });
+    await sourceRun;
+    forkId = initial.forkRequirement(source.id, { title: 'Fork', description: 'Other direction' }).id;
+  } finally {
+    await initial.close();
+  }
+  const runner = new DeferredRunner();
+  const resumed = new AgentManager({
+    workspaceRoot: process.cwd(), databasePath, runner, logger: silentLogger,
+  });
+  try {
+    assert.equal(resumed.getRequirement(forkId)?.session.forkSourceNativeSessionId, 'source-thread');
+    const run = resumed.runRequirement(forkId);
+    assert.deepEqual(runner.requests[0]?.invocation.args.slice(-3), ['fork', 'source-thread', '-']);
+    runner.resolvers[0]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'fork-thread', finalMessage: null, error: null });
+    await run;
+    assert.equal(resumed.getRequirement(forkId)?.session.nativeSessionId, 'fork-thread');
+  } finally {
+    await resumed.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 class InterruptibleRunner implements AgentProcessRunner {
   requests: ProcessRunRequest[] = [];

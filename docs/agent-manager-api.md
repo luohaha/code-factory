@@ -99,6 +99,7 @@ interface Requirement {
   createdBy: 'human' | 'rd_agent';
   parentRequirementId: string | null;
   sourceSessionId: string | null;
+  forkedFromRequirementId: string | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -116,6 +117,7 @@ interface AgentSession {
   requirementId: string;
   provider: 'codex' | 'claude-code';
   nativeSessionId: string | null;
+  forkSourceNativeSessionId: string | null;
   state: 'idle' | 'running' | 'waiting_human' | 'failed' | 'completed';
   lastError: string | null;
   lastConsumedMessageSequence: number;
@@ -126,6 +128,7 @@ interface AgentSession {
 ~~~
 
 nativeSessionId is the native Codex or Claude Code session ID. pendingMessageCount is the number of external messages that RD has not successfully consumed.
+For a new fork, `forkSourceNativeSessionId` holds the source native ID until the forked provider session starts and supplies its own `nativeSessionId`.
 
 ### 3.3 AgentRun
 
@@ -520,6 +523,20 @@ curl -X POST http://127.0.0.1:4310/api/requirements \
 ~~~
 
 Success: 201 Created with the new Requirement. Its initial status is todo and its Session state is idle.
+
+### POST /api/requirements/:id/fork
+
+Forks a `doing` or `waiting_confirmation` Requirement into a new human-authored Requirement and starts its RD Session immediately. The source must already have a native session ID; a running source that has not emitted one yet returns `409 Conflict`.
+
+Request body: non-empty `title` and `description` strings for the new direction. The fork inherits the source's provider, model, reasoning effort, and `parentRequirementId`. `forkedFromRequirementId` records its origin. Its conversation messages and attachments are copied with new IDs and file paths; linked PRs, Runs, timers, and review requests stay with the source. The new Session starts with a provider-native fork of the source context, then resumes under its own native ID. Messages that the source had not successfully consumed remain pending in the fork. Both Requirements can continue independently.
+
+~~~bash
+curl -X POST http://127.0.0.1:4310/api/requirements/req_.../fork \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Explore another approach","description":"Try the alternative design"}'
+~~~
+
+Success: `201 Created` with the new Requirement, normally in `doing` with its Session running. Returns `400 Bad Request` for invalid content, `404 Not Found` for an unknown source, and `409 Conflict` for an ineligible source or unavailable native context. If the provider run fails after creation, the fork remains available in `waiting_confirmation` for inspection and retry.
 
 ### PATCH /api/requirements/:id
 

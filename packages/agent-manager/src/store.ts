@@ -40,6 +40,22 @@ export interface CreateRequirementRecord {
   now: string;
 }
 
+export interface ForkRequirementRecord {
+  sourceRequirementId: string;
+  requirementId: string;
+  sessionId: string;
+  title: string;
+  description: string;
+  sourceNativeSessionId: string;
+  lastConsumedMessageSequence: number;
+  messages: Array<{
+    source: RequirementMessage;
+    id: string;
+    attachments: Array<{ source: MessageAttachment; id: string; localPath: string }>;
+  }>;
+  now: string;
+}
+
 export interface UpdateRequirementAgentConfigurationRecord {
   requirementId: string;
   provider: AgentProvider;
@@ -174,6 +190,7 @@ export interface CompleteAgentTimerOccurrenceRecord {
 export interface AgentManagerStore {
   close(): void;
   createRequirement(input: CreateRequirementRecord): RequirementWithSession;
+  forkRequirement(input: ForkRequirementRecord): RequirementWithSession;
   updateRequirementAgentConfiguration(input: UpdateRequirementAgentConfigurationRecord): RequirementWithSession;
   getRequirement(id: string): RequirementWithSession | null;
   listRequirements(): RequirementWithSession[];

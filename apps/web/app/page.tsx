@@ -20,6 +20,7 @@ import {
   FolderGit2,
   ExternalLink,
   GitBranch,
+  GitFork,
   GitPullRequest,
   LayoutDashboard,
   Languages,
@@ -1186,6 +1187,66 @@ function NewRequirementDialog({ disabled, modelCatalog, onCreate }: {
   );
 }
 
+function ForkRequirementDialog({ requirement, busy, onFork }: {
+  requirement: RequirementDto;
+  busy: boolean;
+  onFork: (input: { title: string; description: string }) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [title, setTitle] = useState(requirement.title);
+  const [description, setDescription] = useState(requirement.description);
+
+  async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
+    event.preventDefault();
+    setSubmitting(true);
+    try {
+      await onFork({ title: title.trim(), description: description.trim() });
+      setOpen(false);
+    } catch {
+      // The parent surfaces the API error while preserving this draft.
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger render={<Button size="xs" variant="outline" disabled={busy || !requirement.session.nativeSessionId} />}>
+        <GitFork data-icon="inline-start" />{t('Fork requirement')}
+      </DialogTrigger>
+      {!requirement.session.nativeSessionId ? <span className="text-[10px] text-muted-foreground">{t('Available after the native Session starts')}</span> : null}
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-w-lg">
+        <form className="flex max-h-[calc(100dvh-2rem)] min-h-0 flex-col" onSubmit={submit}>
+          <DialogHeader className="shrink-0 px-4 pt-4 pr-12">
+            <DialogTitle>{t('Fork requirement')}</DialogTitle>
+            <DialogDescription>{t('Copy the conversation and session context into a new RD Session. The two requirements can continue independently.')}</DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 overflow-y-auto px-4">
+            <FieldGroup className="my-5 gap-4">
+              <Field>
+                <FieldLabel htmlFor="fork-requirement-title">{t('Requirement title')}</FieldLabel>
+                <Input id="fork-requirement-title" value={title} onChange={(event) => setTitle(event.target.value)} required />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="fork-requirement-description">{t('Task and acceptance criteria')}</FieldLabel>
+                <Textarea id="fork-requirement-description" value={description} onChange={(event) => setDescription(event.target.value)} required className="max-h-56 overflow-y-auto" />
+              </Field>
+            </FieldGroup>
+          </div>
+          <DialogFooter className="shrink-0 border-t border-border px-4 py-3">
+            <DialogClose render={<Button type="button" variant="outline" disabled={submitting} />}>{t('Cancel')}</DialogClose>
+            <Button type="submit" disabled={submitting || busy || !title.trim() || !description.trim()}>
+              {submitting ? <LoaderCircle className="animate-spin" /> : <GitFork />}{t('Fork and start')}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ConnectionDialog({ apiUrl, onConnect }: { apiUrl: string; onConnect: (url: string) => void }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -1986,6 +2047,8 @@ function RequirementDetail({
   onUpdateAgentConfiguration,
   onReply,
   onDelete,
+  onFork,
+  onOpenRequirement,
   onInterrupt,
   onConfirm,
   onReview,
@@ -2012,6 +2075,8 @@ function RequirementDetail({
   onUpdateAgentConfiguration: (input: RequirementAgentConfigurationUpdate) => Promise<void>;
   onReply: (message: string, attachments?: File[]) => Promise<void>;
   onDelete: () => void;
+  onFork: (input: { title: string; description: string }) => Promise<void>;
+  onOpenRequirement: (id: string) => void;
   onInterrupt: (mode: 'stop' | 'steer') => Promise<void>;
   onConfirm: () => Promise<void>;
   onReview: (pullRequestId: string, configuration: AgentConfiguration) => Promise<void>;
@@ -2172,6 +2237,18 @@ function RequirementDetail({
             <span aria-hidden="true">·</span>
             <span className="font-mono">ses-{shortId(requirement.session.id)}</span>
           </SheetDescription>
+          {requirement.forkedFromRequirementId || requirement.status === 'doing' || requirement.status === 'waiting_confirmation' ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {requirement.forkedFromRequirementId ? (
+                <Button size="xs" variant="ghost" onClick={() => onOpenRequirement(requirement.forkedFromRequirementId!)}>
+                  <GitFork data-icon="inline-start" />{t('Forked from {id}', { id: `REQ-${shortId(requirement.forkedFromRequirementId)}` })}
+                </Button>
+              ) : null}
+              {requirement.status === 'doing' || requirement.status === 'waiting_confirmation' ? (
+                <ForkRequirementDialog requirement={requirement} busy={busy} onFork={onFork} />
+              ) : null}
+            </div>
+          ) : null}
           {requirement.status === 'todo' ? (
             <div className="mt-3">
               <EditRequirementAgentConfigurationDialog
@@ -3646,6 +3723,18 @@ function Dashboard() {
             },
           ).catch(() => undefined);
         }}
+        onFork={async (input) => {
+          if (!selectedRequirement) return;
+          const forked = await runAction(selectedRequirement.id,
+            () => client.forkRequirement(selectedRequirement.id, input),
+            (requirement) => {
+              setRequirements((current) => upsertRequirement(current, requirement));
+              setSearchRevision((value) => value + 1);
+            });
+          openRequirementDetail(forked.id);
+          setView('requirements');
+        }}
+        onOpenRequirement={(id) => openRequirementDetail(id)}
         onInterrupt={(mode) => selectedRequirement
           ? interruptRequirement(selectedRequirement.id, mode)
           : Promise.resolve()}
