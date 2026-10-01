@@ -4,7 +4,7 @@
 
 <h1 align="center">Code Factory</h1>
 
-<p align="center"><strong>From requirement to reviewed pull request, keep every coding-agent loop visible and under human control.</strong></p>
+<p align="center"><strong>A tree-based collaboration platform for requirements, coding-agent teams, and humans.</strong></p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue" alt="License: Apache 2.0" /></a>
@@ -13,21 +13,37 @@
   <a href="packages/agent-manager/tsconfig.json"><img src="https://img.shields.io/badge/TypeScript-strict-3178C6" alt="TypeScript: strict" /></a>
 </p>
 
-Code Factory is a **local control plane for agent-driven software delivery**. It turns each requirement into a persistent development loop that connects a human, an RD coding agent, the local workspace, GitHub pull requests, on-demand AI reviewers, and external events routed through Agent Triggers in one Web dashboard.
+<p align="center">
+  <img src="docs/assets/demo/code-factory-demo.gif" alt="Code Factory demo: a human creates one root Requirement, and its RD agent splits the work into three child Requirements that each run their own agent in parallel. A child reports its pull request back to the root. The human tells the root conversation to pause analytics and add a price-range filter, and the root agent stops the analytics child and messages the filters child, which updates its pull request. After a quick on-demand AI review, the root agent confirms the finished children and reports back, and the human confirms the root." width="880" />
+</p>
 
-It is designed for developers and engineering teams that already use **Codex** or **Claude Code**, but need more than isolated terminal sessions: durable context, visible progress, human intervention, PR feedback, and an auditable conversation around the work.
+Code Factory is a **tree-based collaboration platform where requirements, a team of coding agents, and humans work together**. Every requirement is a node with its own long-lived RD agent (**Codex** or **Claude Code**). An RD agent can split its work into child requirements, and each child gets its own agent and can split further. The result is an agent team shaped like the work itself. Humans steer the whole team by talking to the root requirement, and can step into any node at any time.
+
+Around that tree, Code Factory connects the local workspace, GitHub pull requests, on-demand AI reviewers, and external events routed through Agent Triggers in one local Web dashboard. It is designed for developers and engineering teams who already use Codex or Claude Code but need more than isolated terminal sessions: a way to decompose large work, run many agents in parallel without losing track of them, and keep humans in charge of scope and completion.
+
+```mermaid
+flowchart TD
+    H([Human]) <-->|chat, steer, confirm| R[Root Requirement<br/>RD agent]
+    R <-->|delegate, manage, message| C1[Child Requirement<br/>RD agent]
+    R <--> C2[Child Requirement<br/>RD agent]
+    C2 <--> G[Grandchild Requirement<br/>RD agent]
+    H -.->|can join any node| C1
+    C1 --> PR1[Pull request]
+    G --> PR2[Pull request]
+```
 
 ## Product Positioning
 
-Code Factory sits between an issue tracker, an agent session manager, and a pull-request control center:
+Code Factory combines a requirement tree, an agent team, and a human-in-the-loop delivery workflow:
 
-- **Requirement-driven:** work starts from a concrete requirement instead of an ad-hoc prompt.
-- **Persistent:** every requirement owns a long-lived RD session that can be resumed across multiple runs.
-- **Human-controlled:** people can add context, queue corrections, interrupt a run, and decide when work is done.
-- **Trigger-connected:** Agent Triggers connect external events and persistent scheduled wake-ups to the delivery loop. Built-in triggers handle configurable one-time or recurring wake-ups plus GitHub PR status, reviews/comments, CI failures, and merge conflicts, while the source-neutral boundary is designed to support systems such as Slack and Jira.
+- **Tree-structured work:** a large requirement breaks down into a tree of linked child requirements, and the Relationships view shows the whole tree. Agent-proposed children stay in TODO until someone starts them, which prevents uncontrolled recursive work.
+- **An agent team, one agent per node:** every requirement owns exactly one long-lived RD session. Sessions for different requirements run in parallel, while each agent keeps its own native context.
+- **Managed through conversation:** a parent RD agent manages its direct children with `code-factory-cli`: it starts or retries them, stops a running child, deletes TODO children, confirms finished children, and exchanges durable messages with their agents. Humans manage the whole tree by chatting with the root requirement.
+- **Human-controlled:** people can join any node to add context, queue corrections, interrupt a run, or reply to a finished requirement, and they decide when the work they own is done.
+- **Delivery-connected:** agents open and register pull requests, a short-lived AI Reviewer checks them on request, and Agent Triggers feed GitHub PR status, reviews/comments, CI failures, merge conflicts, and scheduled wake-ups back into the right node. The source-neutral trigger boundary is designed to support systems such as Slack and Jira.
 - **Local-first:** agents run in your existing repository with your installed CLI tools, project instructions, and credentials.
 
-Code Factory is not a hosted IDE or a generic agent pool. It coordinates the delivery workflow around coding agents while leaving code execution, Git, and GitHub access in the developer's own environment.
+Code Factory is not a hosted IDE or a flat agent pool. Agents are organized by the requirement tree instead of being scheduled from a shared queue, and code execution, Git, and GitHub access stay in the developer's own environment.
 
 The current implementation supports headless **Codex** and **Claude Code** agents.
 
@@ -62,8 +78,9 @@ For the complete domain model, state machines, concurrency rules, and delivery s
 
 ## Web Dashboard
 
-The bundled dashboard provides four views:
+The bundled dashboard provides a relationship tree and four boards:
 
+- Relationship tree: each root Requirement with its parent/child hierarchy; search matches are shown with their ancestors for context
 - Requirement board: `TODO / DOING / Waiting for confirmation / DONE`
 - Pull Request board: `DRAFT / OPEN / CLOSED / MERGED`
 - RD Session board: `Idle / Running / Waiting for human / Failed / Completed`
