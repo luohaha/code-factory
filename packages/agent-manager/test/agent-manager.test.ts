@@ -1303,20 +1303,16 @@ test('steering replays interrupted input and delivers later replies once the rep
     const replayRun = manager.listRuns(requirement.id).find((run) => run.status === 'running');
     assert.equal(replayRun?.inputFromSequence, 1);
     assert.equal(replayRun?.inputToSequence, 3);
-    assert.equal(replayRun?.taskSummary, 'Process 3 conversation messages (1 replayed from non-successful RD Runs)');
+    assert.equal(replayRun?.taskSummary, 'Process 3 new conversation messages');
     assert.equal(manager.getRequirement(requirement.id)?.session.nativeSessionId, 'native-thread-1');
     const resumeIndex = runner.requests[1]?.invocation.args.indexOf('resume') ?? -1;
     assert.notEqual(resumeIndex, -1);
     assert.equal(runner.requests[1]?.invocation.args[resumeIndex + 1], 'native-thread-1');
     const replayPrompt = runner.requests[1]?.invocation.input ?? '';
-    assert.match(replayPrompt, /Replay warning: message sequence #1/);
-    assert.match(replayPrompt, /delivery is at-least-once, not exactly-once/);
-    assert.match(replayPrompt, /inspect the current repository and relevant external state/);
-    assert.match(replayPrompt, /\[Human #1\]\n\[REPLAYED INPUT\]/);
+    assert.match(replayPrompt, /\[Human #1\]\nFirst instruction/);
     assert.match(replayPrompt, /\[Human #2\]/);
-    assert.doesNotMatch(replayPrompt, /\[Human #2\]\n\[REPLAYED INPUT\]/);
     assert.match(replayPrompt, /\[Human #3\]/);
-    assert.doesNotMatch(replayPrompt, /\[Human #3\]\n\[REPLAYED INPUT\]/);
+    assert.doesNotMatch(replayPrompt, /REPLAYED INPUT|Replay warning/);
     for (const body of ['First instruction', 'Second instruction', 'Third instruction']) {
       assert.equal(replayPrompt.split(body).length - 1, 1);
     }
@@ -1369,7 +1365,7 @@ test('interrupting an RD Run without a newer message stops instead of immediatel
   }
 });
 
-test('retrying interrupted input resumes its captured Claude Code session with a replay warning', async () => {
+test('retrying interrupted input resumes its captured Claude Code session with the same numbered message', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new InterruptibleRunner();
   const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
@@ -1380,6 +1376,7 @@ test('retrying interrupted input resumes its captured Claude Code session with a
       provider: 'claude-code',
     });
     const firstExecution = manager.runRequirement(requirement.id, 'Apply the requested change.');
+    assert.match(runner.requests[0]?.invocation.input ?? '', /\[Human #1\]\nApply the requested change\./);
     runner.requests[0]?.onNativeSession?.('claude-session-1');
     manager.interruptRdRun(requirement.id, 'stop');
     const interrupted = await firstExecution;
@@ -1394,8 +1391,8 @@ test('retrying interrupted input resumes its captured Claude Code session with a
     const resumeIndex = resumedRequest.invocation.args.indexOf('--resume');
     assert.notEqual(resumeIndex, -1);
     assert.equal(resumedRequest.invocation.args[resumeIndex + 1], 'claude-session-1');
-    assert.match(resumedRequest.invocation.input, /Replay warning: message sequence #1/);
-    assert.match(resumedRequest.invocation.input, /\[Human #1\]\n\[REPLAYED INPUT\]/);
+    assert.match(resumedRequest.invocation.input, /\[Human #1\]\nApply the requested change\./);
+    assert.doesNotMatch(resumedRequest.invocation.input, /REPLAYED INPUT|Replay warning/);
     assert.equal(resumedRequest.invocation.input.split('Apply the requested change.').length - 1, 1);
 
     runner.resolvers[1]?.({
@@ -1404,6 +1401,10 @@ test('retrying interrupted input resumes its captured Claude Code session with a
     const completed = await retry;
     assert.equal(completed.session.lastConsumedMessageSequence, 1);
     assert.equal(completed.session.pendingMessageCount, 0);
+    assert.deepEqual(manager.listMessages(requirement.id)
+      .filter((message) => message.author === 'human')
+      .map((message) => [message.sequence, message.body]),
+    [[1, 'Apply the requested change.']]);
   } finally {
     manager.close();
   }

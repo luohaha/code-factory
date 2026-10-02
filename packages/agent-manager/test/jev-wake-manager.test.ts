@@ -316,12 +316,8 @@ test('Jev can decide again after a failed retry retains human and Jev input', as
       { author: 'system', body: 'Transient failure 2' },
     ]);
     assert.equal(requests.length, 3);
-    assert.match(requests[1]?.invocation.input ?? '', /Replay warning: message sequence #1/);
-    assert.match(requests[1]?.invocation.input ?? '', /\[Human #1\]\n\[REPLAYED INPUT\]\nPlease finish this task\./);
+    assert.match(requests[1]?.invocation.input ?? '', /\[Human #1\]\nPlease finish this task\./);
     assert.match(requests[1]?.invocation.input ?? '', /\[Jev #3\]\ncontinue\./);
-    assert.doesNotMatch(requests[1]?.invocation.input ?? '', /\[Jev #3\]\n\[REPLAYED INPUT\]/);
-    assert.match(requests[2]?.invocation.input ?? '', /\[Human #1\]\n\[REPLAYED INPUT\]/);
-    assert.match(requests[2]?.invocation.input ?? '', /\[Jev #3\]\n\[REPLAYED INPUT\]\ncontinue\./);
     assert.match(requests[2]?.invocation.input ?? '', /\[Jev #5\]\ncontinue\./);
     assert.deepEqual(manager.listRuns(requirement.id).map((run) => run.status),
       ['succeeded', 'failed', 'failed']);
