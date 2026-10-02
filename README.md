@@ -17,6 +17,10 @@
   <img src="docs/assets/demo/code-factory-demo.gif" alt="Code Factory demo: a human creates one root Requirement, and its RD agent splits the work into three child Requirements that each run their own agent in parallel. A child reports its pull request back to the root. The human tells the root conversation to pause analytics and add a price-range filter, and the root agent stops the analytics child and messages the filters child, which updates its pull request. After a quick on-demand AI review, the root agent confirms the finished children and reports back, and the human confirms the root." width="880" />
 </p>
 
+▶️ **Narrated walkthrough (2 min, with sound):**
+
+https://github.com/user-attachments/assets/REPLACE-WITH-UPLOADED-VIDEO-ID
+
 Code Factory is a **tree-based collaboration platform where requirements, a team of coding agents, and humans work together**. Every requirement is a node with its own long-lived RD agent (**Codex** or **Claude Code**). An RD agent can split its work into child requirements, and each child gets its own agent and can split further. The result is an agent team shaped like the work itself. Humans steer the whole team by talking to the root requirement, and can step into any node at any time.
 
 Around that tree, Code Factory connects the local workspace, GitHub pull requests, on-demand AI reviewers, and external events routed through Agent Triggers in one local Web dashboard. It is designed for developers and engineering teams who already use Codex or Claude Code but need more than isolated terminal sessions: a way to decompose large work, run many agents in parallel without losing track of them, and keep humans in charge of scope and completion.
