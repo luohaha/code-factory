@@ -6,6 +6,13 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-02
+
+### Security
+
+- Updated the Agent Manager's locked production dependency `moment` from 2.30.1 to 2.31.0 and the bundled dashboard's locked dependency `fast-uri` from 3.1.7 to 3.1.8, resolving the moderate-severity advisories GHSA-4p3w-j4w9-5jqw and GHSA-hrr3-gc8f-f4qj.
+- Existing installations should upgrade to `@luoyixin/code-factory@0.2.1`. If an installation is pinned by its own lockfile, update that lockfile and reinstall so it does not retain the vulnerable transitive versions. Source checkouts should pull the updated lockfiles and run `npm ci` in both packages.
+
 ## [0.2.0] - 2026-10-02
 
 ### Added
