@@ -13,9 +13,7 @@
   <a href="packages/agent-manager/tsconfig.json"><img src="https://img.shields.io/badge/TypeScript-strict-3178C6" alt="TypeScript: strict" /></a>
 </p>
 
-<p align="center">
-  <img src="docs/assets/demo/code-factory-demo.gif" alt="Code Factory demo: a human creates one root Requirement, and its RD agent splits the work into three child Requirements that each run their own agent in parallel. A child reports its pull request back to the root. The human tells the root conversation to pause analytics and add a price-range filter, and the root agent stops the analytics child and messages the filters child, which updates its pull request. After a quick on-demand AI review, the root agent confirms the finished children and reports back, and the human confirms the root." width="880" />
-</p>
+https://github.com/user-attachments/assets/80896c78-c804-4c3d-98df-75ccc68031f3
 
 Code Factory is a **tree-based collaboration platform where requirements, a team of coding agents, and humans work together**. Every requirement is a node with its own long-lived RD agent (**Codex** or **Claude Code**). An RD agent can split its work into child requirements, and each child gets its own agent and can split further. The result is an agent team shaped like the work itself. Humans steer the whole team by talking to the root requirement, and can step into any node at any time.
 
