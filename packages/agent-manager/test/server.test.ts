@@ -65,6 +65,47 @@ class InterruptibleWaitingRunner implements AgentProcessRunner {
   }
 }
 
+test('HTTP fork creates and starts a separate Requirement and rejects unavailable source context', async () => {
+  const runner = new InterruptibleWaitingRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(':memory:'),
+    runner, logger: createLogger({ level: 'silent' }),
+  });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const source = manager.createRequirement({ title: 'Source', description: 'Original', provider: 'codex' });
+    const endpoint = `${baseUrl}/api/requirements/${source.id}/fork`;
+    const body = JSON.stringify({ title: 'Other branch', description: 'Another direction' });
+    const todoResponse = await fetch(endpoint, { method: 'POST', body });
+    assert.equal(todoResponse.status, 409);
+    void manager.runRequirement(source.id);
+    const earlyResponse = await fetch(endpoint, { method: 'POST', body });
+    assert.equal(earlyResponse.status, 409);
+    runner.requests[0]?.onNativeSession?.('native-source');
+    const invalidResponse = await fetch(endpoint, { method: 'POST', body: JSON.stringify({ title: '' }) });
+    assert.equal(invalidResponse.status, 400);
+    const response = await fetch(endpoint, { method: 'POST', body });
+    assert.equal(response.status, 201);
+    const fork = await response.json() as { id: string; status: string; parentRequirementId: string; forkedFromRequirementId: string; session: { id: string } };
+    assert.notEqual(fork.id, source.id);
+    assert.equal(fork.status, 'doing');
+    assert.equal(fork.forkedFromRequirementId, source.id);
+    assert.equal(fork.parentRequirementId, source.id);
+    assert.notEqual(fork.session.id, source.session.id);
+    assert.equal(runner.requests.length, 2);
+    assert.ok(runner.requests[1]?.invocation.args.includes('fork'));
+    assert.equal(manager.getRequirement(source.id)?.status, 'doing');
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
+
 test('HTTP API exposes the cached provider model catalog', async () => {
   let stopped = false;
   const modelCatalog: AgentModelCatalogService = {

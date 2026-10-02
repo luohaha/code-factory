@@ -56,6 +56,7 @@ export interface Requirement {
   createdBy: RequirementCreator;
   parentRequirementId: string | null;
   sourceSessionId: string | null;
+  forkedFromRequirementId: string | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -66,6 +67,7 @@ export interface AgentSession {
   requirementId: string;
   provider: AgentProvider;
   nativeSessionId: string | null;
+  forkSourceNativeSessionId: string | null;
   state: SessionState;
   lastError: string | null;
   lastConsumedMessageSequence: number;
@@ -218,6 +220,11 @@ export interface CreateRequirementInput {
   createdBy?: RequirementCreator;
   parentRequirementId?: string;
   sourceSessionId?: string;
+}
+
+export interface ForkRequirementInput {
+  title: string;
+  description: string;
 }
 
 export interface UpdateRequirementAgentConfigurationInput {

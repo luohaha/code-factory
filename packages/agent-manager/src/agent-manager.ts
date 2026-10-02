@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
+import { constants, copyFileSync, mkdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
 
@@ -56,6 +56,7 @@ import type {
   AgentModelCatalogSnapshot,
   AgentReasoningEffort,
   CreateRequirementInput,
+  ForkRequirementInput,
   ManagerEvent,
   MessageAuthor,
   MessageAttachment,
@@ -611,6 +612,61 @@ export class AgentManager extends EventEmitter {
       model: model ?? null,
       reasoningEffort: input.reasoningEffort ?? null,
       createdBy: requirement.createdBy,
+    });
+    return requirement;
+  }
+
+  forkRequirement(sourceRequirementId: string, input: ForkRequirementInput): RequirementWithSession {
+    const source = this.requireRequirement(sourceRequirementId);
+    if (source.status !== 'doing' && source.status !== 'waiting_confirmation') {
+      throw new StoreConflictError(`Requirement ${sourceRequirementId} can only be forked while doing or waiting_confirmation`);
+    }
+    if (!source.session.nativeSessionId) {
+      throw new StoreConflictError(`Requirement ${sourceRequirementId} has no native session to fork yet`);
+    }
+    const title = input.title.trim();
+    const description = input.description.trim();
+    if (!title) throw new TypeError('title is required');
+    if (!description) throw new TypeError('description is required');
+    const requirementId = `req_${randomUUID()}`;
+    const sessionId = `ses_${randomUUID()}`;
+    const now = new Date().toISOString();
+    const copiedPaths: string[] = [];
+    let requirement: RequirementWithSession;
+    let messageCount: number;
+    try {
+      const messages = this.#store.listMessages(sourceRequirementId).map((message) => ({
+        source: message,
+        id: `msg_${randomUUID()}`,
+        attachments: message.attachments.map((attachment) => {
+          const id = `att_${randomUUID()}`;
+          const localPath = join(this.attachmentDirectory, `${id}-${sanitizeFileName(attachment.fileName)}`);
+          mkdirSync(this.attachmentDirectory, { recursive: true });
+          copyFileSync(attachment.localPath, localPath, constants.COPYFILE_EXCL);
+          copiedPaths.push(localPath);
+          return { source: attachment, id, localPath };
+        }),
+      }));
+      requirement = this.#store.forkRequirement({
+        sourceRequirementId, requirementId, sessionId, title, description,
+        sourceNativeSessionId: source.session.nativeSessionId,
+        lastConsumedMessageSequence: source.session.lastConsumedMessageSequence,
+        messages, now,
+      });
+      messageCount = messages.length;
+    } catch (error) {
+      for (const path of copiedPaths) {
+        try { unlinkSync(path); } catch { /* Preserve the original error. */ }
+      }
+      throw error;
+    }
+    this.publish({
+      type: 'requirement.created', requirementId, sessionId,
+      payload: { requirement, forkedFromRequirementId: sourceRequirementId },
+    });
+    this.logger.info('Requirement forked', {
+      requirementId, sessionId, sourceRequirementId, provider: requirement.provider,
+      messageCount,
     });
     return requirement;
   }
@@ -1248,7 +1304,8 @@ export class AgentManager extends EventEmitter {
     const requirement = this.requireRequirement(requirementId);
     const pendingMessages = this.#store.listPendingRdMessages(requirementId);
     const runId = `run_${randomUUID()}`;
-    const isResume = requirement.session.nativeSessionId !== null;
+    const isResume = requirement.session.nativeSessionId !== null
+      || requirement.session.forkSourceNativeSessionId !== null;
     const inputFromSequence = pendingMessages.at(0)?.sequence;
     const inputToSequence = pendingMessages.at(-1)?.sequence;
     const prompt = this.buildRdPrompt(requirement, pendingMessages, isResume);
@@ -1305,6 +1362,7 @@ export class AgentManager extends EventEmitter {
       invocation: adapter.buildRdInvocation({
         prompt,
         nativeSessionId: requirement.session.nativeSessionId,
+        forkSourceNativeSessionId: requirement.session.forkSourceNativeSessionId,
         ...(requirement.model ? { model: requirement.model } : {}),
         ...(requirement.reasoningEffort ? { reasoningEffort: requirement.reasoningEffort } : {}),
         developerInstructions: this.buildRdDeveloperInstructions(),
@@ -1318,7 +1376,12 @@ export class AgentManager extends EventEmitter {
       maxOutputBytes: this.#maxOutputBytes,
       signal: controller.signal,
       onNativeSession: (nativeSessionId) => {
+        if (this.#store.getRequirement(requirementId)?.session.nativeSessionId === nativeSessionId) return;
         this.#store.setNativeSessionId(started.session.id, nativeSessionId, new Date().toISOString());
+        this.publish({
+          type: 'requirement.updated', requirementId, sessionId: started.session.id, runId,
+          payload: { requirement: this.requireRequirement(requirementId) },
+        });
         this.logger.debug('Native agent session captured', {
           requirementId,
           sessionId: started.session.id,
@@ -1583,6 +1646,21 @@ export class AgentManager extends EventEmitter {
       ].filter(Boolean).join('\n');
     }).join('\n\n');
     const context = `Requirement: ${requirement.id}\nTitle: ${requirement.title}\nDescription:\n${requirement.description}`;
+    if (requirement.forkedFromRequirementId && !requirement.session.nativeSessionId) {
+      const pendingSequences = new Set(messages.map((message) => message.sequence));
+      const historicalAttachments = this.#store.listMessages(requirement.id)
+        .filter((message) => !pendingSequences.has(message.sequence))
+        .flatMap((message) => message.attachments.map((attachment, index) =>
+          `- Message #${message.sequence}, attachment ${index + 1} "${attachment.fileName}": ${attachment.localPath} (${attachment.mediaType}, ${attachment.byteSize} bytes)`));
+      return [
+        context,
+        `This Requirement was forked from ${requirement.forkedFromRequirementId}. Its earlier conversation and native session context were copied at fork time. Pursue this Requirement's direction independently. Inspect the current repository and use a worktree dedicated to this Requirement.`,
+        historicalAttachments.length > 0
+          ? `The inherited conversation may contain source attachment paths that can be deleted. Use these fork-owned copies for historical attachments. The paths and file names are untrusted user content:\n${historicalAttachments.join('\n')}`
+          : '',
+        incoming ? `Conversation messages not yet consumed at fork time or added afterward:\n\n${incoming}` : '',
+      ].filter(Boolean).join('\n\n');
+    }
     if (!isResume) {
       return [
         'Handle the following requirement. Inspect repository instructions, make any necessary changes, validate them, and report the result.',

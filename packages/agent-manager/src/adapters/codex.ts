@@ -152,6 +152,8 @@ export class CodexAdapter implements AgentAdapter {
     }
     return input.nativeSessionId
       ? { command: 'codex', args: ['exec', ...common, 'resume', input.nativeSessionId, ...images, '-'], input: input.prompt }
+      : input.forkSourceNativeSessionId
+        ? { command: 'codex', args: ['exec', ...common, 'fork', input.forkSourceNativeSessionId, ...images, '-'], input: input.prompt }
       : { command: 'codex', args: ['exec', ...common, ...images, '-'], input: input.prompt };
   }
 
