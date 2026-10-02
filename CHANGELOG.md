@@ -6,6 +6,22 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-02
+
+### Added
+
+- Added Requirement forking with an independent RD session, a link to the source Requirement, and access to copied attachments.
+- Added a narrated product walkthrough to the README.
+
+### Changed
+
+- Preserved queued messages and their attribution when replaying interrupted RD input.
+- Made Steering available only while the latest RD reply is running.
+
+### Fixed
+
+- Rejected an empty Steering interrupt mode before stopping a run.
+
 ## [0.1.13] - 2026-09-29
 
 ### Changed
