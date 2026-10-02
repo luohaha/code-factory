@@ -19,7 +19,7 @@
 
 ▶️ **Narrated walkthrough (2 min, with sound):**
 
-https://github.com/user-attachments/assets/REPLACE-WITH-UPLOADED-VIDEO-ID
+https://github.com/user-attachments/assets/80896c78-c804-4c3d-98df-75ccc68031f3
 
 Code Factory is a **tree-based collaboration platform where requirements, a team of coding agents, and humans work together**. Every requirement is a node with its own long-lived RD agent (**Codex** or **Claude Code**). An RD agent can split its work into child requirements, and each child gets its own agent and can split further. The result is an agent team shaped like the work itself. Humans steer the whole team by talking to the root requirement, and can step into any node at any time.
 
