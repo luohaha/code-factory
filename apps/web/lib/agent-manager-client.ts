@@ -1,17 +1,19 @@
 import { MANAGER_EVENT_TYPES } from './manager-event-types.ts';
 
-export type AgentProvider = 'codex' | 'claude-code';
+export type AgentProvider = 'codex' | 'claude-code' | 'native-agent';
 export type AgentReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export interface AgentConfiguration {
   provider: AgentProvider;
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
+  sandboxId?: string | null;
 }
 
 export interface RequirementAgentConfigurationUpdate {
   provider?: AgentProvider;
   model?: string | null;
   reasoningEffort?: AgentReasoningEffort | null;
+  sandboxId?: string | null;
 }
 
 export interface AgentModelDto {
@@ -57,6 +59,7 @@ export interface RequirementDto {
   provider: AgentProvider;
   model: string | null;
   reasoningEffort: AgentReasoningEffort | null;
+  sandboxId: string | null;
   createdBy: 'human' | 'rd_agent';
   parentRequirementId: string | null;
   sourceSessionId: string | null;
@@ -65,6 +68,14 @@ export interface RequirementDto {
   updatedAt: string;
   completedAt: string | null;
   session: AgentSessionDto;
+}
+
+export interface SandboxDto {
+  id: string;
+  name: string;
+  kind: 'local' | 'local-sandbox';
+  cwd: string;
+  createdAt: string;
 }
 
 export interface AgentRunDto {
@@ -379,6 +390,12 @@ export class AgentManagerClient {
   createRequirement(input: { title: string; description: string } & AgentConfiguration): Promise<RequirementDto> {
     return this.request('/api/requirements', { method: 'POST', body: JSON.stringify(input) });
   }
+
+  async listSandboxes(): Promise<SandboxDto[]> {
+    const response = await this.request<{ items: SandboxDto[] }>('/api/sandboxes');
+    return response.items;
+  }
+
 
   forkRequirement(id: string, input: { title: string; description: string }): Promise<RequirementDto> {
     return this.request(`/api/requirements/${encodeURIComponent(id)}/fork`, {

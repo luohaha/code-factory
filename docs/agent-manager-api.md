@@ -39,12 +39,14 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/workspace | Read the bound workspace and data paths |
 | GET | /api/configuration | Read desired Agent Manager configuration and restart status |
 | PATCH | /api/configuration | Validate, persist, and apply configuration changes |
-| GET | /api/agent-models | Read cached Codex and Claude Code model options |
+| GET | /api/agent-models | Read cached Codex, Claude Code, and Native Agent model options |
+| GET | /api/sandboxes | List local execution and named sandbox worktrees |
+| POST | /api/sandboxes | Create a reusable local sandbox worktree |
 | GET | /api/search | Hybrid-search Requirements, conversations, and Pull Requests |
 | GET | /api/requirements | List Requirements with their RD Sessions |
 | GET | /api/requirements/:id | Read one Requirement with its RD Session |
 | POST | /api/requirements | Create a Requirement and RD Session |
-| PATCH | /api/requirements/:id | Change a TODO Requirement's Agent provider, model, or reasoning effort |
+| PATCH | /api/requirements/:id | Change a TODO Requirement's Agent provider, model, reasoning effort, or sandbox |
 | DELETE | /api/requirements/:id | Remove a TODO Requirement |
 | POST | /api/requirements/:id/start | Start or retry a Requirement |
 | POST | /api/requirements/:id/reply | Send a human conversation message |
@@ -93,9 +95,10 @@ interface Requirement {
   title: string;
   description: string;
   status: 'todo' | 'doing' | 'waiting_confirmation' | 'done' | 'cancelled';
-  provider: 'codex' | 'claude-code';
+  provider: 'codex' | 'claude-code' | 'native-agent';
   model: string | null;
   reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
+  sandboxId: string | null;
   createdBy: 'human' | 'rd_agent';
   parentRequirementId: string | null;
   sourceSessionId: string | null;
@@ -115,7 +118,7 @@ Requirement query and creation responses always embed the uniquely bound session
 interface AgentSession {
   id: string;                         // ses_<uuid>
   requirementId: string;
-  provider: 'codex' | 'claude-code';
+  provider: 'codex' | 'claude-code' | 'native-agent';
   nativeSessionId: string | null;
   forkSourceNativeSessionId: string | null;
   state: 'idle' | 'running' | 'waiting_human' | 'failed' | 'completed';
@@ -127,7 +130,7 @@ interface AgentSession {
 }
 ~~~
 
-nativeSessionId is the native Codex or Claude Code session ID. pendingMessageCount is the number of external messages that RD has not successfully consumed.
+nativeSessionId is the Codex or Claude Code session ID, or a pi-durable conversation ID for Native Agent. pendingMessageCount is the number of external messages that RD has not successfully consumed.
 For a new fork, `forkSourceNativeSessionId` holds the source native ID until the forked provider session starts and supplies its own `nativeSessionId`.
 
 ### 3.3 AgentRun
@@ -138,7 +141,7 @@ interface AgentRun {
   requirementId: string;
   sessionId: string | null;           // null for Reviewer Runs
   role: 'rd' | 'reviewer';
-  provider: 'codex' | 'claude-code';
+  provider: 'codex' | 'claude-code' | 'native-agent';
   model: string | null;
   reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
   status: 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
@@ -254,7 +257,7 @@ Agent Manager captures targetHeadSha when a review starts, so the ReviewRequest 
 interface AgentModelCatalog {
   refreshIntervalSeconds: number;    // 86400
   providers: Array<{
-    provider: 'codex' | 'claude-code';
+    provider: 'codex' | 'claude-code' | 'native-agent';
     models: Array<{
       id: string;                    // value passed to --model
       displayName: string;
@@ -382,7 +385,7 @@ Set `jevApiKey` to a non-empty string to enable Jev decisions, or to `null` or `
 
 ### GET /api/agent-models
 
-Returns the in-memory provider model catalog. Agent Manager refreshes it at startup and every 24 hours. Codex discovery uses the authenticated local CLI. Claude discovery uses the configured API or gateway when possible and otherwise returns Claude Code rolling aliases and environment-configured model IDs. Refresh failures do not fail this endpoint; the affected provider is returned with `stale=true` and its last usable models.
+Returns the in-memory provider model catalog. Agent Manager refreshes it at startup and every 24 hours. Codex discovery uses the authenticated local CLI. Claude discovery uses the configured API or gateway when possible and otherwise returns Claude Code rolling aliases and environment-configured model IDs. Native Agent lists pi-ai OpenAI and Anthropic models using `provider/model` IDs. Refresh failures do not fail this endpoint; the affected provider is returned with `stale=true` and its last usable models.
 
 Success: 200 OK with `AgentModelCatalog`.
 
@@ -494,6 +497,10 @@ Optional query parameters:
 
 Success: 200 OK with {"items": ReviewRequest[]}. An unknown pullRequestId returns an empty array.
 
+### GET /api/sandboxes
+
+Returns `{ "items": Sandbox[] }`. The built-in `local` item uses the managed workspace. Local execution does not create a separate worktree. E2B cloud sandbox provisioning is tracked separately.
+
 ## 5. Requirement actions
 
 ### POST /api/requirements
@@ -506,9 +513,10 @@ Request body:
 | --- | --- | --- | --- |
 | title | string | yes | Must be non-empty after trimming |
 | description | string | yes | Must be non-empty after trimming |
-| provider | string | yes | codex or claude-code |
-| model | string | no | Model identifier passed to the selected CLI; defaults to CLI configuration |
-| reasoningEffort | string | no | low, medium, high, xhigh, or max; defaults to CLI configuration |
+| provider | string | yes | codex, claude-code, or native-agent |
+| model | string | no | CLI model for headless providers; `provider/model` for Native Agent (`openai/gpt-5.4` by default) |
+| reasoningEffort | string | no | low, medium, high, xhigh, or max; defaults to the selected provider's configuration |
+| sandboxId | string | no | Native Agent only; omit for local execution, or select a named sandbox ID from `/api/sandboxes` |
 
 ~~~bash
 curl -X POST http://127.0.0.1:4310/api/requirements \
@@ -544,9 +552,10 @@ Changes the Agent configuration used when a human starts a Requirement from the 
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
-| provider | string | no | codex or claude-code |
+| provider | string | no | codex, claude-code, or native-agent |
 | model | string or null | no | Non-empty model identifier, or null to restore the CLI default |
 | reasoningEffort | string or null | no | low, medium, high, xhigh, or max; null restores the CLI default |
+| sandboxId | string or null | no | Named Native Agent sandbox ID; null restores local execution |
 
 ~~~bash
 curl -X PATCH http://127.0.0.1:4310/api/requirements/req_... \
@@ -651,7 +660,7 @@ message may be empty when attachmentIds is non-empty. requirement is the latest 
 
 ### POST /api/requirements/:id/interrupt
 
-Interrupts the current Requirement's RD Run without appending a message. The optional request body is `{"mode":"stop"|"steer"}`; only an omitted mode defaults to `stop`, while an empty or invalid mode returns 400. `steer` interrupts only when an RD-deliverable message arrived after the active Run captured its input. This protects a newly started Run that already received the latest reply. `stop` interrupts the active Run even without newer input. Agent Manager terminates the CLI and its complete tool-process tree. POSIX platforms send `SIGTERM` first and then `SIGKILL` to the process group if descendants remain after two seconds. Windows uses `taskkill /T /F`. The Run becomes `cancelled` only after the process tree exits, and the Session returns to `waiting_human`.
+Interrupts the current Requirement's RD Run without appending a message. The optional request body is `{"mode":"stop"|"steer"}`; only an omitted mode defaults to `stop`, while an empty or invalid mode returns 400. `steer` requires an RD-deliverable message newer than the active Run's captured input. For Codex and Claude Code it interrupts the CLI and starts a replacement Run with the new input. For Native Agent it submits `whenBusy: "steer"` to pi-durable so the new direction joins the current Run after its tool round. `stop` interrupts the active Run even without newer input. Headless CLI interruption terminates the complete tool-process tree; Native Agent calls pi-durable conversation abort.
 
 ~~~json
 {
@@ -662,7 +671,7 @@ Interrupts the current Requirement's RD Run without appending a message. The opt
 }
 ~~~
 
-Success: `202 Accepted`. Repeated calls are idempotent while the Run is still exiting. Returns `409 Conflict` when no RD Run is active or `steer` has no newer input to deliver. If pending messages arrived after the interrupted Run started, Agent Manager automatically resumes the same Session after exit; otherwise the Requirement moves to `waiting_confirmation` and waits for confirmation or a new message. The replacement Run receives all unconsumed messages, including input captured by the interrupted Run. A message is stored once in the conversation but may be sent in more than one Run prompt. Failed and timed-out RD Runs also move the Requirement to `waiting_confirmation` while the Session remains `failed` for inspection and retry.
+Success: `202 Accepted`. Returns `409 Conflict` when no RD Run is active or `steer` has no newer input to deliver. Headless providers resume the same Session in a replacement Run after interruption; Native Agent steering keeps the current Run active and advances the message cursor when that Run succeeds. A message is stored once in the Requirement conversation. Failed and timed-out RD Runs move the Requirement to `waiting_confirmation` while the Session remains `failed` for inspection and retry.
 
 ### POST /api/requirements/:id/confirm
 
@@ -811,7 +820,7 @@ Request body:
 | parentRequirementId | string | no | Defaults to the source Session Requirement and must match it if supplied |
 | title | string | yes | Follow-up title |
 | description | string | yes | Follow-up description |
-| provider | string | no | codex or claude-code; defaults to the source Session provider |
+| provider | string | no | codex, claude-code, or native-agent; defaults to the source Session provider |
 | model | string | no | Model identifier passed to the selected CLI; defaults to CLI configuration |
 | reasoningEffort | string | no | low, medium, high, xhigh, or max; defaults to CLI configuration |
 | start | boolean | no | Start the new Requirement's RD Session immediately; defaults to false |
@@ -1021,7 +1030,7 @@ Errors use a consistent JSON shape:
 
 ~~~json
 {
-  "error": "provider must be codex or claude-code"
+  "error": "provider must be codex, claude-code, or native-agent"
 }
 ~~~
 

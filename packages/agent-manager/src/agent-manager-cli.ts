@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { AgentManager } from './agent-manager.js';
+import { AgentManager, defaultDatabasePath } from './agent-manager.js';
 import {
   defaultConfigurationPath,
   loadAgentManagerConfiguration,
@@ -17,6 +17,7 @@ import {
   type DaemonState,
 } from './daemon.js';
 import { isLogLevel, type Logger } from './logger.js';
+import { runNativeAuthCommand } from './native-auth-cli.js';
 import { createAgentManagerServer, listen } from './server.js';
 import { formatStartupBanner } from './startup-banner.js';
 import { CODE_FACTORY_VERSION } from './version.js';
@@ -43,6 +44,8 @@ try {
     await runDaemonRestart(process.argv.slice(3));
   } else if (command === 'daemon') {
     await runDaemonAlias(process.argv[3], process.argv.slice(4));
+  } else if (command === 'auth') {
+    await runNativeAuth(process.argv.slice(3));
   } else {
     usage();
   }
@@ -53,6 +56,19 @@ try {
   }
   process.stderr.write(`Agent Manager: ${message}\n`);
   process.exitCode = 1;
+}
+
+async function runNativeAuth(args: readonly string[]): Promise<void> {
+  for (const name of ['--config', '--db']) {
+    if (args.includes(name) && option(args, name) === undefined) usage();
+  }
+  const workspaceRoot = realpathSync(process.cwd());
+  const configurationPath = resolve(workspaceRoot, option(args, '--config') ?? defaultConfigurationPath(workspaceRoot));
+  const fileConfiguration = loadAgentManagerConfiguration(configurationPath);
+  const databaseValue = option(args, '--db') ?? fileConfiguration.databasePath ?? defaultDatabasePath(workspaceRoot);
+  if (databaseValue === ':memory:') throw new TypeError('Native authentication requires a persistent Agent Manager database');
+  const databasePath = resolve(workspaceRoot, databaseValue);
+  await runNativeAuthCommand(args, join(dirname(databasePath), 'native-agent.sqlite'));
 }
 
 async function runForeground(args: readonly string[]): Promise<void> {
@@ -318,6 +334,7 @@ function usage(): never {
     '  code-factory-agent-manager status',
     '  code-factory-agent-manager version',
     '  code-factory-agent-manager daemon <start|stop|restart|status> [OPTIONS]',
+    '  code-factory-agent-manager auth <login openai|login openai-codex|status|logout openai|logout openai-codex> [--config PATH] [--db PATH]',
     '',
     'Options: --config PATH --host HOST --port PORT --db PATH --allow-origin ORIGIN',
     '         --pr-reconcile-interval SECONDS --log-level LEVEL --log-file PATH',

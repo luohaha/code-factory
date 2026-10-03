@@ -36,6 +36,23 @@ test('a requirement is created atomically with exactly one RD session', () => {
   }
 });
 
+test('native requirements can share a persisted sandbox', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    const sandbox = store.createSandbox({ id: 'sbx-shared', name: 'Shared worktree', kind: 'local-sandbox', cwd: '/tmp/shared', createdAt: now });
+    for (const number of [1, 2]) {
+      const requirement = store.createRequirement({ requirementId: `req-native-${number}`, sessionId: `ses-native-${number}`,
+        title: 'Native work', description: 'Use shared sandbox', provider: 'native-agent', sandboxId: sandbox.id,
+        createdBy: 'human', now });
+      assert.equal(requirement.sandboxId, sandbox.id);
+    }
+    assert.equal(store.listSandboxes().length, 1);
+    assert.equal(store.getSandbox(sandbox.id)?.cwd, '/tmp/shared');
+  } finally {
+    store.close();
+  }
+});
+
 test('legacy fork provenance migrates to a durable field before source retention', () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-fork-migration-'));
   const databasePath = join(directory, 'factory.sqlite');

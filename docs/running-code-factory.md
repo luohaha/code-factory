@@ -4,7 +4,7 @@ This guide covers prerequisites, npm-based startup, daemon operation, configurat
 
 ## Prerequisites
 
-- Node.js 22.13 or newer;
+- Node.js 22.19 or newer;
 - at least one installed and authenticated Agent CLI: `codex` or `claude`;
 - GitHub CLI (`gh`) installed and authenticated for pull-request reconciliation and review workflows.
 

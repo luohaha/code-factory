@@ -112,6 +112,7 @@ import {
   type ReviewRequestDto,
   type AgentTimerDto,
   type SearchResultDto,
+  type SandboxDto,
   type SessionState,
   type WorkspaceDto,
 } from '@/lib/agent-manager-client';
@@ -275,7 +276,7 @@ const searchKindLabel: Record<SearchResultDto['kind'], TranslationKey> = {
 };
 
 function providerLabel(provider: AgentProvider): string {
-  return provider === 'codex' ? 'Codex' : 'Claude Code';
+  return provider === 'codex' ? 'Codex' : provider === 'claude-code' ? 'Claude Code' : 'Native Agent';
 }
 
 function AgentModelSelect({ catalog, provider, value, onChange, id, name, disabled, size, ariaLabel }: {
@@ -303,7 +304,7 @@ function AgentModelSelect({ catalog, provider, value, onChange, id, name, disabl
       className="w-full"
       aria-label={ariaLabel}
     >
-      <NativeSelectOption value="">{t('Use CLI default model')}</NativeSelectOption>
+      <NativeSelectOption value="">{provider === 'native-agent' ? t('Use Native Agent default model') : t('Use CLI default model')}</NativeSelectOption>
       {selectedMissing ? <NativeSelectOption value={value}>{value}</NativeSelectOption> : null}
       {models.map((model) => (
         <NativeSelectOption key={model.id} value={model.id} title={model.description ?? model.id}>
@@ -575,6 +576,7 @@ function EditRequirementAgentConfigurationDialog({
               >
                 <NativeSelectOption value="codex">Codex headless</NativeSelectOption>
                 <NativeSelectOption value="claude-code">Claude Code headless</NativeSelectOption>
+                <NativeSelectOption value="native-agent">Native Agent</NativeSelectOption>
               </NativeSelect>
             </Field>
             <Field>
@@ -1071,9 +1073,10 @@ function RequirementPullRequestCard({ pullRequest, activeReview, busy, modelCata
   );
 }
 
-function NewRequirementDialog({ disabled, modelCatalog, onCreate }: {
+function NewRequirementDialog({ disabled, modelCatalog, sandboxes, onCreate }: {
   disabled: boolean;
   modelCatalog: AgentModelCatalogDto | null;
+  sandboxes: SandboxDto[];
   onCreate: (input: { title: string; description: string } & AgentConfiguration) => Promise<void>;
 }) {
   const { t } = useI18n();
@@ -1089,6 +1092,7 @@ function NewRequirementDialog({ disabled, modelCatalog, onCreate }: {
     const title = form.get('title');
     const description = form.get('description');
     const reasoningEffort = form.get('reasoningEffort');
+    const sandboxId = form.get('sandboxId');
     if (typeof title !== 'string' || typeof description !== 'string') return;
     setSubmitting(true);
     try {
@@ -1096,6 +1100,7 @@ function NewRequirementDialog({ disabled, modelCatalog, onCreate }: {
         title: title.trim(),
         description: description.trim(),
         provider,
+        ...(provider === 'native-agent' && typeof sandboxId === 'string' && sandboxId ? { sandboxId } : {}),
         ...(model ? { model } : {}),
         ...(typeof reasoningEffort === 'string' && reasoningEffort
           ? { reasoningEffort: reasoningEffort as AgentReasoningEffort }
@@ -1151,6 +1156,7 @@ function NewRequirementDialog({ disabled, modelCatalog, onCreate }: {
                 >
                   <NativeSelectOption value="codex">Codex headless</NativeSelectOption>
                   <NativeSelectOption value="claude-code">Claude Code headless</NativeSelectOption>
+                  <NativeSelectOption value="native-agent">Native Agent</NativeSelectOption>
                 </NativeSelect>
               </Field>
               <Field>
@@ -1163,6 +1169,9 @@ function NewRequirementDialog({ disabled, modelCatalog, onCreate }: {
                   value={model}
                   onChange={setModel}
                 />
+                {provider === 'native-agent' ? (
+                  <p className="mt-1 text-xs text-muted-foreground">{t('Native Agent uses OPENAI_API_KEY or ANTHROPIC_API_KEY, or a workspace subscription login via code-factory-agent-manager auth login openai-codex.')}</p>
+                ) : null}
               </Field>
               <Field>
                 <FieldLabel htmlFor="requirement-reasoning-effort">{t('Reasoning effort')}</FieldLabel>
@@ -1175,6 +1184,14 @@ function NewRequirementDialog({ disabled, modelCatalog, onCreate }: {
                   <NativeSelectOption value="max">Max</NativeSelectOption>
                 </NativeSelect>
               </Field>
+              {provider === 'native-agent' ? (
+                <Field>
+                  <FieldLabel htmlFor="requirement-sandbox">{t('Sandbox')}</FieldLabel>
+                  <NativeSelect id="requirement-sandbox" name="sandboxId" className="w-full" defaultValue="">
+                    {sandboxes.map((sandbox) => <NativeSelectOption key={sandbox.id} value={sandbox.id === 'local' ? '' : sandbox.id}>{sandbox.name}</NativeSelectOption>)}
+                  </NativeSelect>
+                </Field>
+              ) : null}
             </FieldGroup>
           </div>
           <DialogFooter className="mx-0 mb-0 shrink-0">
@@ -2485,6 +2502,7 @@ function Dashboard() {
   const [configuration, setConfiguration] = useState<AgentManagerConfigurationSnapshot | null>(null);
   const [modelCatalog, setModelCatalog] = useState<AgentModelCatalogDto | null>(null);
   const [requirements, setRequirements] = useState<RequirementDto[]>([]);
+  const [sandboxes, setSandboxes] = useState<SandboxDto[]>([]);
   const [runs, setRuns] = useState<AgentRunDto[]>([]);
   const [agentTraces, setAgentTraces] = useState<Record<string, AgentTraceEventDto[] | undefined>>({});
   const [loadedTraceRequirementIds, setLoadedTraceRequirementIds] = useState<Set<string>>(() => new Set());
@@ -2593,7 +2611,7 @@ function Dashboard() {
     const eventRevision = eventRevisionRef.current;
     if (showLoading) setLoading(true);
     try {
-      const [nextWorkspace, nextConfiguration, nextModelCatalog, nextRequirements, nextRuns, nextPullRequests, nextReviewRequests, nextAgentTimers] = await Promise.all([
+      const [nextWorkspace, nextConfiguration, nextModelCatalog, nextRequirements, nextRuns, nextPullRequests, nextReviewRequests, nextAgentTimers, nextSandboxes] = await Promise.all([
         client.getWorkspace(),
         client.getConfiguration(),
         client.listAgentModels(),
@@ -2602,10 +2620,12 @@ function Dashboard() {
         client.listPullRequests(),
         client.listReviewRequests(),
         client.listAgentTimers(),
+        client.listSandboxes(),
       ]);
       setWorkspace(nextWorkspace);
       setConfiguration(nextConfiguration);
       setModelCatalog(nextModelCatalog);
+      setSandboxes(nextSandboxes);
       const receivedEventsDuringRequest = eventRevisionRef.current !== eventRevision;
       const removedRequirementIds = removedRequirementIdsRef.current;
       setRequirements((current) => {
@@ -3000,7 +3020,7 @@ function Dashboard() {
     const trimmed = query.trim();
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      if (!trimmed || view === 'timers') {
+      if (!trimmed || view === 'timers' || view === 'sandboxes') {
         setSearchResponse({ query: '', items: [] });
         setSearching(false);
         setSearchError(null);
@@ -3333,7 +3353,7 @@ function Dashboard() {
     setError(null);
   }
 
-  const cycleProvider = () => setProvider((current) => current === 'all' ? 'codex' : current === 'codex' ? 'claude-code' : 'all');
+  const cycleProvider = () => setProvider((current) => current === 'all' ? 'codex' : current === 'codex' ? 'claude-code' : current === 'claude-code' ? 'native-agent' : 'all');
   const activeSessions = requirements.filter((item) => item.session.state === 'running').length;
   const waitingHumans = requirements.filter((item) => item.session.state === 'waiting_human').length;
   const failures = requirements.filter((item) => item.session.state === 'failed').length;
@@ -3344,23 +3364,27 @@ function Dashboard() {
   const viewTitle: TranslationKey = view === 'requirements'
     ? 'Requirement workflow'
     : view === 'relationships' ? 'Requirement relationships'
-    : view === 'pull_requests' ? 'Pull Requests' : view === 'sessions' ? 'RD Agent Sessions' : 'Scheduled wake-ups';
+    : view === 'pull_requests' ? 'Pull Requests' : view === 'sessions' ? 'RD Agent Sessions' : view === 'sandboxes' ? 'Sandboxes' : 'Scheduled wake-ups';
   const viewDescription: TranslationKey = view === 'requirements'
     ? 'The requirement conversation is the RD Agent message stream; messages remain available while it runs'
     : view === 'relationships'
       ? 'Trace each follow-up Requirement back to the work that created it'
     : view === 'pull_requests'
       ? 'A human can select Codex or Claude to run a one-off review on an Open PR'
+      : view === 'sandboxes'
+        ? 'Choose a shared workspace for Native Agents'
       : view === 'sessions'
         ? 'Sessions inherit the Agent Manager working directory and native Skills'
         : 'Track timers and the Requirements they will wake';
-  const searchLabel: TranslationKey = view === 'timers'
+  const searchLabel: TranslationKey = view === 'sandboxes'
+    ? 'Search sandboxes'
+    : view === 'timers'
     ? 'Search timers or Requirements'
     : 'Search requirements, conversations, or PRs';
   const boardLabel: TranslationKey = view === 'requirements'
     ? 'Requirement board'
     : view === 'relationships' ? 'Requirement relationship tree'
-    : view === 'pull_requests' ? 'Pull Request board' : view === 'sessions' ? 'Agent Session board' : 'Timer board';
+    : view === 'pull_requests' ? 'Pull Request board' : view === 'sessions' ? 'Agent Session board' : view === 'sandboxes' ? 'Sandbox board' : 'Timer board';
   const notificationButtonLabel: TranslationKey = notificationAvailability === 'insecure'
     ? 'Desktop notifications require HTTPS or localhost'
     : notificationAvailability === 'unsupported'
@@ -3385,11 +3409,12 @@ function Dashboard() {
             </div>
           </div>
 
-          <nav className="ml-1 flex h-full items-center gap-1 sm:ml-5" aria-label={t('Main navigation')}>
+          <nav className="ml-1 flex h-full min-w-0 flex-1 items-center gap-1 overflow-x-auto sm:ml-5" aria-label={t('Main navigation')}>
             <Button variant="ghost" size="sm" className={view === 'requirements' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('requirements')}><LayoutDashboard data-icon="inline-start" />{t('Requirements')}</Button>
             <Button variant="ghost" size="sm" className={view === 'relationships' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('relationships')}><Network data-icon="inline-start" />{t('Relationships')}</Button>
             <Button variant="ghost" size="sm" className={view === 'pull_requests' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('pull_requests')}><GitPullRequest data-icon="inline-start" />PR</Button>
             <Button variant="ghost" size="sm" className={view === 'sessions' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('sessions')}><Activity data-icon="inline-start" />{t('Sessions')}</Button>
+            <Button variant="ghost" size="sm" className={view === 'sandboxes' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('sandboxes')}><FolderGit2 data-icon="inline-start" />{t('Sandboxes')}</Button>
             <Button variant="ghost" size="sm" className={view === 'timers' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('timers')}><Clock3 data-icon="inline-start" />{t('Timers')}</Button>
           </nav>
 
@@ -3431,7 +3456,7 @@ function Dashboard() {
               workspace={workspace}
             />
             <ConnectionDialog apiUrl={apiUrl} onConnect={connect} />
-            <NewRequirementDialog disabled={connection !== 'online'} modelCatalog={modelCatalog} onCreate={createRequirement} />
+            <NewRequirementDialog disabled={connection !== 'online'} modelCatalog={modelCatalog} sandboxes={sandboxes} onCreate={createRequirement} />
           </div>
         </div>
       </header>
@@ -3611,6 +3636,19 @@ function Dashboard() {
                 </section>
               );
             })}
+          </div>
+        ) : view === 'sandboxes' ? (
+          <div className="w-full p-4 lg:p-5">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {sandboxes.filter((sandbox) => `${sandbox.name} ${sandbox.cwd}`.toLowerCase().includes(query.trim().toLowerCase())).map((sandbox) => (
+                <div key={sandbox.id} className="rounded-xl border border-border bg-card p-4">
+                  <div className="text-sm font-semibold">{sandbox.name}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{t('Local execution')}</div>
+                  <div className="mt-2 break-all font-mono text-[10px] text-muted-foreground">{sandbox.cwd}</div>
+                  <div className="mt-2 text-xs text-muted-foreground">{requirements.filter((item) => item.provider === 'native-agent' && (item.sandboxId ?? 'local') === sandbox.id).length} {t('Requirements')}</div>
+                </div>
+              ))}
+            </div>
           </div>
         ) : view === 'timers' ? (
           <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-3 gap-3 p-4 lg:p-5">

@@ -20,10 +20,10 @@ jobs:
       - name: Check out release tag
         uses: actions/checkout@v7
 
-      - name: Use Node.js 22.13
+      - name: Use Node.js 22.19
         uses: actions/setup-node@v7
         with:
-          node-version: 22.13.0
+          node-version: 22.19.0
           registry-url: https://registry.npmjs.org
           cache: npm
           cache-dependency-path: |
