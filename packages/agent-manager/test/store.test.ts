@@ -39,7 +39,9 @@ test('a requirement is created atomically with exactly one RD session', () => {
 test('native requirements can share a persisted sandbox', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {
-    const sandbox = store.createSandbox({ id: 'sbx-shared', name: 'Shared worktree', kind: 'local-sandbox', cwd: '/tmp/shared', createdAt: now });
+    const sandbox = store.createSandbox({ id: 'sbx-shared', name: 'Shared E2B', kind: 'e2b', cwd: '/home/user/repo',
+      providerSandboxId: 'provider-shared', credentialEnvVar: 'E2B_API_KEY', template: 'base', sharing: 'shared',
+      status: 'running', checkedAt: now, createdAt: now });
     for (const number of [1, 2]) {
       const requirement = store.createRequirement({ requirementId: `req-native-${number}`, sessionId: `ses-native-${number}`,
         title: 'Native work', description: 'Use shared sandbox', provider: 'native-agent', sandboxId: sandbox.id,
@@ -47,7 +49,7 @@ test('native requirements can share a persisted sandbox', () => {
       assert.equal(requirement.sandboxId, sandbox.id);
     }
     assert.equal(store.listSandboxes().length, 1);
-    assert.equal(store.getSandbox(sandbox.id)?.cwd, '/tmp/shared');
+    assert.equal(store.getSandbox(sandbox.id)?.cwd, '/home/user/repo');
   } finally {
     store.close();
   }

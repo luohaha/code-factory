@@ -11,14 +11,22 @@ export const requirementMessagesTableSql = `CREATE TABLE IF NOT EXISTS requireme
     created_at TEXT NOT NULL
   ) STRICT`;
 
-export const schemaStatements = [
-  `CREATE TABLE IF NOT EXISTS sandboxes (
+export const sandboxesTableSql = `CREATE TABLE IF NOT EXISTS sandboxes (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('local', 'local-sandbox')),
+    kind TEXT NOT NULL CHECK (kind IN ('local', 'local-sandbox', 'e2b')),
     cwd TEXT NOT NULL,
+    provider_sandbox_id TEXT,
+    credential_env_var TEXT,
+    template TEXT,
+    sharing TEXT CHECK (sharing IN ('shared', 'dedicated')),
+    status TEXT NOT NULL DEFAULT 'unknown' CHECK (status IN ('running', 'paused', 'terminated', 'unreachable', 'unknown')),
+    checked_at TEXT,
     created_at TEXT NOT NULL
-  ) STRICT`,
+  ) STRICT`;
+
+export const schemaStatements = [
+  sandboxesTableSql,
   `CREATE TABLE IF NOT EXISTS requirements (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -200,4 +208,6 @@ export const schemaStatements = [
 export const postMigrationSchemaStatements = [
   `CREATE INDEX IF NOT EXISTS requirements_parent_updated
     ON requirements (parent_requirement_id, updated_at DESC)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS sandboxes_provider_id
+    ON sandboxes (provider_sandbox_id) WHERE provider_sandbox_id IS NOT NULL`,
 ] as const;

@@ -45,7 +45,12 @@ The service listens only on the loopback interface by default and currently has 
 | POST | /api/native-auth/:provider/login | Start OpenAI or Codex subscription login |
 | GET, POST, DELETE | /api/native-auth/logins/:id | Poll, answer, or cancel a subscription login |
 | GET | /api/agent-models | Read cached Codex, Claude Code, and Native Agent model options |
-| GET | /api/sandboxes | List local execution and available named sandboxes |
+| GET | /api/sandboxes | List local execution and persisted E2B sandboxes |
+| POST | /api/sandboxes | Provision or attach an E2B sandbox |
+| GET | /api/sandboxes/:id/health | Refresh an E2B sandbox's observed state |
+| POST | /api/sandboxes/:id/pause | Pause an idle E2B sandbox |
+| POST | /api/sandboxes/:id/resume | Resume an E2B sandbox |
+| DELETE | /api/sandboxes/:id | Kill and remove an unbound E2B sandbox |
 | GET | /api/search | Hybrid-search Requirements, conversations, and Pull Requests |
 | GET | /api/requirements | List Requirements with their RD Sessions |
 | GET | /api/requirements/:id | Read one Requirement with its RD Session |
@@ -513,7 +518,23 @@ Success: 200 OK with {"items": ReviewRequest[]}. An unknown pullRequestId return
 
 ### GET /api/sandboxes
 
-Returns `{ "items": Sandbox[] }`. The built-in `local` item uses the managed workspace. Local execution does not create a separate worktree. E2B cloud sandbox provisioning is tracked separately.
+Returns `{ "items": Sandbox[] }`. The built-in `local` item uses the managed workspace. An E2B record includes `kind: "e2b"`, `providerSandboxId`, `cwd`, `credentialEnvVar: "E2B_API_KEY"`, `template`, `sharing` (`shared` or `dedicated`), `status` (`running`, `paused`, `terminated`, `unreachable`, or `unknown`), and `checkedAt`. This is the last observed status; use `/health` to refresh it. Legacy local worktrees are hidden, and old Requirement selections migrate to local execution.
+
+### POST /api/sandboxes
+
+Provision or attach an E2B sandbox. Set `E2B_API_KEY` in Agent Manager's environment; the key is never accepted in the request or persisted. Body: `{ "kind": "e2b", "name": "Build sandbox", "sharing": "shared", "template": "base", "cwd": "/home/user" }`. Omit `template` for the default. To attach, supply `providerSandboxId` and a remote `cwd` that already exists. A new sandbox's directory is created if needed. Returns `201 Created` with the Sandbox record. A duplicate provider sandbox ID returns 409. A dedicated sandbox can be selected by only one Requirement.
+
+### GET /api/sandboxes/:id/health
+
+Uses the E2B SDK without resuming the sandbox and persists the observed status and `checkedAt`. Returns the updated Sandbox. A missing E2B sandbox reports `terminated`; other provider lookup errors report `unreachable`.
+
+### POST /api/sandboxes/:id/pause and /resume
+
+Use the E2B SDK and return the refreshed Sandbox. Pausing is rejected with 409 while any selected Requirement has an active RD Run. Resume connects to the sandbox, including one paused by the idle timeout.
+
+### DELETE /api/sandboxes/:id
+
+Kills the E2B sandbox and removes its record. Returns 204. A sandbox selected by any Requirement or used by an active RD Run returns 409. Its remote files are deleted by E2B.
 
 ## 5. Requirement actions
 
