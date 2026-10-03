@@ -41,9 +41,9 @@ Code Factory combines a requirement tree, an agent team, and a human-in-the-loop
 - **Delivery-connected:** agents open and register pull requests, a short-lived AI Reviewer checks them on request, and Agent Triggers feed GitHub PR status, reviews/comments, CI failures, merge conflicts, and scheduled wake-ups back into the right node. The source-neutral trigger boundary is designed to support systems such as Slack and Jira.
 - **Local-first:** agents run in your existing repository with your installed CLI tools, project instructions, and credentials.
 
-Code Factory is not a hosted IDE or a flat agent pool. Agents are organized by the requirement tree instead of being scheduled from a shared queue, and code execution, Git, and GitHub access stay in the developer's own environment.
+Code Factory is not a hosted IDE or a flat agent pool. Agents are organized by the requirement tree instead of being scheduled from a shared queue. Code execution, Git, and GitHub access use the selected local workspace or E2B sandbox.
 
-The current implementation supports headless **Codex** and **Claude Code**, plus a **Native Agent** built on pi-durable. Native Agent conversations persist in a workspace SQLite file. Local execution uses the managed repository directly, with the launching user's filesystem and process permissions. E2B cloud sandboxes are the planned remote option.
+The current implementation supports headless **Codex** and **Claude Code**, plus a **Native Agent** built on pi-durable. Native Agent conversations persist in a workspace SQLite file. Local execution uses the managed repository directly, with the launching user's filesystem and process permissions. Native Agents can also use E2B cloud sandboxes selected on the Sandboxes page. Set `E2B_API_KEY` in Agent Manager's environment before provisioning or attaching one. The API key stays in the process environment; SQLite stores the E2B sandbox ID and the `E2B_API_KEY` setting name. Prepare a Git checkout in the selected remote directory, and install/authenticate `gh` there (or supply `GH_TOKEN` to Agent Manager) for PR commands.
 
 For Native Agent model authentication, set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` before starting Agent Manager, or sign in with a ChatGPT/Codex subscription from the managed repository:
 

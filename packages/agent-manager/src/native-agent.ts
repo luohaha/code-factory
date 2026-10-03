@@ -14,6 +14,7 @@ import { CodingTools } from '@earendil-works/pi-durable/tools';
 
 import { runCodeFactoryCli } from './code-factory-cli.js';
 import { createNativeModels, NativeCredentialStore, nativeAuthDatabasePath } from './native-auth.js';
+import { E2BExecutionEnv, E2BSandboxService } from './e2b-execution-env.js';
 import type { NormalizedAgentEvent } from './adapters/types.js';
 import type { AgentReasoningEffort, RunOutcome } from './types.js';
 
@@ -30,6 +31,7 @@ export interface NativeRunInput {
   model: string | null;
   reasoningEffort: AgentReasoningEffort | null;
   cwd: string;
+  sandbox?: { kind: 'e2b'; providerSandboxId: string };
   environment: Readonly<Record<string, string>>;
   instructions: string;
   signal: AbortSignal;
@@ -45,12 +47,15 @@ export class NativeAgentService {
   #opening: Promise<Harness> | null = null;
   readonly #models: MutableModels | null;
   #credentials: NativeCredentialStore | null = null;
+  readonly #e2b: E2BSandboxService;
   readonly #environments = new Map<ConversationId, Readonly<Record<string, string>>>();
+  readonly #sandboxes = new Map<ConversationId, NativeRunInput['sandbox']>();
   readonly #active = new Map<string, { submit: (message: string) => Promise<void> }>();
 
-  constructor(databasePath: string, models?: MutableModels) {
+  constructor(databasePath: string, models?: MutableModels, e2b?: E2BSandboxService) {
     this.#databasePath = databasePath;
     this.#models = models ?? null;
+    this.#e2b = e2b ?? new E2BSandboxService();
   }
 
   async #open(): Promise<Harness> {
@@ -132,7 +137,16 @@ export class NativeAgentService {
     this.#harness = await Harness.open(await openNodeSqliteStorage(this.#databasePath), {
       models,
       registry,
-      env: ({ conversationId, cwd }) => new NodeExecutionEnv({ cwd: cwd ?? process.cwd(), shellEnv: { ...process.env, ...this.#environments.get(conversationId) } }),
+      env: async ({ conversationId, cwd }) => {
+        const sandbox = this.#sandboxes.get(conversationId);
+        if (sandbox) {
+          const handle = await this.#e2b.connect(sandbox.providerSandboxId);
+          const commandEnv = Object.fromEntries(['GH_TOKEN', 'GITHUB_TOKEN'].flatMap((name) =>
+            process.env[name] ? [[name, process.env[name]!]] : []));
+          return new E2BExecutionEnv(handle, cwd ?? process.cwd(), commandEnv);
+        }
+        return new NodeExecutionEnv({ cwd: cwd ?? process.cwd(), shellEnv: { ...process.env, ...this.#environments.get(conversationId) } });
+      },
     }, CONTEXT);
     return this.#harness;
   }
@@ -167,6 +181,7 @@ export class NativeAgentService {
       conversation ??= await harness.createConversation({ ownership: { kind: 'ownerless' }, agent }, CONTEXT);
       if (!conversation) throw new Error('Native conversation is missing');
       this.#environments.set(conversation.id, input.environment);
+      this.#sandboxes.set(conversation.id, input.sandbox);
       if (input.nativeSessionId) await conversation.configure(agent, CONTEXT);
       else input.onNativeSession(String(conversation.id));
       let timedOut = false;
@@ -228,5 +243,6 @@ export class NativeAgentService {
     if (this.#credentials) await this.#credentials.close();
     this.#credentials = null;
     this.#environments.clear();
+    this.#sandboxes.clear();
   }
 }
