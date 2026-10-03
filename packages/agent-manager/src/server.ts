@@ -338,11 +338,6 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         sendJson(response, 200, { items: manager.listSandboxes() });
         return;
       }
-      if (request.method === 'POST' && url.pathname === '/api/sandboxes') {
-        const body = await readJson(request);
-        sendJson(response, 201, manager.createSandbox(stringField(body, 'name', true)!));
-        return;
-      }
 
       const requirement = url.pathname.match(/^\/api\/requirements\/([^/]+)$/);
       if (request.method === 'GET' && requirement) {

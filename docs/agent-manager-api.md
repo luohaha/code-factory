@@ -499,11 +499,7 @@ Success: 200 OK with {"items": ReviewRequest[]}. An unknown pullRequestId return
 
 ### GET /api/sandboxes
 
-Returns `{ "items": Sandbox[] }`. The built-in `local` item uses the managed workspace. Named `local-sandbox` items are Git worktrees that can be selected by more than one Native Agent Requirement. Their `cwd` is returned for display. These worktrees do not restrict host filesystem or process access.
-
-### POST /api/sandboxes
-
-Creates a local sandbox worktree. Request body: `{ "name": "Shared experiment" }` (1–80 characters after trimming). Returns `201 Created` with `{ id, name, kind: "local-sandbox", cwd, createdAt }`. The cloud `ExecutionEnv` needs a provider integration and is not created by this endpoint.
+Returns `{ "items": Sandbox[] }`. The built-in `local` item uses the managed workspace. Local execution does not create a separate worktree. E2B cloud sandbox provisioning is tracked separately.
 
 ## 5. Requirement actions
 

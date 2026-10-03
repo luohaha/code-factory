@@ -396,9 +396,6 @@ export class AgentManagerClient {
     return response.items;
   }
 
-  createSandbox(name: string): Promise<SandboxDto> {
-    return this.request('/api/sandboxes', { method: 'POST', body: JSON.stringify({ name }) });
-  }
 
   forkRequirement(id: string, input: { title: string; description: string }): Promise<RequirementDto> {
     return this.request(`/api/requirements/${encodeURIComponent(id)}/fork`, {

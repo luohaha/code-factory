@@ -1228,6 +1228,8 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     ensureColumn('requirements', 'model', 'TEXT');
     ensureColumn('requirements', 'reasoning_effort', "TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max'))");
     ensureColumn('requirements', 'sandbox_id', 'TEXT REFERENCES sandboxes(id)');
+    this.#db.prepare(`UPDATE requirements SET sandbox_id = NULL
+      WHERE sandbox_id IN (SELECT id FROM sandboxes WHERE kind = 'local-sandbox')`).run();
     ensureColumn('agent_sessions', 'last_consumed_message_sequence', 'INTEGER NOT NULL DEFAULT 0');
     ensureColumn('agent_sessions', 'fork_source_native_session_id', 'TEXT');
     ensureColumn('agent_runs', 'model', 'TEXT');

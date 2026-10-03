@@ -43,7 +43,16 @@ Code Factory combines a requirement tree, an agent team, and a human-in-the-loop
 
 Code Factory is not a hosted IDE or a flat agent pool. Agents are organized by the requirement tree instead of being scheduled from a shared queue, and code execution, Git, and GitHub access stay in the developer's own environment.
 
-The current implementation supports headless **Codex** and **Claude Code**, plus a **Native Agent** built on pi-durable. Native Agent conversations persist in a workspace SQLite file. Native Agents can use local execution or select a reusable local sandbox worktree from the Sandboxes page. A local sandbox separates Git working files but shares the host's filesystem and process permissions. Cloud sandbox execution requires a provider integration.
+The current implementation supports headless **Codex** and **Claude Code**, plus a **Native Agent** built on pi-durable. Native Agent conversations persist in a workspace SQLite file. Local execution uses the managed repository directly, with the launching user's filesystem and process permissions. E2B cloud sandboxes are the planned remote option.
+
+For Native Agent model authentication, set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` before starting Agent Manager, or sign in with a ChatGPT/Codex subscription from the managed repository:
+
+~~~bash
+npx --package @luoyixin/code-factory code-factory-agent-manager auth login openai-codex
+npx --package @luoyixin/code-factory code-factory-agent-manager auth status
+~~~
+
+Choose an `openai-codex/...` model for that subscription-backed login. Alternatively, `auth login openai` uses pi-ai's direct ChatGPT subscription flow with `openai/...` models. The login uses a browser or device-code flow and stores refreshable credentials in a separate workspace SQLite file with owner-only permissions. Run `auth logout openai-codex` or `auth logout openai` to remove a login. If Agent Manager uses a custom `--config` or `--db`, pass the same option to the auth command.
 
 ## Quick Start
 

@@ -304,7 +304,7 @@ function AgentModelSelect({ catalog, provider, value, onChange, id, name, disabl
       className="w-full"
       aria-label={ariaLabel}
     >
-      <NativeSelectOption value="">{t('Use CLI default model')}</NativeSelectOption>
+      <NativeSelectOption value="">{provider === 'native-agent' ? t('Use Native Agent default model') : t('Use CLI default model')}</NativeSelectOption>
       {selectedMissing ? <NativeSelectOption value={value}>{value}</NativeSelectOption> : null}
       {models.map((model) => (
         <NativeSelectOption key={model.id} value={model.id} title={model.description ?? model.id}>
@@ -1169,6 +1169,9 @@ function NewRequirementDialog({ disabled, modelCatalog, sandboxes, onCreate }: {
                   value={model}
                   onChange={setModel}
                 />
+                {provider === 'native-agent' ? (
+                  <p className="mt-1 text-xs text-muted-foreground">{t('Native Agent uses OPENAI_API_KEY or ANTHROPIC_API_KEY, or a workspace subscription login via code-factory-agent-manager auth login openai-codex.')}</p>
+                ) : null}
               </Field>
               <Field>
                 <FieldLabel htmlFor="requirement-reasoning-effort">{t('Reasoning effort')}</FieldLabel>
@@ -3331,21 +3334,6 @@ function Dashboard() {
     }
   }
 
-  async function createSandbox(event: SyntheticEvent<HTMLFormElement, SubmitEvent>): Promise<void> {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const name = new FormData(form).get('name');
-    if (typeof name !== 'string' || !name.trim()) return;
-    setError(null);
-    try {
-      const sandbox = await client.createSandbox(name.trim());
-      setSandboxes((current) => [...current, sandbox]);
-      form.reset();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t('Failed to create sandbox'));
-    }
-  }
-
   async function saveConfiguration(values: Partial<AgentManagerConfiguration>): Promise<void> {
     setError(null);
     try {
@@ -3651,15 +3639,11 @@ function Dashboard() {
           </div>
         ) : view === 'sandboxes' ? (
           <div className="w-full p-4 lg:p-5">
-            <form onSubmit={(event) => void createSandbox(event)} className="mb-4 flex max-w-lg gap-2">
-              <Input name="name" required maxLength={80} aria-label={t('Sandbox name')} placeholder={t('Sandbox name')} />
-              <Button type="submit" disabled={connection !== 'online'}><Plus data-icon="inline-start" />{t('Create sandbox')}</Button>
-            </form>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {sandboxes.filter((sandbox) => `${sandbox.name} ${sandbox.cwd}`.toLowerCase().includes(query.trim().toLowerCase())).map((sandbox) => (
                 <div key={sandbox.id} className="rounded-xl border border-border bg-card p-4">
                   <div className="text-sm font-semibold">{sandbox.name}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{sandbox.kind === 'local' ? t('Local execution') : t('Local sandbox worktree')}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{t('Local execution')}</div>
                   <div className="mt-2 break-all font-mono text-[10px] text-muted-foreground">{sandbox.cwd}</div>
                   <div className="mt-2 text-xs text-muted-foreground">{requirements.filter((item) => item.provider === 'native-agent' && (item.sandboxId ?? 'local') === sandbox.id).length} {t('Requirements')}</div>
                 </div>

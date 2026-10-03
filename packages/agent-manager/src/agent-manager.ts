@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { constants, copyFileSync, mkdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -578,7 +577,10 @@ export class AgentManager extends EventEmitter {
     if (!title) throw new TypeError('title is required');
     if (!description) throw new TypeError('description is required');
     if (input.sandboxId && input.provider !== 'native-agent') throw new TypeError('sandboxes require native-agent');
-    if (input.sandboxId && !this.#store.getSandbox(input.sandboxId)) throw new StoreNotFoundError(`Sandbox ${input.sandboxId} not found`);
+    const sandboxId = input.sandboxId === 'local' ? null : input.sandboxId;
+    if (sandboxId && !this.listSandboxes().some((sandbox) => sandbox.id === sandboxId)) {
+      throw new StoreNotFoundError(`Sandbox ${sandboxId} not found`);
+    }
     if (input.createdBy === 'rd_agent') {
       if (!input.sourceSessionId) throw new TypeError('sourceSessionId is required for an Agent-created requirement');
       const source = this.#store.listSessions().find((session) => session.id === input.sourceSessionId);
@@ -598,7 +600,7 @@ export class AgentManager extends EventEmitter {
       provider: input.provider,
       ...(model ? { model } : {}),
       ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
-      ...(input.sandboxId ? { sandboxId: input.sandboxId } : {}),
+      ...(sandboxId ? { sandboxId } : {}),
       createdBy: input.createdBy ?? 'human',
       ...(input.parentRequirementId ? { parentRequirementId: input.parentRequirementId } : {}),
       ...(input.sourceSessionId ? { sourceSessionId: input.sourceSessionId } : {}),
@@ -704,8 +706,12 @@ export class AgentManager extends EventEmitter {
     const reasoningEffort = hasReasoningEffort
       ? input.reasoningEffort ?? null
       : providerChanged ? null : current.reasoningEffort;
-    const sandboxId = provider === 'native-agent' ? (hasSandbox ? input.sandboxId ?? null : current.sandboxId) : null;
-    if (sandboxId && !this.#store.getSandbox(sandboxId)) throw new StoreNotFoundError(`Sandbox ${sandboxId} not found`);
+    const sandboxId = provider === 'native-agent'
+      ? (hasSandbox ? (input.sandboxId === 'local' ? null : input.sandboxId ?? null) : current.sandboxId)
+      : null;
+    if (sandboxId && !this.listSandboxes().some((sandbox) => sandbox.id === sandboxId)) {
+      throw new StoreNotFoundError(`Sandbox ${sandboxId} not found`);
+    }
     if (provider === current.provider && model === current.model && reasoningEffort === current.reasoningEffort && sandboxId === current.sandboxId) return current;
 
     const requirement = this.#store.updateRequirementAgentConfiguration({
@@ -734,20 +740,7 @@ export class AgentManager extends EventEmitter {
 
   listSandboxes(): Sandbox[] {
     return [{ id: 'local', name: 'Local execution', kind: 'local', cwd: this.workspaceRoot,
-      createdAt: '1970-01-01T00:00:00.000Z' }, ...this.#store.listSandboxes()];
-  }
-
-  createSandbox(name: string): Sandbox {
-    const label = name.trim();
-    if (!label || label.length > 80) throw new TypeError('sandbox name must contain 1 to 80 characters');
-    const id = `sbx_${randomUUID()}`;
-    const cwd = join(dirname(this.databasePath === ':memory:' ? join(this.workspaceRoot, 'factory.sqlite') : this.databasePath), 'sandboxes', id);
-    mkdirSync(dirname(cwd), { recursive: true });
-    const created = spawnSync('git', ['worktree', 'add', '-b', `code-factory/sandbox/${id}`, cwd, 'HEAD'], {
-      cwd: this.workspaceRoot, encoding: 'utf8', timeout: 30_000,
-    });
-    if (created.status !== 0) throw new Error(`Could not create sandbox worktree: ${created.stderr?.trim() || created.error?.message || 'git failed'}`);
-    return this.#store.createSandbox({ id, name: label, kind: 'local-sandbox', cwd, createdAt: new Date().toISOString() });
+      createdAt: '1970-01-01T00:00:00.000Z' }, ...this.#store.listSandboxes().filter((sandbox) => sandbox.kind !== 'local-sandbox')];
   }
 
   startProposedRequirement(

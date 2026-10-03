@@ -6,16 +6,14 @@ import { promisify } from 'node:util';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { Type } from '@earendil-works/pi-ai';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
-import { createModels } from '@earendil-works/pi-ai/models';
 import type { MutableModels } from '@earendil-works/pi-ai/models';
-import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
-import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import { AssistantEntry, createRegistry, defineExtension, defineTool, Harness, section, watchEvents, type ConversationId } from '@earendil-works/pi-durable';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 
 import { runCodeFactoryCli } from './code-factory-cli.js';
+import { createNativeModels, NativeCredentialStore, nativeAuthDatabasePath } from './native-auth.js';
 import type { NormalizedAgentEvent } from './adapters/types.js';
 import type { AgentReasoningEffort, RunOutcome } from './types.js';
 
@@ -46,6 +44,7 @@ export class NativeAgentService {
   #harness: Harness | null = null;
   #opening: Promise<Harness> | null = null;
   readonly #models: MutableModels | null;
+  #credentials: NativeCredentialStore | null = null;
   readonly #environments = new Map<ConversationId, Readonly<Record<string, string>>>();
   readonly #active = new Map<string, { submit: (message: string) => Promise<void> }>();
 
@@ -63,11 +62,8 @@ export class NativeAgentService {
 
   async #openOnce(): Promise<Harness> {
     await mkdir(dirname(this.#databasePath), { recursive: true });
-    const models = this.#models ?? createModels();
-    if (!this.#models) {
-      models.setProvider(openaiProvider());
-      models.setProvider(anthropicProvider());
-    }
+    if (!this.#models) this.#credentials = new NativeCredentialStore(nativeAuthDatabasePath(this.#databasePath));
+    const models = this.#models ?? createNativeModels(this.#credentials!);
     const registry = createRegistry();
     registry.install(CodingTools);
     const invokeCli = async (args: string[], conversationId: ConversationId): Promise<string> => {
@@ -154,7 +150,9 @@ export class NativeAgentService {
       const [provider, modelId] = input.model?.includes('/')
         ? [input.model.slice(0, input.model.indexOf('/')), input.model.slice(input.model.indexOf('/') + 1)]
         : ['openai', input.model || 'gpt-5.4'];
-      if (!this.#models && provider !== 'openai' && provider !== 'anthropic') throw new TypeError('Native model must be openai/MODEL or anthropic/MODEL');
+      if (!this.#models && provider !== 'openai' && provider !== 'anthropic' && provider !== 'openai-codex') {
+        throw new TypeError('Native model must use a configured pi-ai provider');
+      }
       const agent = { model: { provider, modelId }, cwd: input.cwd,
         ...(input.reasoningEffort ? { thinkingLevel: input.reasoningEffort } : {}),
         instructions: input.instructions };
@@ -227,6 +225,8 @@ export class NativeAgentService {
     if (this.#opening) await this.#opening;
     if (this.#harness) await this.#harness.close(CONTEXT);
     this.#harness = null;
+    if (this.#credentials) await this.#credentials.close();
+    this.#credentials = null;
     this.#environments.clear();
   }
 }
