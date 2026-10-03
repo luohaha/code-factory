@@ -338,6 +338,42 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         sendJson(response, 200, { items: manager.listSandboxes() });
         return;
       }
+      if (request.method === 'POST' && url.pathname === '/api/sandboxes') {
+        const body = await readJson(request);
+        if (body.kind !== 'e2b') throw new TypeError('kind must be e2b');
+        if (body.sharing !== 'shared' && body.sharing !== 'dedicated') throw new TypeError('sharing must be shared or dedicated');
+        sendJson(response, 201, await manager.createE2BSandbox({
+          name: stringField(body, 'name', true)!, sharing: body.sharing,
+          ...(body.template === undefined ? {} : { template: stringField(body, 'template', true)! }),
+          ...(body.cwd === undefined ? {} : { cwd: stringField(body, 'cwd', true)! }),
+          ...(body.providerSandboxId === undefined ? {} : { providerSandboxId: stringField(body, 'providerSandboxId', true)! }),
+        }));
+        return;
+      }
+
+      const sandboxAction = url.pathname.match(/^\/api\/sandboxes\/([^/]+)\/(health|pause|resume)$/);
+      if (sandboxAction) {
+        const sandboxId = decodeURIComponent(sandboxAction[1]!);
+        const action = sandboxAction[2];
+        if (action === 'health' && request.method === 'GET') {
+          sendJson(response, 200, await manager.checkSandboxHealth(sandboxId));
+          return;
+        }
+        if (action === 'pause' && request.method === 'POST') {
+          sendJson(response, 200, await manager.pauseSandbox(sandboxId));
+          return;
+        }
+        if (action === 'resume' && request.method === 'POST') {
+          sendJson(response, 200, await manager.resumeSandbox(sandboxId));
+          return;
+        }
+      }
+      const sandbox = url.pathname.match(/^\/api\/sandboxes\/([^/]+)$/);
+      if (sandbox && request.method === 'DELETE') {
+        await manager.deleteSandbox(decodeURIComponent(sandbox[1]!));
+        response.writeHead(204).end();
+        return;
+      }
 
       const requirement = url.pathname.match(/^\/api\/requirements\/([^/]+)$/);
       if (request.method === 'GET' && requirement) {
