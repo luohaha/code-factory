@@ -21,6 +21,7 @@ import type { AgentReasoningEffort, RunOutcome } from './types.js';
 
 const execFileAsync = promisify(execFile);
 const CONTEXT = BACKGROUND_CONTEXT;
+const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
 export interface NativeRunInput {
   requirementId: string;
@@ -78,7 +79,8 @@ export class NativeAgentService {
         writeError: (value) => { stderr += value; },
         runGitHub: async (ghArgs) => (await execFileAsync('gh', ghArgs, { timeout: 30_000, maxBuffer: 1024 * 1024 })).stdout,
       });
-      return status === 0 ? stdout : stderr || `Command failed (${status})`;
+      if (status !== 0) throw new Error(stderr.trim() || `Code Factory command failed (${status})`);
+      return stdout;
     };
     const output = (text: string) => ({ content: [{ type: 'text' as const, text }] });
     const prRegister = defineTool({ name: 'pr_register',
@@ -87,12 +89,20 @@ export class NativeAgentService {
       execute: async ({ url }, api) => output(await invokeCli(['pr', 'register', '--from-github', url], api.conversationId)),
     });
     const ghPr = defineTool({ name: 'gh_pr',
-      description: 'Run a GitHub PR command in the managed repository. Use view for metadata, create for a draft PR, and edit or ready for your own PR. Register afterward with pr_register.',
+      description: 'Run a GitHub PR command in the selected execution environment. Use view for metadata, create for a draft PR, and edit or ready for your own PR. Register afterward with pr_register.',
       parameters: Type.Object({ action: Type.Union([Type.Literal('view'), Type.Literal('create'), Type.Literal('edit'), Type.Literal('ready')]), args: Type.Array(Type.String()) }),
-      execute: async ({ action, args }, api) => {
-        const cwd = api.env?.cwd ?? process.cwd();
-        const result = await execFileAsync('gh', ['pr', action, ...args], { cwd, timeout: 30_000, maxBuffer: 1024 * 1024 });
-        return output(result.stdout || result.stderr);
+      outputLimits: { retain: 'tail' },
+      execute: async ({ action, args }, api, context) => {
+        if (!api.env) throw new Error('GitHub PR commands require an execution environment');
+        const command = ['gh', 'pr', action, ...args].map(shellQuote).join(' ');
+        const result = await api.env.exec(command, {
+          cwd: api.env.cwd,
+          timeout: 30,
+          onOutput: (value) => api.output(value),
+        }, context);
+        if (!result.ok) throw result.error;
+        if (result.value.exitCode !== 0) throw new Error(`gh pr ${action} exited with code ${result.value.exitCode}`);
+        return {};
       },
     });
     const propose = defineTool({ name: 'requirement_propose',

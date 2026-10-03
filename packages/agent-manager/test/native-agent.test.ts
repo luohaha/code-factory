@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -162,6 +162,82 @@ test('native control-plane tool calls the requirement CLI with session context',
     assert.equal(outcome.status, 'succeeded');
     assert.equal(outcome.finalMessage, 'Related lookup succeeded');
     assert(traces.includes('requirement_related'));
+  } finally {
+    await service.close();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('native gh_pr runs inside the selected execution environment with literal arguments', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-gh-pr-'));
+  const sandbox = join(directory, 'sandbox');
+  const binaryDirectory = join(directory, 'bin');
+  const marker = join(directory, 'unexpected-file');
+  await mkdir(sandbox);
+  await mkdir(binaryDirectory);
+  const gh = join(binaryDirectory, 'gh');
+  await writeFile(gh, '#!/bin/sh\nprintf "%s\\n" "$PWD" "$@"\n');
+  await chmod(gh, 0o755);
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const literalArgument = `$(touch ${marker})`;
+  let sawSandboxCommand = false;
+  faux.setResponses([
+    fauxAssistantMessage(fauxToolCall('gh_pr', { action: 'view', args: ['--title', 'two words', literalArgument] }), { stopReason: 'toolUse' }),
+    (context) => {
+      const messages = JSON.stringify(context.messages);
+      sawSandboxCommand = messages.includes(sandbox) && messages.includes('two words') && messages.includes(literalArgument);
+      return fauxAssistantMessage(sawSandboxCommand ? 'PR command ran in sandbox' : 'PR command ran elsewhere');
+    },
+  ]);
+  const service = new NativeAgentService(join(directory, 'native.sqlite'), models);
+  try {
+    const outcome = await service.run({ requirementId: 'req_gh', sessionId: 'ses_gh', nativeSessionId: null,
+      forkSourceNativeSessionId: null, prompt: 'Inspect PR', model: 'faux/faux-1', reasoningEffort: null,
+      cwd: sandbox, environment: { PATH: `${binaryDirectory}:${process.env.PATH ?? ''}` }, instructions: 'Test agent',
+      signal: new AbortController().signal, timeoutMs: 30_000,
+      onNativeSession: () => undefined, onEvent: () => undefined });
+    assert.equal(outcome.status, 'succeeded');
+    assert.equal(sawSandboxCommand, true);
+    await assert.rejects(stat(marker), { code: 'ENOENT' });
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('native control-plane tool exposes a failed CLI call as a tool error', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-tool-error-'));
+  const server = createServer((_request, response) => {
+    response.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'registration denied' }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  let sawFailure = false;
+  faux.setResponses([
+    fauxAssistantMessage(fauxToolCall('requirement_related', {}), { stopReason: 'toolUse' }),
+    (context) => {
+      const messages = JSON.stringify(context.messages);
+      sawFailure = messages.includes('registration denied') && messages.includes('isError');
+      return fauxAssistantMessage(sawFailure ? 'Lookup failed' : 'Lookup appeared successful');
+    },
+  ]);
+  const service = new NativeAgentService(join(directory, 'native.sqlite'), models);
+  try {
+    const outcome = await service.run({ requirementId: 'req_error', sessionId: 'ses_error', nativeSessionId: null,
+      forkSourceNativeSessionId: null, prompt: 'Check related', model: 'faux/faux-1', reasoningEffort: null,
+      cwd: directory,
+      environment: { CODE_FACTORY_API_URL: `http://127.0.0.1:${address.port}/api`, CODE_FACTORY_REQUIREMENT_ID: 'req_error', CODE_FACTORY_SESSION_ID: 'ses_error' },
+      instructions: 'Test agent', signal: new AbortController().signal, timeoutMs: 30_000,
+      onNativeSession: () => undefined, onEvent: () => undefined });
+    assert.equal(outcome.status, 'succeeded');
+    assert.equal(sawFailure, true);
   } finally {
     await service.close();
     server.close();
