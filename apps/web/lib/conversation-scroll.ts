@@ -1,7 +1,7 @@
 export const conversationBottomThreshold = 96;
 
 export type RequirementDetailMode = 'conversation' | 'trace';
-export type RequirementDetailSourceView = 'requirements' | 'relationships' | 'pull_requests' | 'sessions' | 'timers';
+export type RequirementDetailSourceView = 'requirements' | 'relationships' | 'pull_requests' | 'sessions' | 'timers' | 'sandboxes';
 
 type ScrollMetrics = Pick<
   HTMLElement,

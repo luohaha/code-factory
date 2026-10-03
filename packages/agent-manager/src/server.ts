@@ -53,7 +53,7 @@ function stringField(body: Record<string, unknown>, name: string, required = fal
 }
 
 function providerField(value: unknown): AgentProvider {
-  if (value !== 'codex' && value !== 'claude-code') throw new TypeError('provider must be codex or claude-code');
+  if (value !== 'codex' && value !== 'claude-code' && value !== 'native-agent') throw new TypeError('provider must be codex, claude-code, or native-agent');
   return value;
 }
 
@@ -328,8 +328,19 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           provider: providerField(body.provider),
           ...(model ? { model } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(body.sandboxId === undefined ? {} : { sandboxId: stringField(body, 'sandboxId', true)! }),
         });
         sendJson(response, 201, item);
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/api/sandboxes') {
+        sendJson(response, 200, { items: manager.listSandboxes() });
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/sandboxes') {
+        const body = await readJson(request);
+        sendJson(response, 201, manager.createSandbox(stringField(body, 'name', true)!));
         return;
       }
 
@@ -350,6 +361,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           ...(body.provider !== undefined ? { provider: providerField(body.provider) } : {}),
           ...(model !== undefined ? { model } : {}),
           ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+          ...(body.sandboxId !== undefined ? { sandboxId: body.sandboxId === null ? null : stringField(body, 'sandboxId', true)! } : {}),
         }));
         return;
       }

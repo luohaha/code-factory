@@ -9,13 +9,13 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue" alt="License: Apache 2.0" /></a>
   <a href="https://www.npmjs.com/package/@luoyixin/code-factory"><img src="https://img.shields.io/npm/v/%40luoyixin%2Fcode-factory?label=npm&amp;color=CB3837" alt="npm version" /></a>
-  <a href="packages/agent-manager/package.json"><img src="https://img.shields.io/badge/node-%3E%3D22.13.0-brightgreen" alt="Node.js: >=22.13.0" /></a>
+  <a href="packages/agent-manager/package.json"><img src="https://img.shields.io/badge/node-%3E%3D22.19.0-brightgreen" alt="Node.js: >=22.19.0" /></a>
   <a href="packages/agent-manager/tsconfig.json"><img src="https://img.shields.io/badge/TypeScript-strict-3178C6" alt="TypeScript: strict" /></a>
 </p>
 
 https://github.com/user-attachments/assets/80896c78-c804-4c3d-98df-75ccc68031f3
 
-Code Factory is a **tree-based collaboration platform where requirements, a team of coding agents, and humans work together**. Every requirement is a node with its own long-lived RD agent (**Codex** or **Claude Code**). An RD agent can split its work into child requirements, and each child gets its own agent and can split further. The result is an agent team shaped like the work itself. Humans steer the whole team by talking to the root requirement, and can step into any node at any time.
+Code Factory is a **tree-based collaboration platform where requirements, a team of coding agents, and humans work together**. Every requirement is a node with its own long-lived RD agent (**Codex**, **Claude Code**, or **Native Agent**). An RD agent can split its work into child requirements, and each child gets its own agent and can split further. The result is an agent team shaped like the work itself. Humans steer the whole team by talking to the root requirement, and can step into any node at any time.
 
 Around that tree, Code Factory connects the local workspace, GitHub pull requests, on-demand AI reviewers, and external events routed through Agent Triggers in one local Web dashboard. It is designed for developers and engineering teams who already use Codex or Claude Code but need more than isolated terminal sessions: a way to decompose large work, run many agents in parallel without losing track of them, and keep humans in charge of scope and completion.
 
@@ -43,7 +43,7 @@ Code Factory combines a requirement tree, an agent team, and a human-in-the-loop
 
 Code Factory is not a hosted IDE or a flat agent pool. Agents are organized by the requirement tree instead of being scheduled from a shared queue, and code execution, Git, and GitHub access stay in the developer's own environment.
 
-The current implementation supports headless **Codex** and **Claude Code** agents.
+The current implementation supports headless **Codex** and **Claude Code**, plus a **Native Agent** built on pi-durable. Native Agent conversations persist in a workspace SQLite file. Native Agents can use local execution or select a reusable local sandbox worktree from the Sandboxes page. A local sandbox separates Git working files but shares the host's filesystem and process permissions. Cloud sandbox execution requires a provider integration.
 
 ## Quick Start
 
@@ -62,9 +62,9 @@ Prerequisites, daemon operation, configuration, CLI options, and log locations a
   <img src="docs/assets/brand/code-factory-overview.png" alt="Code Factory coordinates multiple related Requirements, each with its own persistent RD session. RD agents can create and manage child Requirements, exchange durable messages, work in the local workspace, and deliver GitHub pull requests. Timer and GitHub triggers are available today; Slack and Jira triggers are planned." />
 </p>
 
-Each Requirement owns one long-lived RD session. Sessions for different Requirements can run in parallel, but a session has at most one active RD run. Directly related Requirements coordinate through explicit, durable RD-to-RD messages. A human can also fork a running or waiting Requirement to explore another direction: the fork appears as a child of the source with a copy of its conversation, then starts a separate native Codex or Claude Code session from the source context. The fork keeps its source ID and copied attachments if retention later removes the source.
+Each Requirement owns one long-lived RD session. Sessions for different Requirements can run in parallel, but a session has at most one active RD run. Directly related Requirements coordinate through explicit, durable RD-to-RD messages. A human can also fork a running or waiting Requirement to explore another direction: the fork appears as a child of the source with a copy of its conversation, then starts a separate provider session from the source context. The fork keeps its source ID and copied attachments if retention later removes the source.
 
-1. **Create.** A human creates a Requirement in the dashboard and selects Codex or Claude Code, with optional model and reasoning settings. Agent Manager creates the Requirement and its RD session atomically.
+1. **Create.** A human creates a Requirement in the dashboard and selects Codex, Claude Code, or Native Agent, with optional model and reasoning settings. Native Agent also accepts a sandbox selection. Agent Manager creates the Requirement and its RD session atomically.
 2. **Build and delegate.** Agent Manager starts or resumes that session in the managed workspace. The RD edits and tests the repository, then uses `code-factory-cli` to register pull requests, create directly related child Requirements, manage their permitted lifecycle transitions, message their RD agents, or schedule a later wake-up.
 3. **Continue.** The durable Requirement conversation is also the RD delivery stream: Human and Reviewer messages, selected System events, Jev continuations, and explicit related-Agent messages are delivered to RD; the RD's own output is displayed but not fed back as new input. New input stays queued in order, and a running session processes it after the current run unless a human explicitly interrupts. An optional Jev decision considers the Run result and three latest conversation messages after a successful, failed, or timed-out Run ends without newer queued input, an active Reviewer, or an active timer. It can send `continue.` as Jev immediately or after a short delay, including to retry a recoverable failure. A failed Run retains its attempted input for that retry. An interrupted run with no newer input, a failed run, or a timed-out run leaves the Requirement waiting for confirmation; the Session retains its distinct waiting or failed state until another Run starts.
 4. **React.** Today's Timer and GitHub triggers add deduplicated messages for due wake-ups, PR state changes, reviews and comments, CI failures, and merge conflicts. The source-neutral trigger boundary is designed for future Slack and Jira sources, which are not implemented yet. GitHub and the reconciler—not the RD—own PR lifecycle state.
@@ -122,6 +122,6 @@ Code Factory is licensed under the [Apache License 2.0](LICENSE).
 
 ## Current Boundaries
 
-The current implementation includes the Agent Manager core, a supervised daemon mode with automatic process restart, SQLite Store, HTTP/SSE API, Codex and Claude Code adapters, conversation-driven RD continuation, persistent scheduled wake-ups, PR tracking, manually triggered Reviewer runs, and the bundled Web dashboard.
+The current implementation includes the Agent Manager core, a supervised daemon mode with automatic process restart, SQLite Store, HTTP/SSE API, Codex and Claude Code adapters, a pi-durable Native Agent, conversation-driven RD continuation, persistent scheduled wake-ups, PR tracking, manually triggered Reviewer runs, and the bundled Web dashboard.
 
 The `AgentTrigger` lifecycle and extension API are currently code-level, and every delivered trigger message must target an existing Requirement. The native Timer Agent Trigger has HTTP, dashboard, and RD CLI configuration, but dynamic third-party trigger discovery/configuration, Slack and Jira sources, and trigger-created Requirements remain future work. GitHub synchronization currently uses local `gh` polling rather than webhooks. Stale-review indicators after a head-SHA change, local access tokens, detailed tool-execution logs, and Manager-enforced worktree isolation also remain future work. RD Agents are instructed to create or reuse a Requirement-specific Git worktree before changing code, but Agent Manager does not provision or enforce that isolation; every child process still starts in the shared Manager workspace.

@@ -15,6 +15,7 @@ The system has three first-class domain entities:
 ~~~mermaid
 erDiagram
   Requirement ||--|| AgentSession : owns
+  Requirement }o--o| Sandbox : selects
   Requirement ||--o{ RequirementMessage : contains
   Requirement ||--o{ PullRequest : produces
   Requirement ||--o{ AgentTimer : schedules
@@ -34,8 +35,10 @@ flowchart LR
   S[Optional daemon supervisor] -->|Start / restart| M
   M <--> DB[(SQLite)]
   M -->|Same cwd, long-lived resume| RD[Codex / Claude Code RD]
+  M -->|Durable conversation, selected ExecutionEnv| NRD[Native RD / pi-durable]
   M -->|Short-lived, no persistent session| RV[Codex / Claude Code Reviewer]
   RD -->|Register PR / Propose requirement / Schedule wake-up| CLI[code-factory-cli]
+  NRD -->|Typed PR / Requirement / Timer tools| CLI
   CLI --> API[Agent API]
   API --> M
   RV -->|GitHub inline comments| GH[GitHub PR]
@@ -47,6 +50,10 @@ flowchart LR
 ~~~
 
 At startup, Agent Manager fixes the workspace to `realpath(process.cwd())`. Every RD and Reviewer child process uses that directory and inherits Agent Manager's environment. Codex and Claude Code load their provider-specific project/user instructions, Skills, plugins, configuration, and enabled local memory features according to their native discovery rules.
+
+Native RD conversations use pi-durable and a separate workspace SQLite file. Each Requirement stores its pi-durable conversation ID as the native session ID; forks create a pi-durable fork. Human steering submits a `whenBusy: "steer"` input into an active conversation, so it joins the current tool round. Native coding tools run through pi-durable `ExecutionEnv`. Code Factory control-plane actions are named native tools that call the existing CLI implementation with the Requirement's session context.
+
+A Native Agent can use the managed workspace directly or a named local sandbox worktree. Sandbox records are durable and multiple Requirements can select the same worktree. The worktree separates Git files but does not restrict filesystem or process permissions. Cloud sandbox execution needs an external `ExecutionEnv` provider and is not configured by this release.
 
 Before opening its application database or HTTP listener, Agent Manager takes an exclusive process-lifetime lock under the canonical workspace's default data directory. Foreground and daemon-managed processes use the same lock, so a second Manager cannot bypass workspace ownership by selecting a different port, configuration file, or database. A live daemon supervisor also reserves the workspace between Manager restart attempts. The operating system releases the underlying SQLite lock if the Manager process crashes.
 
@@ -65,7 +72,7 @@ cd ~/starrocks
 npx --package @luoyixin/code-factory code-factory-agent-manager start
 ~~~
 
-All agents launched by that process initially use `~/starrocks` as their working directory. Before changing code, an RD Agent is instructed to create or reuse a Git worktree dedicated to its Requirement and perform the work there. Agent Manager does not currently provision or enforce that isolation.
+Headless agents launched by that process initially use `~/starrocks` as their working directory and are instructed to create or reuse a Requirement-specific Git worktree before editing. Native Agents use the managed directory for local execution or the selected sandbox worktree. Sandbox worktrees are provisioned by Agent Manager and may be shared by multiple Native Agents.
 
 Agent Manager may run in the foreground or beneath its workspace-scoped daemon supervisor. `start --daemon` detaches the supervisor, which starts Agent Manager with the original CLI options and waits for a readiness message emitted only after the HTTP listener is active. A startup error emitted before readiness is persisted in daemon state and returned directly to the starting CLI instead of being retried. An unexpected exit after readiness is restarted indefinitely with capped exponential backoff. `stop` terminates the supervisor and Manager intentionally, while `restart` reuses a running daemon's stored options unless replacements are supplied. `daemon.json`, `daemon.lock`, `daemon.guard.sqlite`, and `logs/daemon.log` live beside the workspace database under `~/.code-factory/workspaces/<workspace-hash>/`. The persistent SQLite guard provides process-lifetime supervisor ownership; only its current owner may replace or remove the PID metadata and daemon state. This is application-level process supervision, not operating-system service installation or boot-time activation.
 

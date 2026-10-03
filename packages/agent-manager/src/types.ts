@@ -1,4 +1,12 @@
-export type AgentProvider = 'codex' | 'claude-code';
+export type AgentProvider = 'codex' | 'claude-code' | 'native-agent';
+export type SandboxKind = 'local' | 'local-sandbox';
+export interface Sandbox {
+  id: string;
+  name: string;
+  kind: SandboxKind;
+  cwd: string;
+  createdAt: string;
+}
 export type AgentReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export type RequirementStatus =
@@ -53,6 +61,7 @@ export interface Requirement {
   provider: AgentProvider;
   model: string | null;
   reasoningEffort: AgentReasoningEffort | null;
+  sandboxId: string | null;
   createdBy: RequirementCreator;
   parentRequirementId: string | null;
   sourceSessionId: string | null;
@@ -217,6 +226,7 @@ export interface CreateRequirementInput {
   provider: AgentProvider;
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
+  sandboxId?: string | null;
   createdBy?: RequirementCreator;
   parentRequirementId?: string;
   sourceSessionId?: string;
@@ -231,6 +241,7 @@ export interface UpdateRequirementAgentConfigurationInput {
   provider?: AgentProvider;
   model?: string | null;
   reasoningEffort?: AgentReasoningEffort | null;
+  sandboxId?: string | null;
 }
 
 export interface TrackPullRequestInput {

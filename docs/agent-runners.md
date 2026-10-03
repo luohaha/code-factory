@@ -1,6 +1,16 @@
-# Headless Agent Runner
+# Agent Runners
 
-## 1. Common execution contract
+## Native Agent (pi-durable)
+
+`native-agent` is the third RD provider. It runs in Agent Manager using `@earendil-works/pi-durable`, with a persistent SQLite conversation per Requirement. The model picker lists pi-ai OpenAI and Anthropic model IDs as `provider/model`; the default is `openai/gpt-5.4`. Authentication comes from the launching user's pi-ai provider credentials. Reviewer Runs remain Codex or Claude Code only.
+
+Native coding tools (`read`, `write`, `edit`, `bash`) use a pi-durable `NodeExecutionEnv` rooted at the selected workspace. The default is the managed repository. A named local sandbox creates a Git worktree under the workspace data directory, and multiple Native Agents can select the same sandbox. These worktrees are file organization, not an operating-system security boundary. Cloud execution needs a cloud-specific `ExecutionEnv` implementation and provider configuration.
+
+The control-plane functions are native tools: `pr_register`, `gh_pr`, `requirement_propose`, `requirement_action`, `requirement_related`, `requirement_message`, `timer_register`, `timer_show`, and `timer_cancel`. They reuse the existing CLI's validation, request timeout, and no-automatic-retry behavior. `gh_pr` runs the GitHub CLI in the selected workspace; `pr_register` reads PR metadata from the explicit URL. A Native Agent must register its PR after creation and after its own metadata changes.
+
+When a human requests Steering with newer input, Agent Manager submits that input to the active pi-durable conversation with `whenBusy: "steer"`; the current tool round finishes and the model receives the new direction. Stop Run aborts the conversation. The Requirement message cursor advances only after a successful Run, including steered messages. pi-durable commits its transcript and tool intent before model-visible output, so a reopened harness can continue its durable conversation.
+
+## 1. Headless execution contract
 
 Agent Manager supports the local `codex` and `claude` CLIs. Every invocation follows these rules:
 
