@@ -77,23 +77,32 @@ function fakeSdk() {
 
 test('E2B service passes explicit credentials and durable lifecycle to SDK', async () => {
   const sdk = fakeSdk();
-  const service = new E2BSandboxService(sdk.client, () => 'test-key');
-  const created = await service.create('custom-template');
+  const service = new E2BSandboxService(sdk.client);
+  const credentials = { domain: 'e2b.example', apiKey: 'test-key' };
+  const created = await service.create('custom-template', credentials);
   assert.equal(created.sandboxId, 'e2b-test-123');
-  assert.deepEqual(sdk.createOptions, { template: 'custom-template', apiKey: 'test-key', timeoutMs: 600_000,
+  assert.deepEqual(sdk.createOptions, { template: 'custom-template', ...credentials, timeoutMs: 600_000,
     lifecycle: { onTimeout: 'pause', autoResume: true } });
-  assert.equal((await service.connect(created.sandboxId)).sandboxId, created.sandboxId);
-  assert.equal((await service.getInfo(created.sandboxId)).state, 'paused');
-  assert.equal(await service.pause(created.sandboxId), true);
-  assert.equal(await service.kill(created.sandboxId), true);
-  assert.throws(() => new E2BSandboxService(sdk.client, () => undefined).apiKey(), /E2B_API_KEY/);
+  assert.equal((await service.connect(created.sandboxId, credentials)).sandboxId, created.sandboxId);
+  assert.equal((await service.getInfo(created.sandboxId, credentials)).state, 'paused');
+  assert.equal(await service.pause(created.sandboxId, credentials), true);
+  assert.equal(await service.kill(created.sandboxId, credentials), true);
+});
+
+test('E2B service does not expose provider error text containing an API key', async () => {
+  const sdk = fakeSdk();
+  const service = new E2BSandboxService({ ...sdk.client,
+    create: async () => { throw new Error('provider rejected test-key'); },
+  });
+  await assert.rejects(service.create('base', { domain: 'e2b.example', apiKey: 'test-key' }), (error: unknown) =>
+    error instanceof Error && error.message.includes('creation failed') && !error.message.includes('test-key'));
 });
 
 test('E2B ExecutionEnv uses the remote SDK for files and shell commands', async () => {
   const sdk = fakeSdk();
   const env = new E2BExecutionEnv(sdk.handle, '/home/user/repo', { GH_TOKEN: 'temporary-token' });
   const context = BACKGROUND_CONTEXT;
-  assert.equal(env.id, 'e2b:e2b-test-123');
+  assert.equal(env.id, 'e2b:e2b.app:e2b-test-123');
   assert.deepEqual(await env.absolutePath('src/../note.txt', context), { ok: true, value: '/home/user/repo/note.txt' });
   assert.deepEqual(await env.writeFile('note.txt', 'first\nsecond\n', context), { ok: true, value: undefined });
   assert.deepEqual(await env.readTextFile('note.txt', context), { ok: true, value: 'first\nsecond\n' });
@@ -132,12 +141,13 @@ test('pi-durable read, write, edit and bash use the selected E2B sandbox', async
     (context) => fauxAssistantMessage(JSON.stringify(context.messages).includes('after') ? 'Remote tools succeeded' : 'Missing remote edit'),
   ]);
   const service = new NativeAgentService(join(directory, 'native.sqlite'), models,
-    new E2BSandboxService(sdk.client, () => 'test-key'));
+    new E2BSandboxService(sdk.client));
   try {
     const outcome = await service.run({ requirementId: 'req_e2b', sessionId: 'ses_e2b',
       nativeSessionId: null, forkSourceNativeSessionId: null, prompt: 'Use remote tools',
       model: 'faux/faux-1', reasoningEffort: null, cwd: '/home/user/repo',
-      sandbox: { kind: 'e2b', providerSandboxId: 'e2b-test-123' }, environment: {}, instructions: 'Test',
+      sandbox: { kind: 'e2b', providerSandboxId: 'e2b-test-123',
+        credentials: { domain: 'e2b.example', apiKey: 'test-key' } }, environment: {}, instructions: 'Test',
       signal: new AbortController().signal, timeoutMs: 30_000,
       onNativeSession: () => undefined, onEvent: () => undefined });
     assert.equal(outcome.status, 'succeeded');

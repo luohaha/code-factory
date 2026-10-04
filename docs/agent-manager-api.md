@@ -518,11 +518,11 @@ Success: 200 OK with {"items": ReviewRequest[]}. An unknown pullRequestId return
 
 ### GET /api/sandboxes
 
-Returns `{ "items": Sandbox[] }`. The built-in `local` item uses the managed workspace. An E2B record includes `kind: "e2b"`, `providerSandboxId`, `cwd`, `credentialEnvVar: "E2B_API_KEY"`, `template`, `sharing` (`shared` or `dedicated`), `status` (`running`, `paused`, `terminated`, `unreachable`, or `unknown`), and `checkedAt`. This is the last observed status; use `/health` to refresh it. Legacy local worktrees are hidden, and old Requirement selections migrate to local execution.
+Returns `{ "items": Sandbox[] }`. The built-in `local` item uses the managed workspace. An E2B record includes `kind: "e2b"`, `providerSandboxId`, `domain`, `credentialRef`, `repositoryUrl` (null for attached sandboxes), `cwd`, `template`, `sharing` (`shared` or `dedicated`), `status` (`running`, `paused`, `terminated`, `unreachable`, or `unknown`), and `checkedAt`. The key is never returned. Status is the last observation; use `/health` to refresh it. Legacy local worktrees are hidden, and old Requirement selections migrate to local execution.
 
 ### POST /api/sandboxes
 
-Provision or attach an E2B sandbox. Set `E2B_API_KEY` in Agent Manager's environment; the key is never accepted in the request or persisted. Body: `{ "kind": "e2b", "name": "Build sandbox", "sharing": "shared", "template": "base", "cwd": "/home/user" }`. Omit `template` for the default. To attach, supply `providerSandboxId` and a remote `cwd` that already exists. A new sandbox's directory is created if needed. Returns `201 Created` with the Sandbox record. A duplicate provider sandbox ID returns 409. A dedicated sandbox can be selected by only one Requirement.
+Provision or attach an E2B sandbox. Body for a new sandbox: `{ "kind": "e2b", "name": "Build sandbox", "sharing": "shared", "domain": "e2b.example", "apiKey": "...", "repositoryUrl": "https://github.com/org/repo.git", "template": "base", "cwd": "/home/user/repo" }`. `domain` and `apiKey` are required for each request. The key is saved in an owner-only credential database and referenced by `credentialRef`; it is never returned or logged. Omit `template` and `cwd` for their defaults. New sandboxes clone `repositoryUrl` into `cwd`. To attach, supply `providerSandboxId` and a `cwd` with an existing Git checkout; no clone occurs. Both flows verify remote Git, `gh`, and `gh` authentication. Set `GH_TOKEN` or `GITHUB_TOKEN` on Agent Manager for private GitHub clones and remote `gh` commands, or authenticate `gh` in the template. Missing prerequisites return an actionable error. A duplicate provider sandbox ID returns 409. A dedicated sandbox can be selected by only one Requirement.
 
 ### GET /api/sandboxes/:id/health
 

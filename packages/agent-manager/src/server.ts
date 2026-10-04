@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { AgentManager, MAX_MESSAGE_ATTACHMENT_BYTES } from './agent-manager.js';
 import { validateAgentManagerConfigurationPatch } from './configuration.js';
 import { DashboardServer } from './dashboard-server.js';
+import { E2BProviderError } from './e2b-execution-env.js';
 import type { Logger } from './logger.js';
 import type { NativeAuthProvider, NativeOAuthProvider } from './native-auth-service.js';
 import { StoreConflictError, StoreNotFoundError } from './store.js';
@@ -388,9 +389,11 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         if (body.sharing !== 'shared' && body.sharing !== 'dedicated') throw new TypeError('sharing must be shared or dedicated');
         sendJson(response, 201, await manager.createE2BSandbox({
           name: stringField(body, 'name', true)!, sharing: body.sharing,
+          domain: stringField(body, 'domain', true)!, apiKey: stringField(body, 'apiKey', true)!,
           ...(body.template === undefined ? {} : { template: stringField(body, 'template', true)! }),
           ...(body.cwd === undefined ? {} : { cwd: stringField(body, 'cwd', true)! }),
           ...(body.providerSandboxId === undefined ? {} : { providerSandboxId: stringField(body, 'providerSandboxId', true)! }),
+          ...(body.repositoryUrl === undefined ? {} : { repositoryUrl: stringField(body, 'repositoryUrl', true)! }),
         }));
         return;
       }
@@ -694,6 +697,8 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         sendJson(response, 404, { error: error.message });
       } else if (error instanceof StoreConflictError) {
         sendJson(response, 409, { error: error.message });
+      } else if (error instanceof E2BProviderError) {
+        sendJson(response, 502, { error: error.message });
       } else if (error instanceof TypeError || error instanceof SyntaxError || error instanceof RangeError) {
         sendJson(response, 400, { error: error.message });
       } else {

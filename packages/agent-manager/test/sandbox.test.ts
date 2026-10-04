@@ -32,7 +32,8 @@ test('local execution uses the managed workspace without creating a sandbox work
     assert.equal(createdResponse.status, 400);
     const list = await (await fetch(`${baseUrl}/sandboxes`)).json() as { items: Array<{ id: string; cwd: string }> };
     assert.deepEqual(list.items, [{ id: 'local', name: 'Local execution', kind: 'local', cwd: realpathSync(repository),
-      providerSandboxId: null, credentialEnvVar: null, template: null, sharing: null,
+      providerSandboxId: null, credentialEnvVar: null, domain: null, credentialRef: null, repositoryUrl: null,
+      template: null, sharing: null,
       status: 'running', checkedAt: null,
       createdAt: '1970-01-01T00:00:00.000Z' }]);
     for (const number of [1, 2]) {
@@ -57,7 +58,8 @@ test('legacy local sandbox selections migrate to local execution', () => {
   try {
     const now = new Date().toISOString();
     first.createSandbox({ id: 'sbx_legacy', name: 'Old worktree', kind: 'local-sandbox', cwd: join(directory, 'old'),
-      providerSandboxId: null, credentialEnvVar: null, template: null, sharing: null,
+      providerSandboxId: null, credentialEnvVar: null, domain: null, credentialRef: null, repositoryUrl: null,
+      template: null, sharing: null,
       status: 'unknown', checkedAt: null, createdAt: now });
     first.createRequirement({ requirementId: 'req_local', sessionId: 'ses_local', title: 'Local',
       description: 'Use workspace', provider: 'native-agent', sandboxId: 'sbx_legacy', now });

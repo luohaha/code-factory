@@ -9,6 +9,9 @@ export interface Sandbox {
   cwd: string;
   providerSandboxId: string | null;
   credentialEnvVar: string | null;
+  domain: string | null;
+  credentialRef: string | null;
+  repositoryUrl: string | null;
   template: string | null;
   sharing: SandboxSharing | null;
   status: SandboxStatus;

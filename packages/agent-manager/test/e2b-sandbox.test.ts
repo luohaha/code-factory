@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,38 +9,49 @@ import test from 'node:test';
 import type { SandboxInfo } from 'e2b';
 
 import { AgentManager } from '../src/agent-manager.js';
+import { E2BCredentialStore, e2bCredentialsPath } from '../src/e2b-credentials.js';
 import { E2BSandboxService, type E2BClient, type E2BHandle } from '../src/e2b-execution-env.js';
 import { createLogger } from '../src/logger.js';
 import { createAgentManagerServer } from '../src/server.js';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.js';
 
-function fakeE2B() {
+function fakeE2B(options: { missingGh?: boolean } = {}) {
   let state: 'running' | 'paused' = 'running';
   let killed = false;
   const calls: string[] = [];
+  const check = (options: { apiKey?: string; domain?: string }) => {
+    assert.equal(options.apiKey, 'test-key');
+    assert.equal(options.domain, 'e2b.example');
+  };
   const handle = (id: string) => ({ sandboxId: id,
-    files: { exists: async (path: string) => path === '/home/user', makeDir: async () => true },
+    files: { exists: async (path: string) => path === '/home/user/repo' },
+    commands: { run: async (command: string) => { calls.push(`command:${command}`);
+      return { exitCode: options.missingGh && command.startsWith('command -v') ? 1 : 0 }; } },
+    git: { clone: async (url: string, options: { path: string }) => {
+      calls.push(`clone:${url}:${options.path}`); return { exitCode: 0 };
+    } },
   }) as unknown as E2BHandle;
   const client: E2BClient = {
     async create(options) {
       calls.push(`create:${options.template}`);
-      assert.equal(options.apiKey, 'test-key');
+      check(options);
       return handle('created-e2b-id');
     },
     async connect(id, options) {
       calls.push(`connect:${id}`);
-      assert.equal(options.apiKey, 'test-key');
+      check(options);
       state = 'running';
       return handle(id);
     },
-    async getInfo(id) {
+    async getInfo(id, options) {
+      check(options);
       calls.push(`info:${id}`);
       return { sandboxId: id, templateId: 'base', state } as SandboxInfo;
     },
-    async pause(id) { calls.push(`pause:${id}`); state = 'paused'; return true; },
-    async kill(id) { calls.push(`kill:${id}`); killed = true; return true; },
+    async pause(id, options) { check(options); calls.push(`pause:${id}`); state = 'paused'; return true; },
+    async kill(id, options) { check(options); calls.push(`kill:${id}`); killed = true; return true; },
   };
-  return { service: new E2BSandboxService(client, () => 'test-key'), calls, get killed() { return killed; } };
+  return { service: new E2BSandboxService(client), calls, get killed() { return killed; } };
 }
 
 test('E2B sandbox API provisions, binds exclusively, checks health and controls lifecycle', async () => {
@@ -54,18 +65,30 @@ test('E2B sandbox API provisions, binds exclusively, checks health and controls 
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
   let attachedId: string | null = null;
+  let attachedRef: string | null = null;
+  const credentials = { domain: 'e2b.example', apiKey: 'test-key' };
   const request = (path: string, method: string, body?: unknown) => fetch(`${base}${path}`, {
     method, ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   });
   try {
-    const created = await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Dedicated', sharing: 'dedicated' });
+    assert.equal((await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Missing URL', sharing: 'shared',
+      ...credentials })).status, 400);
+    const created = await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Dedicated', sharing: 'dedicated',
+      ...credentials, repositoryUrl: 'https://github.com/example/repo.git' });
     assert.equal(created.status, 201);
-    const sandbox = await created.json() as { id: string; providerSandboxId: string; status: string; credentialEnvVar: string };
+    const sandbox = await created.json() as { id: string; providerSandboxId: string; status: string;
+      credentialEnvVar: string | null; credentialRef: string; domain: string; repositoryUrl: string };
     assert.equal(sandbox.providerSandboxId, 'created-e2b-id');
-    assert.equal(sandbox.credentialEnvVar, 'E2B_API_KEY');
+    assert.equal(sandbox.credentialEnvVar, null);
+    assert.equal(sandbox.domain, 'e2b.example');
+    assert.match(sandbox.credentialRef, /^e2b_/);
+    assert.equal(sandbox.repositoryUrl, 'https://github.com/example/repo.git');
+    assert.equal(JSON.stringify(sandbox).includes('test-key'), false);
     assert.equal(sandbox.status, 'running');
+    assert(sdk.calls.includes('clone:https://github.com/example/repo.git:/home/user/repo'));
+    assert(sdk.calls.includes('command:gh auth status'));
     assert.equal((await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Duplicate', sharing: 'shared',
-      providerSandboxId: 'created-e2b-id' })).status, 409);
+      ...credentials, providerSandboxId: 'created-e2b-id' })).status, 409);
 
     const first = await request('/requirements', 'POST', { title: 'First', description: 'Uses E2B',
       provider: 'native-agent', sandboxId: sandbox.id });
@@ -85,9 +108,11 @@ test('E2B sandbox API provisions, binds exclusively, checks health and controls 
     assert.equal((await request(`/sandboxes/${sandbox.id}`, 'DELETE')).status, 204);
     assert.equal(sdk.killed, true);
     const attached = await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Attached', sharing: 'shared',
-      providerSandboxId: 'external-e2b-id' });
+      ...credentials, providerSandboxId: 'external-e2b-id' });
     assert.equal(attached.status, 201);
-    attachedId = (await attached.json() as { id: string }).id;
+    const attachedRecord = await attached.json() as { id: string; credentialRef: string };
+    attachedId = attachedRecord.id;
+    attachedRef = attachedRecord.credentialRef;
     for (const number of [1, 2]) {
       assert.equal((await request('/requirements', 'POST', { title: `Shared ${number}`, description: 'Same E2B',
         provider: 'native-agent', sandboxId: attachedId })).status, 201);
@@ -101,8 +126,47 @@ test('E2B sandbox API provisions, binds exclusively, checks health and controls 
       try {
         assert.equal(reopened.getSandbox(attachedId)?.providerSandboxId, 'external-e2b-id');
         assert.equal(reopened.getSandbox(attachedId)?.sharing, 'shared');
+        assert.equal(reopened.getSandbox(attachedId)?.domain, 'e2b.example');
+        assert.equal(reopened.getSandbox(attachedId)?.credentialRef, attachedRef);
       } finally { reopened.close(); }
+      const secrets = new E2BCredentialStore(e2bCredentialsPath(databasePath));
+      try { assert.equal(secrets.read(attachedRef!), 'test-key'); }
+      finally { secrets.close(); }
+      assert.equal(statSync(e2bCredentialsPath(databasePath)).mode & 0o777, 0o600);
+      assert.equal(readFileSync(databasePath).includes('test-key'), false);
+      const restarted = new AgentManager({ workspaceRoot: directory, databasePath,
+        store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+        logger: createLogger({ level: 'silent' }) });
+      try { assert.equal((await restarted.checkSandboxHealth(attachedId)).status, 'running'); }
+      finally { await restarted.close(); }
     }
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('E2B provisioning rejects missing remote gh and removes the new sandbox', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-gh-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const sdk = fakeE2B({ missingGh: true });
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    logger: createLogger({ level: 'silent' }) });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+    const response = await fetch(`${base}/sandboxes`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'e2b', name: 'Missing gh', sharing: 'shared', domain: 'e2b.example',
+        apiKey: 'test-key', repositoryUrl: 'https://github.com/example/repo.git' }) });
+    assert.equal(response.status, 400);
+    const body = await response.text();
+    assert.match(body, /git and gh installed/);
+    assert.equal(body.includes('test-key'), false);
+    assert.equal(sdk.killed, true);
+    assert.equal(manager.listSandboxes().length, 1);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -120,8 +184,34 @@ test('legacy sandbox records survive E2B schema migration', () => {
     const store = new SqliteAgentManagerStore(databasePath);
     try {
       assert.deepEqual(store.getSandbox('old'), { id: 'old', name: 'Existing', kind: 'local-sandbox',
-        cwd: '/tmp/existing', providerSandboxId: null, credentialEnvVar: null, template: null,
+        cwd: '/tmp/existing', providerSandboxId: null, credentialEnvVar: null, domain: null,
+        credentialRef: null, repositoryUrl: null, template: null,
         sharing: null, status: 'unknown', checkedAt: null, createdAt: '2026-01-01T00:00:00Z' });
+    } finally { store.close(); }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('E2B records created before per-sandbox credentials gain nullable settings', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-settings-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(`CREATE TABLE sandboxes (id TEXT PRIMARY KEY, name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('local', 'local-sandbox', 'e2b')), cwd TEXT NOT NULL,
+    provider_sandbox_id TEXT, credential_env_var TEXT, template TEXT, sharing TEXT,
+    status TEXT NOT NULL, checked_at TEXT, created_at TEXT NOT NULL) STRICT`);
+  legacy.prepare('INSERT INTO sandboxes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+    'old-e2b', 'Existing E2B', 'e2b', '/home/user/repo', 'provider-id', 'E2B_API_KEY',
+    'base', 'shared', 'running', null, '2026-01-01T00:00:00Z');
+  legacy.close();
+  try {
+    const store = new SqliteAgentManagerStore(databasePath);
+    try {
+      const sandbox = store.getSandbox('old-e2b');
+      assert.equal(sandbox?.providerSandboxId, 'provider-id');
+      assert.equal(sandbox?.credentialEnvVar, 'E2B_API_KEY');
+      assert.equal(sandbox?.domain, null);
+      assert.equal(sandbox?.credentialRef, null);
+      assert.equal(sandbox?.repositoryUrl, null);
     } finally { store.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

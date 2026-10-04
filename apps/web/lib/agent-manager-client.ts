@@ -77,6 +77,9 @@ export interface SandboxDto {
   cwd: string;
   providerSandboxId: string | null;
   credentialEnvVar: string | null;
+  domain: string | null;
+  credentialRef: string | null;
+  repositoryUrl: string | null;
   template: string | null;
   sharing: 'shared' | 'dedicated' | null;
   status: 'running' | 'paused' | 'terminated' | 'unreachable' | 'unknown';
@@ -459,8 +462,8 @@ export class AgentManagerClient {
     return response.items;
   }
 
-  createSandbox(input: { name: string; sharing: 'shared' | 'dedicated'; providerSandboxId?: string;
-    template?: string; cwd?: string }): Promise<SandboxDto> {
+  createSandbox(input: { name: string; sharing: 'shared' | 'dedicated'; domain: string; apiKey: string;
+    providerSandboxId?: string; repositoryUrl?: string; template?: string; cwd?: string }): Promise<SandboxDto> {
     return this.request('/api/sandboxes', { method: 'POST', body: JSON.stringify({ kind: 'e2b', ...input }) });
   }
 

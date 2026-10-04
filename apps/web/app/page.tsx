@@ -3357,7 +3357,9 @@ function Dashboard() {
         return typeof entry === 'string' ? entry.trim() : '';
       };
       const sandbox = await client.createSandbox({ name: name.trim(), sharing,
+        domain: value('domain'), apiKey: value('apiKey'),
         ...(value('providerSandboxId') ? { providerSandboxId: value('providerSandboxId') } : {}),
+        ...(value('repositoryUrl') ? { repositoryUrl: value('repositoryUrl') } : {}),
         ...(value('template') ? { template: value('template') } : {}),
         ...(value('cwd') ? { cwd: value('cwd') } : {}),
       });
@@ -3706,11 +3708,14 @@ function Dashboard() {
                 <NativeSelectOption value="dedicated">{t('Dedicated sandbox')}</NativeSelectOption>
               </NativeSelect>
               <Input name="providerSandboxId" aria-label={t('Existing E2B sandbox ID')} placeholder={t('Existing E2B sandbox ID (optional)')} />
+              <Input name="domain" required aria-label={t('E2B domain')} placeholder={t('E2B domain (E2B_DOMAIN)')} />
+              <Input name="apiKey" type="password" required autoComplete="off" aria-label={t('E2B API key')} placeholder={t('E2B API key (E2B_API_KEY)')} />
+              <Input name="repositoryUrl" aria-label={t('Repository HTTPS URL')} placeholder={t('Repository HTTPS URL (required for new sandbox)')} />
               <Input name="template" aria-label={t('E2B template')} placeholder={t('E2B template (default: base)')} />
-              <Input name="cwd" aria-label={t('Remote working directory')} placeholder={t('Remote working directory (default: /home/user)')} />
+              <Input name="cwd" aria-label={t('Remote working directory')} placeholder={t('Remote working directory (default: /home/user/repo)')} />
               <Button type="submit" disabled={connection !== 'online' || creatingSandbox}><Plus data-icon="inline-start" />{t('Provision or attach E2B sandbox')}</Button>
             </form>
-            <div className="mb-4 text-xs text-muted-foreground">{t('Set E2B_API_KEY in the Agent Manager environment. Attach an existing sandbox by entering its ID.')}</div>
+            <div className="mb-4 text-xs text-muted-foreground">{t('Enter E2B_DOMAIN and E2B_API_KEY. New sandboxes clone the repository URL; attached sandboxes need an existing Git checkout. Git, gh, and gh authentication must be available remotely.')}</div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {sandboxes.filter((sandbox) => `${sandbox.name} ${sandbox.cwd} ${sandbox.providerSandboxId ?? ''}`.toLowerCase().includes(query.trim().toLowerCase())).map((sandbox) => (
                 <div key={sandbox.id} className="rounded-xl border border-border bg-card p-4">
@@ -3722,7 +3727,8 @@ function Dashboard() {
                   } · {sandbox.sharing === 'dedicated' ? t('Dedicated sandbox') : t('Shared sandbox')}</div> : null}
                   {sandbox.providerSandboxId ? <div className="mt-2 break-all font-mono text-[10px] text-muted-foreground">{sandbox.providerSandboxId}</div> : null}
                   <div className="mt-2 break-all font-mono text-[10px] text-muted-foreground">{sandbox.cwd}</div>
-                  {sandbox.kind === 'e2b' ? <div className="mt-1 text-[10px] text-muted-foreground">{sandbox.template} · {sandbox.credentialEnvVar}</div> : null}
+                  {sandbox.kind === 'e2b' ? <div className="mt-1 break-all text-[10px] text-muted-foreground">{sandbox.template} · {sandbox.domain} · {sandbox.credentialRef ?? sandbox.credentialEnvVar}</div> : null}
+                  {sandbox.repositoryUrl ? <div className="mt-1 break-all text-[10px] text-muted-foreground">{sandbox.repositoryUrl}</div> : null}
                   {sandbox.checkedAt ? <div className="mt-1 text-[10px] text-muted-foreground">{t('Last checked')}: {new Date(sandbox.checkedAt).toLocaleString(locale)}</div> : null}
                   <div className="mt-2 text-xs text-muted-foreground">{requirements.filter((item) => item.provider === 'native-agent' && (item.sandboxId ?? 'local') === sandbox.id).length} {t('Requirements')}</div>
                   {sandbox.kind === 'e2b' ? <div className="mt-3 flex flex-wrap gap-2">

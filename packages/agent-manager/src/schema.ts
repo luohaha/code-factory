@@ -18,6 +18,9 @@ export const sandboxesTableSql = `CREATE TABLE IF NOT EXISTS sandboxes (
     cwd TEXT NOT NULL,
     provider_sandbox_id TEXT,
     credential_env_var TEXT,
+    domain TEXT,
+    credential_ref TEXT,
+    repository_url TEXT,
     template TEXT,
     sharing TEXT CHECK (sharing IN ('shared', 'dedicated')),
     status TEXT NOT NULL DEFAULT 'unknown' CHECK (status IN ('running', 'paused', 'terminated', 'unreachable', 'unknown')),
@@ -208,6 +211,6 @@ export const schemaStatements = [
 export const postMigrationSchemaStatements = [
   `CREATE INDEX IF NOT EXISTS requirements_parent_updated
     ON requirements (parent_requirement_id, updated_at DESC)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS sandboxes_provider_id
-    ON sandboxes (provider_sandbox_id) WHERE provider_sandbox_id IS NOT NULL`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS sandboxes_provider_identity
+    ON sandboxes (COALESCE(domain, 'e2b.app'), provider_sandbox_id) WHERE provider_sandbox_id IS NOT NULL`,
 ] as const;

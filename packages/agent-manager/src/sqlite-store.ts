@@ -295,6 +295,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     this.migrateLegacySchema();
     this.migrateNativeAgentProvider();
     this.migrateE2BSandboxes();
+    this.migrateE2BSettings();
     for (const statement of postMigrationSchemaStatements) this.#db.exec(statement);
     this.#ftsAvailable = this.initializeFullTextSearch();
     this.backfillSearchDocuments();
@@ -307,17 +308,19 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
 
   createSandbox(sandbox: Sandbox): Sandbox {
     this.#db.prepare(`INSERT INTO sandboxes
-      (id, name, kind, cwd, provider_sandbox_id, credential_env_var, template, sharing, status, checked_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(sandbox.id, sandbox.name, sandbox.kind, sandbox.cwd,
-      sandbox.providerSandboxId, sandbox.credentialEnvVar, sandbox.template, sandbox.sharing, sandbox.status,
+      (id, name, kind, cwd, provider_sandbox_id, credential_env_var, domain, credential_ref, repository_url, template, sharing, status, checked_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(sandbox.id, sandbox.name, sandbox.kind, sandbox.cwd,
+      sandbox.providerSandboxId, sandbox.credentialEnvVar, sandbox.domain, sandbox.credentialRef, sandbox.repositoryUrl,
+      sandbox.template, sandbox.sharing, sandbox.status,
       sandbox.checkedAt, sandbox.createdAt);
     return sandbox;
   }
 
   updateSandbox(sandbox: Sandbox): Sandbox {
     const changed = this.#db.prepare(`UPDATE sandboxes SET name = ?, cwd = ?, provider_sandbox_id = ?, credential_env_var = ?,
-      template = ?, sharing = ?, status = ?, checked_at = ? WHERE id = ?`).run(sandbox.name, sandbox.cwd,
-      sandbox.providerSandboxId, sandbox.credentialEnvVar, sandbox.template, sandbox.sharing, sandbox.status,
+      domain = ?, credential_ref = ?, repository_url = ?, template = ?, sharing = ?, status = ?, checked_at = ? WHERE id = ?`).run(sandbox.name, sandbox.cwd,
+      sandbox.providerSandboxId, sandbox.credentialEnvVar, sandbox.domain, sandbox.credentialRef, sandbox.repositoryUrl,
+      sandbox.template, sandbox.sharing, sandbox.status,
       sandbox.checkedAt, sandbox.id);
     if (!changed.changes) throw new StoreNotFoundError(`Sandbox ${sandbox.id} not found`);
     return sandbox;
@@ -333,6 +336,9 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       id: String(row.id), name: String(row.name), kind: String(row.kind) as Sandbox['kind'],
       cwd: String(row.cwd), providerSandboxId: row.provider_sandbox_id === null ? null : String(row.provider_sandbox_id),
       credentialEnvVar: row.credential_env_var === null ? null : String(row.credential_env_var),
+      domain: row.domain === null ? null : String(row.domain),
+      credentialRef: row.credential_ref === null ? null : String(row.credential_ref),
+      repositoryUrl: row.repository_url === null ? null : String(row.repository_url),
       template: row.template === null ? null : String(row.template),
       sharing: row.sharing === null ? null : String(row.sharing) as Sandbox['sharing'],
       status: String(row.status) as Sandbox['status'],
@@ -366,6 +372,15 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     if (this.#db.prepare('PRAGMA foreign_key_check').all().length > 0) {
       throw new Error('E2B sandbox migration violated a foreign key');
     }
+  }
+
+  private migrateE2BSettings(): void {
+    const columns = new Set((this.#db.prepare('PRAGMA table_info(sandboxes)').all() as Row[])
+      .map((column) => String(column.name)));
+    for (const name of ['domain', 'credential_ref', 'repository_url']) {
+      if (!columns.has(name)) this.#db.exec(`ALTER TABLE sandboxes ADD COLUMN ${name} TEXT`);
+    }
+    this.#db.exec('DROP INDEX IF EXISTS sandboxes_provider_id');
   }
 
   createRequirement(input: CreateRequirementRecord): RequirementWithSession {

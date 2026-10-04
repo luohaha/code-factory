@@ -7,18 +7,20 @@ import {
   type ExecutionEnv, type FileInfo, type FileKind, type Result,
   type ShellExecOptions, type ShellExecResult, type TextLine, type TextLineReader,
 } from '@earendil-works/pi-durable/env';
-import { CommandExitError, FileNotFoundError, FileType, Sandbox, TimeoutError } from 'e2b';
-import type { SandboxInfo, SandboxOpts } from 'e2b';
+import { CommandExitError, FileNotFoundError, FileType, Sandbox, SandboxNotFoundError, TimeoutError } from 'e2b';
+import type { SandboxApiOpts, SandboxInfo, SandboxOpts } from 'e2b';
 
-export type E2BHandle = Pick<Sandbox, 'sandboxId' | 'files' | 'commands'>;
+export type E2BHandle = Pick<Sandbox, 'sandboxId' | 'files' | 'commands' | 'git'>;
+export interface E2BCredentials { domain: string; apiKey: string }
+export class E2BProviderError extends Error {}
 
 /** Narrow SDK seam so the same adapter is exercised by deterministic provider tests. */
 export interface E2BClient {
   create(options: SandboxOpts): Promise<E2BHandle>;
-  connect(id: string, options: { apiKey: string }): Promise<E2BHandle>;
-  getInfo(id: string, options: { apiKey: string }): Promise<SandboxInfo>;
-  pause(id: string, options: { apiKey: string }): Promise<boolean>;
-  kill(id: string, options: { apiKey: string }): Promise<boolean>;
+  connect(id: string, options: SandboxApiOpts): Promise<E2BHandle>;
+  getInfo(id: string, options: SandboxApiOpts): Promise<SandboxInfo>;
+  pause(id: string, options: SandboxApiOpts): Promise<boolean>;
+  kill(id: string, options: SandboxApiOpts): Promise<boolean>;
 }
 
 export const e2bClient: E2BClient = {
@@ -30,53 +32,54 @@ export const e2bClient: E2BClient = {
 };
 
 export class E2BSandboxService {
-  constructor(
-    readonly client: E2BClient = e2bClient,
-    readonly credential: () => string | undefined = () => process.env.E2B_API_KEY,
-  ) {}
+  constructor(readonly client: E2BClient = e2bClient) {}
 
-  apiKey(): string {
-    const key = this.credential()?.trim();
-    if (!key) throw new TypeError('E2B_API_KEY is required for cloud sandboxes');
-    return key;
+  async create(template: string, credentials: E2BCredentials): Promise<E2BHandle> {
+    try { return await this.client.create({ template, ...credentials, timeoutMs: 600_000,
+      lifecycle: { onTimeout: 'pause', autoResume: true } }); }
+    catch { throw new E2BProviderError('E2B sandbox creation failed; check the domain, API key, and template'); }
   }
 
-  async create(template = 'base'): Promise<E2BHandle> {
-    return this.client.create({ template, apiKey: this.apiKey(), timeoutMs: 600_000,
-      lifecycle: { onTimeout: 'pause', autoResume: true } });
+  async connect(id: string, credentials: E2BCredentials): Promise<E2BHandle> {
+    try { return await this.client.connect(id, credentials); }
+    catch { throw new E2BProviderError('E2B sandbox connection failed; check the domain, API key, and sandbox ID'); }
   }
 
-  async connect(id: string): Promise<E2BHandle> {
-    return this.client.connect(id, { apiKey: this.apiKey() });
+  async getInfo(id: string, credentials: E2BCredentials): Promise<SandboxInfo> {
+    try { return await this.client.getInfo(id, credentials); }
+    catch (error) {
+      if (error instanceof SandboxNotFoundError) {
+        const missing = new Error('E2B sandbox not found');
+        missing.name = 'SandboxNotFoundError';
+        throw missing;
+      }
+      throw new E2BProviderError('E2B sandbox status lookup failed');
+    }
   }
 
-  async getInfo(id: string): Promise<SandboxInfo> {
-    return this.client.getInfo(id, { apiKey: this.apiKey() });
+  async pause(id: string, credentials: E2BCredentials): Promise<boolean> {
+    try { return await this.client.pause(id, credentials); }
+    catch { throw new E2BProviderError('E2B sandbox pause failed'); }
   }
 
-  async pause(id: string): Promise<boolean> {
-    return this.client.pause(id, { apiKey: this.apiKey() });
-  }
-
-  async kill(id: string): Promise<boolean> {
-    return this.client.kill(id, { apiKey: this.apiKey() });
+  async kill(id: string, credentials: E2BCredentials): Promise<boolean> {
+    try { return await this.client.kill(id, credentials); }
+    catch { throw new E2BProviderError('E2B sandbox deletion failed'); }
   }
 }
 
 function fileError(error: unknown, path?: string): FileError {
   if (error instanceof FileError) return error;
-  const cause = error instanceof Error ? error : new Error(String(error));
-  if (cause.name === 'AbortError') return new FileError('aborted', cause.message, path, cause);
-  if (error instanceof FileNotFoundError) return new FileError('not_found', cause.message, path, cause);
-  return new FileError('unknown', cause.message, path, cause);
+  if (error instanceof Error && error.name === 'AbortError') return new FileError('aborted', 'E2B file operation aborted', path);
+  if (error instanceof FileNotFoundError) return new FileError('not_found', 'E2B file not found', path);
+  return new FileError('unknown', 'E2B file operation failed', path);
 }
 
 function executionError(error: unknown): ExecutionError {
   if (error instanceof ExecutionError) return error;
-  const cause = error instanceof Error ? error : new Error(String(error));
-  if (error instanceof TimeoutError) return new ExecutionError('timeout', cause.message, cause);
-  if (cause.name === 'AbortError') return new ExecutionError('aborted', cause.message, cause);
-  return new ExecutionError('unknown', cause.message, cause);
+  if (error instanceof TimeoutError) return new ExecutionError('timeout', 'E2B command timed out');
+  if (error instanceof Error && error.name === 'AbortError') return new ExecutionError('aborted', 'E2B command aborted');
+  return new ExecutionError('unknown', 'E2B command failed');
 }
 
 function kind(type: FileType | undefined): FileKind {
@@ -91,8 +94,9 @@ export class E2BExecutionEnv implements ExecutionEnv {
   readonly id: string;
   cwd: string;
 
-  constructor(readonly sandbox: E2BHandle, cwd: string, readonly commandEnv: Readonly<Record<string, string>> = {}) {
-    this.id = `e2b:${sandbox.sandboxId}`;
+  constructor(readonly sandbox: E2BHandle, cwd: string, readonly commandEnv: Readonly<Record<string, string>> = {},
+    domain = 'e2b.app') {
+    this.id = `e2b:${domain}:${sandbox.sandboxId}`;
     this.cwd = cwd;
   }
 

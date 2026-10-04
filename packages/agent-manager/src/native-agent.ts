@@ -14,7 +14,7 @@ import { CodingTools } from '@earendil-works/pi-durable/tools';
 
 import { runCodeFactoryCli } from './code-factory-cli.js';
 import { createNativeModels, NativeCredentialStore, nativeAuthDatabasePath } from './native-auth.js';
-import { E2BExecutionEnv, E2BSandboxService } from './e2b-execution-env.js';
+import { E2BExecutionEnv, E2BSandboxService, type E2BCredentials } from './e2b-execution-env.js';
 import type { NormalizedAgentEvent } from './adapters/types.js';
 import type { AgentReasoningEffort, RunOutcome } from './types.js';
 
@@ -31,7 +31,7 @@ export interface NativeRunInput {
   model: string | null;
   reasoningEffort: AgentReasoningEffort | null;
   cwd: string;
-  sandbox?: { kind: 'e2b'; providerSandboxId: string };
+  sandbox?: { kind: 'e2b'; providerSandboxId: string; credentials: E2BCredentials };
   environment: Readonly<Record<string, string>>;
   instructions: string;
   signal: AbortSignal;
@@ -140,10 +140,10 @@ export class NativeAgentService {
       env: async ({ conversationId, cwd }) => {
         const sandbox = this.#sandboxes.get(conversationId);
         if (sandbox) {
-          const handle = await this.#e2b.connect(sandbox.providerSandboxId);
+          const handle = await this.#e2b.connect(sandbox.providerSandboxId, sandbox.credentials);
           const commandEnv = Object.fromEntries(['GH_TOKEN', 'GITHUB_TOKEN'].flatMap((name) =>
             process.env[name] ? [[name, process.env[name]!]] : []));
-          return new E2BExecutionEnv(handle, cwd ?? process.cwd(), commandEnv);
+          return new E2BExecutionEnv(handle, cwd ?? process.cwd(), commandEnv, sandbox.credentials.domain);
         }
         return new NodeExecutionEnv({ cwd: cwd ?? process.cwd(), shellEnv: { ...process.env, ...this.#environments.get(conversationId) } });
       },
@@ -175,6 +175,7 @@ export class NativeAgentService {
         return admitted;
       },
     });
+    let activeConversationId: ConversationId | undefined;
     try {
       const harness = await this.#open();
       const [provider, modelId] = input.model?.includes('/')
@@ -196,6 +197,7 @@ export class NativeAgentService {
       }
       conversation ??= await harness.createConversation({ ownership: { kind: 'ownerless' }, agent }, CONTEXT);
       if (!conversation) throw new Error('Native conversation is missing');
+      activeConversationId = conversation.id;
       this.#environments.set(conversation.id, input.environment);
       this.#sandboxes.set(conversation.id, input.sandbox);
       if (input.nativeSessionId) await conversation.configure(agent, CONTEXT);
@@ -267,6 +269,10 @@ export class NativeAgentService {
       acceptingSteers = false;
       resolveReady(null);
       this.#active.delete(input.requirementId);
+      if (activeConversationId !== undefined) {
+        this.#environments.delete(activeConversationId);
+        this.#sandboxes.delete(activeConversationId);
+      }
     }
   }
 

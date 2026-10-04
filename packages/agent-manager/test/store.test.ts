@@ -40,7 +40,8 @@ test('native requirements can share a persisted sandbox', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {
     const sandbox = store.createSandbox({ id: 'sbx-shared', name: 'Shared E2B', kind: 'e2b', cwd: '/home/user/repo',
-      providerSandboxId: 'provider-shared', credentialEnvVar: 'E2B_API_KEY', template: 'base', sharing: 'shared',
+      providerSandboxId: 'provider-shared', credentialEnvVar: null, domain: 'e2b.example',
+      credentialRef: 'e2b-test', repositoryUrl: 'https://github.com/example/repo.git', template: 'base', sharing: 'shared',
       status: 'running', checkedAt: now, createdAt: now });
     for (const number of [1, 2]) {
       const requirement = store.createRequirement({ requirementId: `req-native-${number}`, sessionId: `ses-native-${number}`,
