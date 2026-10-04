@@ -52,7 +52,7 @@ Multiple Native Agents may select one `shared` sandbox or different sandboxes. A
 
 ## Steering and stopping
 
-A normal reply is appended to the Requirement message stream first. New messages arriving during a Run queue without implicitly interrupting it. When a human explicitly requests Steering and newer input exists, Agent Manager calls `NativeAgentService.steer()`, submitting the new direction to the active conversation with pi-durable's `whenBusy: "steer"`. The model receives that direction after the current tool round, and the same `AgentRun` continues. An explicit Stop Run aborts the conversation. Only a successful Run consumes its original input and accepted Steering messages.
+A normal reply is appended to the Requirement message stream first. New messages arriving during a Run queue without implicitly interrupting it. When a human explicitly requests Steering and newer input exists, Agent Manager queues it even if the Harness is still opening. Once the first submission is ready, NativeAgentService submits the new direction with pi-durable's `whenBusy: "steer"`. Attachment paths and metadata use the same message format as a new RD Run. Agent Manager advances the Run's input cursor only after pi-durable accepts that submission; an input that cannot be steered stays queued for a later Run. The model receives accepted Steering after the current tool round, and the same `AgentRun` continues. An explicit Stop Run aborts the conversation; if it arrives before the first submission, NativeAgentService skips that submission. Only a successful Run consumes its original input and accepted Steering messages.
 
 ## Native tools and the control-plane boundary
 

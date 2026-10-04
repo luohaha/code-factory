@@ -51,7 +51,7 @@ flowchart LR
 
 At startup, Agent Manager fixes the workspace to `realpath(process.cwd())`. Every RD and Reviewer child process uses that directory and inherits Agent Manager's environment. Codex and Claude Code load their provider-specific project/user instructions, Skills, plugins, configuration, and enabled local memory features according to their native discovery rules.
 
-Native RD conversations use pi-durable and a separate workspace SQLite file. Each Requirement stores its pi-durable conversation ID as the native session ID; forks create a pi-durable fork. Human steering submits a `whenBusy: "steer"` input into an active conversation, so it joins the current tool round. Native coding tools run through pi-durable `ExecutionEnv`. Code Factory control-plane actions are named native tools that call the existing CLI implementation with the Requirement's session context.
+Native RD conversations use pi-durable and a separate workspace SQLite file. Each Requirement stores its pi-durable conversation ID as the native session ID; forks create a pi-durable fork. Human steering waits for native conversation setup, then submits numbered messages and attachment details with `whenBusy: "steer"` so accepted input joins the current Run. The Run input boundary advances after submission succeeds; input that cannot be steered remains queued. Stop Run before the initial submission prevents model or tool execution. Native coding tools run through pi-durable `ExecutionEnv`. Code Factory control-plane actions are named native tools that call the existing CLI implementation with the Requirement's session context.
 
 A Native Agent's Local execution uses the managed workspace directly. Cloud sandbox execution will use an E2B-backed `ExecutionEnv`; its sandbox records are durable so multiple Requirements can select the same sandbox.
 
@@ -139,7 +139,7 @@ The system does not maintain a separate RD message-queue table. `requirement_mes
 
 Each message has a monotonically increasing `sequence` and a `deliverToRd` flag. When an RD Run starts, it captures the pending external-message range as `inputFromSequence..inputToSequence`:
 
-1. If the Session is already running, new messages are only appended and never interrupt it; a human may then explicitly click **Steering** to interrupt the active Run and deliver newer input. The server rejects steering when the active Run already contains the latest reply. **Stop Run** remains available for an intentional pause without newer input.
+1. If the Session is already running, new messages are only appended and never interrupt it; a human may then explicitly click **Steering** to deliver newer input. Native Agent steers within the current Run; headless providers stop and resume in a new Run. The server rejects steering when the active Run already contains the latest reply. **Stop Run** remains available for an intentional pause without newer input.
 2. After a successful Run, the consumption cursor advances only to the `inputToSequence` captured when that Run started.
 3. If external messages remain, Agent Manager automatically resumes the same RD Session.
 4. Multiple messages are delivered together in order during the next Run.

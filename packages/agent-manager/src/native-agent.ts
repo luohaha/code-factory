@@ -46,7 +46,7 @@ export class NativeAgentService {
   readonly #models: MutableModels | null;
   #credentials: NativeCredentialStore | null = null;
   readonly #environments = new Map<ConversationId, Readonly<Record<string, string>>>();
-  readonly #active = new Map<string, { submit: (message: string) => Promise<void> }>();
+  readonly #active = new Map<string, { submit: (message: string) => Promise<boolean> }>();
 
   constructor(databasePath: string, models?: MutableModels) {
     this.#databasePath = databasePath;
@@ -140,11 +140,27 @@ export class NativeAgentService {
   async steer(requirementId: string, message: string): Promise<boolean> {
     const active = this.#active.get(requirementId);
     if (!active) return false;
-    await active.submit(message);
-    return true;
+    return active.submit(message);
   }
 
   async run(input: NativeRunInput): Promise<RunOutcome> {
+    type SteerSubmit = (message: string) => Promise<void>;
+    let resolveReady!: (submit: SteerSubmit | null) => void;
+    const ready = new Promise<SteerSubmit | null>((resolve) => { resolveReady = resolve; });
+    let acceptingSteers = true;
+    let steering = Promise.resolve();
+    this.#active.set(input.requirementId, {
+      submit: (message) => {
+        const admitted = steering.then(async () => {
+          const submit = await ready;
+          if (!acceptingSteers || input.signal.aborted || !submit) return false;
+          await submit(message);
+          return true;
+        });
+        steering = admitted.then(() => undefined, () => undefined);
+        return admitted;
+      },
+    });
     try {
       const harness = await this.#open();
       const [provider, modelId] = input.model?.includes('/')
@@ -191,16 +207,31 @@ export class NativeAgentService {
           if (event.type === 'tool_execution_end') input.onEvent({ kind: 'other', traces: [{ kind: 'tool_result', status: 'completed', title: `Result ${event.toolName}`, toolName: event.toolName, toolCallId: event.toolCallId }], raw: { type: event.type } });
         }
       });
-      const onAbort = () => { void conversation.abort(CONTEXT); };
+      let submissionStarted = false;
+      const onAbort = () => { if (submissionStarted) void conversation.abort(CONTEXT); };
       input.signal.addEventListener('abort', onAbort, { once: true });
-      if (input.signal.aborted) onAbort();
       armTimeout();
       try {
+        if (input.signal.aborted) return { status: 'cancelled', exitCode: null, nativeSessionId: String(conversation.id), finalMessage: null, error: 'Agent Run interrupted by human' };
+        if (timedOut) return { status: 'timed_out', exitCode: null, nativeSessionId: String(conversation.id), finalMessage: null, error: 'Native agent timed out after inactivity' };
+        submissionStarted = true;
         const submission = await conversation.submit({ type: 'input', content: input.prompt }, CONTEXT);
-        this.#active.set(input.requirementId, {
-          submit: async (message) => { await conversation.submit({ type: 'input', content: message, whenBusy: 'steer' }, CONTEXT); },
-        });
-        const settled = await submission.wait(CONTEXT);
+        const steeredSubmissions: Array<typeof submission> = [];
+        if (input.signal.aborted || timedOut) {
+          await conversation.abort(CONTEXT);
+          resolveReady(null);
+        } else {
+          resolveReady(async (message) => {
+            const steered = await conversation.submit({ type: 'input', content: message, whenBusy: 'steer' }, CONTEXT);
+            steeredSubmissions.push(steered);
+            if (input.signal.aborted || timedOut) await conversation.abort(CONTEXT);
+          });
+        }
+        await steering;
+        let settled = await submission.wait(CONTEXT);
+        acceptingSteers = false;
+        await steering;
+        for (const steered of steeredSubmissions) settled = await steered.wait(CONTEXT);
         if (timedOut) return { status: 'timed_out', exitCode: null, nativeSessionId: String(conversation.id), finalMessage: null, error: 'Native agent timed out after inactivity' };
         if (input.signal.aborted) return { status: 'cancelled', exitCode: null, nativeSessionId: String(conversation.id), finalMessage: null, error: 'Agent Run interrupted by human' };
         if (settled.status !== 'done' || settled.type !== 'input') return { status: 'failed', exitCode: null, nativeSessionId: String(conversation.id), finalMessage: null, error: 'Native submission was unanswered' };
@@ -212,12 +243,15 @@ export class NativeAgentService {
       } finally {
         input.signal.removeEventListener('abort', onAbort);
         if (timer) clearTimeout(timer);
-        this.#active.delete(input.requirementId);
         await stream.stop();
       }
     } catch (error) {
-      return { status: 'failed', exitCode: null, nativeSessionId: input.nativeSessionId, finalMessage: null,
+      return { status: input.signal.aborted ? 'cancelled' : 'failed', exitCode: null, nativeSessionId: input.nativeSessionId, finalMessage: null,
         error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      acceptingSteers = false;
+      resolveReady(null);
+      this.#active.delete(input.requirementId);
     }
   }
 

@@ -104,6 +104,71 @@ test('native steering joins an active tool round', async () => {
   }
 });
 
+test('Stop Run during native setup never submits the initial input', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-stop-setup-'));
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  faux.setResponses([fauxAssistantMessage('Unexpected model call')]);
+  const service = new NativeAgentService(join(directory, 'native.sqlite'), models);
+  const controller = new AbortController();
+  try {
+    const run = service.run({ requirementId: 'req_stop', sessionId: 'ses_stop', nativeSessionId: null,
+      forkSourceNativeSessionId: null, prompt: 'Do work', model: 'faux/faux-1',
+      reasoningEffort: null, cwd: directory, environment: {}, instructions: 'Test agent',
+      signal: controller.signal, timeoutMs: 30_000, onNativeSession: () => undefined, onEvent: () => undefined });
+    controller.abort();
+    const outcome = await run;
+    assert.equal(outcome.status, 'cancelled');
+    assert.equal(faux.state.callCount, 0);
+    assert.equal(await service.steer('req_stop', 'Too late'), false);
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('native Steering during setup delivers attachment-only input in the same Run', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-steer-setup-'));
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const service = new NativeAgentService(join(directory, 'native.sqlite'), models);
+  const store = new SqliteAgentManagerStore(':memory:');
+  const manager = new AgentManager({ workspaceRoot: directory, store, nativeService: service,
+    logger: createLogger({ level: 'silent' }) });
+  let sawAttachment = false;
+  faux.setResponses([
+    fauxAssistantMessage(fauxToolCall('bash', { command: 'sleep 0.2' }), { stopReason: 'toolUse' }),
+    (context) => {
+      const messages = JSON.stringify(context.messages);
+      sawAttachment = messages.includes('[Attachment only]') && messages.includes('steering-notes.txt');
+      return fauxAssistantMessage('Steered with attachment');
+    },
+  ]);
+  try {
+    const requirement = manager.createRequirement({ title: 'Attachment steering', description: 'Implement it',
+      provider: 'native-agent', model: 'faux/faux-1' });
+    const run = manager.runRequirement(requirement.id);
+    const attachment = manager.uploadMessageAttachment(requirement.id, {
+      fileName: 'steering-notes.txt', data: Buffer.from('New direction'),
+    });
+    const reply = manager.postHumanMessage(requirement.id, '', [attachment.id]);
+    assert.equal(reply.queued, true);
+    manager.interruptRdRun(requirement.id, 'steer');
+    const completed = await run;
+    assert.equal(completed.session.state, 'waiting_human');
+    assert.equal(sawAttachment, true);
+    assert.equal(manager.listRuns(requirement.id).length, 1);
+    const recorded = manager.listRuns(requirement.id)[0];
+    assert.equal(recorded?.status, 'succeeded');
+    assert.equal(recorded.inputToSequence, reply.message.sequence);
+  } finally {
+    await manager.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('native fork starts a separate conversation with source context', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'code-factory-fork-'));
   const faux = fauxProvider();

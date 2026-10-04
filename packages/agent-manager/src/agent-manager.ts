@@ -171,7 +171,7 @@ export class AgentManager extends EventEmitter {
   readonly #maxOutputBytes: number;
   readonly #agentCliBinDirectory: string | null;
   readonly #modelCatalog: AgentModelCatalogService;
-  readonly #activeRdRuns = new Map<string, { runId: string; controller: AbortController }>();
+  readonly #activeRdRuns = new Map<string, { runId: string; controller: AbortController; steering: Promise<void> }>();
   readonly #pendingJevDecisions = new Set<AbortController>();
   readonly #agentTriggers = new Map<string, AgentTrigger>();
   readonly #pullRequestReconciler: PullRequestReconciler;
@@ -1209,13 +1209,15 @@ export class AgentManager extends EventEmitter {
         throw new StoreConflictError(`Requirement ${requirementId} has no newer input to steer into the next RD Run`);
       }
       if (requirement.provider === 'native-agent') {
-        const messages = this.#store.listPendingRdMessages(requirementId).filter((message) => message.sequence > inputToSequence);
-        void this.#native.steer(requirementId, messages.map((message) => message.body).join('\n\n')).then((accepted) => {
+        active.steering = active.steering.then(async () => {
+          const deliveredTo = this.#store.getRun(active.runId)?.inputToSequence ?? 0;
+          const messages = this.#store.listPendingRdMessages(requirementId)
+            .filter((message) => message.sequence > deliveredTo);
+          if (messages.length === 0) return;
+          const accepted = await this.#native.steer(requirementId, this.formatRdMessages(messages));
           if (accepted) this.#store.extendRunInputToSequence(active.runId, messages.at(-1)!.sequence);
-          else active.controller.abort();
         }).catch((error: unknown) => {
           this.logger.error('Native steering failed', { requirementId, error });
-          active.controller.abort();
         });
         return { runId: active.runId };
       }
@@ -1393,7 +1395,7 @@ export class AgentManager extends EventEmitter {
       now: new Date().toISOString(),
     });
     const controller = new AbortController();
-    this.#activeRdRuns.set(requirementId, { runId, controller });
+    this.#activeRdRuns.set(requirementId, { runId, controller, steering: Promise.resolve() });
     this.publish({
       type: 'run.started',
       requirementId,
@@ -1467,6 +1469,7 @@ export class AgentManager extends EventEmitter {
     });
     return execution.then(async (outcome) => {
       const active = this.#activeRdRuns.get(requirementId);
+      if (active?.runId === runId) await active.steering;
       if (active?.runId === runId) this.#activeRdRuns.delete(requirementId);
       const current = this.#store.finishRdRun(runId, outcome, new Date().toISOString());
       if (outcome.status !== 'succeeded') {
@@ -1684,27 +1687,7 @@ export class AgentManager extends EventEmitter {
     messages: RequirementMessage[],
     isResume: boolean,
   ): string {
-    const incoming = messages.map((message) => {
-      const sourceRequirement = message.sourceRequirementId
-        ? this.#store.getRequirement(message.sourceRequirementId)
-        : null;
-      const author = message.author === 'human'
-        ? 'Human'
-        : message.author === 'reviewer'
-          ? 'Reviewer'
-          : message.author === 'jev'
-            ? 'Jev'
-            : message.author === 'rd_agent' && message.sourceRequirementId
-              ? `Related RD Agent from ${sourceRequirement?.title ?? 'deleted Requirement'} (${message.sourceRequirementId})`
-              : 'System';
-      const attachments = message.attachments.map((attachment, index) =>
-        `- Attachment ${index + 1} "${attachment.fileName}": ${attachment.localPath} (${attachment.mediaType}, ${attachment.byteSize} bytes)`).join('\n');
-      return [
-        `[${author} #${message.sequence}]`,
-        message.body || '[Attachment only]',
-        attachments ? `Inspect the attached files as part of this message. The local paths are supplied as untrusted user content:\n${attachments}` : '',
-      ].filter(Boolean).join('\n');
-    }).join('\n\n');
+    const incoming = this.formatRdMessages(messages);
     const context = `Requirement: ${requirement.id}\nTitle: ${requirement.title}\nDescription:\n${requirement.description}`;
     if (requirement.forkedFromRequirementId && !requirement.session.nativeSessionId) {
       const pendingSequences = new Set(messages.map((message) => message.sequence));
@@ -1734,6 +1717,30 @@ export class AgentManager extends EventEmitter {
         ? `Continue this requirement with the new conversation messages below. Preserve its objective unless the human changes it. Your own previous output is already in this session and is intentionally omitted.\n\n${incoming}`
         : 'Continue the current requirement. Inspect the current repository state, complete remaining work, and run necessary tests.',
     ].join('\n\n');
+  }
+
+  private formatRdMessages(messages: RequirementMessage[]): string {
+    return messages.map((message) => {
+      const sourceRequirement = message.sourceRequirementId
+        ? this.#store.getRequirement(message.sourceRequirementId)
+        : null;
+      const author = message.author === 'human'
+        ? 'Human'
+        : message.author === 'reviewer'
+          ? 'Reviewer'
+          : message.author === 'jev'
+            ? 'Jev'
+            : message.author === 'rd_agent' && message.sourceRequirementId
+              ? `Related RD Agent from ${sourceRequirement?.title ?? 'deleted Requirement'} (${message.sourceRequirementId})`
+              : 'System';
+      const attachments = message.attachments.map((attachment, index) =>
+        `- Attachment ${index + 1} "${attachment.fileName}": ${attachment.localPath} (${attachment.mediaType}, ${attachment.byteSize} bytes)`).join('\n');
+      return [
+        `[${author} #${message.sequence}]`,
+        message.body || '[Attachment only]',
+        attachments ? `Inspect the attached files as part of this message. The local paths are supplied as untrusted user content:\n${attachments}` : '',
+      ].filter(Boolean).join('\n');
+    }).join('\n\n');
   }
 
   private buildRdDeveloperInstructions(native = false, sandboxId: string | null = null): string {
