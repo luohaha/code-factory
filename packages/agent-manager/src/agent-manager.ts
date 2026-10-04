@@ -797,7 +797,8 @@ export class AgentManager extends EventEmitter {
   }
 
   private async prepareE2BWorkspace(handle: E2BHandle, cwd: string, repositoryUrl: string | null): Promise<void> {
-    const envs = Object.fromEntries(['GH_TOKEN', 'GITHUB_TOKEN'].flatMap((name) =>
+    const trustedGitHub = repositoryUrl !== null && new URL(repositoryUrl).hostname.toLowerCase() === 'github.com';
+    const envs = Object.fromEntries((trustedGitHub ? ['GH_TOKEN', 'GITHUB_TOKEN'] : []).flatMap((name) =>
       process.env[name] ? [[name, process.env[name]!]] : []));
     try {
       const tools = await handle.commands.run('command -v git >/dev/null && command -v gh >/dev/null',
@@ -806,7 +807,7 @@ export class AgentManager extends EventEmitter {
     } catch { throw new TypeError('E2B template must have git and gh installed'); }
     if (repositoryUrl) {
       try {
-        const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
+        const token = trustedGitHub ? process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN : undefined;
         const cloned = await handle.git.clone(repositoryUrl, { path: cwd, timeoutMs: 120_000,
           ...(token ? { username: 'x-access-token', password: token } : {}) });
         if (cloned.exitCode !== 0) throw new Error();
@@ -1617,7 +1618,9 @@ export class AgentManager extends EventEmitter {
           cwd: selectedSandbox?.cwd ?? this.workspaceRoot,
           ...(selectedSandbox?.kind === 'e2b' && selectedSandbox.providerSandboxId && cloudCredentials
             ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedSandbox.providerSandboxId,
-                credentials: cloudCredentials } } : {}),
+                credentials: cloudCredentials,
+                forwardGitHubToken: selectedSandbox.repositoryUrl !== null
+                  && new URL(selectedSandbox.repositoryUrl).hostname.toLowerCase() === 'github.com' } } : {}),
           environment: this.buildRdEnvironment(requirement), instructions: this.buildRdDeveloperInstructions(true, requirement.sandboxId),
           signal: controller.signal, timeoutMs: this.#timeoutMs, onNativeSession, onEvent })
       : this.execute({

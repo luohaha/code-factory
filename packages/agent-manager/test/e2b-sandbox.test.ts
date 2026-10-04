@@ -19,15 +19,19 @@ function fakeE2B(options: { missingGh?: boolean } = {}) {
   let state: 'running' | 'paused' = 'running';
   let killed = false;
   const calls: string[] = [];
+  const cloneAuth: Array<{ url: string; hasToken: boolean }> = [];
+  const authTokenForwarded: boolean[] = [];
   const check = (options: { apiKey?: string; domain?: string }) => {
     assert.equal(options.apiKey, 'test-key');
     assert.equal(options.domain, 'e2b.example');
   };
   const handle = (id: string) => ({ sandboxId: id,
     files: { exists: async (path: string) => path === '/home/user/repo' },
-    commands: { run: async (command: string) => { calls.push(`command:${command}`);
+    commands: { run: async (command: string, runOptions?: { envs?: Record<string, string> }) => { calls.push(`command:${command}`);
+      if (command === 'gh auth status') authTokenForwarded.push(runOptions?.envs?.GH_TOKEN !== undefined);
       return { exitCode: options.missingGh && command.startsWith('command -v') ? 1 : 0 }; } },
-    git: { clone: async (url: string, options: { path: string }) => {
+    git: { clone: async (url: string, options: { path: string; password?: string }) => {
+      cloneAuth.push({ url, hasToken: options.password !== undefined });
       calls.push(`clone:${url}:${options.path}`); return { exitCode: 0 };
     } },
   }) as unknown as E2BHandle;
@@ -51,7 +55,8 @@ function fakeE2B(options: { missingGh?: boolean } = {}) {
     async pause(id, options) { check(options); calls.push(`pause:${id}`); state = 'paused'; return true; },
     async kill(id, options) { check(options); calls.push(`kill:${id}`); killed = true; return true; },
   };
-  return { service: new E2BSandboxService(client), calls, get killed() { return killed; } };
+  return { service: new E2BSandboxService(client), calls, cloneAuth, authTokenForwarded,
+    get killed() { return killed; } };
 }
 
 test('E2B sandbox API provisions, binds exclusively, checks health and controls lifecycle', async () => {
@@ -73,6 +78,13 @@ test('E2B sandbox API provisions, binds exclusively, checks health and controls 
   try {
     assert.equal((await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Missing URL', sharing: 'shared',
       ...credentials })).status, 400);
+    for (const repositoryUrl of ['https://user:secret@github.com/example/repo.git',
+      'https://github.com/example/repo.git?token=secret']) {
+      const rejected = await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Unsafe URL',
+        sharing: 'shared', ...credentials, repositoryUrl });
+      assert.equal(rejected.status, 400);
+      assert.equal((await rejected.text()).includes('secret'), false);
+    }
     const created = await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Dedicated', sharing: 'dedicated',
       ...credentials, repositoryUrl: 'https://github.com/example/repo.git' });
     assert.equal(created.status, 201);
@@ -167,6 +179,34 @@ test('E2B provisioning rejects missing remote gh and removes the new sandbox', a
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('GitHub token is sent to clone and remote gh only for github.com repositories', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-token-host-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const savedToken = process.env.GH_TOKEN;
+  process.env.GH_TOKEN = 'test-github-token';
+  const sdk = fakeE2B();
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    logger: createLogger({ level: 'silent' }) });
+  try {
+    for (const repositoryUrl of ['https://git.example/org/repo.git', 'https://github.com/org/repo.git']) {
+      const sandbox = await manager.createE2BSandbox({ name: 'Scoped token', sharing: 'shared',
+        domain: 'e2b.example', apiKey: 'test-key', repositoryUrl });
+      await manager.deleteSandbox(sandbox.id);
+    }
+    assert.deepEqual(sdk.cloneAuth, [
+      { url: 'https://git.example/org/repo.git', hasToken: false },
+      { url: 'https://github.com/org/repo.git', hasToken: true },
+    ]);
+    assert.deepEqual(sdk.authTokenForwarded, [false, true]);
+  } finally {
+    await manager.close();
+    if (savedToken === undefined) delete process.env.GH_TOKEN;
+    else process.env.GH_TOKEN = savedToken;
     rmSync(directory, { recursive: true, force: true });
   }
 });

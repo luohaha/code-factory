@@ -8,7 +8,7 @@ import {
   type ShellExecOptions, type ShellExecResult, type TextLine, type TextLineReader,
 } from '@earendil-works/pi-durable/env';
 import { CommandExitError, FileNotFoundError, FileType, Sandbox, SandboxNotFoundError, TimeoutError } from 'e2b';
-import type { SandboxApiOpts, SandboxInfo, SandboxOpts } from 'e2b';
+import type { CommandHandle, SandboxApiOpts, SandboxInfo, SandboxOpts } from 'e2b';
 
 export type E2BHandle = Pick<Sandbox, 'sandboxId' | 'files' | 'commands' | 'git'>;
 export interface E2BCredentials { domain: string; apiKey: string }
@@ -260,23 +260,13 @@ export class E2BExecutionEnv implements ExecutionEnv {
 
   async exec(command: string, options: ShellExecOptions | undefined, context: Context): Promise<Result<ShellExecResult, ExecutionError>> {
     if (context.abortSignal?.aborted) return err(new ExecutionError('aborted', 'Command aborted'));
-    const chunks: string[] = [];
+    if (options?.spill) return this.execWithSpill(command, { ...options, spill: options.spill }, context);
+    let sawOutput = false;
     const onOutput = (value: string) => {
-      chunks.push(value);
+      sawOutput = true;
       try { options?.onOutput?.(value, context); }
       catch (error) { throw new ExecutionError('callback_error', error instanceof Error ? error.message : String(error)); }
     };
-    const saveSpill = async (): Promise<string | undefined> => {
-      if (!options?.spill) return undefined;
-      const output = chunks.join('');
-      if (Buffer.byteLength(output) <= options.spill.afterBytes && output.split('\n').length - 1 <= options.spill.afterLines) {
-        return undefined;
-      }
-      const path = `/tmp/code-factory-output-${randomUUID()}.log`;
-      await this.sandbox.files.write(path, output);
-      return path;
-    };
-    let exitCode: number;
     try {
       const result = await this.sandbox.commands.run(command, {
         cwd: options?.cwd ? this.path(options.cwd) : this.cwd,
@@ -286,28 +276,86 @@ export class E2BExecutionEnv implements ExecutionEnv {
         onStdout: onOutput,
         onStderr: onOutput,
       });
-      exitCode = result.exitCode;
+      return ok({ exitCode: result.exitCode });
     } catch (error) {
       if (error instanceof CommandExitError) {
-        if (chunks.length === 0) {
+        if (!sawOutput) {
           if (error.stdout) onOutput(error.stdout);
           if (error.stderr) onOutput(error.stderr);
         }
-        exitCode = error.exitCode;
-      } else {
-        const failure = executionError(error);
-        try {
-          const spillPath = await saveSpill();
-          if (spillPath) failure.spillPath = spillPath;
-        } catch { /* Preserve the execution failure. */ }
-        return err(failure);
+        return ok({ exitCode: error.exitCode });
       }
-    }
-    try {
-      const spillPath = await saveSpill();
-      return ok({ exitCode, ...(spillPath ? { spillPath } : {}) });
-    } catch (error) {
       return err(executionError(error));
+    }
+  }
+
+  private async execWithSpill(command: string, options: ShellExecOptions & { spill: NonNullable<ShellExecOptions['spill']> },
+    context: Context): Promise<Result<ShellExecResult, ExecutionError>> {
+    // The E2B command handle retains its entire stdout/stderr. Redirect the command on the remote host,
+    // then read bounded slices so neither the SDK nor Agent Manager holds the complete output.
+    const path = `/tmp/code-factory-output-${randomUUID()}.log`;
+    const cwd = options.cwd ? this.path(options.cwd) : this.cwd;
+    const envs = { ...(options.inheritEnv === false ? {} : this.commandEnv), ...options.env };
+    const wrapped = `bash -lc ${quote(command)} > ${quote(path)} 2>&1`;
+    let handle: CommandHandle;
+    try {
+      handle = await this.sandbox.commands.run(wrapped, { cwd, envs, background: true,
+        ...(options.timeout === undefined ? { timeoutMs: 0 } : { timeoutMs: Math.ceil(options.timeout * 1000) }),
+        ...(context.abortSignal ? { signal: context.abortSignal } : {}) });
+    } catch (error) { return err(executionError(error)); }
+
+    let completed = false;
+    const completion = handle.wait().then(
+      (result) => ({ exitCode: result.exitCode }),
+      (error: unknown) => error instanceof CommandExitError
+        ? { exitCode: error.exitCode } : { error: executionError(error) },
+    ).then((result) => { completed = true; return result; });
+    const decoder = new TextDecoder();
+    let offset = 0;
+    let newlines = 0;
+    let lastByte = 0x0a;
+    let spilled = false;
+    const emit = (value: string) => {
+      if (!value) return;
+      try { options.onOutput?.(value, context); }
+      catch (error) { throw new ExecutionError('callback_error', error instanceof Error ? error.message : String(error)); }
+    };
+    const drain = async (): Promise<boolean> => {
+      const read = await this.sandbox.commands.run(
+        `if test -f ${quote(path)}; then tail -c +${offset + 1} ${quote(path)} | head -c 65536 | base64 -w0; fi`,
+        { cwd, timeoutMs: 30_000 });
+      const bytes = Buffer.from(read.stdout.trim(), 'base64');
+      if (bytes.length === 0) return false;
+      offset += bytes.length;
+      for (const byte of bytes) if (byte === 0x0a) newlines++;
+      lastByte = bytes[bytes.length - 1]!;
+      if (offset > options.spill.afterBytes || newlines + (lastByte === 0x0a ? 0 : 1) > options.spill.afterLines) {
+        spilled = true;
+      }
+      emit(decoder.decode(bytes, { stream: true }));
+      return true;
+    };
+    try {
+      while (true) {
+        if (await drain()) continue;
+        if (completed) break;
+        await Promise.race([completion, new Promise<void>((resolve) => setTimeout(resolve, 100))]);
+      }
+      emit(decoder.decode());
+      const result = await completion;
+      if (!spilled) await this.sandbox.files.remove(path).catch(() => undefined);
+      if ('error' in result) {
+        if (spilled) result.error.spillPath = path;
+        return err(result.error);
+      }
+      return ok({ exitCode: result.exitCode, ...(spilled ? { spillPath: path } : {}) });
+    } catch (error) {
+      await handle.kill().catch(() => undefined);
+      await completion;
+      const failure = executionError(error);
+      if (spilled) failure.spillPath = path;
+      else await this.sandbox.files.remove(path).catch(() => undefined);
+      return err(failure);
     }
   }
 

@@ -31,7 +31,8 @@ export interface NativeRunInput {
   model: string | null;
   reasoningEffort: AgentReasoningEffort | null;
   cwd: string;
-  sandbox?: { kind: 'e2b'; providerSandboxId: string; credentials: E2BCredentials };
+  sandbox?: { kind: 'e2b'; providerSandboxId: string; credentials: E2BCredentials;
+    forwardGitHubToken: boolean };
   environment: Readonly<Record<string, string>>;
   instructions: string;
   signal: AbortSignal;
@@ -141,7 +142,8 @@ export class NativeAgentService {
         const sandbox = this.#sandboxes.get(conversationId);
         if (sandbox) {
           const handle = await this.#e2b.connect(sandbox.providerSandboxId, sandbox.credentials);
-          const commandEnv = Object.fromEntries(['GH_TOKEN', 'GITHUB_TOKEN'].flatMap((name) =>
+          const commandEnv = Object.fromEntries((sandbox.forwardGitHubToken ? ['GH_TOKEN', 'GITHUB_TOKEN'] : [])
+            .flatMap((name) =>
             process.env[name] ? [[name, process.env[name]!]] : []));
           return new E2BExecutionEnv(handle, cwd ?? process.cwd(), commandEnv, sandbox.credentials.domain);
         }

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -50,9 +51,22 @@ function fakeSdk() {
     commands: {
       async run(command: string, options: {
         cwd?: string; envs?: Record<string, string>; onStdout?: (value: string) => void;
-        onStderr?: (value: string) => void;
+        onStderr?: (value: string) => void; background?: boolean;
       }) {
         commands.push({ command, cwd: options.cwd, envs: options.envs });
+        if (options.background) {
+          const path = command.match(/ > '([^']+)' 2>&1$/)?.[1];
+          assert(path);
+          data.set(path, encoder.encode('hello world\n'));
+          return { wait: async () => ({ exitCode: 0 }), kill: async () => true };
+        }
+        if (command.startsWith('if test -f ')) {
+          const path = command.match(/test -f '([^']+)'/)?.[1];
+          const offset = Number(command.match(/tail -c \+(\d+)/)?.[1]) - 1;
+          assert(path);
+          const slice = data.get(path)?.subarray(offset, offset + 65_536) ?? new Uint8Array();
+          return { exitCode: 0, stdout: Buffer.from(slice).toString('base64') };
+        }
         if (command === 'fail') throw new CommandExitError({ exitCode: 7, stdout: '', stderr: 'failed' });
         options.onStdout?.('hello ');
         options.onStderr?.('world\n');
@@ -127,6 +141,47 @@ test('E2B ExecutionEnv uses the remote SDK for files and shell commands', async 
   assert.equal(sdk.data.has('/home/user/repo/note.txt'), true);
 });
 
+test('E2B spill reads large remote output in bounded slices and preserves full content', async () => {
+  const output = Buffer.from('large α output\n'.repeat(150_000));
+  const remote = new Map<string, Buffer>();
+  let largestRead = 0;
+  const handle = {
+    sandboxId: 'large-output',
+    files: { remove: async (path: string) => { remote.delete(path); } },
+    commands: {
+      async run(command: string, options?: { background?: boolean }) {
+        if (!options?.background) {
+          const path = command.match(/test -f '([^']+)'/)?.[1];
+          const offset = Number(command.match(/tail -c \+(\d+)/)?.[1]) - 1;
+          assert(path);
+          const slice = remote.get(path)?.subarray(offset, offset + 65_536) ?? Buffer.alloc(0);
+          largestRead = Math.max(largestRead, slice.length);
+          return { exitCode: 0, stdout: slice.toString('base64') };
+        }
+        const path = command.match(/ > '([^']+)' 2>&1$/)?.[1];
+        assert(path);
+        remote.set(path, output);
+        return { wait: async () => ({ exitCode: 0 }), kill: async () => true };
+      },
+    },
+  } as unknown as E2BHandle;
+  const env = new E2BExecutionEnv(handle, '/home/user/repo');
+  const hash = createHash('sha256');
+  const result = await env.exec('produce large output', { spill: { afterBytes: 1024, afterLines: 50 },
+    onOutput: (text) => { hash.update(text); } }, BACKGROUND_CONTEXT);
+  assert(result.ok);
+  assert.equal(result.value.exitCode, 0);
+  assert(result.value.spillPath);
+  assert.equal(remote.get(result.value.spillPath)?.equals(output), true);
+  assert.equal(hash.digest('hex'), createHash('sha256').update(output).digest('hex'));
+  assert(largestRead <= 65_536);
+  const belowThreshold = await env.exec('produce large output', { spill: {
+    afterBytes: output.byteLength + 1, afterLines: 1_000_000,
+  } }, BACKGROUND_CONTEXT);
+  assert.deepEqual(belowThreshold, { ok: true, value: { exitCode: 0 } });
+  assert.equal(remote.size, 1);
+});
+
 test('pi-durable read, write, edit and bash use the selected E2B sandbox', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'code-factory-e2b-native-'));
   const sdk = fakeSdk();
@@ -147,13 +202,15 @@ test('pi-durable read, write, edit and bash use the selected E2B sandbox', async
       nativeSessionId: null, forkSourceNativeSessionId: null, prompt: 'Use remote tools',
       model: 'faux/faux-1', reasoningEffort: null, cwd: '/home/user/repo',
       sandbox: { kind: 'e2b', providerSandboxId: 'e2b-test-123',
-        credentials: { domain: 'e2b.example', apiKey: 'test-key' } }, environment: {}, instructions: 'Test',
+        credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: false },
+      environment: {}, instructions: 'Test',
       signal: new AbortController().signal, timeoutMs: 30_000,
       onNativeSession: () => undefined, onEvent: () => undefined });
     assert.equal(outcome.status, 'succeeded');
     assert.equal(outcome.finalMessage, 'Remote tools succeeded');
     assert.equal(new TextDecoder().decode(sdk.data.get('/home/user/repo/note.txt')), 'after\n');
-    assert(sdk.commands.some((entry) => entry.command === 'echo hello' && entry.cwd === '/home/user/repo'));
+    assert(sdk.commands.some((entry) => entry.command.includes('echo hello') && entry.cwd === '/home/user/repo'));
+    assert.equal(sdk.commands.some((entry) => entry.envs?.GH_TOKEN !== undefined), false);
     assert.equal(existsSync(join(directory, 'note.txt')), false);
   } finally {
     await service.close();
