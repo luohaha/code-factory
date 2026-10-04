@@ -2,6 +2,8 @@
 
 ## Native Agent (pi-durable)
 
+For the execution flow, persistence boundaries, native tools, and sandbox architecture, see the [Native Agent implementation guide](native-agent.md).
+
 `native-agent` is the third RD provider. It runs in Agent Manager using `@earendil-works/pi-durable`, with a persistent SQLite conversation per Requirement. The model picker lists pi-ai OpenAI, Anthropic, and OpenAI Codex model IDs as `provider/model`; the default is `openai/gpt-5.4`. The dashboard's Agent Manager runtime settings panel saves OpenAI and Anthropic API keys and starts pi-ai subscription login for `openai` or `openai-codex`. It shows the authorization URL, device code, or manual response prompt while the server runs the login. The browser polls login state and can cancel it. Saved API keys and refreshable OAuth credentials live in an owner-only workspace SQLite file; status responses never return secrets. Changes apply to subsequent Native Agent Runs without restarting the Manager. Process environment API keys remain a fallback when no credential is saved. Reviewer Runs remain Codex or Claude Code only.
 
 Native coding tools (`read`, `write`, `edit`, `bash`) use a pi-durable `NodeExecutionEnv` in the managed repository for Local execution. This is the same local workspace behavior as the headless agents, without a separate sandbox worktree. E2B cloud execution needs an E2B-backed `ExecutionEnv` implementation and provider configuration.

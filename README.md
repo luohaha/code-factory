@@ -43,7 +43,7 @@ Code Factory combines a requirement tree, an agent team, and a human-in-the-loop
 
 Code Factory is not a hosted IDE or a flat agent pool. Agents are organized by the requirement tree instead of being scheduled from a shared queue, and code execution, Git, and GitHub access stay in the developer's own environment.
 
-The current implementation supports headless **Codex** and **Claude Code**, plus a **Native Agent** built on pi-durable. Native Agent conversations persist in a workspace SQLite file. Local execution uses the managed repository directly, with the launching user's filesystem and process permissions. E2B cloud sandboxes are the planned remote option.
+The current implementation supports headless **Codex** and **Claude Code**, plus a **Native Agent** built on pi-durable. Native Agent conversations persist in a workspace SQLite file. Local execution uses the managed repository directly, with the launching user's filesystem and process permissions. E2B cloud sandboxes are the planned remote option. See the [Native Agent implementation guide](docs/native-agent.md) for its runtime, tools, steering, and sandbox boundary.
 
 Configure Native Agent model authentication in the dashboard's **Agent Manager configuration → Runtime settings → Native Agent authentication** panel. Enter an OpenAI or Anthropic API key, or connect an OpenAI/Codex subscription using the authorization link or device code shown there. Choose an `openai-codex/...` model for a Codex subscription or an `openai/...` model for a direct ChatGPT subscription. The panel shows credential status and lets you remove saved credentials without revealing their values. Changes apply to subsequent Runs without restarting Agent Manager. Refreshable credentials and entered API keys live in a separate owner-only workspace SQLite file. Existing `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` environment variables remain usable when no credential is saved in the panel.
 
@@ -116,6 +116,7 @@ Code Factory is licensed under the [Apache License 2.0](LICENSE).
 - [Development guide](docs/development.md)
 - [Final architecture and domain model](docs/architecture.en.md)
 - [Headless Agent Runner](docs/agent-runners.md)
+- [Native Agent implementation guide](docs/native-agent.md)
 - [Agent Manager HTTP API Reference](docs/agent-manager-api.md)
 - [HTTP and event protocol](docs/protocol.md)
 - [Dashboard perceived-latency audit](docs/dashboard-latency-audit.md)
