@@ -87,6 +87,7 @@ import {
 } from '@/components/ui/sheet';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
+import { NativeAuthSettings } from '@/components/native-auth-settings';
 import {
   AgentManagerApiError,
   AgentManagerClient,
@@ -1170,7 +1171,7 @@ function NewRequirementDialog({ disabled, modelCatalog, sandboxes, onCreate }: {
                   onChange={setModel}
                 />
                 {provider === 'native-agent' ? (
-                  <p className="mt-1 text-xs text-muted-foreground">{t('Native Agent uses OPENAI_API_KEY or ANTHROPIC_API_KEY, or a workspace subscription login via code-factory-agent-manager auth login openai-codex.')}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{t('Configure Native Agent API keys or subscription login in Agent Manager runtime settings.')}</p>
                 ) : null}
               </Field>
               <Field>
@@ -1308,6 +1309,7 @@ function ConnectionDialog({ apiUrl, onConnect }: { apiUrl: string; onConnect: (u
 }
 
 function ManagerConfigurationDialog({
+  client,
   configuration,
   disabled,
   notificationAvailability,
@@ -1318,6 +1320,7 @@ function ManagerConfigurationDialog({
   onSave,
   workspace,
 }: {
+  client: AgentManagerClient;
   configuration: AgentManagerConfigurationSnapshot | null;
   disabled: boolean;
   notificationAvailability: DesktopNotificationAvailability;
@@ -1383,7 +1386,7 @@ function ManagerConfigurationDialog({
         <form onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>{t('Agent Manager configuration')}</DialogTitle>
-            <DialogDescription>{t('Reconciliation, requirement retention, commit attribution, Jev, and log level changes apply immediately. Other settings take effect after restart.')}</DialogDescription>
+            <DialogDescription>{t('Native Agent credentials, reconciliation, requirement retention, commit attribution, Jev, and log level changes apply immediately. Other settings take effect after restart.')}</DialogDescription>
           </DialogHeader>
           {configuration?.restartRequired ? (
             <Alert className="mt-4">
@@ -1434,6 +1437,7 @@ function ManagerConfigurationDialog({
               <div>
                 <p className="mb-3 text-xs font-semibold">{t('Runtime settings')}</p>
                 <div className="grid gap-4 sm:grid-cols-2">
+                  {open ? <NativeAuthSettings client={client} /> : null}
                   <Field className="sm:col-span-2">
                     <FieldLabel htmlFor="configuration-jev-key">{t('Jev API key')}</FieldLabel>
                     <div className="flex gap-2">
@@ -3445,6 +3449,7 @@ function Dashboard() {
             <Button variant="outline" size="sm" aria-label={t('Switch language')} onClick={() => setLocale(locale === 'en' ? 'zh-CN' : 'en')}><Languages data-icon="inline-start" />{locale === 'en' ? t('Chinese') : t('English')}</Button>
             <Button variant="outline" size="icon" aria-label={t('Refresh')} disabled={loading} onClick={() => void reload(true)}><RefreshCw className={loading ? 'animate-spin' : ''} /></Button>
             <ManagerConfigurationDialog
+              client={client}
               configuration={configuration}
               disabled={connection !== 'online'}
               notificationAvailability={notificationAvailability}

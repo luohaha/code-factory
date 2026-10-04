@@ -39,9 +39,13 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/workspace | Read the bound workspace and data paths |
 | GET | /api/configuration | Read desired Agent Manager configuration and restart status |
 | PATCH | /api/configuration | Validate, persist, and apply configuration changes |
+| GET | /api/native-auth | Read Native Agent credential status and current login state |
+| PUT | /api/native-auth/:provider/api-key | Save an OpenAI or Anthropic API key |
+| DELETE | /api/native-auth/:provider | Remove a saved Native Agent credential |
+| POST | /api/native-auth/:provider/login | Start OpenAI or Codex subscription login |
+| GET, POST, DELETE | /api/native-auth/logins/:id | Poll, answer, or cancel a subscription login |
 | GET | /api/agent-models | Read cached Codex, Claude Code, and Native Agent model options |
-| GET | /api/sandboxes | List local execution and named sandbox worktrees |
-| POST | /api/sandboxes | Create a reusable local sandbox worktree |
+| GET | /api/sandboxes | List local execution and available named sandboxes |
 | GET | /api/search | Hybrid-search Requirements, conversations, and Pull Requests |
 | GET | /api/requirements | List Requirements with their RD Sessions |
 | GET | /api/requirements/:id | Read one Requirement with its RD Session |
@@ -382,6 +386,16 @@ curl -X PATCH http://127.0.0.1:4310/api/configuration \
 `port` must be an integer from 1 to 65535. The reconcile interval must be an integer from 0 to 2147483 seconds, the largest whole-second delay supported by Node.js timers. Each Requirement retention value must be an integer from 0 to 36500 days; `0` deletes matching Requirements as they become terminal. Updating either retention value triggers a scan immediately, in addition to the startup and daily scans. A terminal Requirement with any running Run is deferred; a zero-day purge is retried immediately when that Run finishes. Requirement-linked domain records are deleted in one transaction; pending attachment-file deletions are persisted as tombstones and retried until the file is absent. `logLevel` accepts `debug`, `info`, `warn`, `error`, or `silent`. Paths and origins accept a non-empty string or `null`; a null database or log path selects its workspace default, while a null origin disables CORS. Unknown fields return 400 Bad Request.
 
 Set `jevApiKey` to a non-empty string to enable Jev decisions, or to `null` or `""` to disable them. The key is stored in the workspace configuration file and never echoed by this API. When a successful, failed, or timed-out RD Run leaves a Requirement waiting for confirmation, Jev evaluates the Requirement title and description, Run status, and three latest conversation messages, including each author's identity, if no messages arrived after that Run captured its input and there are no active Reviewer Runs or timers. A failed or timed-out Run does not need an RD reply for Jev to consider recovery; its System error message is part of the conversation. Attempted input remains pending after failure and is delivered again on retry, but does not suppress Jev's decision. Jev can leave the session waiting, send `continue.` immediately as Jev, or create a one-time timer to send `continue.` as Jev after 1–60 minutes. Cancelled Runs do not trigger Jev. Jev failures leave the normal waiting flow intact.
+
+### Native Agent authentication
+
+The dashboard's runtime settings panel uses these endpoints. Credentials are stored separately from the configuration JSON in an owner-only `native-agent-auth.sqlite` file. Changes apply to subsequent Native Agent Runs without a restart. No response contains an API key, access token, or refresh token.
+
+`GET /api/native-auth` returns `providers` with `provider` (`openai`, `anthropic`, or `openai-codex`) and `source` (`stored_api_key`, `subscription`, `environment`, or `null`), plus the latest `login` snapshot or `null`. Environment status refers to `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` when no saved credential is present.
+
+`PUT /api/native-auth/openai/api-key` or `/anthropic/api-key` accepts `{ "key": "..." }` and replaces that provider's saved credential. `DELETE /api/native-auth/:provider` removes the saved credential; an environment key may still be available afterward. Both return the updated non-secret provider status list.
+
+`POST /api/native-auth/openai/login` or `/openai-codex/login` starts pi-ai OAuth and returns a login snapshot with HTTP 202. Only one login runs at a time; another start returns 409. Codex login uses the device-code flow. OpenAI login shows an authorization URL and, if needed, a manual redirect-URL prompt. `GET /api/native-auth/logins/:id` polls the snapshot (`pending`, `prompt`, `succeeded`, `failed`, or `cancelled`); it may include `authorizationUrl`, `verificationUri`, `userCode`, and a non-secret prompt description. `POST` to the same path with `{ "answer": "..." }` answers a prompt; `DELETE` cancels a running login. The latest snapshot remains available across dashboard reloads while Agent Manager stays running. Unknown IDs return 404.
 
 ### GET /api/agent-models
 

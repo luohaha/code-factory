@@ -45,14 +45,7 @@ Code Factory is not a hosted IDE or a flat agent pool. Agents are organized by t
 
 The current implementation supports headless **Codex** and **Claude Code**, plus a **Native Agent** built on pi-durable. Native Agent conversations persist in a workspace SQLite file. Local execution uses the managed repository directly, with the launching user's filesystem and process permissions. E2B cloud sandboxes are the planned remote option.
 
-For Native Agent model authentication, set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` before starting Agent Manager, or sign in with a ChatGPT/Codex subscription from the managed repository:
-
-~~~bash
-npx --package @luoyixin/code-factory code-factory-agent-manager auth login openai-codex
-npx --package @luoyixin/code-factory code-factory-agent-manager auth status
-~~~
-
-Choose an `openai-codex/...` model for that subscription-backed login. Alternatively, `auth login openai` uses pi-ai's direct ChatGPT subscription flow with `openai/...` models. The login uses a browser or device-code flow and stores refreshable credentials in a separate workspace SQLite file with owner-only permissions. Run `auth logout openai-codex` or `auth logout openai` to remove a login. If Agent Manager uses a custom `--config` or `--db`, pass the same option to the auth command.
+Configure Native Agent model authentication in the dashboard's **Agent Manager configuration → Runtime settings → Native Agent authentication** panel. Enter an OpenAI or Anthropic API key, or connect an OpenAI/Codex subscription using the authorization link or device code shown there. Choose an `openai-codex/...` model for a Codex subscription or an `openai/...` model for a direct ChatGPT subscription. The panel shows credential status and lets you remove saved credentials without revealing their values. Changes apply to subsequent Runs without restarting Agent Manager. Refreshable credentials and entered API keys live in a separate owner-only workspace SQLite file. Existing `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` environment variables remain usable when no credential is saved in the panel.
 
 ## Quick Start
 

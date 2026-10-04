@@ -41,6 +41,8 @@ import {
 } from './model-catalog.js';
 import { HeadlessProcessRunner, type AgentProcessRunner, type ProcessRunRequest } from './process-runner.js';
 import { NativeAgentService } from './native-agent.js';
+import { NativeAuthService, type NativeAuthProvider, type NativeAuthProviderStatus,
+  type NativeLoginSnapshot, type NativeOAuthProvider } from './native-auth-service.js';
 import { PullRequestReconciler } from './pull-request-reconciler.js';
 import {
   PullRequestCiFailureTrigger,
@@ -82,6 +84,7 @@ export interface AgentManagerOptions {
   store?: AgentManagerStore;
   runner?: AgentProcessRunner;
   nativeService?: NativeAgentService;
+  nativeAuthService?: NativeAuthService;
   githubClient?: GitHubClient;
   jevWakeDecision?: (apiKey: string, context: JevWakeContext, signal: AbortSignal) => Promise<JevWakeDecision>;
   logger?: Logger;
@@ -163,6 +166,7 @@ export class AgentManager extends EventEmitter {
   readonly #runner: AgentProcessRunner;
   readonly #adapters: Record<'codex' | 'claude-code', AgentAdapter>;
   readonly #native: NativeAgentService;
+  #nativeAuth: NativeAuthService | null;
   readonly #timeoutMs: number;
   readonly #maxOutputBytes: number;
   readonly #agentCliBinDirectory: string | null;
@@ -222,6 +226,7 @@ export class AgentManager extends EventEmitter {
     this.#runner = options.runner ?? new HeadlessProcessRunner();
     this.#adapters = { codex: new CodexAdapter(), 'claude-code': new ClaudeCodeAdapter() };
     this.#native = options.nativeService ?? new NativeAgentService(join(dirname(this.databasePath === ':memory:' ? join(this.workspaceRoot, 'factory.sqlite') : this.databasePath), 'native-agent.sqlite'));
+    this.#nativeAuth = options.nativeAuthService ?? null;
     this.#timeoutMs = options.timeoutMs ?? 60 * 60 * 1_000;
     this.#maxOutputBytes = options.maxOutputBytes ?? 2 * 1024 * 1024;
     this.#agentCliBinDirectory = options.agentCliInvocation && this.databasePath !== ':memory:'
@@ -358,6 +363,28 @@ export class AgentManager extends EventEmitter {
     return snapshot;
   }
 
+  private nativeAuth(): NativeAuthService {
+    if (this.#closed) throw new Error('Agent Manager is closed');
+    this.#nativeAuth ??= new NativeAuthService(join(dirname(this.databasePath === ':memory:'
+      ? join(this.workspaceRoot, 'factory.sqlite') : this.databasePath), 'native-agent.sqlite'));
+    return this.#nativeAuth;
+  }
+
+  getNativeAuthStatus(): Promise<NativeAuthProviderStatus[]> { return this.nativeAuth().status(); }
+  getActiveNativeLogin(): NativeLoginSnapshot | null { return this.nativeAuth().activeLogin(); }
+  setNativeApiKey(provider: NativeAuthProvider, key: string): Promise<NativeAuthProviderStatus[]> {
+    return this.nativeAuth().setApiKey(provider, key);
+  }
+  removeNativeAuth(provider: NativeAuthProvider): Promise<NativeAuthProviderStatus[]> {
+    return this.nativeAuth().remove(provider);
+  }
+  startNativeLogin(provider: NativeOAuthProvider): NativeLoginSnapshot { return this.nativeAuth().startLogin(provider); }
+  getNativeLogin(id: string): NativeLoginSnapshot { return this.nativeAuth().getLogin(id); }
+  submitNativeLoginPrompt(id: string, answer: string): NativeLoginSnapshot {
+    return this.nativeAuth().submitPrompt(id, answer);
+  }
+  cancelNativeLogin(id: string): NativeLoginSnapshot { return this.nativeAuth().cancelLogin(id); }
+
   startConfiguredServices(): void {
     this.startAgentTrigger(this.#timerAgentTrigger);
     this.configurePullRequestReconciler(this.#initialPullRequestReconcileIntervalSeconds);
@@ -389,7 +416,8 @@ export class AgentManager extends EventEmitter {
     this.#store.close();
     this.logger.info('Agent Manager closed');
     try {
-      this.#closePromise = this.#native.close().then(() => this.logger.close?.()).then(() => undefined).catch(() => undefined);
+      this.#closePromise = Promise.all([this.#native.close(), this.#nativeAuth?.close()])
+        .then(() => this.logger.close?.()).then(() => undefined).catch(() => undefined);
     } catch {
       this.#closePromise = Promise.resolve();
     }

@@ -142,6 +142,29 @@ export interface AgentManagerConfigurationSnapshot {
   restartRequiredFields: Array<keyof AgentManagerConfiguration>;
 }
 
+export type NativeAuthProvider = 'openai' | 'anthropic' | 'openai-codex';
+
+export interface NativeAuthProviderStatus {
+  provider: NativeAuthProvider;
+  source: 'stored_api_key' | 'subscription' | 'environment' | null;
+}
+
+export interface NativeLoginDto {
+  id: string;
+  provider: 'openai' | 'openai-codex';
+  state: 'pending' | 'prompt' | 'succeeded' | 'failed' | 'cancelled';
+  authorizationUrl: string | null;
+  verificationUri: string | null;
+  userCode: string | null;
+  message: string | null;
+  prompt: null | {
+    type: 'text' | 'secret' | 'select' | 'manual_code';
+    message: string;
+    placeholder: string | null;
+    options: Array<{ id: string; label: string }>;
+  };
+}
+
 export interface ManagerEventDto {
   id: number;
   type: string;
@@ -296,6 +319,40 @@ export class AgentManagerClient {
 
   updateConfiguration(values: Partial<AgentManagerConfiguration>): Promise<AgentManagerConfigurationSnapshot> {
     return this.request('/api/configuration', { method: 'PATCH', body: JSON.stringify(values) });
+  }
+
+  getNativeAuth(): Promise<{ providers: NativeAuthProviderStatus[]; login: NativeLoginDto | null }> {
+    return this.request('/api/native-auth');
+  }
+
+  async setNativeApiKey(provider: 'openai' | 'anthropic', key: string): Promise<NativeAuthProviderStatus[]> {
+    const result = await this.request<{ providers: NativeAuthProviderStatus[] }>(
+      `/api/native-auth/${provider}/api-key`, { method: 'PUT', body: JSON.stringify({ key }) });
+    return result.providers;
+  }
+
+  async removeNativeAuth(provider: NativeAuthProvider): Promise<NativeAuthProviderStatus[]> {
+    const result = await this.request<{ providers: NativeAuthProviderStatus[] }>(
+      `/api/native-auth/${provider}`, { method: 'DELETE' });
+    return result.providers;
+  }
+
+  startNativeLogin(provider: 'openai' | 'openai-codex'): Promise<NativeLoginDto> {
+    return this.request(`/api/native-auth/${provider}/login`, { method: 'POST' });
+  }
+
+  getNativeLogin(id: string): Promise<NativeLoginDto> {
+    return this.request(`/api/native-auth/logins/${encodeURIComponent(id)}`);
+  }
+
+  answerNativeLogin(id: string, answer: string): Promise<NativeLoginDto> {
+    return this.request(`/api/native-auth/logins/${encodeURIComponent(id)}`, {
+      method: 'POST', body: JSON.stringify({ answer }),
+    });
+  }
+
+  cancelNativeLogin(id: string): Promise<NativeLoginDto> {
+    return this.request(`/api/native-auth/logins/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
 
   async listRequirements(): Promise<RequirementDto[]> {
