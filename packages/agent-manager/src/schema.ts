@@ -12,14 +12,22 @@ export const requirementMessagesTableSql = `CREATE TABLE IF NOT EXISTS requireme
   ) STRICT`;
 
 export const schemaStatements = [
+  `CREATE TABLE IF NOT EXISTS sandboxes (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('local', 'local-sandbox')),
+    cwd TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  ) STRICT`,
   `CREATE TABLE IF NOT EXISTS requirements (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     description TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('todo', 'doing', 'waiting_confirmation', 'done', 'cancelled')),
-    provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude-code')),
+    provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude-code', 'native-agent')),
     model TEXT,
     reasoning_effort TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max')),
+    sandbox_id TEXT REFERENCES sandboxes(id),
     created_by TEXT NOT NULL DEFAULT 'human' CHECK (created_by IN ('human', 'rd_agent')),
     parent_requirement_id TEXT REFERENCES requirements(id) ON DELETE SET NULL,
     source_session_id TEXT,
@@ -31,7 +39,7 @@ export const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS agent_sessions (
     id TEXT PRIMARY KEY,
     requirement_id TEXT NOT NULL UNIQUE REFERENCES requirements(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude-code')),
+    provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude-code', 'native-agent')),
     native_session_id TEXT,
     fork_source_native_session_id TEXT,
     state TEXT NOT NULL CHECK (state IN ('idle', 'running', 'waiting_human', 'waiting_review', 'failed', 'completed')),
@@ -45,7 +53,7 @@ export const schemaStatements = [
     requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
     session_id TEXT REFERENCES agent_sessions(id) ON DELETE CASCADE,
     role TEXT NOT NULL CHECK (role IN ('rd', 'reviewer')),
-    provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude-code')),
+    provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude-code', 'native-agent')),
     model TEXT,
     reasoning_effort TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max')),
     status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'timed_out', 'cancelled')),

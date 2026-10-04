@@ -50,6 +50,7 @@ import type {
   RequirementWithSession,
   RunOutcome,
   SessionState,
+  Sandbox,
 } from './types.js';
 
 type Row = Record<string, SQLInputValue>;
@@ -63,6 +64,7 @@ function requirementFrom(row: Row): Requirement {
     provider: String(row.provider) as Requirement['provider'],
     model: row.model === null ? null : String(row.model),
     reasoningEffort: row.reasoning_effort === null ? null : String(row.reasoning_effort) as Requirement['reasoningEffort'],
+    sandboxId: row.sandbox_id === null ? null : String(row.sandbox_id),
     createdBy: String(row.created_by) as Requirement['createdBy'],
     parentRequirementId: row.parent_requirement_id === null ? null : String(row.parent_requirement_id),
     sourceSessionId: row.source_session_id === null ? null : String(row.source_session_id),
@@ -291,6 +293,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     this.#db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
     for (const statement of schemaStatements) this.#db.exec(statement);
     this.migrateLegacySchema();
+    this.migrateNativeAgentProvider();
     for (const statement of postMigrationSchemaStatements) this.#db.exec(statement);
     this.#ftsAvailable = this.initializeFullTextSearch();
     this.backfillSearchDocuments();
@@ -301,13 +304,30 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     this.#db.close();
   }
 
+  createSandbox(sandbox: Sandbox): Sandbox {
+    this.#db.prepare('INSERT INTO sandboxes (id, name, kind, cwd, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(sandbox.id, sandbox.name, sandbox.kind, sandbox.cwd, sandbox.createdAt);
+    return sandbox;
+  }
+
+  listSandboxes(): Sandbox[] {
+    return (this.#db.prepare('SELECT * FROM sandboxes ORDER BY created_at, id').all() as Row[]).map((row) => ({
+      id: String(row.id), name: String(row.name), kind: String(row.kind) as Sandbox['kind'],
+      cwd: String(row.cwd), createdAt: String(row.created_at),
+    }));
+  }
+
+  getSandbox(id: string): Sandbox | null {
+    return this.listSandboxes().find((sandbox) => sandbox.id === id) ?? null;
+  }
+
   createRequirement(input: CreateRequirementRecord): RequirementWithSession {
     this.#db.exec('BEGIN IMMEDIATE');
     try {
       this.#db.prepare(`INSERT INTO requirements
-        (id, title, description, status, provider, model, reasoning_effort, created_by, parent_requirement_id, source_session_id, created_at, updated_at)
-        VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(input.requirementId, input.title, input.description, input.provider, input.model ?? null, input.reasoningEffort ?? null, input.createdBy ?? 'human',
+        (id, title, description, status, provider, model, reasoning_effort, sandbox_id, created_by, parent_requirement_id, source_session_id, created_at, updated_at)
+        VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(input.requirementId, input.title, input.description, input.provider, input.model ?? null, input.reasoningEffort ?? null, input.sandboxId ?? null, input.createdBy ?? 'human',
           input.parentRequirementId ?? null, input.sourceSessionId ?? null, input.now, input.now);
       this.#db.prepare(`INSERT INTO agent_sessions
         (id, requirement_id, provider, state, created_at, updated_at)
@@ -344,11 +364,11 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
         throw new StoreConflictError(`Requirement ${source.id} conversation advanced during fork`);
       }
       this.#db.prepare(`INSERT INTO requirements
-        (id, title, description, status, provider, model, reasoning_effort, created_by,
+        (id, title, description, status, provider, model, reasoning_effort, sandbox_id, created_by,
           parent_requirement_id, fork_origin_requirement_id, created_at, updated_at)
-        VALUES (?, ?, ?, 'todo', ?, ?, ?, 'human', ?, ?, ?, ?)`).run(
+        VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, 'human', ?, ?, ?, ?)`).run(
         input.requirementId, input.title, input.description, source.provider, source.model,
-        source.reasoningEffort, source.id, source.id, input.now, input.now,
+        source.reasoningEffort, source.sandboxId, source.id, source.id, input.now, input.now,
       );
       this.#db.prepare(`INSERT INTO agent_sessions
         (id, requirement_id, provider, fork_source_native_session_id, state,
@@ -405,9 +425,9 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
         throw new StoreConflictError(`Requirement ${input.requirementId} configuration can only be changed while it is todo`);
       }
       this.#db.prepare(`UPDATE requirements
-        SET provider = ?, model = ?, reasoning_effort = ?, updated_at = ?
+        SET provider = ?, model = ?, reasoning_effort = ?, sandbox_id = ?, updated_at = ?
         WHERE id = ? AND status = 'todo'`)
-        .run(input.provider, input.model, input.reasoningEffort, input.now, input.requirementId);
+        .run(input.provider, input.model, input.reasoningEffort, input.sandboxId, input.now, input.requirementId);
       this.#db.prepare(`UPDATE agent_sessions SET provider = ?, updated_at = ? WHERE id = ?`)
         .run(input.provider, input.now, current.session.id);
       const updated = this.requireBundle(input.requirementId);
@@ -1171,6 +1191,12 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     return runFrom(row);
   }
 
+  extendRunInputToSequence(runId: string, sequence: number): void {
+    const result = this.#db.prepare(`UPDATE agent_runs SET input_to_sequence = MAX(COALESCE(input_to_sequence, 0), ?)
+      WHERE id = ? AND role = 'rd' AND status = 'running'`).run(sequence, runId);
+    if (result.changes === 0) throw new StoreConflictError(`RD Run ${runId} is not running`);
+  }
+
   private requireReviewRequest(id: string): ReviewRequest {
     const row = this.#db.prepare('SELECT * FROM review_requests WHERE id = ?').get(id) as Row | undefined;
     if (!row) throw new StoreNotFoundError(`Review request ${id} not found`);
@@ -1201,6 +1227,9 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     }
     ensureColumn('requirements', 'model', 'TEXT');
     ensureColumn('requirements', 'reasoning_effort', "TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max'))");
+    ensureColumn('requirements', 'sandbox_id', 'TEXT REFERENCES sandboxes(id)');
+    this.#db.prepare(`UPDATE requirements SET sandbox_id = NULL
+      WHERE sandbox_id IN (SELECT id FROM sandboxes WHERE kind = 'local-sandbox')`).run();
     ensureColumn('agent_sessions', 'last_consumed_message_sequence', 'INTEGER NOT NULL DEFAULT 0');
     ensureColumn('agent_sessions', 'fork_source_native_session_id', 'TEXT');
     ensureColumn('agent_runs', 'model', 'TEXT');
@@ -1315,6 +1344,40 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
         SELECT 1 FROM agent_sessions session
         WHERE session.requirement_id = requirements.id AND session.state IN ('waiting_human', 'failed')
       )`).run(new Date().toISOString());
+  }
+
+  private migrateNativeAgentProvider(): void {
+    const tables = ['requirements', 'agent_sessions', 'agent_runs'] as const;
+    const oldSql = this.#db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'requirements'").get() as Row;
+    if (String(oldSql.sql).includes("'native-agent'")) return;
+    this.#db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      this.#db.exec('BEGIN IMMEDIATE');
+      for (const table of tables) {
+        const definition = schemaStatements.find((statement) => statement.startsWith(`CREATE TABLE IF NOT EXISTS ${table} (`));
+        if (!definition) throw new Error(`Missing ${table} schema`);
+        this.#db.exec(definition.replace(`CREATE TABLE IF NOT EXISTS ${table} (`, `CREATE TABLE ${table}_native (`));
+        const columns = (this.#db.prepare(`PRAGMA table_info(${table})`).all() as Row[]).map((row) => String(row.name));
+        const target = new Set((this.#db.prepare(`PRAGMA table_info(${table}_native)`).all() as Row[]).map((row) => String(row.name)));
+        const shared = columns.filter((column) => target.has(column));
+        const names = shared.map((column) => `"${column}"`).join(', ');
+        this.#db.exec(`INSERT INTO ${table}_native (${names}) SELECT ${names} FROM ${table}`);
+        this.#db.exec(`DROP TABLE ${table}`);
+        this.#db.exec(`ALTER TABLE ${table}_native RENAME TO ${table}`);
+      }
+      for (const statement of schemaStatements) {
+        if (statement.startsWith('CREATE INDEX') || statement.startsWith('CREATE UNIQUE INDEX')) this.#db.exec(statement);
+      }
+      this.#db.exec('COMMIT');
+    } catch (error) {
+      this.#db.exec('ROLLBACK');
+      throw error;
+    } finally {
+      this.#db.exec('PRAGMA foreign_keys = ON');
+    }
+    if ((this.#db.prepare('PRAGMA foreign_key_check').all() as Row[]).length > 0) {
+      throw new Error('Native agent schema migration violated a foreign key');
+    }
   }
 
   private migrateLegacyAgentTraceEvents(): void {

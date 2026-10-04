@@ -1,6 +1,18 @@
-# Headless Agent Runner
+# Agent Runners
 
-## 1. Common execution contract
+## Native Agent (pi-durable)
+
+For the execution flow, persistence boundaries, native tools, and sandbox architecture, see the [Native Agent implementation guide](native-agent.md).
+
+`native-agent` is the third RD provider. It runs in Agent Manager using `@earendil-works/pi-durable`, with a persistent SQLite conversation per Requirement. The model picker lists pi-ai OpenAI, Anthropic, and OpenAI Codex model IDs as `provider/model`; the default is `openai/gpt-5.4`. The dashboard's Agent Manager runtime settings panel saves OpenAI and Anthropic API keys and starts pi-ai subscription login for `openai` or `openai-codex`. It shows the authorization URL, device code, or manual response prompt while the server runs the login. The browser polls login state and can cancel it. Saved API keys and refreshable OAuth credentials live in an owner-only workspace SQLite file; status responses never return secrets. Changes apply to subsequent Native Agent Runs without restarting the Manager. Process environment API keys remain a fallback when no credential is saved. Reviewer Runs remain Codex or Claude Code only.
+
+Native coding tools (`read`, `write`, `edit`, `bash`) use a pi-durable `NodeExecutionEnv` in the managed repository for Local execution. This is the same local workspace behavior as the headless agents, without a separate sandbox worktree. E2B cloud execution needs an E2B-backed `ExecutionEnv` implementation and provider configuration.
+
+The control-plane functions are native tools: `pr_register`, `gh_pr`, `requirement_propose`, `requirement_action`, `requirement_related`, `requirement_message`, `timer_register`, `timer_show`, and `timer_cancel`. They reuse the existing CLI's validation, request timeout, and no-automatic-retry behavior, and CLI failures become tool errors. `gh_pr` runs the GitHub CLI through the selected `ExecutionEnv`; that environment must have `gh` installed and authenticated. `pr_register` reads PR metadata from the explicit URL. A Native Agent must register its PR after creation and after its own metadata changes.
+
+When a human requests Steering with newer input, Agent Manager queues it through native setup and submits it to the active pi-durable conversation with `whenBusy: "steer"`; the current tool round finishes and the model receives the new direction. Attachment-only replies include their paths and metadata. Stop Run aborts the conversation, or prevents the initial submission if setup is still in progress. The Requirement message cursor advances only after a successful Run, including Steering that pi-durable accepted. Input that could not be steered stays queued for a later Run. pi-durable commits its transcript and tool intent before model-visible output, so a reopened harness can continue its durable conversation.
+
+## 1. Headless execution contract
 
 Agent Manager supports the local `codex` and `claude` CLIs. Every invocation follows these rules:
 

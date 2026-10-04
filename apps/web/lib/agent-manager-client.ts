@@ -1,17 +1,19 @@
 import { MANAGER_EVENT_TYPES } from './manager-event-types.ts';
 
-export type AgentProvider = 'codex' | 'claude-code';
+export type AgentProvider = 'codex' | 'claude-code' | 'native-agent';
 export type AgentReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export interface AgentConfiguration {
   provider: AgentProvider;
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
+  sandboxId?: string | null;
 }
 
 export interface RequirementAgentConfigurationUpdate {
   provider?: AgentProvider;
   model?: string | null;
   reasoningEffort?: AgentReasoningEffort | null;
+  sandboxId?: string | null;
 }
 
 export interface AgentModelDto {
@@ -57,6 +59,7 @@ export interface RequirementDto {
   provider: AgentProvider;
   model: string | null;
   reasoningEffort: AgentReasoningEffort | null;
+  sandboxId: string | null;
   createdBy: 'human' | 'rd_agent';
   parentRequirementId: string | null;
   sourceSessionId: string | null;
@@ -65,6 +68,14 @@ export interface RequirementDto {
   updatedAt: string;
   completedAt: string | null;
   session: AgentSessionDto;
+}
+
+export interface SandboxDto {
+  id: string;
+  name: string;
+  kind: 'local' | 'local-sandbox';
+  cwd: string;
+  createdAt: string;
 }
 
 export interface AgentRunDto {
@@ -129,6 +140,29 @@ export interface AgentManagerConfigurationSnapshot {
   jevApiKeyConfigured: boolean;
   restartRequired: boolean;
   restartRequiredFields: Array<keyof AgentManagerConfiguration>;
+}
+
+export type NativeAuthProvider = 'openai' | 'anthropic' | 'openai-codex';
+
+export interface NativeAuthProviderStatus {
+  provider: NativeAuthProvider;
+  source: 'stored_api_key' | 'subscription' | 'environment' | null;
+}
+
+export interface NativeLoginDto {
+  id: string;
+  provider: 'openai' | 'openai-codex';
+  state: 'pending' | 'prompt' | 'succeeded' | 'failed' | 'cancelled';
+  authorizationUrl: string | null;
+  verificationUri: string | null;
+  userCode: string | null;
+  message: string | null;
+  prompt: null | {
+    type: 'text' | 'secret' | 'select' | 'manual_code';
+    message: string;
+    placeholder: string | null;
+    options: Array<{ id: string; label: string }>;
+  };
 }
 
 export interface ManagerEventDto {
@@ -287,6 +321,40 @@ export class AgentManagerClient {
     return this.request('/api/configuration', { method: 'PATCH', body: JSON.stringify(values) });
   }
 
+  getNativeAuth(): Promise<{ providers: NativeAuthProviderStatus[]; login: NativeLoginDto | null }> {
+    return this.request('/api/native-auth');
+  }
+
+  async setNativeApiKey(provider: 'openai' | 'anthropic', key: string): Promise<NativeAuthProviderStatus[]> {
+    const result = await this.request<{ providers: NativeAuthProviderStatus[] }>(
+      `/api/native-auth/${provider}/api-key`, { method: 'PUT', body: JSON.stringify({ key }) });
+    return result.providers;
+  }
+
+  async removeNativeAuth(provider: NativeAuthProvider): Promise<NativeAuthProviderStatus[]> {
+    const result = await this.request<{ providers: NativeAuthProviderStatus[] }>(
+      `/api/native-auth/${provider}`, { method: 'DELETE' });
+    return result.providers;
+  }
+
+  startNativeLogin(provider: 'openai' | 'openai-codex'): Promise<NativeLoginDto> {
+    return this.request(`/api/native-auth/${provider}/login`, { method: 'POST' });
+  }
+
+  getNativeLogin(id: string): Promise<NativeLoginDto> {
+    return this.request(`/api/native-auth/logins/${encodeURIComponent(id)}`);
+  }
+
+  answerNativeLogin(id: string, answer: string): Promise<NativeLoginDto> {
+    return this.request(`/api/native-auth/logins/${encodeURIComponent(id)}`, {
+      method: 'POST', body: JSON.stringify({ answer }),
+    });
+  }
+
+  cancelNativeLogin(id: string): Promise<NativeLoginDto> {
+    return this.request(`/api/native-auth/logins/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
   async listRequirements(): Promise<RequirementDto[]> {
     const response = await this.request<{ items: RequirementDto[] }>('/api/requirements');
     return response.items;
@@ -379,6 +447,12 @@ export class AgentManagerClient {
   createRequirement(input: { title: string; description: string } & AgentConfiguration): Promise<RequirementDto> {
     return this.request('/api/requirements', { method: 'POST', body: JSON.stringify(input) });
   }
+
+  async listSandboxes(): Promise<SandboxDto[]> {
+    const response = await this.request<{ items: SandboxDto[] }>('/api/sandboxes');
+    return response.items;
+  }
+
 
   forkRequirement(id: string, input: { title: string; description: string }): Promise<RequirementDto> {
     return this.request(`/api/requirements/${encodeURIComponent(id)}/fork`, {

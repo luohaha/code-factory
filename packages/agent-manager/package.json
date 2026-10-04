@@ -1,7 +1,7 @@
 {
   "name": "@luoyixin/code-factory",
   "version": "0.2.1",
-  "description": "Workspace-scoped manager for long-running Codex and Claude Code development sessions.",
+  "description": "Workspace-scoped manager for long-running Codex, Claude Code, and native development sessions.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "dist/index.js",
@@ -33,13 +33,14 @@
     "agent",
     "codex",
     "claude-code",
+    "native-agent",
     "developer-tools"
   ],
   "publishConfig": {
     "access": "public"
   },
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.19.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && npm run build:dashboard",
@@ -60,6 +61,9 @@
     "typescript": "5.9.3"
   },
   "dependencies": {
+    "@earendil-works/chord": "1.0.0",
+    "@earendil-works/pi-ai": "1.0.0",
+    "@earendil-works/pi-durable": "1.0.0",
     "winston": "^3.19.0",
     "winston-daily-rotate-file": "^5.0.0"
   }

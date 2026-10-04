@@ -21,6 +21,7 @@ import type {
   RunOutcome,
   RunRole,
   SessionState,
+  Sandbox,
 } from './types.js';
 
 export class StoreConflictError extends Error {}
@@ -34,6 +35,7 @@ export interface CreateRequirementRecord {
   provider: AgentProvider;
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
+  sandboxId?: string | null;
   createdBy: RequirementCreator;
   parentRequirementId?: string;
   sourceSessionId?: string;
@@ -61,6 +63,7 @@ export interface UpdateRequirementAgentConfigurationRecord {
   provider: AgentProvider;
   model: string | null;
   reasoningEffort: AgentReasoningEffort | null;
+  sandboxId: string | null;
   now: string;
 }
 
@@ -189,6 +192,9 @@ export interface CompleteAgentTimerOccurrenceRecord {
 /** Business-level persistence contract; PostgreSQL can implement this without leaking SQL upward. */
 export interface AgentManagerStore {
   close(): void;
+  createSandbox(sandbox: Sandbox): Sandbox;
+  listSandboxes(): Sandbox[];
+  getSandbox(id: string): Sandbox | null;
   createRequirement(input: CreateRequirementRecord): RequirementWithSession;
   forkRequirement(input: ForkRequirementRecord): RequirementWithSession;
   updateRequirementAgentConfiguration(input: UpdateRequirementAgentConfigurationRecord): RequirementWithSession;
@@ -199,6 +205,7 @@ export interface AgentManagerStore {
   listSessions(): AgentSession[];
   listRuns(requirementId?: string): AgentRun[];
   getRun(id: string): AgentRun | null;
+  extendRunInputToSequence(runId: string, sequence: number): void;
   listAgentTrace(runId: string): AgentTraceEvent[];
   listRequirementAgentTrace(requirementId: string): AgentTraceEvent[];
   createMessageAttachment(input: CreateMessageAttachmentRecord): MessageAttachment;

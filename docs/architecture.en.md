@@ -15,6 +15,7 @@ The system has three first-class domain entities:
 ~~~mermaid
 erDiagram
   Requirement ||--|| AgentSession : owns
+  Requirement }o--o| Sandbox : selects
   Requirement ||--o{ RequirementMessage : contains
   Requirement ||--o{ PullRequest : produces
   Requirement ||--o{ AgentTimer : schedules
@@ -34,8 +35,10 @@ flowchart LR
   S[Optional daemon supervisor] -->|Start / restart| M
   M <--> DB[(SQLite)]
   M -->|Same cwd, long-lived resume| RD[Codex / Claude Code RD]
+  M -->|Durable conversation, selected ExecutionEnv| NRD[Native RD / pi-durable]
   M -->|Short-lived, no persistent session| RV[Codex / Claude Code Reviewer]
   RD -->|Register PR / Propose requirement / Schedule wake-up| CLI[code-factory-cli]
+  NRD -->|Typed PR / Requirement / Timer tools| CLI
   CLI --> API[Agent API]
   API --> M
   RV -->|GitHub inline comments| GH[GitHub PR]
@@ -47,6 +50,10 @@ flowchart LR
 ~~~
 
 At startup, Agent Manager fixes the workspace to `realpath(process.cwd())`. Every RD and Reviewer child process uses that directory and inherits Agent Manager's environment. Codex and Claude Code load their provider-specific project/user instructions, Skills, plugins, configuration, and enabled local memory features according to their native discovery rules.
+
+Native RD conversations use pi-durable and a separate workspace SQLite file. Each Requirement stores its pi-durable conversation ID as the native session ID; forks create a pi-durable fork. Human steering waits for native conversation setup, then submits numbered messages and attachment details with `whenBusy: "steer"` so accepted input joins the current Run. The Run input boundary advances after submission succeeds; input that cannot be steered remains queued. Stop Run before the initial submission prevents model or tool execution. Native coding tools run through pi-durable `ExecutionEnv`. Code Factory control-plane actions are named native tools that call the existing CLI implementation with the Requirement's session context.
+
+A Native Agent's Local execution uses the managed workspace directly. Cloud sandbox execution will use an E2B-backed `ExecutionEnv`; its sandbox records are durable so multiple Requirements can select the same sandbox.
 
 Before opening its application database or HTTP listener, Agent Manager takes an exclusive process-lifetime lock under the canonical workspace's default data directory. Foreground and daemon-managed processes use the same lock, so a second Manager cannot bypass workspace ownership by selecting a different port, configuration file, or database. A live daemon supervisor also reserves the workspace between Manager restart attempts. The operating system releases the underlying SQLite lock if the Manager process crashes.
 
@@ -65,7 +72,7 @@ cd ~/starrocks
 npx --package @luoyixin/code-factory code-factory-agent-manager start
 ~~~
 
-All agents launched by that process initially use `~/starrocks` as their working directory. Before changing code, an RD Agent is instructed to create or reuse a Git worktree dedicated to its Requirement and perform the work there. Agent Manager does not currently provision or enforce that isolation.
+Headless agents launched by that process initially use `~/starrocks` as their working directory and are instructed to create or reuse a Requirement-specific Git worktree before editing. Native Agents use the managed directory for Local execution. E2B cloud sandboxes are a separate remote execution option.
 
 Agent Manager may run in the foreground or beneath its workspace-scoped daemon supervisor. `start --daemon` detaches the supervisor, which starts Agent Manager with the original CLI options and waits for a readiness message emitted only after the HTTP listener is active. A startup error emitted before readiness is persisted in daemon state and returned directly to the starting CLI instead of being retried. An unexpected exit after readiness is restarted indefinitely with capped exponential backoff. `stop` terminates the supervisor and Manager intentionally, while `restart` reuses a running daemon's stored options unless replacements are supplied. `daemon.json`, `daemon.lock`, `daemon.guard.sqlite`, and `logs/daemon.log` live beside the workspace database under `~/.code-factory/workspaces/<workspace-hash>/`. The persistent SQLite guard provides process-lifetime supervisor ownership; only its current owner may replace or remove the PID metadata and daemon state. This is application-level process supervision, not operating-system service installation or boot-time activation.
 
@@ -132,7 +139,7 @@ The system does not maintain a separate RD message-queue table. `requirement_mes
 
 Each message has a monotonically increasing `sequence` and a `deliverToRd` flag. When an RD Run starts, it captures the pending external-message range as `inputFromSequence..inputToSequence`:
 
-1. If the Session is already running, new messages are only appended and never interrupt it; a human may then explicitly click **Steering** to interrupt the active Run and deliver newer input. The server rejects steering when the active Run already contains the latest reply. **Stop Run** remains available for an intentional pause without newer input.
+1. If the Session is already running, new messages are only appended and never interrupt it; a human may then explicitly click **Steering** to deliver newer input. Native Agent steers within the current Run; headless providers stop and resume in a new Run. The server rejects steering when the active Run already contains the latest reply. **Stop Run** remains available for an intentional pause without newer input.
 2. After a successful Run, the consumption cursor advances only to the `inputToSequence` captured when that Run started.
 3. If external messages remain, Agent Manager automatically resumes the same RD Session.
 4. Multiple messages are delivered together in order during the next Run.
@@ -260,7 +267,7 @@ Requirement details form a Jira-like work surface containing the description, li
 
 The Session board card opens a read-only Agent trace surface. This surface contains only one chronological timeline combining trace events from every Run in the Session; it has no Run selector and does not show the Requirement description, linked Pull Requests, conversation, or reply composer. Requirement, relationship, Pull Request, and Timer entry points continue to use the conversational work surface and do not show the trace panel. The trace timeline shares the conversation viewport semantics: it opens at the latest event, keeps following live events while the viewport remains at the bottom, pauses when the operator scrolls upward, and exposes controls for returning to the top or bottom. Provider JSON events are normalized inside the Codex and Claude Code adapters, persisted once as Run-scoped ManagerEvents, and streamed through SSE as they arrive. The same event rows provide historical traces through a Requirement-level aggregate endpoint, and clients order them by event time with the ManagerEvent sequence as a tie-breaker. The trace includes lifecycle events, reasoning summaries emitted by the Provider, Agent messages, tool calls, command/tool results, and errors. Individual detail values are capped at 64 KiB so a large command result cannot dominate SQLite or the dashboard.
 
-The dashboard supports English and Simplified Chinese. The header language switcher applies the locale immediately and persists the choice in browser storage; a visitor without a saved preference defaults to the browser language. Requirement and Reviewer forms select models from the current provider catalog and retain the CLI-default option. The configuration dialog updates the workspace configuration, distinguishes immediately applied settings from restart-required settings, and contains browser-local settings that take effect without saving the Manager configuration.
+The dashboard supports English and Simplified Chinese. The header language switcher applies the locale immediately and persists the choice in browser storage; a visitor without a saved preference defaults to the browser language. Requirement and Reviewer forms select models from the current provider catalog and retain the CLI-default option. The configuration dialog updates the workspace configuration, distinguishes immediately applied settings from restart-required settings, and contains browser-local settings that take effect without saving the Manager configuration. Its Native Agent authentication panel saves API keys in a separate owner-only credential store and orchestrates pi-ai subscription login through short-lived HTTP requests plus polling. OAuth tokens and API keys are never returned to the browser; configuration changes take effect for subsequent Native Agent Runs.
 
 Browser desktop notifications are enabled by default and the preference is stored in that browser. The settings dialog changes it immediately, while the header bell remains a shortcut. Because permission cannot be granted silently, the settings dialog and bell request it only from a direct user action and report blocked, unsupported, or insecure contexts separately. While the dashboard is open, terminal RD Run SSE events (`run.succeeded`, `run.failed`, `run.timed_out`, and `run.cancelled`) create outcome-specific notifications with the Requirement title. Clicking one focuses the dashboard and opens that Requirement. Reviewer outcomes and historical Run snapshots do not notify; Run IDs suppress repeat notifications after an SSE reconnection. Browser notifications require a secure context (localhost or HTTPS) and granted site permission, so a Windows browser using port forwarding can display its own operating-system notifications without a Manager-side Windows integration.
 

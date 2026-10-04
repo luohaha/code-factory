@@ -5,6 +5,7 @@ import { AgentManager, MAX_MESSAGE_ATTACHMENT_BYTES } from './agent-manager.js';
 import { validateAgentManagerConfigurationPatch } from './configuration.js';
 import { DashboardServer } from './dashboard-server.js';
 import type { Logger } from './logger.js';
+import type { NativeAuthProvider, NativeOAuthProvider } from './native-auth-service.js';
 import { StoreConflictError, StoreNotFoundError } from './store.js';
 import type { AgentProvider, AgentReasoningEffort, ManagerEvent, PullRequestStatus } from './types.js';
 import { CODE_FACTORY_VERSION } from './version.js';
@@ -53,7 +54,21 @@ function stringField(body: Record<string, unknown>, name: string, required = fal
 }
 
 function providerField(value: unknown): AgentProvider {
-  if (value !== 'codex' && value !== 'claude-code') throw new TypeError('provider must be codex or claude-code');
+  if (value !== 'codex' && value !== 'claude-code' && value !== 'native-agent') throw new TypeError('provider must be codex, claude-code, or native-agent');
+  return value;
+}
+
+function nativeAuthProviderField(value: string): NativeAuthProvider {
+  if (value !== 'openai' && value !== 'anthropic' && value !== 'openai-codex') {
+    throw new TypeError('Native Agent auth provider must be openai, anthropic, or openai-codex');
+  }
+  return value;
+}
+
+function nativeOAuthProviderField(value: string): NativeOAuthProvider {
+  if (value !== 'openai' && value !== 'openai-codex') {
+    throw new TypeError('Subscription login supports openai and openai-codex');
+  }
   return value;
 }
 
@@ -159,7 +174,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
     if (allowedOrigin) {
       response.setHeader('access-control-allow-origin', allowedOrigin);
       response.setHeader('access-control-allow-headers', 'content-type, x-file-name');
-      response.setHeader('access-control-allow-methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+      response.setHeader('access-control-allow-methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
     }
     if (request.method === 'OPTIONS') {
       response.writeHead(204).end();
@@ -195,6 +210,35 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
       if (request.method === 'PATCH' && url.pathname === '/api/configuration') {
         const patch = validateAgentManagerConfigurationPatch(await readJson(request));
         sendJson(response, 200, manager.updateConfiguration(patch));
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/native-auth') {
+        sendJson(response, 200, { providers: await manager.getNativeAuthStatus(), login: manager.getActiveNativeLogin() });
+        return;
+      }
+      const nativeLogin = url.pathname.match(/^\/api\/native-auth\/logins\/([^/]+)$/);
+      if (nativeLogin) {
+        const id = decodeURIComponent(nativeLogin[1]!);
+        if (request.method === 'GET') sendJson(response, 200, manager.getNativeLogin(id));
+        else if (request.method === 'DELETE') sendJson(response, 200, manager.cancelNativeLogin(id));
+        else if (request.method === 'POST') {
+          const body = await readJson(request);
+          sendJson(response, 200, manager.submitNativeLoginPrompt(id, stringField(body, 'answer', true)!));
+        } else response.writeHead(405).end();
+        return;
+      }
+      const nativeAuth = url.pathname.match(/^\/api\/native-auth\/([^/]+)(?:\/(api-key|login))?$/);
+      if (nativeAuth) {
+        const provider = nativeAuthProviderField(decodeURIComponent(nativeAuth[1]!));
+        const action = nativeAuth[2];
+        if (request.method === 'PUT' && action === 'api-key') {
+          const body = await readJson(request);
+          sendJson(response, 200, { providers: await manager.setNativeApiKey(provider, stringField(body, 'key', true)!) });
+        } else if (request.method === 'POST' && action === 'login') {
+          sendJson(response, 202, manager.startNativeLogin(nativeOAuthProviderField(provider)));
+        } else if (request.method === 'DELETE' && !action) {
+          sendJson(response, 200, { providers: await manager.removeNativeAuth(provider) });
+        } else response.writeHead(405).end();
         return;
       }
       if (request.method === 'GET' && url.pathname === '/api/search') {
@@ -328,8 +372,14 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           provider: providerField(body.provider),
           ...(model ? { model } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(body.sandboxId === undefined ? {} : { sandboxId: stringField(body, 'sandboxId', true)! }),
         });
         sendJson(response, 201, item);
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/api/sandboxes') {
+        sendJson(response, 200, { items: manager.listSandboxes() });
         return;
       }
 
@@ -350,6 +400,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           ...(body.provider !== undefined ? { provider: providerField(body.provider) } : {}),
           ...(model !== undefined ? { model } : {}),
           ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+          ...(body.sandboxId !== undefined ? { sandboxId: body.sandboxId === null ? null : stringField(body, 'sandboxId', true)! } : {}),
         }));
         return;
       }

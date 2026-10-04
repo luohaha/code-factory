@@ -69,7 +69,7 @@ Required options:
   --description DESCRIPTION or --description-file PATH (UTF-8)
 
 Optional options:
-  --provider codex|claude-code
+  --provider codex|claude-code|native-agent
   --model MODEL
   --reasoning-effort low|medium|high|xhigh|max
   --start                  Start the new Requirement's RD Agent immediately
@@ -320,8 +320,8 @@ async function parseRequirementPayload(args: readonly string[], runtime: CodeFac
     throw new CliUsageError('Use either --description or --description-file', REQUIREMENT_PROPOSE_HELP);
   }
   const provider = values.provider as string | undefined;
-  if (provider !== undefined && provider !== 'codex' && provider !== 'claude-code') {
-    throw new CliUsageError('--provider must be codex or claude-code', REQUIREMENT_PROPOSE_HELP);
+  if (provider !== undefined && provider !== 'codex' && provider !== 'claude-code' && provider !== 'native-agent') {
+    throw new CliUsageError('--provider must be codex, claude-code, or native-agent', REQUIREMENT_PROPOSE_HELP);
   }
   const reasoningEffort = values['reasoning-effort'] as string | undefined;
   if (reasoningEffort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(reasoningEffort)) {
