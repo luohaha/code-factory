@@ -449,21 +449,6 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         return;
       }
 
-      const forkRequirement = url.pathname.match(/^\/api\/requirements\/([^/]+)\/fork$/);
-      if (request.method === 'POST' && forkRequirement) {
-        const body = await readJson(request);
-        const item = manager.forkRequirement(decodeURIComponent(forkRequirement[1]!), {
-          title: stringField(body, 'title', true)!,
-          description: stringField(body, 'description', true)!,
-        });
-        void manager.runRequirement(item.id)
-          .catch((error: unknown) => logger.error('Forked RD run failed unexpectedly', {
-            requirementId: item.id, error,
-          }));
-        sendJson(response, 201, manager.getRequirement(item.id) ?? item);
-        return;
-      }
-
       if (request.method === 'POST' && url.pathname === '/api/agent/requirements') {
         const body = await readJson(request);
         const sourceSessionId = stringField(body, 'sourceSessionId', true)!;

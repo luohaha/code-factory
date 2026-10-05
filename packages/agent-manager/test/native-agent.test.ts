@@ -44,7 +44,7 @@ test('native agent preserves its durable conversation across service reopen', as
   const first = new NativeAgentService(join(directory, 'native.sqlite'), models);
   const sessions: string[] = [];
   const run = (service: NativeAgentService, nativeSessionId: string | null, prompt: string) => service.run({
-    requirementId: 'req_test', sessionId: 'ses_test', nativeSessionId, forkSourceNativeSessionId: null,
+    requirementId: 'req_test', sessionId: 'ses_test', nativeSessionId,
     prompt, model: 'faux/faux-1', reasoningEffort: null, cwd: directory, environment: {}, instructions: 'Test agent',
     signal: new AbortController().signal, timeoutMs: 30_000, onNativeSession: (id) => sessions.push(id), onEvent: () => undefined,
   });
@@ -88,7 +88,7 @@ test('native steering joins an active tool round', async () => {
   ]);
   try {
     const run = service.run({ requirementId: 'req_steer', sessionId: 'ses_steer', nativeSessionId: null,
-      forkSourceNativeSessionId: null, prompt: 'Original direction', model: 'faux/faux-1',
+      prompt: 'Original direction', model: 'faux/faux-1',
       reasoningEffort: null, cwd: directory, environment: {}, instructions: 'Test agent',
       signal: new AbortController().signal, timeoutMs: 30_000, onNativeSession: () => undefined, onEvent: () => undefined });
     for (let attempt = 0; attempt < 100 && faux.state.callCount < 1; attempt++) {
@@ -114,7 +114,7 @@ test('Stop Run during native setup never submits the initial input', async () =>
   const controller = new AbortController();
   try {
     const run = service.run({ requirementId: 'req_stop', sessionId: 'ses_stop', nativeSessionId: null,
-      forkSourceNativeSessionId: null, prompt: 'Do work', model: 'faux/faux-1',
+      prompt: 'Do work', model: 'faux/faux-1',
       reasoningEffort: null, cwd: directory, environment: {}, instructions: 'Test agent',
       signal: controller.signal, timeoutMs: 30_000, onNativeSession: () => undefined, onEvent: () => undefined });
     controller.abort();
@@ -169,36 +169,6 @@ test('native Steering during setup delivers attachment-only input in the same Ru
   }
 });
 
-test('native fork starts a separate conversation with source context', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'code-factory-fork-'));
-  const faux = fauxProvider();
-  const models = createModels();
-  models.setProvider(faux.provider);
-  const service = new NativeAgentService(join(directory, 'native.sqlite'), models);
-  const base = { model: 'faux/faux-1', reasoningEffort: null, cwd: directory, environment: {},
-    instructions: 'Test agent', signal: new AbortController().signal, timeoutMs: 30_000,
-    onNativeSession: () => undefined, onEvent: () => undefined } as const;
-  try {
-    faux.setResponses([fauxAssistantMessage('Source answer')]);
-    const source = await service.run({ ...base, requirementId: 'req_source', sessionId: 'ses_source',
-      nativeSessionId: null, forkSourceNativeSessionId: null, prompt: 'Source task' });
-    assert.equal(source.status, 'succeeded');
-    let inherited = false;
-    faux.setResponses([(context) => {
-      inherited = JSON.stringify(context.messages).includes('Source answer');
-      return fauxAssistantMessage('Fork answer');
-    }]);
-    const fork = await service.run({ ...base, requirementId: 'req_fork', sessionId: 'ses_fork',
-      nativeSessionId: null, forkSourceNativeSessionId: source.nativeSessionId, prompt: 'Another direction' });
-    assert.equal(fork.status, 'succeeded');
-    assert.notEqual(fork.nativeSessionId, source.nativeSessionId);
-    assert.equal(inherited, true);
-  } finally {
-    await service.close();
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
 test('native control-plane tool calls the requirement CLI with session context', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'code-factory-tools-'));
   const server = createServer((request, response) => {
@@ -219,7 +189,7 @@ test('native control-plane tool calls the requirement CLI with session context',
   const traces: string[] = [];
   try {
     const outcome = await service.run({ requirementId: 'req_tools', sessionId: 'ses_tools', nativeSessionId: null,
-      forkSourceNativeSessionId: null, prompt: 'Check related requirements', model: 'faux/faux-1',
+      prompt: 'Check related requirements', model: 'faux/faux-1',
       reasoningEffort: null, cwd: directory,
       environment: { CODE_FACTORY_API_URL: `http://127.0.0.1:${address.port}/api`, CODE_FACTORY_REQUIREMENT_ID: 'req_tools', CODE_FACTORY_SESSION_ID: 'ses_tools' },
       instructions: 'Test agent', signal: new AbortController().signal, timeoutMs: 30_000,
@@ -260,7 +230,7 @@ test('native gh_pr runs inside the selected execution environment with literal a
   const service = new NativeAgentService(join(directory, 'native.sqlite'), models);
   try {
     const outcome = await service.run({ requirementId: 'req_gh', sessionId: 'ses_gh', nativeSessionId: null,
-      forkSourceNativeSessionId: null, prompt: 'Inspect PR', model: 'faux/faux-1', reasoningEffort: null,
+      prompt: 'Inspect PR', model: 'faux/faux-1', reasoningEffort: null,
       cwd: sandbox, environment: { PATH: `${binaryDirectory}:${process.env.PATH ?? ''}` }, instructions: 'Test agent',
       signal: new AbortController().signal, timeoutMs: 30_000,
       onNativeSession: () => undefined, onEvent: () => undefined });
@@ -296,7 +266,7 @@ test('native control-plane tool exposes a failed CLI call as a tool error', asyn
   const service = new NativeAgentService(join(directory, 'native.sqlite'), models);
   try {
     const outcome = await service.run({ requirementId: 'req_error', sessionId: 'ses_error', nativeSessionId: null,
-      forkSourceNativeSessionId: null, prompt: 'Check related', model: 'faux/faux-1', reasoningEffort: null,
+      prompt: 'Check related', model: 'faux/faux-1', reasoningEffort: null,
       cwd: directory,
       environment: { CODE_FACTORY_API_URL: `http://127.0.0.1:${address.port}/api`, CODE_FACTORY_REQUIREMENT_ID: 'req_error', CODE_FACTORY_SESSION_ID: 'ses_error' },
       instructions: 'Test agent', signal: new AbortController().signal, timeoutMs: 30_000,

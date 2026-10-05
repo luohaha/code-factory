@@ -32,7 +32,6 @@ export interface NormalizedAgentTrace {
 export interface RdInvocationInput {
   prompt: string;
   nativeSessionId: string | null;
-  forkSourceNativeSessionId?: string | null;
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
   developerInstructions?: string;

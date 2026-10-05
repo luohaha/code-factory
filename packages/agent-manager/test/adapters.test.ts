@@ -31,16 +31,6 @@ test('Codex starts and resumes through stdin without disabling native context di
   ]);
 });
 
-test('RD adapters fork native context into a new session on the first run', () => {
-  const input = { prompt: 'explore the other direction', nativeSessionId: null, forkSourceNativeSessionId: 'source-native' };
-  const codex = new CodexAdapter().buildRdInvocation(input);
-  assert.deepEqual(codex.args.slice(-3), ['fork', 'source-native', '-']);
-  assert.equal(codex.input, input.prompt);
-  const claude = new ClaudeCodeAdapter().buildRdInvocation(input);
-  assert.deepEqual(claude.args.slice(-3), ['--resume', 'source-native', '--fork-session']);
-  assert.ok(!claude.args.includes('--session-id'));
-});
-
 test('Codex reviewer is ephemeral and receives a prompt through stdin', () => {
   const invocation = new CodexAdapter().buildReviewInvocation({
     prompt: 'Review GitHub PR https://github.com/acme/repo/pull/7',

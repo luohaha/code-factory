@@ -42,7 +42,6 @@ export interface AgentSessionDto {
   requirementId: string;
   provider: AgentProvider;
   nativeSessionId: string | null;
-  forkSourceNativeSessionId: string | null;
   state: SessionState;
   lastError: string | null;
   lastConsumedMessageSequence: number;
@@ -63,7 +62,6 @@ export interface RequirementDto {
   createdBy: 'human' | 'rd_agent';
   parentRequirementId: string | null;
   sourceSessionId: string | null;
-  forkedFromRequirementId: string | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -481,12 +479,6 @@ export class AgentManagerClient {
 
   deleteSandbox(id: string): Promise<void> {
     return this.request(`/api/sandboxes/${encodeURIComponent(id)}`, { method: 'DELETE' });
-  }
-
-  forkRequirement(id: string, input: { title: string; description: string }): Promise<RequirementDto> {
-    return this.request(`/api/requirements/${encodeURIComponent(id)}/fork`, {
-      method: 'POST', body: JSON.stringify(input),
-    });
   }
 
   updateRequirementAgentConfiguration(
