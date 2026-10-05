@@ -310,6 +310,16 @@ export class E2BExecutionEnv implements ExecutionEnv {
       (error: unknown) => error instanceof CommandExitError
         ? { exitCode: error.exitCode } : { error: executionError(error) },
     ).then((result) => { completed = true; return result; });
+    const signal = context.abortSignal;
+    let wakeOnAbort: (() => void) | undefined;
+    const aborted = new Promise<void>((resolve) => { wakeOnAbort = resolve; });
+    let killOnAbort: Promise<boolean | undefined> | undefined;
+    const onAbort = () => {
+      killOnAbort ??= handle.kill().catch(() => undefined);
+      wakeOnAbort?.();
+    };
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
     const decoder = new TextDecoder();
     let offset = 0;
     let newlines = 0;
@@ -323,7 +333,7 @@ export class E2BExecutionEnv implements ExecutionEnv {
     const drain = async (): Promise<boolean> => {
       const read = await this.sandbox.commands.run(
         `if test -f ${quote(path)}; then tail -c +${offset + 1} ${quote(path)} | head -c 65536 | base64 -w0; fi`,
-        { cwd, timeoutMs: 30_000 });
+        { cwd, timeoutMs: 30_000, ...(signal ? { signal } : {}) });
       const bytes = Buffer.from(read.stdout.trim(), 'base64');
       if (bytes.length === 0) return false;
       offset += bytes.length;
@@ -337,12 +347,15 @@ export class E2BExecutionEnv implements ExecutionEnv {
     };
     try {
       while (true) {
+        if (signal?.aborted) throw new ExecutionError('aborted', 'E2B command aborted');
         if (await drain()) continue;
+        if (signal?.aborted) throw new ExecutionError('aborted', 'E2B command aborted');
         if (completed) break;
-        await Promise.race([completion, new Promise<void>((resolve) => setTimeout(resolve, 100))]);
+        await Promise.race([completion, aborted, new Promise<void>((resolve) => setTimeout(resolve, 100))]);
       }
       emit(decoder.decode());
       const result = await completion;
+      if (signal?.aborted) throw new ExecutionError('aborted', 'E2B command aborted');
       if (!spilled) await this.sandbox.files.remove(path).catch(() => undefined);
       if ('error' in result) {
         if (spilled) result.error.spillPath = path;
@@ -350,12 +363,13 @@ export class E2BExecutionEnv implements ExecutionEnv {
       }
       return ok({ exitCode: result.exitCode, ...(spilled ? { spillPath: path } : {}) });
     } catch (error) {
-      await handle.kill().catch(() => undefined);
-      await completion;
-      const failure = executionError(error);
+      await (killOnAbort ?? handle.kill().catch(() => undefined));
+      const failure = signal?.aborted ? new ExecutionError('aborted', 'E2B command aborted') : executionError(error);
       if (spilled) failure.spillPath = path;
       else await this.sandbox.files.remove(path).catch(() => undefined);
       return err(failure);
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
     }
   }
 
