@@ -112,6 +112,8 @@ codex exec --json --color never --ephemeral \
 
 The `thread_id` from a `thread.started` event is stored on the AgentSession and reused by later RD Runs. Reviewers use `--ephemeral` and do not create resumable business Sessions.
 
+When Codex reports a failed turn, the Run retains the provider's error message when available, including a preceding error event if the final `turn.failed` event has no detail.
+
 Code Factory instructions are appended through Codex's supported `developer_instructions` override and do not replace repository `AGENTS.md` files. A Reviewer does not use the local-working-tree-oriented `codex exec review --base` command. It runs as an ordinary headless Agent and receives `Review GitHub PR <url>` through stdin.
 
 ## 3. Claude Code

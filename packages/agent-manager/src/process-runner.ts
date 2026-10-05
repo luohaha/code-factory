@@ -106,7 +106,10 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         const event = request.adapter.parseLine(line);
         if (!event) return;
         request.onEvent?.(event);
-        if (event.kind === 'error') protocolError = event.message ?? 'Agent reported an error';
+        if (event.kind === 'error') {
+          const message = event.message ?? 'Agent reported an error';
+          if (message !== 'turn.failed' || !protocolError) protocolError = message;
+        }
         if (event.nativeSessionId) {
           nativeSessionId = event.nativeSessionId;
           request.onNativeSession?.(event.nativeSessionId);

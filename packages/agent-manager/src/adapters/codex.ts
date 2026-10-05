@@ -231,7 +231,12 @@ export class CodexAdapter implements AgentAdapter {
       };
     }
     if (type.includes('error') || type === 'turn.failed') {
-      const message = typeof raw.message === 'string' ? raw.message : type;
+      const nestedError = raw.error && typeof raw.error === 'object'
+        ? raw.error as Record<string, unknown>
+        : null;
+      const message = stringField(raw, 'message')
+        ?? (nestedError ? stringField(nestedError, 'message') : undefined)
+        ?? type;
       return {
         kind: 'error',
         message,

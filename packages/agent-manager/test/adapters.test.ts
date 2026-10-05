@@ -92,6 +92,16 @@ test('adapters normalize native session identifiers', () => {
   assert.equal(claude?.nativeSessionId, 'claude-1');
 });
 
+test('Codex preserves the reason nested in a failed turn', () => {
+  const event = new CodexAdapter().parseLine(JSON.stringify({
+    type: 'turn.failed',
+    error: { message: 'Selected model is at capacity. Please try a different model.' },
+  }));
+  assert.equal(event?.kind, 'error');
+  assert.equal(event?.message, 'Selected model is at capacity. Please try a different model.');
+  assert.equal(event?.traces?.[0]?.detail, event?.message);
+});
+
 test('Codex normalizes commands, results, reasoning, and Agent messages into trace events', () => {
   const adapter = new CodexAdapter();
   const started = adapter.parseLine(JSON.stringify({
