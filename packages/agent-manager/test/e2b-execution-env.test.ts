@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import { CommandExitError, FileType } from 'e2b';
@@ -180,6 +180,74 @@ test('E2B spill reads large remote output in bounded slices and preserves full c
   } }, BACKGROUND_CONTEXT);
   assert.deepEqual(belowThreshold, { ok: true, value: { exitCode: 0 } });
   assert.equal(remote.size, 1);
+});
+
+test('aborting a spilled E2B command kills the remote process and returns its output path', async () => {
+  const controller = new AbortController();
+  const remote = new Map<string, Buffer>();
+  let killed = 0;
+  const handle = {
+    sandboxId: 'aborted-output',
+    files: { remove: async (path: string) => { remote.delete(path); } },
+    commands: {
+      async run(command: string, options?: { background?: boolean }) {
+        if (options?.background) {
+          const path = command.match(/ > '([^']+)' 2>&1$/)?.[1];
+          assert(path);
+          remote.set(path, Buffer.from('partial output\n'));
+          return {
+            wait: () => new Promise<never>(() => undefined),
+            kill: async () => { killed++; return true; },
+          };
+        }
+        const path = command.match(/test -f '([^']+)'/)?.[1];
+        const offset = Number(command.match(/tail -c \+(\d+)/)?.[1]) - 1;
+        assert(path);
+        return { exitCode: 0, stdout: (remote.get(path)?.subarray(offset) ?? Buffer.alloc(0)).toString('base64') };
+      },
+    },
+  } as unknown as E2BHandle;
+  const env = new E2BExecutionEnv(handle, '/home/user/repo');
+  const output: string[] = [];
+  const result = await env.exec('long-running command', { spill: { afterBytes: 1, afterLines: 1 },
+    onOutput: (text) => { output.push(text); controller.abort(); },
+  }, withAbortSignal(controller.signal, BACKGROUND_CONTEXT));
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.error.code, 'aborted');
+  assert.equal(killed, 1);
+  assert.equal(output.join(''), 'partial output\n');
+  assert(result.error.spillPath);
+  assert.equal(remote.get(result.error.spillPath)?.toString(), 'partial output\n');
+});
+
+test('aborting an idle E2B background command wakes the spill poller', async () => {
+  const controller = new AbortController();
+  let killed = 0;
+  let removed = false;
+  const handle = {
+    sandboxId: 'idle-command',
+    files: { remove: async () => { removed = true; } },
+    commands: {
+      async run(_command: string, options?: { background?: boolean }) {
+        if (options?.background) return {
+          wait: () => new Promise<never>(() => undefined),
+          kill: async () => { killed++; return true; },
+        };
+        return { exitCode: 0, stdout: '' };
+      },
+    },
+  } as unknown as E2BHandle;
+  const env = new E2BExecutionEnv(handle, '/home/user/repo');
+  const pending = env.exec('wait forever', { spill: { afterBytes: 1, afterLines: 1 } },
+    withAbortSignal(controller.signal, BACKGROUND_CONTEXT));
+  setTimeout(() => controller.abort(), 10);
+  const result = await pending;
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.error.code, 'aborted');
+  assert.equal(killed, 1);
+  assert.equal(removed, true);
 });
 
 test('pi-durable read, write, edit and bash use the selected E2B sandbox', async () => {
