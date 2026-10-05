@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import type { AgentAdapter } from '../src/adapters/types.ts';
+import { CodexAdapter } from '../src/adapters/codex.ts';
 import { HeadlessProcessRunner } from '../src/process-runner.ts';
 
 const noOutputAdapter: AgentAdapter = {
@@ -82,6 +83,27 @@ test('HeadlessProcessRunner preserves the workspace and parent environment while
     else process.env[parentContextName] = previousParentContext;
     rmSync(workspaceRoot, { recursive: true, force: true });
   }
+});
+
+test('HeadlessProcessRunner retains a provider error before a generic failed turn', async () => {
+  const lines = [
+    { type: 'error', message: 'Selected model is at capacity. Please try a different model.' },
+    { type: 'turn.failed' },
+  ].map((event) => JSON.stringify(event)).join('\n') + '\n';
+  const outcome = await new HeadlessProcessRunner().run({
+    invocation: {
+      command: process.execPath,
+      args: ['-e', `process.stdout.write(${JSON.stringify(lines)}); process.exitCode = 1;`],
+      input: '',
+    },
+    adapter: new CodexAdapter(),
+    workspaceRoot: process.cwd(),
+    timeoutMs: 30_000,
+    maxOutputBytes: 1024,
+  });
+
+  assert.equal(outcome.status, 'failed');
+  assert.equal(outcome.error, 'Selected model is at capacity. Please try a different model.');
 });
 
 test('HeadlessProcessRunner kills descendant tool processes before completing a cancelled Run', async () => {
