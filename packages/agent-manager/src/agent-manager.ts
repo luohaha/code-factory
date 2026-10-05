@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { constants, copyFileSync, mkdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, delimiter, dirname, join, resolve } from 'node:path';
+import { basename, delimiter, dirname, join, posix, resolve } from 'node:path';
 
 import { normalizeRepositoryKey } from './repository-key.js';
 import { ClaudeCodeAdapter } from './adapters/claude-code.js';
@@ -43,6 +43,8 @@ import { HeadlessProcessRunner, type AgentProcessRunner, type ProcessRunRequest 
 import { NativeAgentService } from './native-agent.js';
 import { NativeAuthService, type NativeAuthProvider, type NativeAuthProviderStatus,
   type NativeLoginSnapshot, type NativeOAuthProvider } from './native-auth-service.js';
+import { E2BProviderError, E2BSandboxService, type E2BCredentials, type E2BHandle } from './e2b-execution-env.js';
+import { E2BCredentialStore, e2bCredentialsPath } from './e2b-credentials.js';
 import { PullRequestReconciler } from './pull-request-reconciler.js';
 import {
   PullRequestCiFailureTrigger,
@@ -73,6 +75,7 @@ import type {
   AgentTimer,
   AgentTimerSchedule,
   Sandbox,
+  SandboxSharing,
   TrackPullRequestInput,
   UpdateRequirementAgentConfigurationInput,
 } from './types.js';
@@ -85,6 +88,7 @@ export interface AgentManagerOptions {
   runner?: AgentProcessRunner;
   nativeService?: NativeAgentService;
   nativeAuthService?: NativeAuthService;
+  e2bService?: E2BSandboxService;
   githubClient?: GitHubClient;
   jevWakeDecision?: (apiKey: string, context: JevWakeContext, signal: AbortSignal) => Promise<JevWakeDecision>;
   logger?: Logger;
@@ -167,6 +171,8 @@ export class AgentManager extends EventEmitter {
   readonly #adapters: Record<'codex' | 'claude-code', AgentAdapter>;
   readonly #native: NativeAgentService;
   #nativeAuth: NativeAuthService | null;
+  readonly #e2b: E2BSandboxService;
+  #e2bCredentials: E2BCredentialStore | null = null;
   readonly #timeoutMs: number;
   readonly #maxOutputBytes: number;
   readonly #agentCliBinDirectory: string | null;
@@ -225,7 +231,8 @@ export class AgentManager extends EventEmitter {
     this.#store = options.store ?? new SqliteAgentManagerStore(this.databasePath);
     this.#runner = options.runner ?? new HeadlessProcessRunner();
     this.#adapters = { codex: new CodexAdapter(), 'claude-code': new ClaudeCodeAdapter() };
-    this.#native = options.nativeService ?? new NativeAgentService(join(dirname(this.databasePath === ':memory:' ? join(this.workspaceRoot, 'factory.sqlite') : this.databasePath), 'native-agent.sqlite'));
+    this.#e2b = options.e2bService ?? new E2BSandboxService();
+    this.#native = options.nativeService ?? new NativeAgentService(join(dirname(this.databasePath === ':memory:' ? join(this.workspaceRoot, 'factory.sqlite') : this.databasePath), 'native-agent.sqlite'), undefined, this.#e2b);
     this.#nativeAuth = options.nativeAuthService ?? null;
     this.#timeoutMs = options.timeoutMs ?? 60 * 60 * 1_000;
     this.#maxOutputBytes = options.maxOutputBytes ?? 2 * 1024 * 1024;
@@ -414,6 +421,7 @@ export class AgentManager extends EventEmitter {
     }
     this.#agentTriggers.clear();
     this.#store.close();
+    this.#e2bCredentials?.close();
     this.logger.info('Agent Manager closed');
     try {
       this.#closePromise = Promise.all([this.#native.close(), this.#nativeAuth?.close()])
@@ -606,9 +614,7 @@ export class AgentManager extends EventEmitter {
     if (!description) throw new TypeError('description is required');
     if (input.sandboxId && input.provider !== 'native-agent') throw new TypeError('sandboxes require native-agent');
     const sandboxId = input.sandboxId === 'local' ? null : input.sandboxId;
-    if (sandboxId && !this.listSandboxes().some((sandbox) => sandbox.id === sandboxId)) {
-      throw new StoreNotFoundError(`Sandbox ${sandboxId} not found`);
-    }
+    if (sandboxId) this.requireAvailableSandbox(sandboxId);
     if (input.createdBy === 'rd_agent') {
       if (!input.sourceSessionId) throw new TypeError('sourceSessionId is required for an Agent-created requirement');
       const source = this.#store.listSessions().find((session) => session.id === input.sourceSessionId);
@@ -659,6 +665,9 @@ export class AgentManager extends EventEmitter {
 
   forkRequirement(sourceRequirementId: string, input: ForkRequirementInput): RequirementWithSession {
     const source = this.requireRequirement(sourceRequirementId);
+    if (source.sandboxId && this.#store.getSandbox(source.sandboxId)?.sharing === 'dedicated') {
+      throw new StoreConflictError('A dedicated E2B sandbox cannot be shared by a fork');
+    }
     if (source.status !== 'doing' && source.status !== 'waiting_confirmation') {
       throw new StoreConflictError(`Requirement ${sourceRequirementId} can only be forked while doing or waiting_confirmation`);
     }
@@ -737,9 +746,7 @@ export class AgentManager extends EventEmitter {
     const sandboxId = provider === 'native-agent'
       ? (hasSandbox ? (input.sandboxId === 'local' ? null : input.sandboxId ?? null) : current.sandboxId)
       : null;
-    if (sandboxId && !this.listSandboxes().some((sandbox) => sandbox.id === sandboxId)) {
-      throw new StoreNotFoundError(`Sandbox ${sandboxId} not found`);
-    }
+    if (sandboxId) this.requireAvailableSandbox(sandboxId, id);
     if (provider === current.provider && model === current.model && reasoningEffort === current.reasoningEffort && sandboxId === current.sandboxId) return current;
 
     const requirement = this.#store.updateRequirementAgentConfiguration({
@@ -768,7 +775,169 @@ export class AgentManager extends EventEmitter {
 
   listSandboxes(): Sandbox[] {
     return [{ id: 'local', name: 'Local execution', kind: 'local', cwd: this.workspaceRoot,
-      createdAt: '1970-01-01T00:00:00.000Z' }, ...this.#store.listSandboxes().filter((sandbox) => sandbox.kind !== 'local-sandbox')];
+      providerSandboxId: null, credentialEnvVar: null, domain: null, credentialRef: null,
+      repositoryUrl: null, template: null, sharing: null,
+      status: 'running', checkedAt: null,
+      createdAt: '1970-01-01T00:00:00.000Z' },
+      ...this.#store.listSandboxes().filter((sandbox) => sandbox.kind !== 'local-sandbox')];
+  }
+
+  private e2bCredentialStore(): E2BCredentialStore {
+    this.#e2bCredentials ??= new E2BCredentialStore(e2bCredentialsPath(this.databasePath === ':memory:'
+      ? join(this.workspaceRoot, 'factory.sqlite') : this.databasePath));
+    return this.#e2bCredentials;
+  }
+
+  private e2bCredentials(sandbox: Sandbox): E2BCredentials {
+    const apiKey = sandbox.credentialRef
+      ? this.e2bCredentialStore().read(sandbox.credentialRef)
+      : sandbox.credentialEnvVar ? process.env[sandbox.credentialEnvVar] : null;
+    if (!apiKey) throw new TypeError(`E2B credential is unavailable for sandbox ${sandbox.id}`);
+    return { domain: sandbox.domain ?? process.env.E2B_DOMAIN ?? 'e2b.app', apiKey };
+  }
+
+  private async prepareE2BWorkspace(handle: E2BHandle, cwd: string, repositoryUrl: string | null): Promise<void> {
+    const trustedGitHub = repositoryUrl !== null && new URL(repositoryUrl).hostname.toLowerCase() === 'github.com';
+    const envs = Object.fromEntries((trustedGitHub ? ['GH_TOKEN', 'GITHUB_TOKEN'] : []).flatMap((name) =>
+      process.env[name] ? [[name, process.env[name]!]] : []));
+    try {
+      const tools = await handle.commands.run('command -v git >/dev/null && command -v gh >/dev/null',
+        { timeoutMs: 30_000 });
+      if (tools.exitCode !== 0) throw new Error();
+    } catch { throw new TypeError('E2B template must have git and gh installed'); }
+    if (repositoryUrl) {
+      try {
+        const token = trustedGitHub ? process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN : undefined;
+        const cloned = await handle.git.clone(repositoryUrl, { path: cwd, timeoutMs: 120_000,
+          ...(token ? { username: 'x-access-token', password: token } : {}) });
+        if (cloned.exitCode !== 0) throw new Error();
+      } catch { throw new TypeError('E2B repository clone failed; check the URL and GitHub authentication'); }
+    }
+    const quoted = `'${cwd.replaceAll("'", "'\\''")}'`;
+    try {
+      const checkout = await handle.commands.run(`git -C ${quoted} rev-parse --is-inside-work-tree`,
+        { timeoutMs: 30_000 });
+      if (checkout.exitCode !== 0) throw new Error();
+    } catch { throw new TypeError('E2B working directory must contain a Git checkout'); }
+    try {
+      const auth = await handle.commands.run('gh auth status', { cwd, envs, timeoutMs: 30_000 });
+      if (auth.exitCode !== 0) throw new Error();
+    } catch { throw new TypeError('Authenticate gh in the E2B sandbox or set GH_TOKEN on Agent Manager'); }
+  }
+
+  private requireAvailableSandbox(id: string, requirementId?: string): Sandbox {
+    const sandbox = this.#store.getSandbox(id);
+    if (!sandbox) throw new StoreNotFoundError(`Sandbox ${id} not found`);
+    if (sandbox.kind === 'local-sandbox') throw new StoreNotFoundError(`Sandbox ${id} not found`);
+    if (sandbox.status === 'terminated') throw new StoreConflictError(`Sandbox ${id} is terminated`);
+    if (sandbox.sharing === 'dedicated' && this.#store.listRequirements().some((requirement) =>
+      requirement.sandboxId === id && requirement.id !== requirementId)) {
+      throw new StoreConflictError(`Sandbox ${id} is dedicated to another Requirement`);
+    }
+    return sandbox;
+  }
+
+  async createE2BSandbox(input: { name: string; sharing: SandboxSharing; template?: string; cwd?: string;
+    providerSandboxId?: string; domain: string; apiKey: string; repositoryUrl?: string }): Promise<Sandbox> {
+    const name = input.name.trim();
+    if (!name || name.length > 80) throw new TypeError('sandbox name must contain 1 to 80 characters');
+    if (input.sharing !== 'shared' && input.sharing !== 'dedicated') throw new TypeError('sharing must be shared or dedicated');
+    const domain = input.domain.trim().toLowerCase();
+    if (!/^[a-zA-Z0-9.-]+(?::[0-9]+)?$/.test(domain)) throw new TypeError('E2B_DOMAIN must be a domain name');
+    const apiKey = input.apiKey.trim();
+    if (!apiKey) throw new TypeError('E2B_API_KEY is required');
+    const credentials = { domain, apiKey };
+    const cwd = input.cwd?.trim() || '/home/user/repo';
+    if (!posix.isAbsolute(cwd) || cwd.includes('\0')) throw new TypeError('cwd must be an absolute remote path');
+    const template = input.template?.trim() || 'base';
+    if (template.length > 100) throw new TypeError('template must contain at most 100 characters');
+    const providerId = input.providerSandboxId?.trim();
+    const attached = !!providerId;
+    const repositoryUrl = input.repositoryUrl?.trim() || null;
+    if (!attached && !repositoryUrl) throw new TypeError('repositoryUrl is required when provisioning a new E2B sandbox');
+    if (repositoryUrl) {
+      let parsed: URL;
+      try { parsed = new URL(repositoryUrl); }
+      catch { throw new TypeError('repositoryUrl must be an HTTPS URL without embedded credentials'); }
+      if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash) {
+        throw new TypeError('repositoryUrl must be an HTTPS URL without embedded credentials');
+      }
+    }
+    if (attached && this.#store.listSandboxes().some((sandbox) =>
+      sandbox.providerSandboxId === providerId && (sandbox.domain ?? 'e2b.app') === domain)) {
+      throw new StoreConflictError('E2B sandbox is already attached');
+    }
+    const handle = attached ? await this.#e2b.connect(providerId!, credentials) : await this.#e2b.create(template, credentials);
+    const credentialRef = `e2b_${randomUUID()}`;
+    try {
+      if (attached) {
+        let exists: boolean;
+        try { exists = await handle.files.exists(cwd); }
+        catch { throw new TypeError('Could not inspect the attached E2B working directory'); }
+        if (!exists) throw new TypeError(`Remote directory ${cwd} does not exist`);
+      }
+      await this.prepareE2BWorkspace(handle, cwd, attached ? null : repositoryUrl);
+      const info = await this.#e2b.getInfo(handle.sandboxId, credentials);
+      const now = new Date().toISOString();
+      this.e2bCredentialStore().save(credentialRef, apiKey);
+      return this.#store.createSandbox({ id: `sbx_${randomUUID()}`, name, kind: 'e2b', cwd,
+        providerSandboxId: handle.sandboxId, credentialEnvVar: null, domain, credentialRef,
+        repositoryUrl: attached ? null : repositoryUrl,
+        template: attached ? info.templateId : template, sharing: input.sharing,
+        status: info.state, checkedAt: now, createdAt: now });
+    } catch (error) {
+      this.#e2bCredentials?.delete(credentialRef);
+      if (!attached) await this.#e2b.kill(handle.sandboxId, credentials).catch(() => undefined);
+      if (error instanceof TypeError || error instanceof StoreConflictError || error instanceof E2BProviderError) throw error;
+      throw new Error('E2B sandbox setup failed; check the domain, credentials, and remote template');
+    }
+  }
+
+  async checkSandboxHealth(id: string): Promise<Sandbox> {
+    const sandbox = this.#store.getSandbox(id);
+    if (!sandbox) throw new StoreNotFoundError(`Sandbox ${id} not found`);
+    if (sandbox.kind !== 'e2b' || !sandbox.providerSandboxId) return sandbox;
+    let status: Sandbox['status'];
+    try { status = (await this.#e2b.getInfo(sandbox.providerSandboxId, this.e2bCredentials(sandbox))).state; }
+    catch (error) { status = error instanceof Error && error.name === 'SandboxNotFoundError' ? 'terminated' : 'unreachable'; }
+    return this.#store.updateSandbox({ ...sandbox, status, checkedAt: new Date().toISOString() });
+  }
+
+  private requireE2BSandbox(id: string): Sandbox & { providerSandboxId: string } {
+    const sandbox = this.#store.getSandbox(id);
+    if (!sandbox) throw new StoreNotFoundError(`Sandbox ${id} not found`);
+    if (sandbox.kind !== 'e2b' || !sandbox.providerSandboxId) throw new TypeError('Sandbox must be E2B');
+    return sandbox as Sandbox & { providerSandboxId: string };
+  }
+
+  private ensureSandboxIdle(id: string): void {
+    if ([...this.#activeRdRuns.keys()].some((requirementId) => this.#store.getRequirement(requirementId)?.sandboxId === id)) {
+      throw new StoreConflictError(`Sandbox ${id} has an active RD Run`);
+    }
+  }
+
+  async pauseSandbox(id: string): Promise<Sandbox> {
+    const sandbox = this.requireE2BSandbox(id);
+    this.ensureSandboxIdle(id);
+    await this.#e2b.pause(sandbox.providerSandboxId, this.e2bCredentials(sandbox));
+    return this.checkSandboxHealth(id);
+  }
+
+  async resumeSandbox(id: string): Promise<Sandbox> {
+    const sandbox = this.requireE2BSandbox(id);
+    await this.#e2b.connect(sandbox.providerSandboxId, this.e2bCredentials(sandbox));
+    return this.checkSandboxHealth(id);
+  }
+
+  async deleteSandbox(id: string): Promise<void> {
+    const sandbox = this.requireE2BSandbox(id);
+    this.ensureSandboxIdle(id);
+    if (this.#store.listRequirements().some((requirement) => requirement.sandboxId === id)) {
+      throw new StoreConflictError(`Sandbox ${id} is selected by a Requirement`);
+    }
+    await this.#e2b.kill(sandbox.providerSandboxId, this.e2bCredentials(sandbox));
+    this.#store.deleteSandbox(id);
+    if (sandbox.credentialRef) this.e2bCredentialStore().delete(sandbox.credentialRef);
   }
 
   startProposedRequirement(
@@ -1370,6 +1539,9 @@ export class AgentManager extends EventEmitter {
   private startRdRun(requirementId: string): Promise<RequirementWithSession> {
     const startedAt = performance.now();
     const requirement = this.requireRequirement(requirementId);
+    const selectedSandbox = requirement.sandboxId ? this.#store.getSandbox(requirement.sandboxId) : null;
+    if (requirement.sandboxId && !selectedSandbox) throw new StoreNotFoundError(`Sandbox ${requirement.sandboxId} not found`);
+    const cloudCredentials = selectedSandbox?.kind === 'e2b' ? this.e2bCredentials(selectedSandbox) : null;
     const pendingMessages = this.#store.listPendingRdMessages(requirementId);
     const runId = `run_${randomUUID()}`;
     const isResume = requirement.session.nativeSessionId !== null
@@ -1443,7 +1615,12 @@ export class AgentManager extends EventEmitter {
       ? this.#native.run({ requirementId, sessionId: started.session.id, nativeSessionId: requirement.session.nativeSessionId,
           forkSourceNativeSessionId: requirement.session.forkSourceNativeSessionId,
           prompt, model: requirement.model, reasoningEffort: requirement.reasoningEffort,
-          cwd: requirement.sandboxId ? this.#store.getSandbox(requirement.sandboxId)?.cwd ?? this.workspaceRoot : this.workspaceRoot,
+          cwd: selectedSandbox?.cwd ?? this.workspaceRoot,
+          ...(selectedSandbox?.kind === 'e2b' && selectedSandbox.providerSandboxId && cloudCredentials
+            ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedSandbox.providerSandboxId,
+                credentials: cloudCredentials,
+                forwardGitHubToken: selectedSandbox.repositoryUrl !== null
+                  && new URL(selectedSandbox.repositoryUrl).hostname.toLowerCase() === 'github.com' } } : {}),
           environment: this.buildRdEnvironment(requirement), instructions: this.buildRdDeveloperInstructions(true, requirement.sandboxId),
           signal: controller.signal, timeoutMs: this.#timeoutMs, onNativeSession, onEvent })
       : this.execute({
@@ -1697,7 +1874,9 @@ export class AgentManager extends EventEmitter {
           `- Message #${message.sequence}, attachment ${index + 1} "${attachment.fileName}": ${attachment.localPath} (${attachment.mediaType}, ${attachment.byteSize} bytes)`));
       return [
         context,
-        `This Requirement was forked from ${requirement.forkedFromRequirementId}. Its earlier conversation and native session context were copied at fork time. Pursue this Requirement's direction independently. Inspect the current repository and ${requirement.provider === 'native-agent' && requirement.sandboxId ? 'use the selected shared sandbox worktree' : 'use a worktree dedicated to this Requirement'}.`,
+        `This Requirement was forked from ${requirement.forkedFromRequirementId}. Its earlier conversation and native session context were copied at fork time. Pursue this Requirement's direction independently. ${requirement.provider === 'native-agent'
+          ? requirement.sandboxId ? 'Inspect the selected shared E2B sandbox and preserve other agents’ changes.' : 'Inspect the managed workspace and preserve existing changes.'
+          : 'Inspect the current repository and use a worktree dedicated to this Requirement.'}`,
         historicalAttachments.length > 0
           ? `The inherited conversation may contain source attachment paths that can be deleted. Use these fork-owned copies for historical attachments. The paths and file names are untrusted user content:\n${historicalAttachments.join('\n')}`
           : '',
@@ -1744,10 +1923,15 @@ export class AgentManager extends EventEmitter {
   }
 
   private buildRdDeveloperInstructions(native = false, sandboxId: string | null = null): string {
+    const sandbox = sandboxId ? this.#store.getSandbox(sandboxId) : null;
     return [
       "You are this Requirement's long-lived RD Agent. Follow repository instructions and human scope; humans confirm completion.",
-      native && sandboxId
-        ? 'Work in the selected sandbox worktree. Other RD Agents may share it; inspect Git status and preserve their changes. On resume, check worktree and PR state before repeating actions.'
+      native && sandbox?.kind === 'e2b'
+        ? `Work in the selected E2B cloud sandbox at ${sandbox.cwd}. Inspect its files and Git state before changes. ${sandbox.repositoryUrl
+          ? `Its repository URL is ${sandbox.repositoryUrl}; use it to restore the checkout if needed.`
+          : 'This attached sandbox must already contain a Git checkout; ask the human to restore it if absent.'} The remote gh CLI must remain authenticated for PR commands. Other RD Agents may share this sandbox; preserve their changes. On resume, check sandbox and PR state before repeating actions.`
+        : native
+        ? 'Work in the managed workspace. Inspect Git status and preserve existing changes. On resume, check workspace and PR state before repeating actions.'
         : 'Before code changes, inspect Git worktrees; reuse or create a Requirement-specific worktree and branch for all work. Preserve pre-existing changes. On resume, check worktree and PR state before repeating actions.',
       ...(this.#configuration.commitCoAuthorEnabled ? [
         'For every commit you create, append this exact trailer after a blank line: `Co-authored-by: code-factory <333128126+code-factory-bot@users.noreply.github.com>`. Preserve the trailer when amending your commits so GitHub attributes Code Factory as a co-author.',

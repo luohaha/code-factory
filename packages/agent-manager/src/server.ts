@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { AgentManager, MAX_MESSAGE_ATTACHMENT_BYTES } from './agent-manager.js';
 import { validateAgentManagerConfigurationPatch } from './configuration.js';
 import { DashboardServer } from './dashboard-server.js';
+import { E2BProviderError } from './e2b-execution-env.js';
 import type { Logger } from './logger.js';
 import type { NativeAuthProvider, NativeOAuthProvider } from './native-auth-service.js';
 import { StoreConflictError, StoreNotFoundError } from './store.js';
@@ -382,6 +383,44 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         sendJson(response, 200, { items: manager.listSandboxes() });
         return;
       }
+      if (request.method === 'POST' && url.pathname === '/api/sandboxes') {
+        const body = await readJson(request);
+        if (body.kind !== 'e2b') throw new TypeError('kind must be e2b');
+        if (body.sharing !== 'shared' && body.sharing !== 'dedicated') throw new TypeError('sharing must be shared or dedicated');
+        sendJson(response, 201, await manager.createE2BSandbox({
+          name: stringField(body, 'name', true)!, sharing: body.sharing,
+          domain: stringField(body, 'domain', true)!, apiKey: stringField(body, 'apiKey', true)!,
+          ...(body.template === undefined ? {} : { template: stringField(body, 'template', true)! }),
+          ...(body.cwd === undefined ? {} : { cwd: stringField(body, 'cwd', true)! }),
+          ...(body.providerSandboxId === undefined ? {} : { providerSandboxId: stringField(body, 'providerSandboxId', true)! }),
+          ...(body.repositoryUrl === undefined ? {} : { repositoryUrl: stringField(body, 'repositoryUrl', true)! }),
+        }));
+        return;
+      }
+
+      const sandboxAction = url.pathname.match(/^\/api\/sandboxes\/([^/]+)\/(health|pause|resume)$/);
+      if (sandboxAction) {
+        const sandboxId = decodeURIComponent(sandboxAction[1]!);
+        const action = sandboxAction[2];
+        if (action === 'health' && request.method === 'GET') {
+          sendJson(response, 200, await manager.checkSandboxHealth(sandboxId));
+          return;
+        }
+        if (action === 'pause' && request.method === 'POST') {
+          sendJson(response, 200, await manager.pauseSandbox(sandboxId));
+          return;
+        }
+        if (action === 'resume' && request.method === 'POST') {
+          sendJson(response, 200, await manager.resumeSandbox(sandboxId));
+          return;
+        }
+      }
+      const sandbox = url.pathname.match(/^\/api\/sandboxes\/([^/]+)$/);
+      if (sandbox && request.method === 'DELETE') {
+        await manager.deleteSandbox(decodeURIComponent(sandbox[1]!));
+        response.writeHead(204).end();
+        return;
+      }
 
       const requirement = url.pathname.match(/^\/api\/requirements\/([^/]+)$/);
       if (request.method === 'GET' && requirement) {
@@ -658,6 +697,8 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         sendJson(response, 404, { error: error.message });
       } else if (error instanceof StoreConflictError) {
         sendJson(response, 409, { error: error.message });
+      } else if (error instanceof E2BProviderError) {
+        sendJson(response, 502, { error: error.message });
       } else if (error instanceof TypeError || error instanceof SyntaxError || error instanceof RangeError) {
         sendJson(response, 400, { error: error.message });
       } else {

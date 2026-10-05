@@ -1,10 +1,21 @@
 export type AgentProvider = 'codex' | 'claude-code' | 'native-agent';
-export type SandboxKind = 'local' | 'local-sandbox';
+export type SandboxKind = 'local' | 'local-sandbox' | 'e2b';
+export type SandboxSharing = 'shared' | 'dedicated';
+export type SandboxStatus = 'running' | 'paused' | 'terminated' | 'unreachable' | 'unknown';
 export interface Sandbox {
   id: string;
   name: string;
   kind: SandboxKind;
   cwd: string;
+  providerSandboxId: string | null;
+  credentialEnvVar: string | null;
+  domain: string | null;
+  credentialRef: string | null;
+  repositoryUrl: string | null;
+  template: string | null;
+  sharing: SandboxSharing | null;
+  status: SandboxStatus;
+  checkedAt: string | null;
   createdAt: string;
 }
 export type AgentReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';

@@ -193,6 +193,8 @@ export interface CompleteAgentTimerOccurrenceRecord {
 export interface AgentManagerStore {
   close(): void;
   createSandbox(sandbox: Sandbox): Sandbox;
+  updateSandbox(sandbox: Sandbox): Sandbox;
+  deleteSandbox(id: string): void;
   listSandboxes(): Sandbox[];
   getSandbox(id: string): Sandbox | null;
   createRequirement(input: CreateRequirementRecord): RequirementWithSession;

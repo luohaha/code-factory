@@ -2507,6 +2507,8 @@ function Dashboard() {
   const [modelCatalog, setModelCatalog] = useState<AgentModelCatalogDto | null>(null);
   const [requirements, setRequirements] = useState<RequirementDto[]>([]);
   const [sandboxes, setSandboxes] = useState<SandboxDto[]>([]);
+  const [creatingSandbox, setCreatingSandbox] = useState(false);
+  const [busySandboxId, setBusySandboxId] = useState<string | null>(null);
   const [runs, setRuns] = useState<AgentRunDto[]>([]);
   const [agentTraces, setAgentTraces] = useState<Record<string, AgentTraceEventDto[] | undefined>>({});
   const [loadedTraceRequirementIds, setLoadedTraceRequirementIds] = useState<Set<string>>(() => new Set());
@@ -3338,6 +3340,58 @@ function Dashboard() {
     }
   }
 
+  async function createSandbox(event: SyntheticEvent<HTMLFormElement, SubmitEvent>): Promise<void> {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const fields = new FormData(form);
+    const name = fields.get('name');
+    const sharing = fields.get('sharing');
+    if (typeof name !== 'string' || !name.trim()) return;
+    if (sharing !== 'shared' && sharing !== 'dedicated') return;
+    if (creatingSandbox) return;
+    setCreatingSandbox(true);
+    setError(null);
+    try {
+      const value = (field: string) => {
+        const entry = fields.get(field);
+        return typeof entry === 'string' ? entry.trim() : '';
+      };
+      const sandbox = await client.createSandbox({ name: name.trim(), sharing,
+        domain: value('domain'), apiKey: value('apiKey'),
+        ...(value('providerSandboxId') ? { providerSandboxId: value('providerSandboxId') } : {}),
+        ...(value('repositoryUrl') ? { repositoryUrl: value('repositoryUrl') } : {}),
+        ...(value('template') ? { template: value('template') } : {}),
+        ...(value('cwd') ? { cwd: value('cwd') } : {}),
+      });
+      setSandboxes((current) => [...current, sandbox]);
+      form.reset();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t('Failed to create sandbox'));
+    } finally {
+      setCreatingSandbox(false);
+    }
+  }
+
+  async function changeSandbox(id: string, action: 'health' | 'pause' | 'resume' | 'delete'): Promise<void> {
+    if (action === 'delete' && !window.confirm(t('Delete this E2B sandbox and its remote files?'))) return;
+    setBusySandboxId(id);
+    setError(null);
+    try {
+      if (action === 'delete') {
+        await client.deleteSandbox(id);
+        setSandboxes((current) => current.filter((sandbox) => sandbox.id !== id));
+      } else {
+        const sandbox = action === 'health' ? await client.checkSandboxHealth(id)
+          : action === 'pause' ? await client.pauseSandbox(id) : await client.resumeSandbox(id);
+        setSandboxes((current) => current.map((item) => item.id === id ? sandbox : item));
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t('Sandbox action failed'));
+    } finally {
+      setBusySandboxId(null);
+    }
+  }
+
   async function saveConfiguration(values: Partial<AgentManagerConfiguration>): Promise<void> {
     setError(null);
     try {
@@ -3461,7 +3515,10 @@ function Dashboard() {
               workspace={workspace}
             />
             <ConnectionDialog apiUrl={apiUrl} onConnect={connect} />
-            <NewRequirementDialog disabled={connection !== 'online'} modelCatalog={modelCatalog} sandboxes={sandboxes} onCreate={createRequirement} />
+            <NewRequirementDialog disabled={connection !== 'online'} modelCatalog={modelCatalog}
+              sandboxes={sandboxes.filter((sandbox) => sandbox.status !== 'terminated' &&
+                (sandbox.sharing !== 'dedicated' || !requirements.some((requirement) => requirement.sandboxId === sandbox.id)))}
+              onCreate={createRequirement} />
           </div>
         </div>
       </header>
@@ -3644,13 +3701,43 @@ function Dashboard() {
           </div>
         ) : view === 'sandboxes' ? (
           <div className="w-full p-4 lg:p-5">
+            <form onSubmit={(event) => void createSandbox(event)} className="mb-4 grid max-w-3xl gap-2 sm:grid-cols-2">
+              <Input name="name" required maxLength={80} aria-label={t('Sandbox name')} placeholder={t('Sandbox name')} />
+              <NativeSelect name="sharing" aria-label={t('Sandbox sharing')} defaultValue="shared">
+                <NativeSelectOption value="shared">{t('Shared sandbox')}</NativeSelectOption>
+                <NativeSelectOption value="dedicated">{t('Dedicated sandbox')}</NativeSelectOption>
+              </NativeSelect>
+              <Input name="providerSandboxId" aria-label={t('Existing E2B sandbox ID')} placeholder={t('Existing E2B sandbox ID (optional)')} />
+              <Input name="domain" required aria-label={t('E2B domain')} placeholder={t('E2B domain (E2B_DOMAIN)')} />
+              <Input name="apiKey" type="password" required autoComplete="off" aria-label={t('E2B API key')} placeholder={t('E2B API key (E2B_API_KEY)')} />
+              <Input name="repositoryUrl" aria-label={t('Repository HTTPS URL')} placeholder={t('Repository HTTPS URL (required for new sandbox)')} />
+              <Input name="template" aria-label={t('E2B template')} placeholder={t('E2B template (default: base)')} />
+              <Input name="cwd" aria-label={t('Remote working directory')} placeholder={t('Remote working directory (default: /home/user/repo)')} />
+              <Button type="submit" disabled={connection !== 'online' || creatingSandbox}><Plus data-icon="inline-start" />{t('Provision or attach E2B sandbox')}</Button>
+            </form>
+            <div className="mb-4 text-xs text-muted-foreground">{t('Enter E2B_DOMAIN and E2B_API_KEY. New sandboxes clone the repository URL; attached sandboxes need an existing Git checkout. Git, gh, and gh authentication must be available remotely.')}</div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {sandboxes.filter((sandbox) => `${sandbox.name} ${sandbox.cwd}`.toLowerCase().includes(query.trim().toLowerCase())).map((sandbox) => (
+              {sandboxes.filter((sandbox) => `${sandbox.name} ${sandbox.cwd} ${sandbox.providerSandboxId ?? ''}`.toLowerCase().includes(query.trim().toLowerCase())).map((sandbox) => (
                 <div key={sandbox.id} className="rounded-xl border border-border bg-card p-4">
                   <div className="text-sm font-semibold">{sandbox.name}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{t('Local execution')}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{sandbox.kind === 'local' ? t('Local execution') : sandbox.kind === 'e2b' ? t('E2B cloud sandbox') : t('Local sandbox worktree')}</div>
+                  {sandbox.kind === 'e2b' ? <div className="mt-1 text-xs text-muted-foreground">{
+                    sandbox.status === 'running' ? t('Running') : sandbox.status === 'paused' ? t('Paused')
+                      : sandbox.status === 'terminated' ? t('Terminated') : sandbox.status === 'unreachable' ? t('Unreachable') : t('Unknown')
+                  } · {sandbox.sharing === 'dedicated' ? t('Dedicated sandbox') : t('Shared sandbox')}</div> : null}
+                  {sandbox.providerSandboxId ? <div className="mt-2 break-all font-mono text-[10px] text-muted-foreground">{sandbox.providerSandboxId}</div> : null}
                   <div className="mt-2 break-all font-mono text-[10px] text-muted-foreground">{sandbox.cwd}</div>
+                  {sandbox.kind === 'e2b' ? <div className="mt-1 break-all text-[10px] text-muted-foreground">{sandbox.template} · {sandbox.domain} · {sandbox.credentialRef ?? sandbox.credentialEnvVar}</div> : null}
+                  {sandbox.repositoryUrl ? <div className="mt-1 break-all text-[10px] text-muted-foreground">{sandbox.repositoryUrl}</div> : null}
+                  {sandbox.checkedAt ? <div className="mt-1 text-[10px] text-muted-foreground">{t('Last checked')}: {new Date(sandbox.checkedAt).toLocaleString(locale)}</div> : null}
                   <div className="mt-2 text-xs text-muted-foreground">{requirements.filter((item) => item.provider === 'native-agent' && (item.sandboxId ?? 'local') === sandbox.id).length} {t('Requirements')}</div>
+                  {sandbox.kind === 'e2b' ? <div className="mt-3 flex flex-wrap gap-2">
+                    <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id} onClick={() => void changeSandbox(sandbox.id, 'health')}>{t('Check health')}</Button>
+                    {sandbox.status === 'paused'
+                      ? <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id} onClick={() => void changeSandbox(sandbox.id, 'resume')}>{t('Resume')}</Button>
+                      : <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id || sandbox.status === 'terminated'} onClick={() => void changeSandbox(sandbox.id, 'pause')}>{t('Pause')}</Button>}
+                    <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id || requirements.some((item) => item.sandboxId === sandbox.id)} onClick={() => void changeSandbox(sandbox.id, 'delete')}>{t('Delete')}</Button>
+                  </div> : null}
                 </div>
               ))}
             </div>

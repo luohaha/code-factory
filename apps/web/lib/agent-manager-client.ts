@@ -73,8 +73,17 @@ export interface RequirementDto {
 export interface SandboxDto {
   id: string;
   name: string;
-  kind: 'local' | 'local-sandbox';
+  kind: 'local' | 'local-sandbox' | 'e2b';
   cwd: string;
+  providerSandboxId: string | null;
+  credentialEnvVar: string | null;
+  domain: string | null;
+  credentialRef: string | null;
+  repositoryUrl: string | null;
+  template: string | null;
+  sharing: 'shared' | 'dedicated' | null;
+  status: 'running' | 'paused' | 'terminated' | 'unreachable' | 'unknown';
+  checkedAt: string | null;
   createdAt: string;
 }
 
@@ -453,6 +462,26 @@ export class AgentManagerClient {
     return response.items;
   }
 
+  createSandbox(input: { name: string; sharing: 'shared' | 'dedicated'; domain: string; apiKey: string;
+    providerSandboxId?: string; repositoryUrl?: string; template?: string; cwd?: string }): Promise<SandboxDto> {
+    return this.request('/api/sandboxes', { method: 'POST', body: JSON.stringify({ kind: 'e2b', ...input }) });
+  }
+
+  checkSandboxHealth(id: string): Promise<SandboxDto> {
+    return this.request(`/api/sandboxes/${encodeURIComponent(id)}/health`);
+  }
+
+  pauseSandbox(id: string): Promise<SandboxDto> {
+    return this.request(`/api/sandboxes/${encodeURIComponent(id)}/pause`, { method: 'POST' });
+  }
+
+  resumeSandbox(id: string): Promise<SandboxDto> {
+    return this.request(`/api/sandboxes/${encodeURIComponent(id)}/resume`, { method: 'POST' });
+  }
+
+  deleteSandbox(id: string): Promise<void> {
+    return this.request(`/api/sandboxes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
 
   forkRequirement(id: string, input: { title: string; description: string }): Promise<RequirementDto> {
     return this.request(`/api/requirements/${encodeURIComponent(id)}/fork`, {
