@@ -11,6 +11,7 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-work
 import { AgentManager } from '../src/agent-manager.js';
 import { createLogger } from '../src/logger.js';
 import { NativeAgentService } from '../src/native-agent.js';
+import { NativeProfileStore, nativeAuthDatabasePath, profileModel } from '../src/native-auth.js';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.js';
 
 test('Agent Manager records a native RD Run and conversation reply', async () => {
@@ -32,6 +33,81 @@ test('Agent Manager records a native RD Run and conversation reply', async () =>
     assert(manager.listMessages(requirement.id).some((message) => message.author === 'rd_agent' && message.body === 'Implementation ready'));
   } finally {
     await manager.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('Native Agent sends a selected OpenAI-compatible profile to its saved endpoint', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-native-profile-run-'));
+  const server = createServer(async (request, response) => {
+    assert.equal(request.url, '/v1/chat/completions');
+    assert.equal(request.headers.authorization, 'Bearer profile-secret');
+    let body = '';
+    for await (const chunk of request) body += String(chunk);
+    assert.equal((JSON.parse(body) as { model: string }).model, 'custom-model');
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.write('data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"custom-model","choices":[{"index":0,"delta":{"role":"assistant","content":"Profile works"},"finish_reason":null}]}\n\n');
+    response.write('data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"custom-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n');
+    response.end('data: [DONE]\n\n');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+  const databasePath = join(directory, 'native.sqlite');
+  const profiles = new NativeProfileStore(nativeAuthDatabasePath(databasePath));
+  const profile = profiles.save({ format: 'openai', baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    apiKey: 'profile-secret', modelName: 'custom-model' });
+  profiles.close();
+  const service = new NativeAgentService(databasePath);
+  try {
+    const outcome = await service.run({ requirementId: 'req_profile', sessionId: 'ses_profile', nativeSessionId: null,
+      forkSourceNativeSessionId: null, prompt: 'Say hello', model: profileModel(profile.id),
+      reasoningEffort: null, cwd: directory, environment: {}, instructions: 'Test agent',
+      signal: new AbortController().signal, timeoutMs: 30_000, onNativeSession: () => undefined, onEvent: () => undefined });
+    assert.equal(outcome.status, 'succeeded');
+    assert.equal(outcome.finalMessage, 'Profile works');
+  } finally {
+    await service.close();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('Native Agent sends a selected Anthropic-format profile to its saved endpoint', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-native-anthropic-run-'));
+  const server = createServer(async (request, response) => {
+    assert.equal(new URL(request.url!, 'http://localhost').pathname, '/v1/messages');
+    assert.equal(request.headers['x-api-key'], 'anthropic-secret');
+    let body = '';
+    for await (const chunk of request) body += String(chunk);
+    assert.equal((JSON.parse(body) as { model: string }).model, 'claude-custom');
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.write('event: message_start\ndata: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"claude-custom","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":0}}}\n\n');
+    response.write('event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n');
+    response.write('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Anthropic works"}}\n\n');
+    response.write('event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n');
+    response.write('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":3}}\n\n');
+    response.end('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+  const databasePath = join(directory, 'native.sqlite');
+  const profiles = new NativeProfileStore(nativeAuthDatabasePath(databasePath));
+  const profile = profiles.save({ format: 'anthropic', baseUrl: `http://127.0.0.1:${address.port}`,
+    apiKey: 'anthropic-secret', modelName: 'claude-custom' });
+  profiles.close();
+  const service = new NativeAgentService(databasePath);
+  try {
+    const outcome = await service.run({ requirementId: 'req_anthropic_profile', sessionId: 'ses_anthropic_profile', nativeSessionId: null,
+      forkSourceNativeSessionId: null, prompt: 'Say hello', model: profileModel(profile.id),
+      reasoningEffort: null, cwd: directory, environment: {}, instructions: 'Test agent',
+      signal: new AbortController().signal, timeoutMs: 30_000, onNativeSession: () => undefined, onEvent: () => undefined });
+    assert.equal(outcome.status, 'succeeded');
+    assert.equal(outcome.finalMessage, 'Anthropic works');
+  } finally {
+    await service.close();
+    server.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

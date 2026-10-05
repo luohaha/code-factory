@@ -37,7 +37,7 @@ The pi-durable conversations live in the workspace's `native-agent.sqlite`. Requ
 
 ## Model authentication
 
-The dashboard's **Agent Manager configuration → Runtime settings → Native Agent authentication** panel saves OpenAI and Anthropic API keys or starts OpenAI and Codex subscription login. OpenAI login presents an authorization link and, when needed, a manual callback prompt; Codex subscription login uses a device code. The dashboard polls login status and can cancel a login. Model credentials live in a separate owner-only `native-agent-auth.sqlite` file. Credential-status responses expose only the source; login responses expose an authorization link or device code, never an API key or token. When no credential is saved, Agent Manager can still use `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` from its process environment. Changes apply to later Runs without restarting Agent Manager.
+The dashboard's **Agent Manager configuration → Runtime settings → Native Agent API profiles** panel adds saved items with OpenAI-compatible or Anthropic format, base URL, API key, and model name. Each Native Agent Requirement selects one item instead of choosing a model from the catalog. The key is stored in the separate owner-only `native-agent-auth.sqlite` file; list and save responses expose only the item ID, format, URL, and model name. The selected item is resolved when a Run starts, so profile changes apply to later Runs without restarting Agent Manager. Existing saved OpenAI and Anthropic API keys are added as profiles on upgrade. Older Requirements configured with direct provider/model IDs can use those saved API keys or process environment API keys. Subscription login is unavailable.
 
 ## Execution environments and sandboxes
 

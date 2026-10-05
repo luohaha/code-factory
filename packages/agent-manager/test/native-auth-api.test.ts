@@ -2,84 +2,60 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import { AgentManager } from '../src/agent-manager.js';
-import { NativeCredentialStore, nativeAuthDatabasePath } from '../src/native-auth.js';
-import { NativeAuthService } from '../src/native-auth-service.js';
+import { NativeProfileStore, nativeAuthDatabasePath, profileModel } from '../src/native-auth.js';
 import { createLogger } from '../src/logger.js';
 import { createAgentManagerServer } from '../src/server.js';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.js';
 
-test('Native Agent credentials and subscription login work through the configuration API', async () => {
+test('Native API profiles are saved without exposing keys and selected by requirements', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-native-auth-api-'));
-  const conversationPath = join(directory, 'native-agent.sqlite');
-  const auth = new NativeAuthService(conversationPath, {
-    environment: {},
-    login: async (provider, interaction, getDeviceId) => {
-      assert.match(getDeviceId(), /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-      if (provider === 'openai-codex') {
-        assert.equal(await interaction.prompt({ type: 'select', message: 'Method', options: [
-          { id: 'browser', label: 'Browser' }, { id: 'device_code', label: 'Device code' },
-        ] }), 'device_code');
-        interaction.notify({ type: 'device_code', verificationUri: 'https://example.com/device', userCode: 'ABCD' });
-        await new Promise<void>((_resolve, reject) => {
-          interaction.signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
-        });
-      } else {
-        interaction.notify({ type: 'auth_url', url: 'https://example.com/authorize' });
-        assert.equal(await interaction.prompt({ type: 'manual_code', message: 'Paste redirect URL' }),
-          'https://example.com/callback?code=done');
-      }
-    },
-  });
   const manager = new AgentManager({ workspaceRoot: directory, store: new SqliteAgentManagerStore(':memory:'),
-    nativeAuthService: auth, logger: createLogger({ level: 'silent' }) });
+    logger: createLogger({ level: 'silent' }) });
   const server = createAgentManagerServer(manager);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/native-auth`;
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
   const request = (path: string, method = 'GET', body?: unknown) => fetch(`${base}${path}`, {
     method, ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   });
   try {
-    const initial = await (await request('')).json() as { providers: Array<{ provider: string; source: string | null }> };
-    assert.equal(initial.providers.find((item) => item.provider === 'openai')?.source, null);
+    const input = { format: 'openai', baseUrl: 'https://gateway.example/v1', apiKey: 'api-secret-123', modelName: 'team/model' };
+    assert.equal((await request('/native-auth/openai-codex/login', 'POST')).status, 404);
+    assert.equal((await request('/native-auth/profiles', 'POST', { ...input, format: 'other' })).status, 400);
+    const createdResponse = await request('/native-auth/profiles', 'POST', input);
+    assert.equal(createdResponse.status, 201);
+    const createdText = await createdResponse.text();
+    assert.equal(createdText.includes(input.apiKey), false);
+    const created = JSON.parse(createdText) as { id: string; modelName: string };
+    assert.equal(created.modelName, input.modelName);
+    assert.equal(statSync(nativeAuthDatabasePath(join(dirname(manager.databasePath), 'native-agent.sqlite'))).mode & 0o777, 0o600);
+    const listText = await (await request('/native-auth')).text();
+    assert.equal(listText.includes(input.apiKey), false);
+    assert.equal((JSON.parse(listText) as { items: unknown[] }).items.length, 1);
+    const updatedResponse = await request(`/native-auth/profiles/${created.id}`, 'PUT', {
+      format: 'openai', baseUrl: 'https://gateway.example/updated', modelName: 'new-model',
+    });
+    assert.equal(updatedResponse.status, 200);
+    assert.equal((await updatedResponse.text()).includes(input.apiKey), false);
+    assert.equal(manager.listNativeApiProfiles()[0]?.modelName, 'new-model');
+    const profileStore = new NativeProfileStore(nativeAuthDatabasePath(join(dirname(manager.databasePath), 'native-agent.sqlite')));
+    try { assert.equal(profileStore.get(created.id)?.apiKey, input.apiKey); }
+    finally { profileStore.close(); }
 
-    assert.equal((await request('/openai/api-key', 'PUT', { key: '' })).status, 400);
-    const savedResponse = await request('/openai/api-key', 'PUT', { key: 'api-secret-123' });
-    assert.equal(savedResponse.status, 200);
-    const savedText = await savedResponse.text();
-    assert.equal(savedText.includes('api-secret-123'), false);
-    assert.equal((JSON.parse(savedText) as { providers: Array<{ provider: string; source: string }> })
-      .providers.find((item) => item.provider === 'openai')?.source, 'stored_api_key');
-    const credentials = new NativeCredentialStore(nativeAuthDatabasePath(conversationPath));
-    try { assert.deepEqual(await credentials.read('openai'), { type: 'api_key', key: 'api-secret-123' }); }
-    finally { await credentials.close(); }
-    assert.equal(statSync(nativeAuthDatabasePath(conversationPath)).mode & 0o777, 0o600);
-    assert.equal((await request('/openai', 'DELETE')).status, 200);
-
-    const codex = await (await request('/openai-codex/login', 'POST')).json() as { id: string };
-    assert.equal((await request('/openai/login', 'POST')).status, 409);
-    const codexProgress = await (await request(`/logins/${codex.id}`)).json() as { state: string; userCode: string };
-    assert.equal(codexProgress.state, 'pending');
-    assert.equal(codexProgress.userCode, 'ABCD');
-    assert.equal((await request(`/logins/${codex.id}`, 'DELETE')).status, 200);
-
-    const cancelledOpenai = await (await request('/openai/login', 'POST')).json() as { id: string };
-    assert.equal((await request(`/logins/${cancelledOpenai.id}`, 'DELETE')).status, 200);
-    const cancelled = await (await request(`/logins/${cancelledOpenai.id}`)).json() as { state: string };
-    assert.equal(cancelled.state, 'cancelled');
-
-    const openai = await (await request('/openai/login', 'POST')).json() as { id: string };
-    const prompt = await (await request(`/logins/${openai.id}`)).json() as { state: string; authorizationUrl: string };
-    assert.equal(prompt.state, 'prompt');
-    assert.equal(prompt.authorizationUrl, 'https://example.com/authorize');
-    assert.equal((await request(`/logins/${openai.id}`, 'POST', { answer: 'https://example.com/callback?code=done' })).status, 200);
-    await Promise.resolve();
-    const completed = await (await request(`/logins/${openai.id}`)).json() as { state: string };
-    assert.equal(completed.state, 'succeeded');
-    assert.equal((await request('/anthropic/login', 'POST')).status, 400);
+    const model = profileModel(created.id);
+    const requirementResponse = await request('/requirements', 'POST', { title: 'Use gateway', description: 'Build it', provider: 'native-agent', model });
+    assert.equal(requirementResponse.status, 201);
+    const requirement = await requirementResponse.json() as { id: string; model: string };
+    assert.equal(requirement.model, model);
+    assert.equal((await request('/native-auth/profiles/absent', 'DELETE')).status, 404);
+    assert.equal((await request(`/native-auth/profiles/${created.id}`, 'DELETE')).status, 409);
+    assert.equal((await request('/requirements', 'POST', { title: 'Bad profile', description: 'Build it', provider: 'native-agent', model: 'profile:absent' })).status, 404);
+    assert.equal((await request(`/requirements/${requirement.id}`, 'DELETE')).status, 204);
+    assert.equal((await request(`/native-auth/profiles/${created.id}`, 'DELETE')).status, 204);
+    assert.equal((JSON.parse(await (await request('/native-auth')).text()) as { items: unknown[] }).items.length, 0);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();

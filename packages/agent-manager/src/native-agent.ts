@@ -13,7 +13,8 @@ import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 
 import { runCodeFactoryCli } from './code-factory-cli.js';
-import { createNativeModels, NativeCredentialStore, nativeAuthDatabasePath } from './native-auth.js';
+import { configureNativeProfile, createNativeModels, NativeCredentialStore, NativeProfileStore,
+  nativeAuthDatabasePath, profileIdFromModel } from './native-auth.js';
 import { E2BExecutionEnv, E2BSandboxService, type E2BCredentials } from './e2b-execution-env.js';
 import type { NormalizedAgentEvent } from './adapters/types.js';
 import type { AgentReasoningEffort, RunOutcome } from './types.js';
@@ -47,7 +48,9 @@ export class NativeAgentService {
   #harness: Harness | null = null;
   #opening: Promise<Harness> | null = null;
   readonly #models: MutableModels | null;
+  #runtimeModels: MutableModels | null = null;
   #credentials: NativeCredentialStore | null = null;
+  #profiles: NativeProfileStore | null = null;
   readonly #e2b: E2BSandboxService;
   readonly #environments = new Map<ConversationId, Readonly<Record<string, string>>>();
   readonly #sandboxes = new Map<ConversationId, NativeRunInput['sandbox']>();
@@ -70,6 +73,8 @@ export class NativeAgentService {
     await mkdir(dirname(this.#databasePath), { recursive: true });
     if (!this.#models) this.#credentials = new NativeCredentialStore(nativeAuthDatabasePath(this.#databasePath));
     const models = this.#models ?? createNativeModels(this.#credentials!);
+    this.#runtimeModels = models;
+    this.#profiles = new NativeProfileStore(nativeAuthDatabasePath(this.#databasePath));
     const registry = createRegistry();
     registry.install(CodingTools);
     const invokeCli = async (args: string[], conversationId: ConversationId): Promise<string> => {
@@ -180,10 +185,17 @@ export class NativeAgentService {
     let activeConversationId: ConversationId | undefined;
     try {
       const harness = await this.#open();
-      const [provider, modelId] = input.model?.includes('/')
+      const profileId = profileIdFromModel(input.model);
+      const [legacyProvider, legacyModelId] = input.model?.includes('/')
         ? [input.model.slice(0, input.model.indexOf('/')), input.model.slice(input.model.indexOf('/') + 1)]
         : ['openai', input.model || 'gpt-5.4'];
-      if (!this.#models && provider !== 'openai' && provider !== 'anthropic' && provider !== 'openai-codex') {
+      const savedProfile = profileId ? this.#profiles!.get(profileId) : null;
+      if (profileId && !savedProfile) throw new Error('Selected Native API profile no longer exists');
+      const profile = savedProfile;
+      const modelId = profile?.modelName ?? legacyModelId;
+      if (profile) configureNativeProfile(this.#runtimeModels!, { ...profile, modelName: modelId });
+      const provider = profile ? `profile:${profile.id}` : legacyProvider;
+      if (!this.#models && provider !== 'openai' && provider !== 'anthropic' && !profile) {
         throw new TypeError('Native model must use a configured pi-ai provider');
       }
       const agent = { model: { provider, modelId }, cwd: input.cwd,
@@ -282,6 +294,8 @@ export class NativeAgentService {
     if (this.#opening) await this.#opening;
     if (this.#harness) await this.#harness.close(CONTEXT);
     this.#harness = null;
+    this.#profiles?.close();
+    this.#profiles = null;
     if (this.#credentials) await this.#credentials.close();
     this.#credentials = null;
     this.#environments.clear();

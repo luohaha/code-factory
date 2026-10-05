@@ -41,8 +41,8 @@ import {
 } from './model-catalog.js';
 import { HeadlessProcessRunner, type AgentProcessRunner, type ProcessRunRequest } from './process-runner.js';
 import { NativeAgentService } from './native-agent.js';
-import { NativeAuthService, type NativeAuthProvider, type NativeAuthProviderStatus,
-  type NativeLoginSnapshot, type NativeOAuthProvider } from './native-auth-service.js';
+import { NativeAuthService } from './native-auth-service.js';
+import { profileIdFromModel, profileModel, type NativeApiFormat, type NativeApiProfile } from './native-auth.js';
 import { E2BProviderError, E2BSandboxService, type E2BCredentials, type E2BHandle } from './e2b-execution-env.js';
 import { E2BCredentialStore, e2bCredentialsPath } from './e2b-credentials.js';
 import { PullRequestReconciler } from './pull-request-reconciler.js';
@@ -377,20 +377,16 @@ export class AgentManager extends EventEmitter {
     return this.#nativeAuth;
   }
 
-  getNativeAuthStatus(): Promise<NativeAuthProviderStatus[]> { return this.nativeAuth().status(); }
-  getActiveNativeLogin(): NativeLoginSnapshot | null { return this.nativeAuth().activeLogin(); }
-  setNativeApiKey(provider: NativeAuthProvider, key: string): Promise<NativeAuthProviderStatus[]> {
-    return this.nativeAuth().setApiKey(provider, key);
+  listNativeApiProfiles(): NativeApiProfile[] { return this.nativeAuth().list(); }
+  saveNativeApiProfile(input: { id?: string; format: NativeApiFormat; baseUrl: string; apiKey?: string; modelName: string }): NativeApiProfile {
+    return this.nativeAuth().save(input);
   }
-  removeNativeAuth(provider: NativeAuthProvider): Promise<NativeAuthProviderStatus[]> {
-    return this.nativeAuth().remove(provider);
+  removeNativeApiProfile(id: string): void {
+    if (this.#store.listRequirements().some((requirement) => requirement.model === profileModel(id))) {
+      throw new StoreConflictError('Native API profile is used by a Requirement');
+    }
+    this.nativeAuth().remove(id);
   }
-  startNativeLogin(provider: NativeOAuthProvider): NativeLoginSnapshot { return this.nativeAuth().startLogin(provider); }
-  getNativeLogin(id: string): NativeLoginSnapshot { return this.nativeAuth().getLogin(id); }
-  submitNativeLoginPrompt(id: string, answer: string): NativeLoginSnapshot {
-    return this.nativeAuth().submitPrompt(id, answer);
-  }
-  cancelNativeLogin(id: string): NativeLoginSnapshot { return this.nativeAuth().cancelLogin(id); }
 
   startConfiguredServices(): void {
     this.startAgentTrigger(this.#timerAgentTrigger);
@@ -612,6 +608,8 @@ export class AgentManager extends EventEmitter {
     const model = input.model?.trim() || undefined;
     if (!title) throw new TypeError('title is required');
     if (!description) throw new TypeError('description is required');
+    if (input.provider === 'native-agent' && model?.startsWith('profile:')
+      && !this.nativeAuth().get(profileIdFromModel(model)!)) throw new StoreNotFoundError('Native API profile not found');
     if (input.sandboxId && input.provider !== 'native-agent') throw new TypeError('sandboxes require native-agent');
     const sandboxId = input.sandboxId === 'local' ? null : input.sandboxId;
     if (sandboxId) this.requireAvailableSandbox(sandboxId);
@@ -740,6 +738,8 @@ export class AgentManager extends EventEmitter {
     const provider = input.provider ?? current.provider;
     const providerChanged = provider !== current.provider;
     const model = hasModel ? input.model?.trim() || null : providerChanged ? null : current.model;
+    if (provider === 'native-agent' && model?.startsWith('profile:')
+      && !this.nativeAuth().get(profileIdFromModel(model)!)) throw new StoreNotFoundError('Native API profile not found');
     const reasoningEffort = hasReasoningEffort
       ? input.reasoningEffort ?? null
       : providerChanged ? null : current.reasoningEffort;

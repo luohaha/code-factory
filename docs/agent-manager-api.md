@@ -39,11 +39,10 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/workspace | Read the bound workspace and data paths |
 | GET | /api/configuration | Read desired Agent Manager configuration and restart status |
 | PATCH | /api/configuration | Validate, persist, and apply configuration changes |
-| GET | /api/native-auth | Read Native Agent credential status and current login state |
-| PUT | /api/native-auth/:provider/api-key | Save an OpenAI or Anthropic API key |
-| DELETE | /api/native-auth/:provider | Remove a saved Native Agent credential |
-| POST | /api/native-auth/:provider/login | Start OpenAI or Codex subscription login |
-| GET, POST, DELETE | /api/native-auth/logins/:id | Poll, answer, or cancel a subscription login |
+| GET | /api/native-auth | List saved Native Agent API profiles without secrets |
+| POST | /api/native-auth/profiles | Save a Native Agent API profile |
+| PUT | /api/native-auth/profiles/:id | Replace a saved API profile |
+| DELETE | /api/native-auth/profiles/:id | Remove an unused API profile |
 | GET | /api/agent-models | Read cached Codex, Claude Code, and Native Agent model options |
 | GET | /api/sandboxes | List local execution and persisted E2B sandboxes |
 | POST | /api/sandboxes | Provision or attach an E2B sandbox |
@@ -392,15 +391,13 @@ curl -X PATCH http://127.0.0.1:4310/api/configuration \
 
 Set `jevApiKey` to a non-empty string to enable Jev decisions, or to `null` or `""` to disable them. The key is stored in the workspace configuration file and never echoed by this API. When a successful, failed, or timed-out RD Run leaves a Requirement waiting for confirmation, Jev evaluates the Requirement title and description, Run status, and three latest conversation messages, including each author's identity, if no messages arrived after that Run captured its input and there are no active Reviewer Runs or timers. A failed or timed-out Run does not need an RD reply for Jev to consider recovery; its System error message is part of the conversation. Attempted input remains pending after failure and is delivered again on retry, but does not suppress Jev's decision. Jev can leave the session waiting, send `continue.` immediately as Jev, or create a one-time timer to send `continue.` as Jev after 1–60 minutes. Cancelled Runs do not trigger Jev. Jev failures leave the normal waiting flow intact.
 
-### Native Agent authentication
+### Native Agent API profiles
 
-The dashboard's runtime settings panel uses these endpoints. Credentials are stored separately from the configuration JSON in an owner-only `native-agent-auth.sqlite` file. Changes apply to subsequent Native Agent Runs without a restart. No response contains an API key, access token, or refresh token.
+The dashboard runtime settings panel saves multiple API profiles in the owner-only `native-agent-auth.sqlite` file, outside workspace configuration and Requirement data. Each item contains `format` (`openai` for an OpenAI-compatible chat completions API, or `anthropic` for Anthropic Messages), `baseUrl`, `apiKey`, and `modelName`. `baseUrl` must be an absolute HTTP(S) URL without embedded credentials, query, or fragment. OpenAI-compatible endpoints usually include `/v1`.
 
-`GET /api/native-auth` returns `providers` with `provider` (`openai`, `anthropic`, or `openai-codex`) and `source` (`stored_api_key`, `subscription`, `environment`, or `null`), plus the latest `login` snapshot or `null`. Environment status refers to `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` when no saved credential is present.
+`GET /api/native-auth` returns `{ "items": [{ "id", "format", "baseUrl", "modelName" }] }`. `POST /api/native-auth/profiles` accepts the four fields above and returns the saved metadata with HTTP 201. `PUT /api/native-auth/profiles/:id` requires `format`, `baseUrl`, and `modelName`; omit `apiKey` or pass an empty value to keep the saved key. Unknown IDs return 404. No response contains the API key. `DELETE /api/native-auth/profiles/:id` returns 204, or 409 if any Requirement still selects the item. Saved changes apply to subsequent Native Agent Runs without a restart. Subscription login endpoints are unavailable.
 
-`PUT /api/native-auth/openai/api-key` or `/anthropic/api-key` accepts `{ "key": "..." }` and replaces that provider's saved credential. `DELETE /api/native-auth/:provider` removes the saved credential; an environment key may still be available afterward. Both return the updated non-secret provider status list.
-
-`POST /api/native-auth/openai/login` or `/openai-codex/login` starts pi-ai OAuth and returns a login snapshot with HTTP 202. Only one login runs at a time; another start returns 409. Codex login uses the device-code flow. OpenAI login shows an authorization URL and, if needed, a manual redirect-URL prompt. `GET /api/native-auth/logins/:id` polls the snapshot (`pending`, `prompt`, `succeeded`, `failed`, or `cancelled`); it may include `authorizationUrl`, `verificationUri`, `userCode`, and a non-secret prompt description. `POST` to the same path with `{ "answer": "..." }` answers a prompt; `DELETE` cancels a running login. The latest snapshot remains available across dashboard reloads while Agent Manager stays running. Unknown IDs return 404.
+A Native Agent Requirement stores the selected item in `model` as `profile:<id>`; the server validates the reference on create and TODO configuration updates. Previously saved OpenAI and Anthropic API keys become `legacy-openai` and `legacy-anthropic` profiles. An existing Requirement with a direct `openai/...` or `anthropic/...` model can still use the migrated key or an API key from `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 
 ### GET /api/agent-models
 
@@ -549,7 +546,7 @@ Request body:
 | title | string | yes | Must be non-empty after trimming |
 | description | string | yes | Must be non-empty after trimming |
 | provider | string | yes | codex, claude-code, or native-agent |
-| model | string | no | CLI model for headless providers; `provider/model` for Native Agent (`openai/gpt-5.4` by default) |
+| model | string | no | CLI model for headless providers; `profile:<id>` for a selected Native Agent API profile |
 | reasoningEffort | string | no | low, medium, high, xhigh, or max; defaults to the selected provider's configuration |
 | sandboxId | string | no | Native Agent only; omit for local execution, or select a named sandbox ID from `/api/sandboxes` |
 
@@ -588,7 +585,7 @@ Changes the Agent configuration used when a human starts a Requirement from the 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | provider | string | no | codex, claude-code, or native-agent |
-| model | string or null | no | Non-empty model identifier, or null to restore the CLI default |
+| model | string or null | no | Headless model identifier or Native Agent `profile:<id>`; null restores the previous default behavior |
 | reasoningEffort | string or null | no | low, medium, high, xhigh, or max; null restores the CLI default |
 | sandboxId | string or null | no | Named Native Agent sandbox ID; null restores local execution |
 
