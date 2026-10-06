@@ -56,60 +56,6 @@ test('native requirements can share a persisted sandbox', () => {
   }
 });
 
-test('legacy fork provenance migrates to a durable field before source retention', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'code-factory-fork-migration-'));
-  const databasePath = join(directory, 'factory.sqlite');
-  const legacy = new DatabaseSync(databasePath);
-  legacy.exec(`PRAGMA foreign_keys = ON;
-    CREATE TABLE requirements (
-      id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL,
-      status TEXT NOT NULL, provider TEXT NOT NULL, model TEXT, reasoning_effort TEXT,
-      created_by TEXT NOT NULL, parent_requirement_id TEXT REFERENCES requirements(id) ON DELETE SET NULL,
-      source_session_id TEXT,
-      forked_from_requirement_id TEXT REFERENCES requirements(id) ON DELETE SET NULL,
-      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
-    ) STRICT;
-    CREATE TABLE agent_sessions (
-      id TEXT PRIMARY KEY, requirement_id TEXT NOT NULL UNIQUE REFERENCES requirements(id) ON DELETE CASCADE,
-      provider TEXT NOT NULL, native_session_id TEXT, state TEXT NOT NULL, last_error TEXT,
-      last_consumed_message_sequence INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-    ) STRICT;`);
-  legacy.prepare(`INSERT INTO requirements
-    (id, title, description, status, provider, created_by, created_at, updated_at, completed_at)
-    VALUES ('req-source', 'Source', 'Original', 'done', 'codex', 'human', ?, ?, ?)`).run(now, now, now);
-  legacy.prepare(`INSERT INTO requirements
-    (id, title, description, status, provider, created_by, parent_requirement_id,
-      forked_from_requirement_id, created_at, updated_at)
-    VALUES ('req-fork', 'Fork', 'Other direction', 'doing', 'codex', 'human',
-      'req-source', 'req-source', ?, ?)`).run(now, now);
-  legacy.prepare(`INSERT INTO agent_sessions
-    (id, requirement_id, provider, state, created_at, updated_at)
-    VALUES (?, ?, 'codex', 'completed', ?, ?)`).run('ses-source', 'req-source', now, now);
-  legacy.prepare(`INSERT INTO agent_sessions
-    (id, requirement_id, provider, state, created_at, updated_at)
-    VALUES (?, ?, 'codex', 'waiting_human', ?, ?)`).run('ses-fork', 'req-fork', now, now);
-  legacy.close();
-
-  const migrated = new SqliteAgentManagerStore(databasePath);
-  try {
-    assert.equal(migrated.getRequirement('req-fork')?.forkedFromRequirementId, 'req-source');
-    migrated.purgeExpiredRequirements({ cancelledBefore: now, doneBefore: now, now });
-    assert.equal(migrated.getRequirement('req-source'), null);
-    assert.equal(migrated.getRequirement('req-fork')?.parentRequirementId, null);
-    assert.equal(migrated.getRequirement('req-fork')?.forkedFromRequirementId, 'req-source');
-  } finally {
-    migrated.close();
-  }
-  const reopened = new SqliteAgentManagerStore(databasePath);
-  try {
-    assert.equal(reopened.getRequirement('req-fork')?.forkedFromRequirementId, 'req-source');
-  } finally {
-    reopened.close();
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
 test('Agent trace events are derived from the durable Manager event stream', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {

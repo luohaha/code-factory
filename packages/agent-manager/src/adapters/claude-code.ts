@@ -99,7 +99,6 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     if (input.model) args.push('--model', input.model);
     if (input.reasoningEffort) args.push('--effort', input.reasoningEffort);
     if (input.nativeSessionId) args.push('--resume', input.nativeSessionId);
-    else if (input.forkSourceNativeSessionId) args.push('--resume', input.forkSourceNativeSessionId, '--fork-session');
     else args.push('--session-id', randomUUID());
     if (input.developerInstructions) args.push('--append-system-prompt', input.developerInstructions);
     return { command: 'claude', args, input: input.prompt };

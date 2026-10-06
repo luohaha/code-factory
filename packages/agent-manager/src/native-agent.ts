@@ -26,7 +26,6 @@ export interface NativeRunInput {
   requirementId: string;
   sessionId: string;
   nativeSessionId: string | null;
-  forkSourceNativeSessionId: string | null;
   prompt: string;
   model: string | null;
   reasoningEffort: AgentReasoningEffort | null;
@@ -192,11 +191,6 @@ export class NativeAgentService {
       let conversation = input.nativeSessionId
         ? await harness.conversation(Number(input.nativeSessionId) as ConversationId, CONTEXT)
         : undefined;
-      if (!conversation && input.forkSourceNativeSessionId) {
-        const source = await harness.conversation(Number(input.forkSourceNativeSessionId) as ConversationId, CONTEXT);
-        const latest = source && (await source.entries({}, 1, undefined, CONTEXT)).items[0];
-        if (source && latest) conversation = await source.fork(latest.id, { ownership: { kind: 'ownerless' }, agent }, CONTEXT);
-      }
       conversation ??= await harness.createConversation({ ownership: { kind: 'ownerless' }, agent }, CONTEXT);
       if (!conversation) throw new Error('Native conversation is missing');
       activeConversationId = conversation.id;

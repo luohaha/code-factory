@@ -267,7 +267,7 @@ test('pi-durable read, write, edit and bash use the selected E2B sandbox', async
     new E2BSandboxService(sdk.client));
   try {
     const outcome = await service.run({ requirementId: 'req_e2b', sessionId: 'ses_e2b',
-      nativeSessionId: null, forkSourceNativeSessionId: null, prompt: 'Use remote tools',
+      nativeSessionId: null, prompt: 'Use remote tools',
       model: 'faux/faux-1', reasoningEffort: null, cwd: '/home/user/repo',
       sandbox: { kind: 'e2b', providerSandboxId: 'e2b-test-123',
         credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: false },
