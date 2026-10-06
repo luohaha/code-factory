@@ -563,6 +563,50 @@ test('expired cancelled and done requirements purge their related domain records
   }
 });
 
+test('existing review requests migrate to permit Native Agent reviewers', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-native-review-migration-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  try {
+    const store = new SqliteAgentManagerStore(databasePath);
+    store.createRequirement({ requirementId: 'req-old-review', sessionId: 'ses-old-review',
+      title: 'Existing review', description: 'Keep review history', provider: 'codex', createdBy: 'human', now });
+    const oldPr = store.upsertPullRequest({ id: 'pr-old-review', requirementId: 'req-old-review',
+      repository: 'example/repo', number: 1, url: 'https://github.com/example/repo/pull/1', title: 'Existing PR',
+      baseBranch: 'main', headBranch: 'old', headSha: 'oldsha', status: 'open', now });
+    store.beginReviewRequest({ id: 'rev-old', runId: 'run-old', pullRequestId: oldPr.id,
+      requirementId: 'req-old-review', provider: 'codex', targetHeadSha: oldPr.headSha,
+      taskSummary: 'Existing review', now });
+    store.finishReviewRequest('rev-old', { status: 'succeeded', exitCode: 0, nativeSessionId: null,
+      finalMessage: 'Reviewed', error: null }, now);
+    store.close();
+
+    const legacy = new DatabaseSync(databasePath);
+    try {
+      const row = legacy.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'review_requests'").get() as { sql: string };
+      const previousDefinition = row.sql.replace("provider IN ('codex', 'claude-code', 'native-agent')",
+        "provider IN ('codex', 'claude-code')").replace('review_requests (', 'review_requests_legacy (');
+      legacy.exec('PRAGMA foreign_keys = OFF; BEGIN IMMEDIATE');
+      legacy.exec(previousDefinition);
+      legacy.exec('INSERT INTO review_requests_legacy SELECT * FROM review_requests');
+      legacy.exec('DROP TABLE review_requests; ALTER TABLE review_requests_legacy RENAME TO review_requests; COMMIT');
+    } finally { legacy.close(); }
+
+    const migrated = new SqliteAgentManagerStore(databasePath);
+    try {
+      assert.equal(migrated.listReviewRequests(oldPr.id)[0]?.status, 'succeeded');
+      migrated.createRequirement({ requirementId: 'req-native-review', sessionId: 'ses-native-review',
+        title: 'Native PR', description: 'Review with Native Agent', provider: 'native-agent', createdBy: 'human', now });
+      const nativePr = migrated.upsertPullRequest({ id: 'pr-native-review', requirementId: 'req-native-review',
+        repository: 'example/repo', number: 2, url: 'https://github.com/example/repo/pull/2', title: 'Native PR',
+        baseBranch: 'main', headBranch: 'native', headSha: 'nativesha', status: 'open', now });
+      const started = migrated.beginReviewRequest({ id: 'rev-native', runId: 'run-native', pullRequestId: nativePr.id,
+        requirementId: 'req-native-review', provider: 'native-agent', targetHeadSha: nativePr.headSha,
+        taskSummary: 'Native review', now });
+      assert.equal(started.reviewRequest.provider, 'native-agent');
+    } finally { migrated.close(); }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 test('an expired requirement with a running reviewer is retained until the run finishes', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {

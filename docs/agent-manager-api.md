@@ -243,7 +243,7 @@ interface ReviewRequest {
   id: string;                         // rev_<uuid>
   pullRequestId: string;
   runId: string;
-  provider: 'codex' | 'claude-code';
+  provider: 'codex' | 'claude-code' | 'native-agent';
   model: string | null;
   reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
   targetHeadSha: string;
@@ -731,15 +731,15 @@ Cancels an active Agent Timer owned by the Requirement. Success: 200 OK with the
 
 Starts a short-lived Reviewer Run for a registered Open PR. The id is Code Factory's pr_<uuid>, not the GitHub PR number.
 
-The Reviewer uses the workspace selected by the PR's Requirement. Default and named local workspaces run the CLI in their local directory. An E2B selection runs the Codex or Claude Code Reviewer CLI in the same remote checkout; that sandbox must have the selected CLI installed and authenticated.
+The Reviewer uses the workspace selected by the PR's Requirement. Native Agent Requirements require a Native Agent Reviewer. Its model runs on the Agent Manager host, while `read` and `bash` use the selected local directory or E2B remote checkout. The E2B sandbox needs Git and authenticated `gh`, but no Codex or Claude Code CLI. Codex and Claude Code Requirements accept either headless Reviewer in their selected local directory.
 
 Request body:
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
-| provider | string | yes | codex or claude-code |
-| model | string | no | Model identifier passed to the selected CLI; defaults to CLI configuration |
-| reasoningEffort | string | no | low, medium, high, xhigh, or max; defaults to CLI configuration |
+| provider | string | yes | native-agent for a Native Agent Requirement; codex or claude-code for a headless Requirement |
+| model | string | no | Native API profile (`profile:<id>`) or direct model identifier for a Native Reviewer; defaults to the Requirement model. For headless Reviewers, passed to the selected CLI and defaults to CLI configuration |
+| reasoningEffort | string | no | low, medium, high, xhigh, or max; Native defaults to the Requirement setting, headless defaults to CLI configuration |
 | prompt | string | no | Additional focus appended to Reviewer system/developer instructions; the task prompt remains Review GitHub PR <url> |
 
 ~~~bash
@@ -775,7 +775,8 @@ Success: 202 Accepted
 }
 ~~~
 
-reviewRequest and run are the persisted records created before acceptance. The Reviewer runs in the background, and the request does not wait for completion. Returns 404 for an unknown PR and 409 when the PR is not Open or already has an active review.
+reviewRequest and run are the persisted records created before acceptance. The Reviewer runs in the background, and the request does not wait for completion. Returns 400 when the Reviewer provider is incompatible with the Requirement, 404 for an unknown PR, and 409 when the PR is not Open or already has an active review.
+The response `model` and `reasoningEffort` fields report the effective choices, including values inherited from a Native Agent Requirement.
 
 ## 7. RD Agent endpoints
 

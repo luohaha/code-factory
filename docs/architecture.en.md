@@ -36,7 +36,7 @@ flowchart LR
   M <--> DB[(SQLite)]
   M -->|Selected local cwd, long-lived resume| RD[Codex / Claude Code RD]
   M -->|Durable conversation, selected ExecutionEnv| NRD[Native RD / pi-durable]
-  M -->|Requirement workspace, short-lived| RV[Codex / Claude Code Reviewer]
+  M -->|Requirement workspace, short-lived| RV[Codex / Claude Code / Native Reviewer]
   RD -->|Register PR / Propose requirement / Schedule wake-up| CLI[code-factory-cli]
   NRD -->|Typed PR / Requirement / Timer tools| CLI
   CLI --> API[Agent API]
@@ -55,7 +55,7 @@ Native RD conversations use pi-durable and a separate workspace SQLite file. Eac
 
 A Native Agent uses the Default workspace or a named local workspace through `NodeExecutionEnv`. Named local workspaces are existing absolute directories on the Manager host, shared by whichever Requirements select them. An E2B sandbox record persists the provider sandbox ID, domain, repository URL when provisioned, remote working directory, template, shared or dedicated mode, last observed lifecycle state, and an opaque credential reference. The key is kept in an owner-only credential database outside the application database. pi-durable constructs an E2B `ExecutionEnv` for the selected sandbox; all coding tools and `gh_pr` use its remote filesystem and command runner. New sandboxes clone the managed workspace's Git origin by default, with an optional HTTPS repository URL override; attached sandboxes require an existing checkout. Setup checks remote Git, `gh`, and `gh` authentication. Shared records can serve multiple Native Agent Requirements, while dedicated records permit one Requirement. Agent Manager uses E2B pause-on-timeout and auto-resume. The Workspaces page creates, edits, and removes named local workspaces without deleting local files; it also creates or attaches E2B sandboxes, edits their connection settings, checks health, pauses, resumes, and deletes unbound sandboxes.
 
-When a Requirement uses E2B, its Reviewer runs the selected Codex or Claude Code CLI inside the same remote checkout through the E2B command SDK. That sandbox must also have the Reviewer CLI installed and authenticated. The Reviewer remains a separate short-lived Run; it does not share the Native Agent conversation.
+Native Agent Requirements require a Native Agent Reviewer. It runs in a fresh pi-durable conversation, separate from the RD conversation, with `read` and `bash` tools in the Requirement's selected `ExecutionEnv`. For E2B, the model and Harness stay on the Manager host while these tools access the same remote checkout as RD. The sandbox needs Git and authenticated `gh`, but no Codex or Claude Code CLI. Codex and Claude Code Requirements use either headless Reviewer in their selected local workspace.
 
 Before opening its application database or HTTP listener, Agent Manager takes an exclusive process-lifetime lock under the canonical workspace's default data directory. Foreground and daemon-managed processes use the same lock, so a second Manager cannot bypass workspace ownership by selecting a different port, configuration file, or database. A live daemon supervisor also reserves the workspace between Manager restart attempts. The operating system releases the underlying SQLite lock if the Manager process crashes.
 
@@ -78,15 +78,15 @@ Headless RD agents using Default workspace start in `~/starrocks`; those selecti
 
 Agent Manager may run in the foreground or beneath its workspace-scoped daemon supervisor. `start --daemon` detaches the supervisor, which starts Agent Manager with the original CLI options and waits for a readiness message emitted only after the HTTP listener is active. A startup error emitted before readiness is persisted in daemon state and returned directly to the starting CLI instead of being retried. An unexpected exit after readiness is restarted indefinitely with capped exponential backoff. `stop` terminates the supervisor and Manager intentionally, while `restart` reuses a running daemon's stored options unless replacements are supplied. `daemon.json`, `daemon.lock`, `daemon.guard.sqlite`, and `logs/daemon.log` live beside the workspace database under `~/.code-factory/workspaces/<workspace-hash>/`. The persistent SQLite guard provides process-lifetime supervisor ownership; only its current owner may replace or remove the PID metadata and daemon state. This is application-level process supervision, not operating-system service installation or boot-time activation.
 
-Every local headless RD and Reviewer invocation skips interactive approval and CLI sandbox checks. It therefore inherits the launching user's full filesystem, network, and command-execution permissions. An E2B Reviewer has the remote sandbox's command and file access instead. Agent Manager must only be started in a trusted workspace. Reviewers remain behaviorally read-only through their task instructions; this is not an operating-system security boundary.
+Every local headless RD and Reviewer invocation skips interactive approval and CLI sandbox checks. It therefore inherits the launching user's full filesystem, network, and command-execution permissions. A Native Reviewer uses the selected local or E2B `ExecutionEnv` for its tools. Agent Manager must only be started in a trusted workspace. Reviewers remain behaviorally read-only through their task instructions; this is not an operating-system security boundary.
 
 ## 3. Entities
 
 ### Requirement
 
 - `status`: `todo | doing | waiting_confirmation | done | cancelled`;
-- `provider`: `codex | claude-code`;
-- optional `model` and `reasoningEffort` pin the CLI configuration for every RD Run in the Session;
+- `provider`: `codex | claude-code | native-agent`;
+- optional `model` and `reasoningEffort` select the model configuration for every RD Run in the Session;
 - `createdBy`: `human | rd_agent`;
 - an agent-proposed Requirement records `parentRequirementId` and `sourceSessionId`;
 - Requirement content is immutable after creation;
@@ -114,7 +114,7 @@ Every local headless RD and Reviewer invocation skips interactive approval and C
 
 - Can only be created manually by a human for an Open PR;
 - records the selected provider and optional model and reasoning effort for the one-off Reviewer Run;
-- requires the human to select `codex` or `claude-code`;
+- requires `native-agent` for a Native Agent Requirement, or `codex` or `claude-code` for a headless Requirement;
 - captures an immutable `targetHeadSha` when the request starts;
 - owns one short-lived Reviewer AgentRun and never creates an AgentSession;
 - allows at most one active ReviewRequest per PR.
@@ -162,7 +162,7 @@ Open PR
   → An idle RD resumes immediately; a running RD resumes after its current Run
 ~~~
 
-Codex and Claude Code Reviewers both run as ordinary short-lived headless agents in the workspace selected by the PR's Requirement; neither invokes a native review command or skill that targets the working tree. A Reviewer does not change Requirement or RD AgentSession state and does not need to run serially with RD. It must read the specified PR through the GitHub API without checking out or modifying the selected working directory. Agent Manager still records the trigger-time revision internally as `ReviewRequest.targetHeadSha`.
+Codex and Claude Code Reviewers both run as ordinary short-lived headless agents in the workspace selected by the PR's Requirement; neither invokes a native review command or skill that targets the working tree. A Native Agent Reviewer runs in a separate short-lived pi-durable conversation and uses the same selected workspace as its RD Agent. A Reviewer does not change Requirement or RD AgentSession state and does not need to run serially with RD. It must read the specified PR through the GitHub API without checking out or modifying the selected working directory. Agent Manager still records the trigger-time revision internally as `ReviewRequest.targetHeadSha`.
 
 If the PR head SHA changes, previous reviews remain historical results for the old revision. A human must request another review for the new revision.
 
@@ -267,7 +267,7 @@ Requirement details form a Jira-like work surface containing the description, li
 
 The Session board card opens a read-only Agent trace surface. This surface contains only one chronological timeline combining trace events from every Run in the Session; it has no Run selector and does not show the Requirement description, linked Pull Requests, conversation, or reply composer. Requirement, relationship, Pull Request, and Timer entry points continue to use the conversational work surface and do not show the trace panel. The trace timeline shares the conversation viewport semantics: it opens at the latest event, keeps following live events while the viewport remains at the bottom, pauses when the operator scrolls upward, and exposes controls for returning to the top or bottom. Provider JSON events are normalized inside the Codex and Claude Code adapters, persisted once as Run-scoped ManagerEvents, and streamed through SSE as they arrive. The same event rows provide historical traces through a Requirement-level aggregate endpoint, and clients order them by event time with the ManagerEvent sequence as a tie-breaker. The trace includes lifecycle events, reasoning summaries emitted by the Provider, Agent messages, tool calls, command/tool results, and errors. Individual detail values are capped at 64 KiB so a large command result cannot dominate SQLite or the dashboard.
 
-The dashboard supports English and Simplified Chinese. The header language switcher applies the locale immediately and persists the choice in browser storage; a visitor without a saved preference defaults to the browser language. Headless Requirement and Reviewer forms select models from the current provider catalog and retain the CLI-default option. Native Agent Requirement forms select a saved API profile. The configuration dialog updates the workspace configuration, distinguishes immediately applied settings from restart-required settings, and contains browser-local settings that take effect without saving the Manager configuration. Its Native Agent panel saves multiple OpenAI-compatible or Anthropic API profiles in a separate owner-only credential store. API keys are never returned to the browser; changes take effect for subsequent Native Agent Runs.
+The dashboard supports English and Simplified Chinese. The header language switcher applies the locale immediately and persists the choice in browser storage; a visitor without a saved preference defaults to the browser language. Headless Requirement and Reviewer forms select models from the current provider catalog and retain the CLI-default option. Native Agent Requirement forms select a saved API profile; Native Reviewer forms fix the provider to Native Agent and allow an optional profile or reasoning override. The configuration dialog updates the workspace configuration, distinguishes immediately applied settings from restart-required settings, and contains browser-local settings that take effect without saving the Manager configuration. Its Native Agent panel saves multiple OpenAI-compatible or Anthropic API profiles in a separate owner-only credential store. API keys are never returned to the browser; changes take effect for subsequent Native Agent Runs.
 
 Browser desktop notifications are enabled by default and the preference is stored in that browser. The settings dialog changes it immediately, while the header bell remains a shortcut. Because permission cannot be granted silently, the settings dialog and bell request it only from a direct user action and report blocked, unsupported, or insecure contexts separately. While the dashboard is open, terminal RD Run SSE events (`run.succeeded`, `run.failed`, `run.timed_out`, and `run.cancelled`) create outcome-specific notifications with the Requirement title. Clicking one focuses the dashboard and opens that Requirement. Reviewer outcomes and historical Run snapshots do not notify; Run IDs suppress repeat notifications after an SSE reconnection. Browser notifications require a secure context (localhost or HTTPS) and granted site permission, so a Windows browser using port forwarding can display its own operating-system notifications without a Manager-side Windows integration.
 

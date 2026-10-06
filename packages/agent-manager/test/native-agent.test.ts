@@ -37,6 +37,44 @@ test('Agent Manager records a native RD Run and conversation reply', async () =>
   }
 });
 
+test('Native Agent PR review uses a separate conversation and wakes its Native RD session', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-native-review-'));
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  faux.setResponses([fauxAssistantMessage('Review published'), fauxAssistantMessage('RD received review')]);
+  const manager = new AgentManager({ workspaceRoot: directory, store: new SqliteAgentManagerStore(':memory:'),
+    nativeService: new NativeAgentService(join(directory, 'native.sqlite'), models),
+    logger: createLogger({ level: 'silent' }) });
+  try {
+    const requirement = manager.createRequirement({ title: 'Native PR', description: 'Review it',
+      provider: 'native-agent', model: 'faux/faux-1' });
+    const pullRequest = manager.trackPullRequest({ requirementId: requirement.id, repository: 'example/repo',
+      number: 7, url: 'https://github.com/example/repo/pull/7', title: 'Native PR',
+      baseBranch: 'main', headBranch: 'feature', headSha: 'abc123def456', status: 'open' });
+    assert.throws(() => manager.requestReview(pullRequest.id, { provider: 'codex' }), /Native Agent Reviewer/);
+    assert.equal(manager.listReviewRequests(pullRequest.id).length, 0);
+
+    const outcome = await manager.requestReview(pullRequest.id, { provider: 'native-agent' });
+    assert.equal(outcome.status, 'succeeded');
+    assert.equal(manager.listReviewRequests(pullRequest.id)[0]?.provider, 'native-agent');
+    assert.equal(manager.listReviewRequests(pullRequest.id)[0]?.model, 'faux/faux-1');
+    assert.equal(manager.listMessages(requirement.id).find((message) => message.author === 'reviewer')?.body, 'Review published');
+    for (let attempt = 0; attempt < 100 && !manager.listRuns(requirement.id)
+      .some((run) => run.role === 'rd' && run.status === 'succeeded'); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const rdSessionId = manager.getRequirement(requirement.id)?.session.nativeSessionId;
+    assert(rdSessionId);
+    assert.notEqual(outcome.nativeSessionId, rdSessionId);
+    assert(manager.listMessages(requirement.id).some((message) => message.author === 'rd_agent' && message.body === 'RD received review'));
+    assert.equal(manager.listRuns(requirement.id).filter((run) => run.role === 'reviewer').length, 1);
+  } finally {
+    await manager.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('Native Agent sends a selected OpenAI-compatible profile to its saved endpoint', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'code-factory-native-profile-run-'));
   const server = createServer(async (request, response) => {

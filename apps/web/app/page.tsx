@@ -316,13 +316,15 @@ function AgentModelSelect({ catalog, provider, value, onChange, id, name, disabl
   );
 }
 
-function NativeProfileSelect({ client, active, value, onChange, id, disabled }: {
+function NativeProfileSelect({ client, active, value, onChange, id, disabled, required = true, emptyLabel }: {
   client: AgentManagerClient;
   active: boolean;
   value: string;
   onChange: (value: string) => void;
   id: string;
   disabled?: boolean;
+  required?: boolean;
+  emptyLabel?: TranslationKey;
 }) {
   const { t } = useI18n();
   const [items, setItems] = useState<NativeApiProfileDto[]>([]);
@@ -336,9 +338,9 @@ function NativeProfileSelect({ client, active, value, onChange, id, disabled }: 
     return () => { mounted = false; };
   }, [active, client]);
   return <>
-    <NativeSelect id={id} name="model" className="w-full" value={value} disabled={disabled} required
+    <NativeSelect id={id} name="model" className="w-full" value={value} disabled={disabled} required={required}
       onChange={(event) => onChange(event.target.value)}>
-      <NativeSelectOption value="">{t('Select a saved API profile')}</NativeSelectOption>
+      <NativeSelectOption value="">{emptyLabel ? t(emptyLabel) : t('Select a saved API profile')}</NativeSelectOption>
       {value && !items.some((item) => `profile:${item.id}` === value) ? <NativeSelectOption value={value}>{t('Saved profile unavailable')}</NativeSelectOption> : null}
       {items.map((item) => <NativeSelectOption key={item.id} value={`profile:${item.id}`}>
         {item.modelName} · {t(item.format === 'openai' ? 'OpenAI format' : 'Anthropic format')} · {item.baseUrl}
@@ -801,7 +803,9 @@ function SessionCard({ requirement, run, busy, onOpen, onRetry }: {
   );
 }
 
-function ReviewAgentDialog({ activeReview, busy, modelCatalog, onReview }: {
+function ReviewAgentDialog({ client, requirement, activeReview, busy, modelCatalog, onReview }: {
+  client: AgentManagerClient;
+  requirement?: RequirementDto;
   activeReview?: ReviewRequestDto;
   busy: boolean;
   modelCatalog: AgentModelCatalogDto | null;
@@ -814,6 +818,8 @@ function ReviewAgentDialog({ activeReview, busy, modelCatalog, onReview }: {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [provider, setProvider] = useState<AgentProvider>('codex');
   const [model, setModel] = useState('');
+  const nativeOnly = requirement?.provider === 'native-agent';
+  const reviewerProvider = nativeOnly ? 'native-agent' : provider;
   const disabled = busy || submitting || Boolean(activeReview);
 
   async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
@@ -825,7 +831,7 @@ function ReviewAgentDialog({ activeReview, busy, modelCatalog, onReview }: {
     setSubmitting(true);
     try {
       await onReview({
-        provider,
+        provider: reviewerProvider,
         ...(model.trim() ? { model: model.trim() } : {}),
         ...(typeof reasoningEffort === 'string' && reasoningEffort
           ? { reasoningEffort: reasoningEffort as AgentReasoningEffort }
@@ -858,7 +864,9 @@ function ReviewAgentDialog({ activeReview, busy, modelCatalog, onReview }: {
         <form onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>{t('Request a PR review')}</DialogTitle>
-            <DialogDescription>{t('Choose an Agent type, model, and reasoning effort for this one-off review.')}</DialogDescription>
+            <DialogDescription>{t(nativeOnly
+              ? 'This PR uses a Native Agent Reviewer. Choose an optional API profile and reasoning effort.'
+              : 'Choose an Agent type, model, and reasoning effort for this one-off review.')}</DialogDescription>
           </DialogHeader>
           {submitError ? (
             <Alert variant="destructive" className="mt-5">
@@ -870,7 +878,9 @@ function ReviewAgentDialog({ activeReview, busy, modelCatalog, onReview }: {
           <FieldGroup className="my-5 gap-4">
             <Field>
               <FieldLabel htmlFor={`${fieldId}-provider`}>{t('Reviewer Agent')}</FieldLabel>
-              <NativeSelect
+              {nativeOnly ? <NativeSelect id={`${fieldId}-provider`} name="provider" className="w-full" value="native-agent" disabled>
+                <NativeSelectOption value="native-agent">{t('Native Agent Reviewer')}</NativeSelectOption>
+              </NativeSelect> : <NativeSelect
                 id={`${fieldId}-provider`}
                 name="provider"
                 className="w-full"
@@ -882,23 +892,25 @@ function ReviewAgentDialog({ activeReview, busy, modelCatalog, onReview }: {
               >
                 <NativeSelectOption value="codex">{t('Codex Reviewer')}</NativeSelectOption>
                 <NativeSelectOption value="claude-code">{t('Claude Reviewer')}</NativeSelectOption>
-              </NativeSelect>
+              </NativeSelect>}
             </Field>
             <Field>
-              <FieldLabel htmlFor={`${fieldId}-model`}>{t('Model')}</FieldLabel>
-              <AgentModelSelect
+              <FieldLabel htmlFor={`${fieldId}-model`}>{t(nativeOnly ? 'API profile' : 'Model')}</FieldLabel>
+              {nativeOnly ? <NativeProfileSelect client={client} active={open} id={`${fieldId}-model`}
+                value={model} onChange={setModel} disabled={submitting} required={false}
+                emptyLabel="Use Requirement API profile" /> : <AgentModelSelect
                 id={`${fieldId}-model`}
                 name="model"
                 catalog={modelCatalog}
                 provider={provider}
                 value={model}
                 onChange={setModel}
-              />
+              />}
             </Field>
             <Field>
               <FieldLabel htmlFor={`${fieldId}-reasoning-effort`}>{t('Reasoning effort')}</FieldLabel>
               <NativeSelect id={`${fieldId}-reasoning-effort`} name="reasoningEffort" className="w-full" defaultValue="">
-                <NativeSelectOption value="">{t('Default reasoning')}</NativeSelectOption>
+                <NativeSelectOption value="">{t(nativeOnly ? 'Use Requirement reasoning effort' : 'Default reasoning')}</NativeSelectOption>
                 <NativeSelectOption value="low">Low</NativeSelectOption>
                 <NativeSelectOption value="medium">Medium</NativeSelectOption>
                 <NativeSelectOption value="high">High</NativeSelectOption>
@@ -907,7 +919,9 @@ function ReviewAgentDialog({ activeReview, busy, modelCatalog, onReview }: {
               </NativeSelect>
             </Field>
           </FieldGroup>
-          <p className="mb-5 text-xs text-muted-foreground">{t('The Reviewer uses this Requirement’s workspace. E2B reviews need the selected CLI installed and authenticated there.')}</p>
+          <p className="mb-5 text-xs text-muted-foreground">{t(nativeOnly
+            ? 'The Native Reviewer uses this Requirement’s workspace. In E2B, its tools run remotely without a Codex or Claude CLI.'
+            : 'The Reviewer uses this Requirement’s workspace.')}</p>
           <DialogFooter>
             <DialogClose render={<Button type="button" variant="outline" />}>{t('Cancel')}</DialogClose>
             <Button type="submit" disabled={submitting}>
@@ -921,7 +935,8 @@ function ReviewAgentDialog({ activeReview, busy, modelCatalog, onReview }: {
   );
 }
 
-function PullRequestCard({ pullRequest, requirement, activeReview, busy, modelCatalog, onReview }: {
+function PullRequestCard({ client, pullRequest, requirement, activeReview, busy, modelCatalog, onReview }: {
+  client: AgentManagerClient;
   pullRequest: PullRequestDto;
   requirement?: RequirementDto;
   activeReview?: ReviewRequestDto;
@@ -944,7 +959,7 @@ function PullRequestCard({ pullRequest, requirement, activeReview, busy, modelCa
       ) : null}
       {pullRequest.status === 'open' ? (
         <div className="mt-3 border-t border-border/70 pt-3">
-          <ReviewAgentDialog activeReview={activeReview} busy={busy} modelCatalog={modelCatalog} onReview={onReview} />
+          <ReviewAgentDialog client={client} requirement={requirement} activeReview={activeReview} busy={busy} modelCatalog={modelCatalog} onReview={onReview} />
         </div>
       ) : null}
     </article>
@@ -1088,7 +1103,9 @@ function AgentTimerCard({ timer, requirement, onOpenRequirement }: {
   );
 }
 
-function RequirementPullRequestCard({ pullRequest, activeReview, busy, modelCatalog, onReview }: {
+function RequirementPullRequestCard({ client, requirement, pullRequest, activeReview, busy, modelCatalog, onReview }: {
+  client: AgentManagerClient;
+  requirement: RequirementDto;
   pullRequest: PullRequestDto;
   activeReview?: ReviewRequestDto;
   busy: boolean;
@@ -1121,7 +1138,7 @@ function RequirementPullRequestCard({ pullRequest, activeReview, busy, modelCata
 
         {pullRequest.status === 'open' ? (
           <div className="w-full shrink-0 border-t border-border/70 pt-3 sm:w-auto sm:border-t-0 sm:pt-0">
-            <ReviewAgentDialog activeReview={activeReview} busy={busy} modelCatalog={modelCatalog} onReview={onReview} />
+            <ReviewAgentDialog client={client} requirement={requirement} activeReview={activeReview} busy={busy} modelCatalog={modelCatalog} onReview={onReview} />
           </div>
         ) : null}
       </div>
@@ -2348,6 +2365,8 @@ function RequirementDetail({
                   {pullRequests.map((pullRequest) => (
                     <RequirementPullRequestCard
                       key={pullRequest.id}
+                      client={client}
+                      requirement={requirement}
                       pullRequest={pullRequest}
                       activeReview={reviewRequests.find((review) => review.pullRequestId === pullRequest.id && review.status === 'running')}
                       busy={busyPullRequestId === pullRequest.id}
@@ -3694,6 +3713,7 @@ function Dashboard() {
                     {items.map((pullRequest) => (
                       <PullRequestCard
                         key={pullRequest.id}
+                        client={client}
                         pullRequest={pullRequest}
                         requirement={requirements.find((requirement) => requirement.id === pullRequest.requirementId)}
                         activeReview={reviewRequests.find((review) => review.pullRequestId === pullRequest.id && review.status === 'running')}

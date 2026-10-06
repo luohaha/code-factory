@@ -45,7 +45,6 @@ import { NativeAgentService } from './native-agent.js';
 import { NativeAuthService } from './native-auth-service.js';
 import { profileIdFromModel, profileModel, type NativeApiFormat, type NativeApiProfile } from './native-auth.js';
 import { E2BProviderError, E2BSandboxService, type E2BCredentials, type E2BHandle } from './e2b-execution-env.js';
-import { E2BProcessRunner } from './e2b-process-runner.js';
 import { E2BCredentialStore, e2bCredentialsPath } from './e2b-credentials.js';
 import { PullRequestReconciler } from './pull-request-reconciler.js';
 import {
@@ -1454,10 +1453,15 @@ export class AgentManager extends EventEmitter {
     pullRequestId: string,
     options: { provider: AgentProvider; model?: string; reasoningEffort?: AgentReasoningEffort; prompt?: string },
   ): Promise<RunOutcome> {
-    if (options.provider === 'native-agent') throw new TypeError('Native agent is available for RD runs, not Reviewer runs');
     const startedAt = performance.now();
     const pullRequest = this.requirePullRequest(pullRequestId);
     const requirement = this.requireRequirement(pullRequest.requirementId);
+    if (requirement.provider === 'native-agent' && options.provider !== 'native-agent') {
+      throw new TypeError('Native Agent Requirements require a Native Agent Reviewer');
+    }
+    if (requirement.provider !== 'native-agent' && options.provider === 'native-agent') {
+      throw new TypeError('Native Agent Reviewers are only available for Native Agent Requirements');
+    }
     const selectedWorkspace = requirement.sandboxId ? this.#store.getSandbox(requirement.sandboxId) : null;
     if (requirement.sandboxId && !selectedWorkspace) {
       throw new StoreNotFoundError(`Workspace ${requirement.sandboxId} not found`);
@@ -1465,7 +1469,11 @@ export class AgentManager extends EventEmitter {
     const remoteCredentials = selectedWorkspace?.kind === 'e2b' ? this.e2bCredentials(selectedWorkspace) : null;
     const runId = `run_${randomUUID()}`;
     const reviewRequestId = `rev_${randomUUID()}`;
-    const model = options.model?.trim() || undefined;
+    const model = options.model?.trim() || (options.provider === 'native-agent' ? requirement.model ?? undefined : undefined);
+    if (options.provider === 'native-agent' && model?.startsWith('profile:')
+      && !this.nativeAuth().get(profileIdFromModel(model)!)) throw new StoreNotFoundError('Native API profile not found');
+    const reasoningEffort = options.reasoningEffort
+      ?? (options.provider === 'native-agent' ? requirement.reasoningEffort ?? undefined : undefined);
     const started = this.#store.beginReviewRequest({
       id: reviewRequestId,
       runId,
@@ -1473,7 +1481,7 @@ export class AgentManager extends EventEmitter {
       requirementId: requirement.id,
       provider: options.provider,
       ...(model ? { model } : {}),
-      ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
       targetHeadSha: pullRequest.headSha,
       taskSummary: `Review ${pullRequest.repository}#${pullRequest.number} at ${pullRequest.headSha.slice(0, 8)}`,
       now: new Date().toISOString(),
@@ -1491,7 +1499,7 @@ export class AgentManager extends EventEmitter {
         pullRequestId,
         provider: options.provider,
         model: model ?? null,
-        reasoningEffort: options.reasoningEffort ?? null,
+        reasoningEffort: reasoningEffort ?? null,
         targetHeadSha: pullRequest.headSha,
       },
     });
@@ -1502,47 +1510,38 @@ export class AgentManager extends EventEmitter {
       pullRequestId,
       provider: options.provider,
       model: model ?? null,
-      reasoningEffort: options.reasoningEffort ?? null,
+      reasoningEffort: reasoningEffort ?? null,
       targetHeadSha: pullRequest.headSha,
     });
 
-    const adapter = this.#adapters[options.provider];
     let lastReviewerMessage = '';
     const prompt = `Review GitHub PR ${pullRequest.url}`;
     const developerInstructions = [
       REVIEWER_DEVELOPER_INSTRUCTIONS,
       options.prompt?.trim() ? `Additional review focus from the human: ${options.prompt.trim()}` : '',
     ].filter(Boolean).join('\n\n');
-    const request: ProcessRunRequest = {
-      invocation: adapter.buildReviewInvocation({
-        prompt,
-        ...(model ? { model } : {}),
-        ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
-        developerInstructions,
-      }),
-      adapter,
-      workspaceRoot: selectedWorkspace?.cwd ?? this.workspaceRoot,
-      timeoutMs: Math.min(this.#timeoutMs, 30 * 60 * 1_000),
-      timeoutMode: 'elapsed',
-      maxOutputBytes: this.#maxOutputBytes,
-      onOutput: (line) => this.emit('output', { runId, line }),
-      onEvent: (event) => {
-        this.recordAgentTraces(requirement.id, requirement.session.id, runId, event.traces);
-        if (!event.message || (event.kind !== 'message' && event.kind !== 'completed')) return;
-        const body = event.message.trim();
-        if (body) lastReviewerMessage = body;
-      },
+    const onEvent = (event: import('./adapters/types.js').NormalizedAgentEvent) => {
+      this.recordAgentTraces(requirement.id, requirement.session.id, runId, event.traces);
+      if (!event.message || (event.kind !== 'message' && event.kind !== 'completed')) return;
+      const body = event.message.trim();
+      if (body) lastReviewerMessage = body;
     };
-    const run = selectedWorkspace?.kind === 'e2b' && selectedWorkspace.providerSandboxId && remoteCredentials
-      ? this.#e2b.connect(selectedWorkspace.providerSandboxId, remoteCredentials).then((handle) => {
-        const trustedGitHub = selectedWorkspace.repositoryUrl !== null
-          && new URL(selectedWorkspace.repositoryUrl).hostname.toLowerCase() === 'github.com';
-        const envs = Object.fromEntries((trustedGitHub ? ['GH_TOKEN', 'GITHUB_TOKEN'] : [])
-          .flatMap((name) => process.env[name] ? [[name, process.env[name]!]] : []));
-        return new E2BProcessRunner(handle, envs).run(request);
-      }).catch((error: unknown): RunOutcome => ({ status: 'failed', exitCode: null, nativeSessionId: null,
-        finalMessage: null, error: error instanceof Error ? error.message : 'E2B Reviewer failed' }))
-      : this.execute(request);
+    const run: Promise<RunOutcome> = options.provider === 'native-agent'
+      ? this.#native.run({ role: 'reviewer', requirementId: requirement.id, sessionId: requirement.session.id,
+        nativeSessionId: null, prompt, model: model ?? null, reasoningEffort: reasoningEffort ?? null,
+        cwd: selectedWorkspace?.cwd ?? this.workspaceRoot,
+        ...(selectedWorkspace?.kind === 'e2b' && selectedWorkspace.providerSandboxId && remoteCredentials
+          ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedWorkspace.providerSandboxId,
+              credentials: remoteCredentials,
+              forwardGitHubToken: selectedWorkspace.repositoryUrl !== null
+                && new URL(selectedWorkspace.repositoryUrl).hostname.toLowerCase() === 'github.com' } } : {}),
+        environment: {}, instructions: `${developerInstructions}\nUse the bash tool for GitHub CLI commands in the selected workspace.`,
+        signal: new AbortController().signal, timeoutMs: Math.min(this.#timeoutMs, 30 * 60 * 1_000),
+        timeoutMode: 'elapsed', onNativeSession: () => undefined, onEvent })
+      : this.runHeadlessReview(options.provider, {
+        prompt, model, reasoningEffort, developerInstructions, selectedWorkspace,
+        runId, onEvent,
+      });
     return run.then((outcome) => {
       this.#store.finishReviewRequest(reviewRequestId, outcome, new Date().toISOString());
       if (outcome.status === 'succeeded') {
@@ -1576,6 +1575,30 @@ export class AgentManager extends EventEmitter {
       }
       return outcome;
     });
+  }
+
+  private runHeadlessReview(provider: 'codex' | 'claude-code', input: {
+    prompt: string; model: string | undefined; reasoningEffort: AgentReasoningEffort | undefined;
+    developerInstructions: string; selectedWorkspace: Sandbox | null; runId: string;
+    onEvent: (event: import('./adapters/types.js').NormalizedAgentEvent) => void;
+  }): Promise<RunOutcome> {
+    const adapter = this.#adapters[provider];
+    const request: ProcessRunRequest = {
+      invocation: adapter.buildReviewInvocation({
+        prompt: input.prompt,
+        ...(input.model ? { model: input.model } : {}),
+        ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+        developerInstructions: input.developerInstructions,
+      }),
+      adapter,
+      workspaceRoot: input.selectedWorkspace?.cwd ?? this.workspaceRoot,
+      timeoutMs: Math.min(this.#timeoutMs, 30 * 60 * 1_000),
+      timeoutMode: 'elapsed',
+      maxOutputBytes: this.#maxOutputBytes,
+      onOutput: (line) => this.emit('output', { runId: input.runId, line }),
+      onEvent: input.onEvent,
+    };
+    return this.execute(request);
   }
 
   confirmRequirement(requirementId: string): RequirementWithSession {
