@@ -1834,7 +1834,7 @@ function RequirementComposer({
         <div className="mb-2.5 flex items-center justify-between gap-3 rounded-xl border border-violet-500/15 bg-violet-500/7 px-3 py-2 text-[10px] text-violet-700 dark:text-violet-300">
           <span>{t(requirement.session.state === 'failed'
             ? 'The RD Run failed. Review the error, retry, or confirm the Requirement if the work is complete.'
-            : 'The RD Run stopped. Review the work, reply to continue, or confirm completion.')}</span>
+            : 'The RD Run is awaiting confirmation. Review the work, reply to continue, or confirm completion.')}</span>
           <Button size="xs" className="shrink-0" disabled={busy} onClick={() => void onConfirm().catch(() => undefined)}><Check data-icon="inline-start" />{t('Complete')}</Button>
         </div>
       ) : null}
@@ -2074,6 +2074,7 @@ function RequirementDetail({
   modelCatalog,
   sandboxes,
   messageLoading,
+  messagesReady,
   busy,
   busyPullRequestId,
   detailMode,
@@ -2102,6 +2103,7 @@ function RequirementDetail({
   modelCatalog: AgentModelCatalogDto | null;
   sandboxes: SandboxDto[];
   messageLoading: boolean;
+  messagesReady: boolean;
   busy: boolean;
   busyPullRequestId: string | null;
   detailMode: RequirementDetailMode;
@@ -2448,7 +2450,7 @@ function RequirementDetail({
               <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
                 <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-emerald-500/12 text-emerald-600"><Bot className="size-3.5" /></span>
                 <span className="flex min-w-0 flex-1 items-center gap-2"><LoaderCircle className="size-3.5 shrink-0 animate-spin" />{t('RD Agent is working; new messages are queued by default.')}</span>
-                {activeRdRun ? (
+                {activeRdRun && messagesReady ? (
                   <Button type="button" variant="ghost" size="xs" className="shrink-0 text-amber-700 dark:text-amber-300" disabled={busy} onClick={() => void onInterrupt(hasNewerInput ? 'steer' : 'stop').catch(() => undefined)}>
                     <Square data-icon="inline-start" />{t(hasNewerInput ? 'Steering' : 'Stop Run')}
                   </Button>
@@ -2518,6 +2520,7 @@ function Dashboard() {
     requirementId: string | null;
     items: RequirementMessageDto[];
   }>({ requirementId: null, items: [] });
+  const [loadedConversationRequirementId, setLoadedConversationRequirementId] = useState<string | null>(null);
   const [agentTimers, setAgentTimers] = useState<AgentTimerDto[]>([]);
   const [messageLoading, setMessageLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -2552,6 +2555,7 @@ function Dashboard() {
     const nextDetailMode = requirementDetailModeForView(sourceView);
     detailModeRef.current = nextDetailMode;
     setDetailMode(nextDetailMode);
+    if (nextDetailMode === 'conversation') setLoadedConversationRequirementId(null);
     setSelectedId(requirementId);
   }, []);
   const {
@@ -2755,6 +2759,7 @@ function Dashboard() {
                     items,
                   ),
                 ));
+                setLoadedConversationRequirementId(target.requirementId);
               }
             }
             return;
@@ -3011,6 +3016,7 @@ function Dashboard() {
                 received,
               ),
             ));
+            setLoadedConversationRequirementId(selectedId);
           }
         })
         .catch((caught: unknown) => { if (!cancelled) setError(caught instanceof Error ? caught.message : t('Failed to load messages')); })
@@ -3963,6 +3969,7 @@ function Dashboard() {
           (sandbox.sharing !== 'dedicated' || sandbox.id === selectedRequirement?.sandboxId ||
             !requirements.some((item) => item.sandboxId === sandbox.id)))}
         messageLoading={selectedMessageLoading}
+        messagesReady={loadedConversationRequirementId === selectedId && !selectedMessageLoading}
         busy={selectedRequirement
           ? busyId === selectedRequirement.id || interruptingRequirementIds.has(selectedRequirement.id)
           : false}

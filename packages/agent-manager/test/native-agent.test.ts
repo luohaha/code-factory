@@ -242,6 +242,38 @@ test('Stop Run during native setup never submits the initial input', async () =>
   }
 });
 
+test('Stop Run with no queued input pauses an active native Requirement', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-native-stop-'));
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  faux.setResponses([
+    fauxAssistantMessage(fauxToolCall('bash', { command: 'sleep 0.5' }), { stopReason: 'toolUse' }),
+    fauxAssistantMessage('Unexpected continued answer'),
+  ]);
+  const manager = new AgentManager({ workspaceRoot: directory, store: new SqliteAgentManagerStore(':memory:'),
+    nativeService: new NativeAgentService(join(directory, 'native.sqlite'), models),
+    logger: createLogger({ level: 'silent' }) });
+  try {
+    const requirement = manager.createRequirement({ title: 'Pause native work', description: 'Run a tool',
+      provider: 'native-agent', model: 'faux/faux-1' });
+    const run = manager.runRequirement(requirement.id);
+    for (let attempt = 0; attempt < 100 && faux.state.callCount < 1; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(faux.state.callCount, 1);
+    manager.interruptRdRun(requirement.id, 'stop');
+    const result = await run;
+    assert.equal(result.status, 'waiting_confirmation');
+    assert.equal(result.session.state, 'waiting_human');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(manager.listRuns(requirement.id).map((item) => item.status), ['cancelled']);
+  } finally {
+    await manager.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('native Steering during setup delivers attachment-only input in the same Run', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'code-factory-steer-setup-'));
   const faux = fauxProvider();

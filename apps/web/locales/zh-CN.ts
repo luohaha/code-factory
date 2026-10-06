@@ -277,7 +277,7 @@ export const zhCN = {
   'after the current Run': '在当前运行结束后',
   'during the next Run': '在下一次运行中',
   'The RD Run failed. Review the error, retry, or confirm the Requirement if the work is complete.': 'RD 运行异常。请查看错误、重试；如果工作已完成，也可确认需求。',
-  'The RD Run stopped. Review the work, reply to continue, or confirm completion.': 'RD 运行已停止。请检查结果、回复以继续，或确认完成。',
+  'The RD Run is awaiting confirmation. Review the work, reply to continue, or confirm completion.': 'RD 运行正在等待确认。请检查结果、回复以继续，或确认完成。',
   'Remove {name}': '移除 {name}',
   'Reply to RD Agent': '回复 RD Agent',
   'Add instructions and start; paste or drop attachments…': '补充要求并开始执行；可以粘贴或拖入附件…',
