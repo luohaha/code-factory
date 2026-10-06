@@ -1,182 +1,121 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type SyntheticEvent } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { useI18n } from '@/lib/i18n';
-import type { AgentManagerClient, NativeAuthProviderStatus, NativeLoginDto } from '@/lib/agent-manager-client';
-
-const providers = [
-  { id: 'openai', name: 'OpenAI', apiKey: true, subscription: true },
-  { id: 'anthropic', name: 'Anthropic', apiKey: true, subscription: false },
-  { id: 'openai-codex', name: 'Codex subscription', apiKey: false, subscription: true },
-] as const;
+import type { AgentManagerClient, NativeApiProfileDto } from '@/lib/agent-manager-client';
 
 export function NativeAuthSettings({ client }: { client: AgentManagerClient }) {
   const { t } = useI18n();
-  const [statuses, setStatuses] = useState<NativeAuthProviderStatus[] | null>(null);
-  const [keys, setKeys] = useState({ openai: '', anthropic: '' });
-  const [login, setLogin] = useState<NativeLoginDto | null>(null);
-  const [answer, setAnswer] = useState('');
-  const [busy, setBusy] = useState<string | null>(null);
+  const [items, setItems] = useState<NativeApiProfileDto[] | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [format, setFormat] = useState<'openai' | 'anthropic'>('openai');
+  const [baseUrl, setBaseUrl] = useState('https://api.openai.com/v1');
+  const [apiKey, setApiKey] = useState('');
+  const [modelName, setModelName] = useState('');
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
-    void client.getNativeAuth().then((result) => {
-      if (active) { setStatuses(result.providers); setLogin(result.login); }
-    })
+    void client.getNativeAuth().then((result) => { if (active) setItems(result.items); })
       .catch((caught: unknown) => { if (active) setError(caught instanceof Error ? caught.message : t('Failed to load Native Agent authentication')); });
     return () => { active = false; };
   }, [client, t]);
 
-  useEffect(() => {
-    if (!login || login.state === 'succeeded' || login.state === 'failed' || login.state === 'cancelled') return;
-    let active = true;
-    const poll = async () => {
-      try {
-        const next = await client.getNativeLogin(login.id);
-        if (!active) return;
-        setLogin(next);
-        if (next.state === 'succeeded') {
-          const result = await client.getNativeAuth();
-          if (active) setStatuses(result.providers);
-        }
-      } catch (caught) {
-        if (active) setError(caught instanceof Error ? caught.message : t('Failed to check login status'));
-      }
-    };
-    const interval = window.setInterval(() => void poll(), 1500);
-    return () => { active = false; window.clearInterval(interval); };
-  }, [client, login]);
-
-  async function saveKey(provider: 'openai' | 'anthropic') {
-    setBusy(provider);
+  async function save(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
+    event.preventDefault();
+    setBusy(true);
     setError(null);
     try {
-      setStatuses(await client.setNativeApiKey(provider, keys[provider]));
-      setKeys((current) => ({ ...current, [provider]: '' }));
-    } catch (caught) { setError(caught instanceof Error ? caught.message : t('Failed to save API key')); }
-    finally { setBusy(null); }
+      await client.saveNativeApiProfile({ ...(editingId ? { id: editingId } : {}), format, baseUrl,
+        ...(apiKey.trim() ? { apiKey } : {}), modelName });
+      setItems((await client.getNativeAuth()).items);
+      setApiKey('');
+      setModelName('');
+      setAdding(false);
+      setEditingId(null);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : t('Failed to save API profile')); }
+    finally { setBusy(false); }
   }
 
-  async function remove(provider: 'openai' | 'anthropic' | 'openai-codex') {
-    setBusy(provider);
+  async function remove(id: string) {
+    setBusy(true);
     setError(null);
-    try { setStatuses(await client.removeNativeAuth(provider)); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : t('Failed to remove credential')); }
-    finally { setBusy(null); }
+    try {
+      await client.removeNativeApiProfile(id);
+      setItems((current) => current?.filter((item) => item.id !== id) ?? null);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : t('Failed to remove API profile')); }
+    finally { setBusy(false); }
   }
-
-  async function startLogin(provider: 'openai' | 'openai-codex') {
-    setBusy(provider);
-    setError(null);
-    setAnswer('');
-    try { setLogin(await client.startNativeLogin(provider)); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : t('Failed to start login')); }
-    finally { setBusy(null); }
-  }
-
-  async function submitAnswer() {
-    if (!login) return;
-    setBusy('login');
-    setError(null);
-    try { setLogin(await client.answerNativeLogin(login.id, answer)); setAnswer(''); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : t('Failed to submit login response')); }
-    finally { setBusy(null); }
-  }
-
-  async function cancelLogin() {
-    if (!login) return;
-    setBusy('login');
-    try { setLogin(await client.cancelNativeLogin(login.id)); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : t('Failed to cancel login')); }
-    finally { setBusy(null); }
-  }
-
-  const loginActive = login?.state === 'pending' || login?.state === 'prompt';
-  const sourceLabel = (source: NativeAuthProviderStatus['source']) => source === 'subscription'
-    ? t('Subscription credential saved') : source === 'stored_api_key' ? t('API key configured')
-      : source === 'environment' ? t('API key from environment') : t('Not configured');
 
   return (
     <div className="rounded-lg border border-border p-3 sm:col-span-2">
-      <p className="text-xs font-medium">{t('Native Agent authentication')}</p>
-      <p className="mt-1 text-[10px] text-muted-foreground">{t('Credentials apply immediately to subsequent Native Agent runs. Saved secrets are not shown again.')}</p>
-      <div className="mt-3 grid gap-3">
-        {providers.map((provider) => {
-          const source = statuses?.find((item) => item.provider === provider.id)?.source ?? null;
-          return (
-            <div key={provider.id} className="rounded-md border border-border p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-medium">{t(provider.name)}</span>
-                <span className="text-[10px] text-muted-foreground">{statuses ? sourceLabel(source) : t('Loading…')}</span>
-              </div>
-              {provider.apiKey ? (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <Input className="min-w-40 flex-1" type="password" autoComplete="off"
-                    aria-label={`${provider.name} ${t('API key')}`} placeholder={t('Enter API key')}
-                    value={keys[provider.id]} onChange={(event) => setKeys((current) => ({ ...current, [provider.id]: event.target.value }))}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        event.preventDefault();
-                        if (keys[provider.id].trim() && busy === null) void saveKey(provider.id);
-                      }
-                    }} />
-                  <Button type="button" size="sm" variant="outline" disabled={!keys[provider.id].trim() || busy !== null}
-                    onClick={() => void saveKey(provider.id)}>{t('Save key')}</Button>
-                </div>
-              ) : null}
-              <div className="mt-2 flex flex-wrap gap-2">
-                {provider.subscription ? (
-                  <Button type="button" size="sm" variant="outline" disabled={busy !== null || loginActive}
-                    onClick={() => void startLogin(provider.id)}>{t('Connect subscription')}</Button>
-                ) : null}
-                {source === 'stored_api_key' || source === 'subscription' ? (
-                  <Button type="button" size="sm" variant="outline" disabled={busy !== null}
-                    onClick={() => void remove(provider.id)}>{t('Remove saved credential')}</Button>
-                ) : null}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      {login ? (
-        <div className="mt-3 rounded-md border border-border p-3 text-xs">
-          <p className="font-medium">{t('Subscription login')}: {t(login.provider === 'openai' ? 'OpenAI' : 'Codex subscription')} · {t(login.state === 'succeeded' ? 'Connected' : login.state === 'failed' ? 'Failed' : login.state === 'cancelled' ? 'Cancelled' : 'In progress')}</p>
-          {login.authorizationUrl ? <a className="mt-2 block break-all text-primary underline" href={login.authorizationUrl} target="_blank" rel="noreferrer">{t('Open authorization page')}</a> : null}
-          {login.verificationUri ? <a className="mt-2 block break-all text-primary underline" href={login.verificationUri} target="_blank" rel="noreferrer">{t('Open device verification page')}</a> : null}
-          {login.userCode ? <p className="mt-2 font-mono">{t('Device code')}: {login.userCode}</p> : null}
-          {login.message ? <p className="mt-2 text-muted-foreground">{login.message}</p> : null}
-          {login.prompt ? (
-            <div className="mt-3">
-              <p className="mb-2 text-muted-foreground">{login.prompt.message}</p>
-              <div className="flex flex-wrap gap-2">
-              {login.prompt.type === 'select' ? (
-                <NativeSelect aria-label={t('Login response')} value={answer} onChange={(event) => setAnswer(event.target.value)}>
-                  <NativeSelectOption value="">{t('Select an option')}</NativeSelectOption>
-                  {login.prompt.options.map((option) => <NativeSelectOption key={option.id} value={option.id}>{option.label}</NativeSelectOption>)}
-                </NativeSelect>
-              ) : <Input className="min-w-40 flex-1" aria-label={t('Login response')}
-                type={login.prompt.type === 'secret' ? 'password' : 'text'} autoComplete="off"
-                placeholder={login.prompt.placeholder ?? login.prompt.message} value={answer}
-                onChange={(event) => setAnswer(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    if (answer.trim() && busy === null) void submitAnswer();
-                  }
-                }} />}
-              <Button type="button" size="sm" disabled={!answer.trim() || busy !== null}
-                onClick={() => void submitAnswer()}>{t('Continue login')}</Button>
-              </div>
-            </div>
-          ) : null}
-          {loginActive ? <Button className="mt-2" type="button" size="sm" variant="ghost" disabled={busy !== null}
-            onClick={() => void cancelLogin()}>{t('Cancel login')}</Button> : null}
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-medium">{t('Native Agent API profiles')}</p>
+          <p className="mt-1 text-[10px] text-muted-foreground">{t('Saved API keys are not shown again. Changes apply to later Native Agent runs.')}</p>
         </div>
+        <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => {
+          setEditingId(null);
+          setFormat('openai');
+          setBaseUrl('https://api.openai.com/v1');
+          setApiKey('');
+          setModelName('');
+          setAdding(true);
+        }}>{t('Add item')}</Button>
+      </div>
+      <div className="mt-3 grid gap-2">
+        {items?.map((item) => (
+          <div key={item.id} className="flex items-start justify-between gap-3 rounded-md border border-border p-3">
+            <div className="min-w-0 text-xs">
+              <p className="font-medium">{item.modelName} · {t(item.format === 'openai' ? 'OpenAI format' : 'Anthropic format')}</p>
+              <p className="mt-1 break-all text-muted-foreground">{item.baseUrl}</p>
+            </div>
+            <div className="flex shrink-0 gap-1">
+              <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => {
+                setEditingId(item.id);
+                setFormat(item.format);
+                setBaseUrl(item.baseUrl);
+                setApiKey('');
+                setModelName(item.modelName);
+                setAdding(true);
+              }}>{t('Edit')}</Button>
+              <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void remove(item.id)}>{t('Remove')}</Button>
+            </div>
+          </div>
+        ))}
+        {items?.length === 0 ? <p className="text-xs text-muted-foreground">{t('No API profiles saved yet.')}</p> : null}
+      </div>
+      {adding ? (
+        <form className="mt-3 grid gap-2 rounded-md border border-border p-3" onSubmit={save}>
+          <label className="text-xs font-medium" htmlFor="native-api-format">{t('API format')}</label>
+          <NativeSelect id="native-api-format" className="w-full" value={format}
+            disabled={editingId?.startsWith('legacy-') ?? false} onChange={(event) => {
+            const next = event.target.value as 'openai' | 'anthropic';
+            setFormat(next);
+            setBaseUrl(next === 'openai' ? 'https://api.openai.com/v1' : 'https://api.anthropic.com');
+          }}>
+            <NativeSelectOption value="openai">{t('OpenAI format')}</NativeSelectOption>
+            <NativeSelectOption value="anthropic">{t('Anthropic format')}</NativeSelectOption>
+          </NativeSelect>
+          <label className="text-xs font-medium" htmlFor="native-api-base-url">{t('Base URL')}</label>
+          <Input id="native-api-base-url" type="url" required value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
+          <label className="text-xs font-medium" htmlFor="native-api-key">{t('API key')}</label>
+          <Input id="native-api-key" type="password" autoComplete="off" required={!editingId}
+            placeholder={editingId ? t('Leave blank to keep saved key') : undefined}
+            value={apiKey} onChange={(event) => setApiKey(event.target.value)} />
+          <label className="text-xs font-medium" htmlFor="native-model-name">{t('Model name')}</label>
+          <Input id="native-model-name" required value={modelName} onChange={(event) => setModelName(event.target.value)} />
+          <div className="flex justify-end gap-2 pt-1">
+            <Button type="button" size="sm" variant="outline" onClick={() => { setAdding(false); setEditingId(null); }}>{t('Cancel')}</Button>
+            <Button type="submit" size="sm" disabled={busy || (!editingId && !apiKey.trim()) || !modelName.trim() || !baseUrl.trim()}>{t('Save')}</Button>
+          </div>
+        </form>
       ) : null}
       {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
     </div>

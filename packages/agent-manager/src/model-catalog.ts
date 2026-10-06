@@ -2,7 +2,6 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
-import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex';
 
 import type { Logger } from './logger.js';
 import type {
@@ -24,7 +23,7 @@ export interface AgentModelDiscoverer {
 export class NativeAgentModelDiscoverer implements AgentModelDiscoverer {
   readonly provider = 'native-agent' as const;
   async discover(): Promise<readonly AgentModel[]> {
-    return [openaiProvider(), anthropicProvider(), openaiCodexProvider()].flatMap((provider) => provider.getModels().map((model) => ({
+    return [openaiProvider(), anthropicProvider()].flatMap((provider) => provider.getModels().map((model) => ({
       id: `${provider.id}/${model.id}`, displayName: model.name, description: null,
     })));
   }

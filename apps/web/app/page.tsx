@@ -96,6 +96,7 @@ import {
   type AgentManagerConfiguration,
   type AgentManagerConfigurationSnapshot,
   type AgentModelCatalogDto,
+  type NativeApiProfileDto,
   type AgentProvider,
   type AgentReasoningEffort,
   type AgentRunDto,
@@ -304,7 +305,7 @@ function AgentModelSelect({ catalog, provider, value, onChange, id, name, disabl
       className="w-full"
       aria-label={ariaLabel}
     >
-      <NativeSelectOption value="">{provider === 'native-agent' ? t('Use Native Agent default model') : t('Use CLI default model')}</NativeSelectOption>
+      <NativeSelectOption value="">{t('Use CLI default model')}</NativeSelectOption>
       {selectedMissing ? <NativeSelectOption value={value}>{value}</NativeSelectOption> : null}
       {models.map((model) => (
         <NativeSelectOption key={model.id} value={model.id} title={model.description ?? model.id}>
@@ -315,12 +316,46 @@ function AgentModelSelect({ catalog, provider, value, onChange, id, name, disabl
   );
 }
 
+function NativeProfileSelect({ client, active, value, onChange, id, disabled }: {
+  client: AgentManagerClient;
+  active: boolean;
+  value: string;
+  onChange: (value: string) => void;
+  id: string;
+  disabled?: boolean;
+}) {
+  const { t } = useI18n();
+  const [items, setItems] = useState<NativeApiProfileDto[]>([]);
+  const [error, setError] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    if (!active) return;
+    let mounted = true;
+    void client.getNativeAuth().then((result) => { if (mounted) { setItems(result.items); setError(false); setLoaded(true); } })
+      .catch(() => { if (mounted) { setError(true); setLoaded(true); } });
+    return () => { mounted = false; };
+  }, [active, client]);
+  return <>
+    <NativeSelect id={id} name="model" className="w-full" value={value} disabled={disabled} required
+      onChange={(event) => onChange(event.target.value)}>
+      <NativeSelectOption value="">{t('Select a saved API profile')}</NativeSelectOption>
+      {value && !items.some((item) => `profile:${item.id}` === value) ? <NativeSelectOption value={value}>{t('Saved profile unavailable')}</NativeSelectOption> : null}
+      {items.map((item) => <NativeSelectOption key={item.id} value={`profile:${item.id}`}>
+        {item.modelName} · {t(item.format === 'openai' ? 'OpenAI format' : 'Anthropic format')} · {item.baseUrl}
+      </NativeSelectOption>)}
+    </NativeSelect>
+    {error ? <p className="mt-1 text-xs text-destructive">{t('Failed to load API profiles')}</p> : null}
+    {loaded && !error && items.length === 0 ? <p className="mt-1 text-xs text-muted-foreground">{t('Add an API profile in Agent Manager runtime settings first.')}</p> : null}
+  </>;
+}
+
 function agentConfigurationLabel(configuration: {
   provider: AgentProvider;
   model: string | null;
   reasoningEffort: AgentReasoningEffort | null;
 }): string {
-  return [providerLabel(configuration.provider), configuration.model, configuration.reasoningEffort].filter(Boolean).join(' · ');
+  const model = configuration.model?.startsWith('profile:') ? 'API profile' : configuration.model;
+  return [providerLabel(configuration.provider), model, configuration.reasoningEffort].filter(Boolean).join(' · ');
 }
 
 function shortId(id: string): string {
@@ -489,11 +524,13 @@ function DeleteRequirementDialog({
 }
 
 function EditRequirementAgentConfigurationDialog({
+  client,
   requirement,
   busy,
   modelCatalog,
   onUpdate,
 }: {
+  client: AgentManagerClient;
   requirement: RequirementDto;
   busy: boolean;
   modelCatalog: AgentModelCatalogDto | null;
@@ -580,8 +617,9 @@ function EditRequirementAgentConfigurationDialog({
               </NativeSelect>
             </Field>
             <Field>
-              <FieldLabel htmlFor={`${fieldId}-model`}>{t('Model')}</FieldLabel>
-              <AgentModelSelect
+              <FieldLabel htmlFor={`${fieldId}-model`}>{t(provider === 'native-agent' ? 'API profile' : 'Model')}</FieldLabel>
+              {provider === 'native-agent' ? <NativeProfileSelect client={client} active={open} id={`${fieldId}-model`}
+                value={model} onChange={setModel} disabled={submitting} /> : <AgentModelSelect
                 id={`${fieldId}-model`}
                 name="model"
                 catalog={modelCatalog}
@@ -589,7 +627,7 @@ function EditRequirementAgentConfigurationDialog({
                 value={model}
                 onChange={setModel}
                 disabled={submitting}
-              />
+              />}
             </Field>
             <Field>
               <FieldLabel htmlFor={`${fieldId}-reasoning-effort`}>{t('Reasoning effort')}</FieldLabel>
@@ -1073,7 +1111,8 @@ function RequirementPullRequestCard({ pullRequest, activeReview, busy, modelCata
   );
 }
 
-function NewRequirementDialog({ disabled, modelCatalog, sandboxes, onCreate }: {
+function NewRequirementDialog({ client, disabled, modelCatalog, sandboxes, onCreate }: {
+  client: AgentManagerClient;
   disabled: boolean;
   modelCatalog: AgentModelCatalogDto | null;
   sandboxes: SandboxDto[];
@@ -1160,18 +1199,16 @@ function NewRequirementDialog({ disabled, modelCatalog, sandboxes, onCreate }: {
                 </NativeSelect>
               </Field>
               <Field>
-                <FieldLabel htmlFor="requirement-model">{t('Model')}</FieldLabel>
-                <AgentModelSelect
+                <FieldLabel htmlFor="requirement-model">{t(provider === 'native-agent' ? 'API profile' : 'Model')}</FieldLabel>
+                {provider === 'native-agent' ? <NativeProfileSelect client={client} active={open} id="requirement-model"
+                  value={model} onChange={setModel} disabled={submitting} /> : <AgentModelSelect
                   id="requirement-model"
                   name="model"
                   catalog={modelCatalog}
                   provider={provider}
                   value={model}
                   onChange={setModel}
-                />
-                {provider === 'native-agent' ? (
-                  <p className="mt-1 text-xs text-muted-foreground">{t('Configure Native Agent API keys or subscription login in Agent Manager runtime settings.')}</p>
-                ) : null}
+                />}
               </Field>
               <Field>
                 <FieldLabel htmlFor="requirement-reasoning-effort">{t('Reasoning effort')}</FieldLabel>
@@ -1989,6 +2026,7 @@ function AgentTracePanel({ requirementId, runs, tracesByRun, loadedRequirementId
 }
 
 function RequirementDetail({
+  client,
   requirement,
   runs,
   tracesByRun,
@@ -2015,6 +2053,7 @@ function RequirementDetail({
   onLoadTrace,
   apiUrl,
 }: {
+  client: AgentManagerClient;
   requirement: RequirementDto | null;
   runs: AgentRunDto[];
   tracesByRun: Readonly<Record<string, AgentTraceEventDto[] | undefined>>;
@@ -2196,6 +2235,7 @@ function RequirementDetail({
           {requirement.status === 'todo' ? (
             <div className="mt-3">
               <EditRequirementAgentConfigurationDialog
+                client={client}
                 requirement={requirement}
                 busy={busy}
                 modelCatalog={modelCatalog}
@@ -3428,7 +3468,7 @@ function Dashboard() {
               workspace={workspace}
             />
             <ConnectionDialog apiUrl={apiUrl} onConnect={connect} />
-            <NewRequirementDialog disabled={connection !== 'online'} modelCatalog={modelCatalog}
+            <NewRequirementDialog client={client} disabled={connection !== 'online'} modelCatalog={modelCatalog}
               sandboxes={sandboxes.filter((sandbox) => sandbox.status !== 'terminated' &&
                 (sandbox.sharing !== 'dedicated' || !requirements.some((requirement) => requirement.sandboxId === sandbox.id)))}
               onCreate={createRequirement} />
@@ -3723,6 +3763,7 @@ function Dashboard() {
       </section>
 
       <RequirementDetail
+        client={client}
         key={selectedRequirement ? `${selectedRequirement.id}:${detailMode}` : 'closed'}
         requirement={selectedRequirement}
         runs={selectedRuns}
