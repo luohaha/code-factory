@@ -148,7 +148,7 @@ export const schemaStatements = [
     id TEXT PRIMARY KEY,
     pull_request_id TEXT NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
     run_id TEXT NOT NULL UNIQUE REFERENCES agent_runs(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude-code')),
+    provider TEXT NOT NULL CHECK (provider IN ('codex', 'claude-code', 'native-agent')),
     model TEXT,
     reasoning_effort TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max')),
     target_head_sha TEXT NOT NULL,

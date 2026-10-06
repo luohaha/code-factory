@@ -22,7 +22,7 @@ Preserve these rules unless the task explicitly changes the product architecture
 - Native Codex thread IDs and Claude Code session IDs preserve agent context across runs.
 - `requirement_messages` is both the visible conversation and the RD delivery stream. Human, Reviewer, and selected System messages are delivered in sequence; RD output is displayed but is never sent back as new RD input.
 - Messages arriving during a run are queued without implicitly interrupting it. Failed or interrupted runs must not advance the message-consumption cursor.
-- A Reviewer is a short-lived run, not a persistent `AgentSession`. Review output returns to the Requirement conversation and can wake its RD session.
+- A Reviewer is a short-lived run, not a persistent `AgentSession`. Review output returns to the Requirement conversation and can wake its RD session. Native Agent Requirements require a Native Agent Reviewer with a fresh conversation; Codex and Claude Code Requirements use a headless Reviewer.
 - GitHub and the PR reconciler own `draft`, `open`, `closed`, and `merged` lifecycle state. RD endpoints may register a PR or refresh metadata, but must not mirror reconciler-observed lifecycle changes.
 - SQLite is behind the business-level Store interface. Keep business rules out of HTTP handlers and storage-specific code where possible.
 - Headless agents run with the launching user's filesystem, network, and command permissions. Do not describe behavioral instructions as an operating-system security boundary.

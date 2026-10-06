@@ -290,6 +290,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     for (const statement of schemaStatements) this.#db.exec(statement);
     this.migrateLegacySchema();
     this.migrateNativeAgentProvider();
+    this.migrateNativeReviewerProvider();
     this.migrateE2BSandboxes();
     this.migrateE2BSettings();
     for (const statement of postMigrationSchemaStatements) this.#db.exec(statement);
@@ -1354,6 +1355,33 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     }
     if ((this.#db.prepare('PRAGMA foreign_key_check').all() as Row[]).length > 0) {
       throw new Error('Native agent schema migration violated a foreign key');
+    }
+  }
+
+  private migrateNativeReviewerProvider(): void {
+    const definition = schemaStatements.find((statement) => statement.startsWith('CREATE TABLE IF NOT EXISTS review_requests ('));
+    if (!definition) throw new Error('Missing review_requests schema');
+    const existing = this.#db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'review_requests'").get() as Row;
+    if (String(existing.sql).includes("'native-agent'")) return;
+    this.#db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      this.#db.exec('BEGIN IMMEDIATE');
+      this.#db.exec(definition.replace('CREATE TABLE IF NOT EXISTS review_requests (', 'CREATE TABLE review_requests_native ('));
+      this.#db.exec('INSERT INTO review_requests_native SELECT * FROM review_requests');
+      this.#db.exec('DROP TABLE review_requests');
+      this.#db.exec('ALTER TABLE review_requests_native RENAME TO review_requests');
+      for (const statement of schemaStatements) {
+        if (statement.includes('ON review_requests')) this.#db.exec(statement);
+      }
+      this.#db.exec('COMMIT');
+    } catch (error) {
+      this.#db.exec('ROLLBACK');
+      throw error;
+    } finally {
+      this.#db.exec('PRAGMA foreign_keys = ON');
+    }
+    if ((this.#db.prepare('PRAGMA foreign_key_check').all() as Row[]).length > 0) {
+      throw new Error('Native Reviewer schema migration violated a foreign key');
     }
   }
 

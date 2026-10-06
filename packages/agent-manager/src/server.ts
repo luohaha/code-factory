@@ -620,8 +620,8 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           reviewRequest: acceptedReview ?? null,
           run: acceptedRun,
           provider,
-          model: model ?? null,
-          reasoningEffort: reasoningEffort ?? null,
+          model: acceptedReview?.model ?? null,
+          reasoningEffort: acceptedReview?.reasoningEffort ?? null,
         });
         return;
       }

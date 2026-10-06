@@ -8,11 +8,14 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
 import type { SandboxInfo } from 'e2b';
+import { createModels } from '@earendil-works/pi-ai/models';
+import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 
 import { AgentManager } from '../src/agent-manager.js';
 import { E2BCredentialStore, e2bCredentialsPath } from '../src/e2b-credentials.js';
 import { E2BSandboxService, type E2BClient, type E2BHandle } from '../src/e2b-execution-env.js';
 import { createLogger } from '../src/logger.js';
+import { NativeAgentService } from '../src/native-agent.js';
 import { createAgentManagerServer } from '../src/server.js';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.js';
 
@@ -23,6 +26,7 @@ function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; revie
   const cloneAuth: Array<{ url: string; hasToken: boolean }> = [];
   const authTokenForwarded: boolean[] = [];
   const reviews: Array<{ command: string; cwd: string | undefined; input: string }> = [];
+  const remoteCommands: Array<{ command: string; cwd: string | undefined }> = [];
   const check = (credentials: { apiKey?: string; domain?: string }) => {
     if (settings.acceptRotated && credentials.apiKey === 'new-key' &&
       credentials.domain === 'new.e2b.example') return;
@@ -33,6 +37,7 @@ function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; revie
     files: { exists: async (path: string) => path === '/home/user/repo' },
     commands: { run: async (command: string, runOptions?: { envs?: Record<string, string>; cwd?: string;
       background?: boolean; onStdout?: (chunk: string) => void }) => { calls.push(`command:${command}`);
+      remoteCommands.push({ command, cwd: runOptions?.cwd });
       if (settings.review && runOptions?.background) {
         const review = { command, cwd: runOptions.cwd, input: '' };
         reviews.push(review);
@@ -68,7 +73,7 @@ function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; revie
     async pause(id, options) { check(options); calls.push(`pause:${id}`); state = 'paused'; return true; },
     async kill(id, options) { check(options); calls.push(`kill:${id}`); killed = true; return true; },
   };
-  return { service: new E2BSandboxService(client), calls, cloneAuth, authTokenForwarded, reviews,
+  return { service: new E2BSandboxService(client), calls, cloneAuth, authTokenForwarded, reviews, remoteCommands,
     get killed() { return killed; } };
 }
 
@@ -242,27 +247,36 @@ test('E2B workspace settings can be edited and credentials rotate without exposi
   }
 });
 
-test('a Reviewer for an E2B Requirement runs inside the same remote workspace', async () => {
+test('a Native Reviewer for an E2B Requirement uses the same remote execution environment without a CLI', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-review-'));
   const databasePath = join(directory, 'factory.sqlite');
-  const sdk = fakeE2B({ review: true });
+  const sdk = fakeE2B();
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  faux.setResponses([
+    fauxAssistantMessage(fauxToolCall('bash', { command: 'gh pr view https://github.com/example/repo/pull/7' }), { stopReason: 'toolUse' }),
+    fauxAssistantMessage('Remote review completed'),
+    fauxAssistantMessage('RD saw the review'),
+  ]);
   const manager = new AgentManager({ workspaceRoot: directory, databasePath,
     store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    nativeService: new NativeAgentService(join(directory, 'native.sqlite'), models, sdk.service),
     logger: createLogger({ level: 'silent' }) });
   try {
     const workspace = await manager.createE2BSandbox({ name: 'Review remote', domain: 'e2b.example',
       apiKey: 'test-key', repositoryUrl: 'https://github.com/example/repo.git' });
     const requirement = manager.createRequirement({ title: 'Remote work', description: 'Review PR',
-      provider: 'native-agent', sandboxId: workspace.id });
+      provider: 'native-agent', model: 'faux/faux-1', sandboxId: workspace.id });
     const pullRequest = manager.trackPullRequest({ requirementId: requirement.id, repository: 'example/repo',
       number: 7, url: 'https://github.com/example/repo/pull/7', title: 'Remote PR',
       baseBranch: 'main', headBranch: 'feature', headSha: 'abc123def456', status: 'open' });
-    const outcome = await manager.requestReview(pullRequest.id, { provider: 'codex' });
+    assert.throws(() => manager.requestReview(pullRequest.id, { provider: 'codex' }), /Native Agent Reviewer/);
+    const outcome = await manager.requestReview(pullRequest.id, { provider: 'native-agent' });
     assert.equal(outcome.status, 'succeeded');
-    assert.equal(sdk.reviews.length, 1);
-    assert.equal(sdk.reviews[0]?.cwd, '/home/user/repo');
-    assert.equal(sdk.reviews[0]?.input, 'Review GitHub PR https://github.com/example/repo/pull/7');
-    assert.match(sdk.reviews[0]?.command ?? '', /^'codex' 'exec'/);
+    assert.equal(sdk.reviews.length, 0);
+    assert(sdk.remoteCommands.some((entry) => entry.command.includes('gh pr view') && entry.cwd === '/home/user/repo'));
+    assert.equal(manager.listMessages(requirement.id).find((message) => message.author === 'reviewer')?.body, 'Remote review completed');
   } finally {
     await manager.close();
     rmSync(directory, { recursive: true, force: true });

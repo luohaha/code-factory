@@ -10,7 +10,7 @@ import type { MutableModels } from '@earendil-works/pi-ai/models';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import { AssistantEntry, createRegistry, defineExtension, defineTool, Harness, section, watchEvents, type ConversationId } from '@earendil-works/pi-durable';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
-import { CodingTools } from '@earendil-works/pi-durable/tools';
+import { CodingTools, createBashTool, createReadTool } from '@earendil-works/pi-durable/tools';
 
 import { runCodeFactoryCli } from './code-factory-cli.js';
 import { configureNativeProfile, createNativeModels, NativeCredentialStore, NativeProfileStore,
@@ -24,6 +24,7 @@ const CONTEXT = BACKGROUND_CONTEXT;
 const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
 export interface NativeRunInput {
+  role?: 'rd' | 'reviewer';
   requirementId: string;
   sessionId: string;
   nativeSessionId: string | null;
@@ -37,6 +38,7 @@ export interface NativeRunInput {
   instructions: string;
   signal: AbortSignal;
   timeoutMs: number;
+  timeoutMode?: 'inactivity' | 'elapsed';
   onEvent: (event: NormalizedAgentEvent) => void;
   onNativeSession: (id: string) => void;
 }
@@ -164,12 +166,13 @@ export class NativeAgentService {
   }
 
   async run(input: NativeRunInput): Promise<RunOutcome> {
+    const reviewer = input.role === 'reviewer';
     type SteerSubmit = (message: string) => Promise<void>;
     let resolveReady!: (submit: SteerSubmit | null) => void;
     const ready = new Promise<SteerSubmit | null>((resolve) => { resolveReady = resolve; });
     let acceptingSteers = true;
     let steering = Promise.resolve();
-    this.#active.set(input.requirementId, {
+    if (!reviewer) this.#active.set(input.requirementId, {
       submit: (message) => {
         const admitted = steering.then(async () => {
           const submit = await ready;
@@ -199,6 +202,7 @@ export class NativeAgentService {
       }
       const agent = { model: { provider, modelId }, cwd: input.cwd,
         ...(input.reasoningEffort ? { thinkingLevel: input.reasoningEffort } : {}),
+        ...(reviewer ? { extensions: [CodingTools], tools: [createReadTool(), createBashTool()] } : {}),
         instructions: input.instructions };
       let conversation = input.nativeSessionId
         ? await harness.conversation(Number(input.nativeSessionId) as ConversationId, CONTEXT)
@@ -219,7 +223,7 @@ export class NativeAgentService {
       };
       const stream = await watchEvents(harness, conversation.id, CONTEXT);
       stream.start(async (events) => {
-        armTimeout();
+        if (input.timeoutMode !== 'elapsed') armTimeout();
         for (const event of events) {
           if (event.type === 'message_end' && AssistantEntry.is(event.entry)) {
             const assistant = event.entry.model?.[0] as AssistantMessage | undefined;
@@ -238,7 +242,8 @@ export class NativeAgentService {
       armTimeout();
       try {
         if (input.signal.aborted) return { status: 'cancelled', exitCode: null, nativeSessionId: String(conversation.id), finalMessage: null, error: 'Agent Run interrupted by human' };
-        if (timedOut) return { status: 'timed_out', exitCode: null, nativeSessionId: String(conversation.id), finalMessage: null, error: 'Native agent timed out after inactivity' };
+        if (timedOut) return { status: 'timed_out', exitCode: null, nativeSessionId: String(conversation.id), finalMessage: null,
+          error: input.timeoutMode === 'elapsed' ? 'Native agent timed out after elapsed time' : 'Native agent timed out after inactivity' };
         submissionStarted = true;
         const submission = await conversation.submit({ type: 'input', content: input.prompt }, CONTEXT);
         const steeredSubmissions: Array<typeof submission> = [];
@@ -257,7 +262,8 @@ export class NativeAgentService {
         acceptingSteers = false;
         await steering;
         for (const steered of steeredSubmissions) settled = await steered.wait(CONTEXT);
-        if (timedOut) return { status: 'timed_out', exitCode: null, nativeSessionId: String(conversation.id), finalMessage: null, error: 'Native agent timed out after inactivity' };
+        if (timedOut) return { status: 'timed_out', exitCode: null, nativeSessionId: String(conversation.id), finalMessage: null,
+          error: input.timeoutMode === 'elapsed' ? 'Native agent timed out after elapsed time' : 'Native agent timed out after inactivity' };
         if (input.signal.aborted) return { status: 'cancelled', exitCode: null, nativeSessionId: String(conversation.id), finalMessage: null, error: 'Agent Run interrupted by human' };
         if (settled.status !== 'done' || settled.type !== 'input') return { status: 'failed', exitCode: null, nativeSessionId: String(conversation.id), finalMessage: null, error: 'Native submission was unanswered' };
         const answer = await conversation.commit((tx) => tx.entry(AssistantEntry, settled.answer), CONTEXT);
@@ -276,7 +282,7 @@ export class NativeAgentService {
     } finally {
       acceptingSteers = false;
       resolveReady(null);
-      this.#active.delete(input.requirementId);
+      if (!reviewer) this.#active.delete(input.requirementId);
       if (activeConversationId !== undefined) {
         this.#environments.delete(activeConversationId);
         this.#sandboxes.delete(activeConversationId);

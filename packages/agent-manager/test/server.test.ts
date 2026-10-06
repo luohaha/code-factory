@@ -1338,6 +1338,11 @@ test('HTTP API exposes the persisted human and RD Agent conversation', async () 
     assert.equal(attemptedStatus.status, 'open');
     assert.equal(attemptedStatus.title, 'Interactive task with another commit');
     assert.equal(attemptedStatus.headSha, 'def456');
+    const rejectedNativeReview = await fetch(`${baseUrl}/api/pull-requests/${pullRequest.id}/review-requests`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'native-agent' }),
+    });
+    assert.equal(rejectedNativeReview.status, 400);
     const reviewResponse = await fetch(`${baseUrl}/api/pull-requests/${pullRequest.id}/review-requests`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
