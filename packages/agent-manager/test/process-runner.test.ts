@@ -152,6 +152,54 @@ test('HeadlessProcessRunner kills descendant tool processes before completing a 
   }
 });
 
+test('HeadlessProcessRunner interrupts a tool in a separate process group', async () => {
+  if (process.platform === 'win32') return;
+  const toolScript = [
+    "process.on('SIGTERM', () => undefined);",
+    'setInterval(() => undefined, 1000);',
+  ].join('\n');
+  const rootScript = [
+    "const { spawn } = require('node:child_process');",
+    `const tool = spawn(process.execPath, ['-e', ${JSON.stringify(toolScript)}], { detached: true, stdio: ['ignore', 'inherit', 'ignore'] });`,
+    "process.stdout.write(`detached:${tool.pid}\\n`);",
+    'tool.unref();',
+    'setInterval(() => undefined, 1000);',
+  ].join('\n');
+  const controller = new AbortController();
+  let ready: (pid: number) => void = () => undefined;
+  const toolReady = new Promise<number>((resolve) => { ready = resolve; });
+  let toolPid: number | null = null;
+  const outcomePromise = new HeadlessProcessRunner().run({
+    invocation: { command: process.execPath, args: ['-e', rootScript], input: '' },
+    adapter: noOutputAdapter,
+    workspaceRoot: process.cwd(),
+    timeoutMs: 30_000,
+    maxOutputBytes: 1024,
+    signal: controller.signal,
+    onOutput: (line) => {
+      const match = line.match(/^detached:(\d+)$/);
+      if (match?.[1]) ready(Number(match[1]));
+    },
+  });
+
+  try {
+    toolPid = await Promise.race([
+      toolReady,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Detached tool did not start')), 2_000)),
+    ]);
+    controller.abort();
+    const outcome = await Promise.race([
+      outcomePromise,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Interrupted Run did not finish')), 4_000)),
+    ]);
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    assert.equal(outcome.status, 'cancelled');
+    assert.equal(processExists(toolPid), false);
+  } finally {
+    if (toolPid !== null && processExists(toolPid)) process.kill(toolPid, 'SIGKILL');
+  }
+});
+
 test('HeadlessProcessRunner lets an active RD process outlive its inactivity timeout', async () => {
   const outcome = await new HeadlessProcessRunner().run({
     invocation: {

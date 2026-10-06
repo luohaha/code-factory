@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -204,6 +204,112 @@ test('daemon start reports an occupied port without entering a restart loop', { 
       runCli(['stop'], workspace, env, 20_000);
     }
     if (supervisorPid !== null && isProcessAlive(supervisorPid)) process.kill(supervisorPid, 'SIGKILL');
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Stop pauses an RD Run and Steering resumes with queued input without losing the daemon', { timeout: 55_000 }, async () => {
+  if (process.platform === 'win32') return;
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-daemon-steer-'));
+  const workspace = join(directory, 'workspace');
+  const fakeHome = join(directory, 'home');
+  const bin = join(directory, 'bin');
+  const toolPidFile = join(directory, 'tool.pid');
+  mkdirSync(workspace); mkdirSync(fakeHome); mkdirSync(bin);
+  const fakeCodex = join(bin, 'codex');
+  writeFileSync(fakeCodex, [
+    '#!/usr/bin/env node',
+    "const { spawn } = require('node:child_process');",
+    "const { writeFileSync } = require('node:fs');",
+    "if (!process.argv.includes('exec')) process.exit(1);",
+    "process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: '00000000-0000-4000-8000-000000000001' }) + '\\n');",
+    "if (process.argv.includes('resume')) { process.stdout.write(JSON.stringify({ type: 'turn.completed' }) + '\\n'); process.exit(0); }",
+    "const tool = spawn(process.execPath, ['-e', \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)\"],",
+    "  { detached: true, stdio: ['ignore', 'inherit', 'ignore'] });",
+    `writeFileSync(${JSON.stringify(toolPidFile)}, String(tool.pid));`,
+    'tool.unref();',
+    'setInterval(() => {}, 1000);',
+  ].join('\n'));
+  chmodSync(fakeCodex, 0o755);
+  const env = { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome,
+    PATH: `${bin}:${process.env.PATH ?? ''}` };
+  const paths = defaultDaemonPaths(workspace, fakeHome);
+  const port = await reservePort();
+  let managerPid: number | null = null;
+  let supervisorPid: number | null = null;
+  try {
+    const started = runCli(['start', '--daemon', '--port', String(port), '--pr-reconcile-interval', '0', '--log-level', 'silent'], workspace, env);
+    assert.equal(started.status, 0, `${started.stderr}\n${started.stdout}`);
+    const state = await waitForState(paths.stateFile, (current) => current.status === 'running');
+    managerPid = state.managerPid;
+    supervisorPid = state.supervisorPid;
+    const base = `http://127.0.0.1:${port}`;
+    const post = (path: string, body: unknown) => fetch(`${base}${path}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const listRuns = async (requirementId: string) => {
+      const result = await fetch(`${base}/api/runs?requirementId=${requirementId}`)
+        .then((response) => response.json()) as { items: Array<{ status: string }> };
+      return result.items.map((run) => run.status);
+    };
+    const stoppedResponse = await post('/api/requirements', {
+      title: 'Stop reproduction', description: 'Keep working', provider: 'codex',
+    });
+    assert.equal(stoppedResponse.status, 201);
+    const stopped = await stoppedResponse.json() as { id: string };
+    assert.equal((await post(`/api/requirements/${stopped.id}/start`, {})).status, 202);
+    for (let attempt = 0; attempt < 100 && !existsSync(toolPidFile); attempt++) {
+      await new Promise<void>((resolveWait) => setTimeout(resolveWait, 50));
+    }
+    assert.ok(existsSync(toolPidFile), 'The first detached tool started');
+    assert.equal((await post(`/api/requirements/${stopped.id}/interrupt`, { mode: 'stop' })).status, 202);
+    let stoppedRuns: string[] = [];
+    for (let attempt = 0; attempt < 120; attempt++) {
+      stoppedRuns = await listRuns(stopped.id);
+      if (stoppedRuns.includes('cancelled')) break;
+      await new Promise<void>((resolveWait) => setTimeout(resolveWait, 50));
+    }
+    await new Promise<void>((resolveWait) => setTimeout(resolveWait, 100));
+    assert.deepEqual(await listRuns(stopped.id), ['cancelled']);
+    const stoppedRequirement = await fetch(`${base}/api/requirements/${stopped.id}`)
+      .then((response) => response.json()) as { status: string; session: { state: string } };
+    assert.equal(stoppedRequirement.status, 'waiting_confirmation');
+    assert.equal(stoppedRequirement.session.state, 'waiting_human');
+    await waitForProcessToExit(Number(readFileSync(toolPidFile, 'utf8')), 3_000);
+    rmSync(toolPidFile);
+
+    const createdResponse = await post('/api/requirements', {
+      title: 'Steering reproduction', description: 'Keep working', provider: 'codex',
+    });
+    assert.equal(createdResponse.status, 201);
+    const created = await createdResponse.json() as { id: string };
+    assert.equal((await post(`/api/requirements/${created.id}/start`, {})).status, 202);
+    for (let attempt = 0; attempt < 100 && !existsSync(toolPidFile); attempt++) {
+      await new Promise<void>((resolveWait) => setTimeout(resolveWait, 50));
+    }
+    assert.ok(existsSync(toolPidFile), 'The detached tool started');
+    assert.equal((await post(`/api/requirements/${created.id}/reply`, { message: 'New direction' })).status, 202);
+    assert.equal((await post(`/api/requirements/${created.id}/interrupt`, { mode: 'steer' })).status, 202);
+
+    let runStatuses: string[] = [];
+    for (let attempt = 0; attempt < 120; attempt++) {
+      runStatuses = await listRuns(created.id);
+      if (runStatuses.includes('cancelled') && runStatuses.includes('succeeded')) break;
+      await new Promise<void>((resolveWait) => setTimeout(resolveWait, 50));
+    }
+    assert.ok(runStatuses.includes('cancelled') && runStatuses.includes('succeeded'), runStatuses.join(', '));
+    assert.equal((await fetch(`${base}/api/health`)).status, 200);
+    const after = readDaemonState(paths.stateFile);
+    assert.equal(after?.managerPid, managerPid);
+    assert.equal(after?.restartCount, 0);
+    await waitForProcessToExit(Number(readFileSync(toolPidFile, 'utf8')), 3_000);
+  } finally {
+    if (existsSync(paths.stateFile)) runCli(['stop'], workspace, env, 20_000);
+    if (managerPid !== null && isProcessAlive(managerPid)) process.kill(managerPid, 'SIGKILL');
+    if (supervisorPid !== null && isProcessAlive(supervisorPid)) process.kill(supervisorPid, 'SIGKILL');
+    if (existsSync(toolPidFile)) {
+      try { process.kill(Number(readFileSync(toolPidFile, 'utf8')), 'SIGKILL'); } catch { /* Already exited. */ }
+    }
     rmSync(directory, { recursive: true, force: true });
   }
 });

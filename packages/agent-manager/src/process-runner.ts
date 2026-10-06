@@ -40,7 +40,46 @@ function formatDuration(milliseconds: number): string {
   return `${milliseconds}ms`;
 }
 
-function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
+interface ProcessSnapshot {
+  pid: number;
+  parentPid: number;
+  groupId: number;
+}
+
+function processTable(): ProcessSnapshot[] {
+  const result = spawnSync('ps', ['-Ao', 'pid=,ppid=,pgid='], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  if (result.status !== 0 || !result.stdout) return [];
+  return result.stdout.split('\n').flatMap((line) => {
+    const fields = line.trim().split(/\s+/).map(Number);
+    const [pid, parentPid, groupId] = fields;
+    return pid && parentPid !== undefined && groupId ? [{ pid, parentPid, groupId }] : [];
+  });
+}
+
+function descendantsOf(rootPid: number): ProcessSnapshot[] {
+  const byParent = new Map<number, ProcessSnapshot[]>();
+  for (const entry of processTable()) {
+    const siblings = byParent.get(entry.parentPid) ?? [];
+    siblings.push(entry);
+    byParent.set(entry.parentPid, siblings);
+  }
+  const descendants: ProcessSnapshot[] = [];
+  const pending = [rootPid];
+  while (pending.length > 0) {
+    for (const entry of byParent.get(pending.pop()!) ?? []) {
+      descendants.push(entry);
+      pending.push(entry.pid);
+    }
+  }
+  return descendants;
+}
+
+function liveDescendants(captured: readonly ProcessSnapshot[], snapshot = processTable()): ProcessSnapshot[] {
+  const current = new Map(snapshot.map((entry) => [entry.pid, entry]));
+  return captured.filter((entry) => current.get(entry.pid)?.groupId === entry.groupId);
+}
+
+function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals, descendants: readonly ProcessSnapshot[]): void {
   if (child.pid === undefined) return;
   if (process.platform === 'win32') {
     const result = spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
@@ -50,15 +89,26 @@ function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
     if (result.error || result.status !== 0) child.kill(signal);
     return;
   }
-  try {
-    process.kill(-child.pid, signal);
-  } catch {
+  const snapshot = processTable();
+  const live = liveDescendants(descendants, snapshot);
+  const root = snapshot.find((entry) => entry.pid === child.pid);
+  if (root?.groupId !== child.pid && !live.some((entry) => entry.groupId === child.pid)) {
     child.kill(signal);
+  } else {
+    try {
+      process.kill(-child.pid, signal);
+    } catch {
+      child.kill(signal);
+    }
+  }
+  for (const entry of live.reverse()) {
+    try { process.kill(entry.pid, signal); } catch { /* The process already exited. */ }
   }
 }
 
-function isProcessTreeAlive(child: ChildProcess): boolean {
+function isProcessTreeAlive(child: ChildProcess, descendants: readonly ProcessSnapshot[]): boolean {
   if (child.pid === undefined || process.platform === 'win32') return false;
+  if (liveDescendants(descendants).length > 0) return true;
   try {
     process.kill(-child.pid, 0);
     return true;
@@ -87,6 +137,8 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
       let forceKill: NodeJS.Timeout | null = null;
       let timeout: NodeJS.Timeout | null = null;
       let rootClose: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+      let rootExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+      let descendants: ProcessSnapshot[] = [];
       let forceSent = false;
       let settled = false;
       const timeoutMode = request.timeoutMode ?? 'elapsed';
@@ -140,12 +192,18 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
       const terminate = (reason: 'cancelled' | 'timed_out') => {
         if (termination || settled) return;
         termination = reason;
-        signalProcessTree(child, 'SIGTERM');
+        descendants = child.pid === undefined || process.platform === 'win32' ? [] : descendantsOf(child.pid);
+        signalProcessTree(child, 'SIGTERM', descendants);
         forceKill = setTimeout(() => {
           forceSent = true;
-          signalProcessTree(child, 'SIGKILL');
+          signalProcessTree(child, 'SIGKILL', descendants);
           forceKill = null;
-          if (rootClose) finishClose(rootClose.code, rootClose.signal);
+          if (rootClose || rootExit) {
+            const result = rootClose ?? rootExit!;
+            child.stdout.destroy();
+            child.stderr.destroy();
+            finishClose(result.code, result.signal);
+          }
         }, 2_000);
       };
       const onAbort = () => terminate('cancelled');
@@ -194,13 +252,14 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         }
         resolve({ status: 'failed', exitCode: null, nativeSessionId, finalMessage, error: error.message });
       });
+      child.once('exit', (code, signal) => { rootExit = { code, signal }; });
       child.once('close', (code, signal) => {
         if (settled) return;
         if (stdoutBuffer) {
           consumeLine(stdoutBuffer);
           stdoutBuffer = '';
         }
-        if (termination && !forceSent && isProcessTreeAlive(child)) {
+        if (termination && !forceSent && isProcessTreeAlive(child, descendants)) {
           rootClose = { code, signal };
           return;
         }
