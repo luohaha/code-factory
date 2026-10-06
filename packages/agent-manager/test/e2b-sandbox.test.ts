@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -15,21 +16,33 @@ import { createLogger } from '../src/logger.js';
 import { createAgentManagerServer } from '../src/server.js';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.js';
 
-function fakeE2B(options: { missingGh?: boolean } = {}) {
+function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; review?: boolean } = {}) {
   let state: 'running' | 'paused' = 'running';
   let killed = false;
   const calls: string[] = [];
   const cloneAuth: Array<{ url: string; hasToken: boolean }> = [];
   const authTokenForwarded: boolean[] = [];
-  const check = (options: { apiKey?: string; domain?: string }) => {
-    assert.equal(options.apiKey, 'test-key');
-    assert.equal(options.domain, 'e2b.example');
+  const reviews: Array<{ command: string; cwd: string | undefined; input: string }> = [];
+  const check = (credentials: { apiKey?: string; domain?: string }) => {
+    if (settings.acceptRotated && credentials.apiKey === 'new-key' &&
+      credentials.domain === 'new.e2b.example') return;
+    assert.equal(credentials.apiKey, 'test-key');
+    assert.equal(credentials.domain, 'e2b.example');
   };
   const handle = (id: string) => ({ sandboxId: id,
     files: { exists: async (path: string) => path === '/home/user/repo' },
-    commands: { run: async (command: string, runOptions?: { envs?: Record<string, string> }) => { calls.push(`command:${command}`);
+    commands: { run: async (command: string, runOptions?: { envs?: Record<string, string>; cwd?: string;
+      background?: boolean; onStdout?: (chunk: string) => void }) => { calls.push(`command:${command}`);
+      if (settings.review && runOptions?.background) {
+        const review = { command, cwd: runOptions.cwd, input: '' };
+        reviews.push(review);
+        return { sendStdin: async (input: string) => { review.input = input; },
+          closeStdin: async () => undefined, kill: async () => true,
+          wait: async () => { runOptions.onStdout?.('{"type":"item.completed","item":{"type":"agent_message","text":"Remote review"}}\n');
+            return { exitCode: 0 }; } };
+      }
       if (command === 'gh auth status') authTokenForwarded.push(runOptions?.envs?.GH_TOKEN !== undefined);
-      return { exitCode: options.missingGh && command.startsWith('command -v') ? 1 : 0 }; } },
+      return { exitCode: settings.missingGh && command.startsWith('command -v') ? 1 : 0 }; } },
     git: { clone: async (url: string, options: { path: string; password?: string }) => {
       cloneAuth.push({ url, hasToken: options.password !== undefined });
       calls.push(`clone:${url}:${options.path}`); return { exitCode: 0 };
@@ -55,7 +68,7 @@ function fakeE2B(options: { missingGh?: boolean } = {}) {
     async pause(id, options) { check(options); calls.push(`pause:${id}`); state = 'paused'; return true; },
     async kill(id, options) { check(options); calls.push(`kill:${id}`); killed = true; return true; },
   };
-  return { service: new E2BSandboxService(client), calls, cloneAuth, authTokenForwarded,
+  return { service: new E2BSandboxService(client), calls, cloneAuth, authTokenForwarded, reviews,
     get killed() { return killed; } };
 }
 
@@ -108,6 +121,8 @@ test('E2B sandbox API provisions, binds exclusively, checks health and controls 
     const requirement = await first.json() as { id: string };
     assert.equal((await request('/requirements', 'POST', { title: 'Second', description: 'Conflicts',
       provider: 'native-agent', sandboxId: sandbox.id })).status, 409);
+    assert.equal((await request('/requirements', 'POST', { title: 'Headless', description: 'Cannot use E2B',
+      provider: 'codex', sandboxId: sandbox.id })).status, 400);
 
     const health = await request(`/sandboxes/${sandbox.id}/health`, 'GET');
     assert.equal((await health.json() as { status: string }).status, 'running');
@@ -116,7 +131,9 @@ test('E2B sandbox API provisions, binds exclusively, checks health and controls 
     const resumed = await request(`/sandboxes/${sandbox.id}/resume`, 'POST');
     assert.equal((await resumed.json() as { status: string }).status, 'running');
     assert.equal((await request(`/sandboxes/${sandbox.id}`, 'DELETE')).status, 409);
-    assert.equal((await request(`/requirements/${requirement.id}`, 'PATCH', { sandboxId: null })).status, 200);
+    const switched = await request(`/requirements/${requirement.id}`, 'PATCH', { provider: 'codex' });
+    assert.equal(switched.status, 200);
+    assert.equal((await switched.json() as { sandboxId: string | null }).sandboxId, null);
     assert.equal((await request(`/sandboxes/${sandbox.id}`, 'DELETE')).status, 204);
     assert.equal(sdk.killed, true);
     const attached = await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Attached', sharing: 'shared',
@@ -152,6 +169,102 @@ test('E2B sandbox API provisions, binds exclusively, checks health and controls 
       try { assert.equal((await restarted.checkSandboxHealth(attachedId)).status, 'running'); }
       finally { await restarted.close(); }
     }
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('E2B creation uses the managed workspace Git origin when only name, domain, and key are supplied', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-origin-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  execFileSync('git', ['init', directory]);
+  execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:example/repo.git'], { cwd: directory });
+  const sdk = fakeE2B();
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    logger: createLogger({ level: 'silent' }) });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sandboxes`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'e2b', name: 'Simple', domain: 'e2b.example', apiKey: 'test-key' }),
+    });
+    assert.equal(response.status, 201);
+    const sandbox = await response.json() as { id: string; repositoryUrl: string; cwd: string; sharing: string };
+    assert.equal(sandbox.repositoryUrl, 'https://github.com/example/repo.git');
+    assert.equal(sandbox.cwd, '/home/user/repo');
+    assert.equal(sandbox.sharing, 'shared');
+    assert.deepEqual(sdk.cloneAuth, [{ url: sandbox.repositoryUrl, hasToken: Boolean(process.env.GH_TOKEN || process.env.GITHUB_TOKEN) }]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('E2B workspace settings can be edited and credentials rotate without exposing keys', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-edit-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const sdk = fakeE2B({ acceptRotated: true });
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    logger: createLogger({ level: 'silent' }) });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sandboxes`;
+  try {
+    const created = await fetch(base, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'e2b', name: 'Original', domain: 'e2b.example', apiKey: 'test-key',
+        repositoryUrl: 'https://github.com/example/repo.git' }) });
+    assert.equal(created.status, 201);
+    const first = await created.json() as { id: string; credentialRef: string };
+    const updated = await fetch(`${base}/${first.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Renamed', domain: 'new.e2b.example', apiKey: 'new-key', sharing: 'dedicated' }) });
+    assert.equal(updated.status, 200);
+    const second = await updated.json() as { id: string; name: string; domain: string; sharing: string;
+      credentialRef: string };
+    assert.equal(second.name, 'Renamed');
+    assert.equal(second.domain, 'new.e2b.example');
+    assert.equal(second.sharing, 'dedicated');
+    assert.notEqual(second.credentialRef, first.credentialRef);
+    assert.equal(JSON.stringify(second).includes('new-key'), false);
+    const secrets = new E2BCredentialStore(e2bCredentialsPath(databasePath));
+    try {
+      assert.equal(secrets.read(first.credentialRef), null);
+      assert.equal(secrets.read(second.credentialRef), 'new-key');
+    } finally { secrets.close(); }
+    assert.equal((await fetch(`${base}/${first.id}/health`)).status, 200);
+    assert.equal((await fetch(`${base}/${first.id}`, { method: 'DELETE' })).status, 204);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('a Reviewer for an E2B Requirement runs inside the same remote workspace', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-review-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const sdk = fakeE2B({ review: true });
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    logger: createLogger({ level: 'silent' }) });
+  try {
+    const workspace = await manager.createE2BSandbox({ name: 'Review remote', domain: 'e2b.example',
+      apiKey: 'test-key', repositoryUrl: 'https://github.com/example/repo.git' });
+    const requirement = manager.createRequirement({ title: 'Remote work', description: 'Review PR',
+      provider: 'native-agent', sandboxId: workspace.id });
+    const pullRequest = manager.trackPullRequest({ requirementId: requirement.id, repository: 'example/repo',
+      number: 7, url: 'https://github.com/example/repo/pull/7', title: 'Remote PR',
+      baseBranch: 'main', headBranch: 'feature', headSha: 'abc123def456', status: 'open' });
+    const outcome = await manager.requestReview(pullRequest.id, { provider: 'codex' });
+    assert.equal(outcome.status, 'succeeded');
+    assert.equal(sdk.reviews.length, 1);
+    assert.equal(sdk.reviews[0]?.cwd, '/home/user/repo');
+    assert.equal(sdk.reviews[0]?.input, 'Review GitHub PR https://github.com/example/repo/pull/7');
+    assert.match(sdk.reviews[0]?.command ?? '', /^'codex' 'exec'/);
+  } finally {
+    await manager.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });

@@ -424,9 +424,18 @@ export class AgentManagerClient {
     return response.items;
   }
 
-  createSandbox(input: { name: string; sharing: 'shared' | 'dedicated'; domain: string; apiKey: string;
+  createLocalExecution(input: { name: string; cwd: string }): Promise<SandboxDto> {
+    return this.request('/api/sandboxes', { method: 'POST', body: JSON.stringify({ kind: 'local', ...input }) });
+  }
+
+  createSandbox(input: { name: string; sharing?: 'shared' | 'dedicated'; domain: string; apiKey: string;
     providerSandboxId?: string; repositoryUrl?: string; template?: string; cwd?: string }): Promise<SandboxDto> {
     return this.request('/api/sandboxes', { method: 'POST', body: JSON.stringify({ kind: 'e2b', ...input }) });
+  }
+
+  updateWorkspace(id: string, input: { name?: string; cwd?: string; domain?: string;
+    apiKey?: string; sharing?: 'shared' | 'dedicated' }): Promise<SandboxDto> {
+    return this.request(`/api/sandboxes/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) });
   }
 
   checkSandboxHealth(id: string): Promise<SandboxDto> {

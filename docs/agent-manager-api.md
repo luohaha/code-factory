@@ -44,17 +44,18 @@ The service listens only on the loopback interface by default and currently has 
 | PUT | /api/native-auth/profiles/:id | Replace a saved API profile |
 | DELETE | /api/native-auth/profiles/:id | Remove an unused API profile |
 | GET | /api/agent-models | Read cached Codex, Claude Code, and Native Agent model options |
-| GET | /api/sandboxes | List local execution and persisted E2B sandboxes |
-| POST | /api/sandboxes | Provision or attach an E2B sandbox |
+| GET | /api/sandboxes | List Default workspace, named local workspaces, and E2B sandboxes |
+| POST | /api/sandboxes | Create a named local workspace or provision/attach E2B |
+| PATCH | /api/sandboxes/:id | Update a named local workspace or E2B sandbox |
 | GET | /api/sandboxes/:id/health | Refresh an E2B sandbox's observed state |
 | POST | /api/sandboxes/:id/pause | Pause an idle E2B sandbox |
 | POST | /api/sandboxes/:id/resume | Resume an E2B sandbox |
-| DELETE | /api/sandboxes/:id | Kill and remove an unbound E2B sandbox |
+| DELETE | /api/sandboxes/:id | Remove an unbound local workspace or kill and remove an unbound E2B sandbox |
 | GET | /api/search | Hybrid-search Requirements, conversations, and Pull Requests |
 | GET | /api/requirements | List Requirements with their RD Sessions |
 | GET | /api/requirements/:id | Read one Requirement with its RD Session |
 | POST | /api/requirements | Create a Requirement and RD Session |
-| PATCH | /api/requirements/:id | Change a TODO Requirement's Agent provider, model, reasoning effort, or sandbox |
+| PATCH | /api/requirements/:id | Change a TODO Requirement's Agent provider, model, reasoning effort, or workspace |
 | DELETE | /api/requirements/:id | Remove a TODO Requirement |
 | POST | /api/requirements/:id/start | Start or retry a Requirement |
 | POST | /api/requirements/:id/reply | Send a human conversation message |
@@ -512,11 +513,17 @@ Success: 200 OK with {"items": ReviewRequest[]}. An unknown pullRequestId return
 
 ### GET /api/sandboxes
 
-Returns `{ "items": Sandbox[] }`. The built-in `local` item uses the managed workspace. An E2B record includes `kind: "e2b"`, `providerSandboxId`, `domain`, `credentialRef`, `repositoryUrl` (null for attached sandboxes), `cwd`, `template`, `sharing` (`shared` or `dedicated`), `status` (`running`, `paused`, `terminated`, `unreachable`, or `unknown`), and `checkedAt`. The key is never returned. Status is the last observation; use `/health` to refresh it. Legacy local worktrees are hidden, and old Requirement selections migrate to local execution.
+Returns `{ "items": Sandbox[] }`. The built-in `local` item is named `Default workspace` and uses the Agent Manager startup directory. It cannot be edited or deleted. Named local workspaces have `kind: "local"`, a distinct ID, name, and absolute `cwd` on the Manager host. An E2B record includes `kind: "e2b"`, `providerSandboxId`, `domain`, `credentialRef`, `repositoryUrl` (null for attached sandboxes), `cwd`, `template`, `sharing` (`shared` or `dedicated`), `status` (`running`, `paused`, `terminated`, `unreachable`, or `unknown`), and `checkedAt`. The key is never returned. Status is the last observation; use `/health` to refresh it. Legacy local worktrees are hidden, and old Requirement selections migrate to Default workspace. The API retains `sandboxId` for Requirement workspace selection for compatibility.
 
 ### POST /api/sandboxes
 
-Provision or attach an E2B sandbox. Body for a new sandbox: `{ "kind": "e2b", "name": "Build sandbox", "sharing": "shared", "domain": "e2b.example", "apiKey": "...", "repositoryUrl": "https://github.com/org/repo.git", "template": "base", "cwd": "/home/user/repo" }`. `domain` and `apiKey` are required for each request. The key is saved in an owner-only credential database and referenced by `credentialRef`; it is never returned or logged. Omit `template` and `cwd` for their defaults. New sandboxes clone `repositoryUrl` into `cwd`. URLs with embedded credentials, queries, or fragments are rejected before persistence. To attach, supply `providerSandboxId` and a `cwd` with an existing Git checkout; no clone occurs. Both flows verify remote Git, `gh`, and `gh` authentication. Agent Manager forwards `GH_TOKEN` or `GITHUB_TOKEN` for cloning and remote commands only when `repositoryUrl` has the exact host `github.com`; attached and other-host sandboxes need remote `gh` authentication. Missing prerequisites return an actionable error. A duplicate provider sandbox ID returns 409. A dedicated sandbox can be selected by only one Requirement.
+For a named local workspace, send `{ "kind": "local", "name": "Feature checkout", "cwd": "/absolute/path/to/checkout" }`. The directory must already exist on the Agent Manager host and differ from Default workspace. No worktree is created automatically.
+
+For E2B, the common form is `{ "kind": "e2b", "name": "Build sandbox", "domain": "e2b.example", "apiKey": "..." }`. Agent Manager reads the managed workspace's Git `origin`, converts `git@host:owner/repo.git` to HTTPS, and clones it into `/home/user/repo` using the `base` template. If no usable HTTPS origin exists, provide `repositoryUrl` explicitly. Optional `sharing` defaults to `shared`; `dedicated` allows selection by one Requirement. Optional `template` and `cwd` override the defaults. To attach an existing sandbox, provide `providerSandboxId` and optionally `cwd`; it must already contain a Git checkout. The API key is saved in a separate owner-only credential database and never returned or logged. Repository URLs with embedded credentials, queries, or fragments are rejected. Both E2B flows verify remote Git, `gh`, and `gh` authentication. Agent Manager forwards `GH_TOKEN` or `GITHUB_TOKEN` only for repositories hosted exactly at `github.com`; attached and other-host sandboxes need remote `gh` authentication. Missing prerequisites return an actionable error. A duplicate provider sandbox ID returns 409.
+
+### PATCH /api/sandboxes/:id
+
+Updates a named workspace. Local workspaces accept `name` and/or `cwd`; the new directory must already exist on the Manager host and cannot be the Default workspace directory. E2B workspaces accept `name`, `cwd`, `domain`, `apiKey`, and/or `sharing`. A changed E2B connection or working directory is verified before persistence, and a new API key replaces the old stored credential only after verification. Omit `apiKey` to keep it. `providerSandboxId`, template, and repository URL describe the provisioned remote sandbox and cannot be changed in place. A workspace cannot change its directory or E2B connection while its RD or Reviewer Run is active. A dedicated E2B workspace cannot be selected by more than one Requirement. Default workspace returns 400.
 
 ### GET /api/sandboxes/:id/health
 
@@ -524,11 +531,11 @@ Uses the E2B SDK without resuming the sandbox and persists the observed status a
 
 ### POST /api/sandboxes/:id/pause and /resume
 
-Use the E2B SDK and return the refreshed Sandbox. Pausing is rejected with 409 while any selected Requirement has an active RD Run. Resume connects to the sandbox, including one paused by the idle timeout.
+Use the E2B SDK and return the refreshed Sandbox. Pausing is rejected with 409 while any selected Requirement has an active RD or Reviewer Run. Resume connects to the sandbox, including one paused by the idle timeout.
 
 ### DELETE /api/sandboxes/:id
 
-Kills the E2B sandbox and removes its record. Returns 204. A sandbox selected by any Requirement or used by an active RD Run returns 409. Its remote files are deleted by E2B.
+Removes a named local workspace record, or kills an E2B sandbox and removes its record. Returns 204. A workspace selected by any Requirement or used by an active RD or Reviewer Run returns 409. Deleting a local record does not delete its directory; deleting E2B removes its remote files. Default workspace cannot be deleted.
 
 ## 5. Requirement actions
 
@@ -545,7 +552,7 @@ Request body:
 | provider | string | yes | codex, claude-code, or native-agent |
 | model | string | no | CLI model for headless providers; `profile:<id>` for a selected Native Agent API profile |
 | reasoningEffort | string | no | low, medium, high, xhigh, or max; defaults to the selected provider's configuration |
-| sandboxId | string | no | Native Agent only; omit for local execution, or select a named sandbox ID from `/api/sandboxes` |
+| sandboxId | string | no | Workspace ID from `/api/sandboxes`; omit or use `local` for Default workspace. Codex and Claude Code RD support Default and named local workspaces; Native Agent also supports E2B |
 
 ~~~bash
 curl -X POST http://127.0.0.1:4310/api/requirements \
@@ -570,7 +577,7 @@ Changes the Agent configuration used when a human starts a Requirement from the 
 | provider | string | no | codex, claude-code, or native-agent |
 | model | string or null | no | Headless model identifier or Native Agent `profile:<id>`; null restores the previous default behavior |
 | reasoningEffort | string or null | no | low, medium, high, xhigh, or max; null restores the CLI default |
-| sandboxId | string or null | no | Named Native Agent sandbox ID; null restores local execution |
+| sandboxId | string or null | no | Workspace ID; null or `local` restores Default workspace. Codex and Claude Code RD cannot select E2B |
 
 ~~~bash
 curl -X PATCH http://127.0.0.1:4310/api/requirements/req_... \
@@ -723,6 +730,8 @@ Cancels an active Agent Timer owned by the Requirement. Success: 200 OK with the
 ### POST /api/pull-requests/:id/review-requests
 
 Starts a short-lived Reviewer Run for a registered Open PR. The id is Code Factory's pr_<uuid>, not the GitHub PR number.
+
+The Reviewer uses the workspace selected by the PR's Requirement. Default and named local workspaces run the CLI in their local directory. An E2B selection runs the Codex or Claude Code Reviewer CLI in the same remote checkout; that sandbox must have the selected CLI installed and authenticated.
 
 Request body:
 

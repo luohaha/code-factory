@@ -528,12 +528,14 @@ function EditRequirementAgentConfigurationDialog({
   requirement,
   busy,
   modelCatalog,
+  sandboxes,
   onUpdate,
 }: {
   client: AgentManagerClient;
   requirement: RequirementDto;
   busy: boolean;
   modelCatalog: AgentModelCatalogDto | null;
+  sandboxes: SandboxDto[];
   onUpdate: (input: RequirementAgentConfigurationUpdate) => Promise<void>;
 }) {
   const { t } = useI18n();
@@ -544,6 +546,7 @@ function EditRequirementAgentConfigurationDialog({
   const [provider, setProvider] = useState<AgentProvider>(requirement.provider);
   const [model, setModel] = useState(requirement.model ?? '');
   const [reasoningEffort, setReasoningEffort] = useState(requirement.reasoningEffort ?? '');
+  const [sandboxId, setSandboxId] = useState(requirement.sandboxId ?? '');
 
   async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
     event.preventDefault();
@@ -556,6 +559,7 @@ function EditRequirementAgentConfigurationDialog({
         reasoningEffort: reasoningEffort
           ? reasoningEffort as AgentReasoningEffort
           : null,
+        sandboxId: sandboxId || null,
       });
       setOpen(false);
     } catch (caught) {
@@ -574,6 +578,7 @@ function EditRequirementAgentConfigurationDialog({
           setProvider(requirement.provider);
           setModel(requirement.model ?? '');
           setReasoningEffort(requirement.reasoningEffort ?? '');
+          setSandboxId(requirement.sandboxId ?? '');
           setSubmitError(null);
         }
       }}
@@ -609,6 +614,8 @@ function EditRequirementAgentConfigurationDialog({
                   setProvider(event.target.value as AgentProvider);
                   setModel('');
                   setReasoningEffort('');
+                  if (event.target.value !== 'native-agent' &&
+                    sandboxes.find((sandbox) => sandbox.id === sandboxId)?.kind === 'e2b') setSandboxId('');
                 }}
               >
                 <NativeSelectOption value="codex">Codex headless</NativeSelectOption>
@@ -645,6 +652,16 @@ function EditRequirementAgentConfigurationDialog({
                 <NativeSelectOption value="high">High</NativeSelectOption>
                 <NativeSelectOption value="xhigh">XHigh</NativeSelectOption>
                 <NativeSelectOption value="max">Max</NativeSelectOption>
+              </NativeSelect>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor={`${fieldId}-sandbox`}>{t('Workspace')}</FieldLabel>
+              <NativeSelect id={`${fieldId}-sandbox`} name="sandboxId" className="w-full"
+                value={sandboxId} disabled={submitting} onChange={(event) => setSandboxId(event.target.value)}>
+                {sandboxes.filter((sandbox) => sandbox.id === 'local' || sandbox.kind === 'local' || provider === 'native-agent')
+                  .map((sandbox) => <NativeSelectOption key={sandbox.id} value={sandbox.id === 'local' ? '' : sandbox.id}>
+                    {sandbox.id === 'local' ? t('Default workspace') : sandbox.name} · {sandbox.cwd}
+                  </NativeSelectOption>)}
               </NativeSelect>
             </Field>
           </FieldGroup>
@@ -890,6 +907,7 @@ function ReviewAgentDialog({ activeReview, busy, modelCatalog, onReview }: {
               </NativeSelect>
             </Field>
           </FieldGroup>
+          <p className="mb-5 text-xs text-muted-foreground">{t('The Reviewer uses this Requirement’s workspace. E2B reviews need the selected CLI installed and authenticated there.')}</p>
           <DialogFooter>
             <DialogClose render={<Button type="button" variant="outline" />}>{t('Cancel')}</DialogClose>
             <Button type="submit" disabled={submitting}>
@@ -1139,7 +1157,7 @@ function NewRequirementDialog({ client, disabled, modelCatalog, sandboxes, onCre
         title: title.trim(),
         description: description.trim(),
         provider,
-        ...(provider === 'native-agent' && typeof sandboxId === 'string' && sandboxId ? { sandboxId } : {}),
+        ...(typeof sandboxId === 'string' && sandboxId ? { sandboxId } : {}),
         ...(model ? { model } : {}),
         ...(typeof reasoningEffort === 'string' && reasoningEffort
           ? { reasoningEffort: reasoningEffort as AgentReasoningEffort }
@@ -1221,14 +1239,15 @@ function NewRequirementDialog({ client, disabled, modelCatalog, sandboxes, onCre
                   <NativeSelectOption value="max">Max</NativeSelectOption>
                 </NativeSelect>
               </Field>
-              {provider === 'native-agent' ? (
-                <Field>
-                  <FieldLabel htmlFor="requirement-sandbox">{t('Sandbox')}</FieldLabel>
-                  <NativeSelect id="requirement-sandbox" name="sandboxId" className="w-full" defaultValue="">
-                    {sandboxes.map((sandbox) => <NativeSelectOption key={sandbox.id} value={sandbox.id === 'local' ? '' : sandbox.id}>{sandbox.name}</NativeSelectOption>)}
-                  </NativeSelect>
-                </Field>
-              ) : null}
+              <Field>
+                <FieldLabel htmlFor="requirement-sandbox">{t('Workspace')}</FieldLabel>
+                <NativeSelect key={provider} id="requirement-sandbox" name="sandboxId" className="w-full" defaultValue="">
+                  {sandboxes.filter((sandbox) => sandbox.id === 'local' || sandbox.kind === 'local' || provider === 'native-agent')
+                    .map((sandbox) => <NativeSelectOption key={sandbox.id} value={sandbox.id === 'local' ? '' : sandbox.id}>
+                      {sandbox.id === 'local' ? t('Default workspace') : sandbox.name} · {sandbox.cwd}
+                    </NativeSelectOption>)}
+                </NativeSelect>
+              </Field>
             </FieldGroup>
           </div>
           <DialogFooter className="mx-0 mb-0 shrink-0">
@@ -2036,6 +2055,7 @@ function RequirementDetail({
   pullRequests,
   reviewRequests,
   modelCatalog,
+  sandboxes,
   messageLoading,
   busy,
   busyPullRequestId,
@@ -2063,6 +2083,7 @@ function RequirementDetail({
   pullRequests: PullRequestDto[];
   reviewRequests: ReviewRequestDto[];
   modelCatalog: AgentModelCatalogDto | null;
+  sandboxes: SandboxDto[];
   messageLoading: boolean;
   busy: boolean;
   busyPullRequestId: string | null;
@@ -2239,6 +2260,7 @@ function RequirementDetail({
                 requirement={requirement}
                 busy={busy}
                 modelCatalog={modelCatalog}
+                sandboxes={sandboxes}
                 onUpdate={onUpdateAgentConfiguration}
               />
             </div>
@@ -2461,6 +2483,12 @@ function Dashboard() {
   const [requirements, setRequirements] = useState<RequirementDto[]>([]);
   const [sandboxes, setSandboxes] = useState<SandboxDto[]>([]);
   const [creatingSandbox, setCreatingSandbox] = useState(false);
+  const [createPathOpen, setCreatePathOpen] = useState(false);
+  const [createPathError, setCreatePathError] = useState<string | null>(null);
+  const [createPathKind, setCreatePathKind] = useState<'local' | 'e2b'>('local');
+  const [editingWorkspace, setEditingWorkspace] = useState<SandboxDto | null>(null);
+  const [savingWorkspace, setSavingWorkspace] = useState(false);
+  const [editWorkspaceError, setEditWorkspaceError] = useState<string | null>(null);
   const [busySandboxId, setBusySandboxId] = useState<string | null>(null);
   const [runs, setRuns] = useState<AgentRunDto[]>([]);
   const [agentTraces, setAgentTraces] = useState<Record<string, AgentTraceEventDto[] | undefined>>({});
@@ -3298,35 +3326,67 @@ function Dashboard() {
     const form = event.currentTarget;
     const fields = new FormData(form);
     const name = fields.get('name');
-    const sharing = fields.get('sharing');
     if (typeof name !== 'string' || !name.trim()) return;
-    if (sharing !== 'shared' && sharing !== 'dedicated') return;
     if (creatingSandbox) return;
     setCreatingSandbox(true);
     setError(null);
+    setCreatePathError(null);
     try {
       const value = (field: string) => {
         const entry = fields.get(field);
         return typeof entry === 'string' ? entry.trim() : '';
       };
-      const sandbox = await client.createSandbox({ name: name.trim(), sharing,
-        domain: value('domain'), apiKey: value('apiKey'),
-        ...(value('providerSandboxId') ? { providerSandboxId: value('providerSandboxId') } : {}),
-        ...(value('repositoryUrl') ? { repositoryUrl: value('repositoryUrl') } : {}),
-        ...(value('template') ? { template: value('template') } : {}),
-        ...(value('cwd') ? { cwd: value('cwd') } : {}),
-      });
+      const sandbox = createPathKind === 'local'
+        ? await client.createLocalExecution({ name: name.trim(), cwd: value('cwd') })
+        : await client.createSandbox({ name: name.trim(),
+          domain: value('domain'), apiKey: value('apiKey'),
+          sharing: value('sharing') === 'dedicated' ? 'dedicated' : 'shared',
+          ...(value('providerSandboxId') ? { providerSandboxId: value('providerSandboxId') } : {}),
+          ...(value('repositoryUrl') ? { repositoryUrl: value('repositoryUrl') } : {}),
+          ...(value('template') ? { template: value('template') } : {}),
+          ...(value('cwd') ? { cwd: value('cwd') } : {}),
+        });
       setSandboxes((current) => [...current, sandbox]);
       form.reset();
+      setCreatePathOpen(false);
+      setCreatePathKind('local');
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t('Failed to create sandbox'));
+      setCreatePathError(caught instanceof Error ? caught.message : t('Failed to create workspace'));
     } finally {
       setCreatingSandbox(false);
     }
   }
 
+  async function saveWorkspace(event: SyntheticEvent<HTMLFormElement, SubmitEvent>): Promise<void> {
+    event.preventDefault();
+    if (!editingWorkspace || savingWorkspace) return;
+    const fields = new FormData(event.currentTarget);
+    const value = (field: string) => {
+      const entry = fields.get(field);
+      return typeof entry === 'string' ? entry.trim() : '';
+    };
+    setSavingWorkspace(true);
+    setEditWorkspaceError(null);
+    try {
+      const updated = await client.updateWorkspace(editingWorkspace.id, {
+        name: value('name'), cwd: value('cwd'),
+        ...(editingWorkspace.kind === 'e2b' ? {
+          domain: value('domain'), sharing: value('sharing') === 'dedicated' ? 'dedicated' as const : 'shared' as const,
+          ...(value('apiKey') ? { apiKey: value('apiKey') } : {}),
+        } : {}),
+      });
+      setSandboxes((current) => current.map((workspace) => workspace.id === updated.id ? updated : workspace));
+      setEditingWorkspace(null);
+    } catch (caught) {
+      setEditWorkspaceError(caught instanceof Error ? caught.message : t('Failed to update workspace'));
+    } finally {
+      setSavingWorkspace(false);
+    }
+  }
+
   async function changeSandbox(id: string, action: 'health' | 'pause' | 'resume' | 'delete'): Promise<void> {
-    if (action === 'delete' && !window.confirm(t('Delete this E2B sandbox and its remote files?'))) return;
+    if (action === 'delete' && !window.confirm(t(sandboxes.find((sandbox) => sandbox.id === id)?.kind === 'e2b'
+      ? 'Delete this E2B sandbox and its remote files?' : 'Remove this local workspace?'))) return;
     setBusySandboxId(id);
     setError(null);
     try {
@@ -3375,7 +3435,7 @@ function Dashboard() {
   const viewTitle: TranslationKey = view === 'requirements'
     ? 'Requirement workflow'
     : view === 'relationships' ? 'Requirement relationships'
-    : view === 'pull_requests' ? 'Pull Requests' : view === 'sessions' ? 'RD Agent Sessions' : view === 'sandboxes' ? 'Sandboxes' : 'Scheduled wake-ups';
+    : view === 'pull_requests' ? 'Pull Requests' : view === 'sessions' ? 'RD Agent Sessions' : view === 'sandboxes' ? 'Workspaces' : 'Scheduled wake-ups';
   const viewDescription: TranslationKey = view === 'requirements'
     ? 'The requirement conversation is the RD Agent message stream; messages remain available while it runs'
     : view === 'relationships'
@@ -3383,19 +3443,19 @@ function Dashboard() {
     : view === 'pull_requests'
       ? 'A human can select Codex or Claude to run a one-off review on an Open PR'
       : view === 'sandboxes'
-        ? 'Choose a shared workspace for Native Agents'
+        ? 'Choose a workspace for RD Agents'
       : view === 'sessions'
-        ? 'Sessions inherit the Agent Manager working directory and native Skills'
+        ? 'Sessions use their selected workspace and native Skills'
         : 'Track timers and the Requirements they will wake';
   const searchLabel: TranslationKey = view === 'sandboxes'
-    ? 'Search sandboxes'
+    ? 'Search workspaces'
     : view === 'timers'
     ? 'Search timers or Requirements'
     : 'Search requirements, conversations, or PRs';
   const boardLabel: TranslationKey = view === 'requirements'
     ? 'Requirement board'
     : view === 'relationships' ? 'Requirement relationship tree'
-    : view === 'pull_requests' ? 'Pull Request board' : view === 'sessions' ? 'Agent Session board' : view === 'sandboxes' ? 'Sandbox board' : 'Timer board';
+    : view === 'pull_requests' ? 'Pull Request board' : view === 'sessions' ? 'Agent Session board' : view === 'sandboxes' ? 'Workspace board' : 'Timer board';
   const notificationButtonLabel: TranslationKey = notificationAvailability === 'insecure'
     ? 'Desktop notifications require HTTPS or localhost'
     : notificationAvailability === 'unsupported'
@@ -3425,7 +3485,7 @@ function Dashboard() {
             <Button variant="ghost" size="sm" className={view === 'relationships' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('relationships')}><Network data-icon="inline-start" />{t('Relationships')}</Button>
             <Button variant="ghost" size="sm" className={view === 'pull_requests' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('pull_requests')}><GitPullRequest data-icon="inline-start" />PR</Button>
             <Button variant="ghost" size="sm" className={view === 'sessions' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('sessions')}><Activity data-icon="inline-start" />{t('Sessions')}</Button>
-            <Button variant="ghost" size="sm" className={view === 'sandboxes' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('sandboxes')}><FolderGit2 data-icon="inline-start" />{t('Sandboxes')}</Button>
+            <Button variant="ghost" size="sm" className={view === 'sandboxes' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('sandboxes')}><FolderGit2 data-icon="inline-start" />{t('Workspaces')}</Button>
             <Button variant="ghost" size="sm" className={view === 'timers' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('timers')}><Clock3 data-icon="inline-start" />{t('Timers')}</Button>
           </nav>
 
@@ -3654,26 +3714,126 @@ function Dashboard() {
           </div>
         ) : view === 'sandboxes' ? (
           <div className="w-full p-4 lg:p-5">
-            <form onSubmit={(event) => void createSandbox(event)} className="mb-4 grid max-w-3xl gap-2 sm:grid-cols-2">
-              <Input name="name" required maxLength={80} aria-label={t('Sandbox name')} placeholder={t('Sandbox name')} />
-              <NativeSelect name="sharing" aria-label={t('Sandbox sharing')} defaultValue="shared">
-                <NativeSelectOption value="shared">{t('Shared sandbox')}</NativeSelectOption>
-                <NativeSelectOption value="dedicated">{t('Dedicated sandbox')}</NativeSelectOption>
-              </NativeSelect>
-              <Input name="providerSandboxId" aria-label={t('Existing E2B sandbox ID')} placeholder={t('Existing E2B sandbox ID (optional)')} />
-              <Input name="domain" required aria-label={t('E2B domain')} placeholder={t('E2B domain (E2B_DOMAIN)')} />
-              <Input name="apiKey" type="password" required autoComplete="off" aria-label={t('E2B API key')} placeholder={t('E2B API key (E2B_API_KEY)')} />
-              <Input name="repositoryUrl" aria-label={t('Repository HTTPS URL')} placeholder={t('Repository HTTPS URL (required for new sandbox)')} />
-              <Input name="template" aria-label={t('E2B template')} placeholder={t('E2B template (default: base)')} />
-              <Input name="cwd" aria-label={t('Remote working directory')} placeholder={t('Remote working directory (default: /home/user/repo)')} />
-              <Button type="submit" disabled={connection !== 'online' || creatingSandbox}><Plus data-icon="inline-start" />{t('Provision or attach E2B sandbox')}</Button>
-            </form>
-            <div className="mb-4 text-xs text-muted-foreground">{t('Enter E2B_DOMAIN and E2B_API_KEY. New sandboxes clone the repository URL; attached sandboxes need an existing Git checkout. Git, gh, and gh authentication must be available remotely.')}</div>
+            <Dialog open={createPathOpen} onOpenChange={(open) => { setCreatePathOpen(open); if (open) setCreatePathError(null); }}>
+              <DialogTrigger render={<Button className="mb-4" disabled={connection !== 'online'} />}>
+                <Plus data-icon="inline-start" />{t('Create workspace')}
+              </DialogTrigger>
+              <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
+                <form onSubmit={(event) => void createSandbox(event)}>
+                  <DialogHeader>
+                    <DialogTitle>{t('Create workspace')}</DialogTitle>
+                    <DialogDescription>{t('Select a local workspace or E2B sandbox.')}</DialogDescription>
+                  </DialogHeader>
+                  {createPathError ? <Alert variant="destructive" className="mt-4">
+                    <TriangleAlert /><AlertTitle>{t('Failed to create workspace')}</AlertTitle>
+                    <AlertDescription>{createPathError}</AlertDescription>
+                  </Alert> : null}
+                  <FieldGroup className="my-5 gap-4">
+                    <Field>
+                      <FieldLabel htmlFor="execution-path-kind">{t('Workspace type')}</FieldLabel>
+                      <NativeSelect id="execution-path-kind" className="w-full" value={createPathKind}
+                        onChange={(event) => setCreatePathKind(event.target.value as 'local' | 'e2b')}>
+                        <NativeSelectOption value="local">{t('Local workspace')}</NativeSelectOption>
+                        <NativeSelectOption value="e2b">{t('E2B sandbox')}</NativeSelectOption>
+                      </NativeSelect>
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="execution-path-name">{t('Workspace name')}</FieldLabel>
+                      <Input id="execution-path-name" name="name" required maxLength={80} />
+                    </Field>
+                    {createPathKind === 'local' ? (
+                      <Field>
+                        <FieldLabel htmlFor="execution-path-cwd">{t('Local directory')}</FieldLabel>
+                        <Input id="execution-path-cwd" name="cwd" required placeholder="/path/to/repository" />
+                        <p className="text-xs text-muted-foreground">{t('The directory must already exist on the Agent Manager host.')}</p>
+                      </Field>
+                    ) : (
+                      <>
+                        <Field>
+                          <FieldLabel htmlFor="execution-path-domain">{t('E2B domain')}</FieldLabel>
+                          <Input id="execution-path-domain" name="domain" required placeholder={t('E2B domain (E2B_DOMAIN)')} />
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor="execution-path-key">{t('E2B API key')}</FieldLabel>
+                          <Input id="execution-path-key" name="apiKey" type="password" required autoComplete="off" placeholder={t('E2B API key (E2B_API_KEY)')} />
+                        </Field>
+                        <p className="text-xs text-muted-foreground">{t('The Git origin of the managed workspace is cloned into the E2B sandbox by default.')}</p>
+                        <details className="rounded-lg border border-border p-3 text-sm">
+                          <summary className="cursor-pointer font-medium">{t('Advanced E2B options')}</summary>
+                          <div className="mt-3 grid gap-3">
+                            <Input name="repositoryUrl" aria-label={t('Repository HTTPS URL')} placeholder={t('Repository HTTPS URL (optional override)')} />
+                            <Input name="providerSandboxId" aria-label={t('Existing E2B sandbox ID')} placeholder={t('Existing E2B sandbox ID (optional)')} />
+                            <Input name="template" aria-label={t('E2B template')} placeholder={t('E2B template (default: base)')} />
+                            <Input name="cwd" aria-label={t('Remote working directory')} placeholder={t('Remote working directory (default: /home/user/repo)')} />
+                            <NativeSelect name="sharing" aria-label={t('Sandbox sharing')} defaultValue="shared">
+                              <NativeSelectOption value="shared">{t('Shared sandbox')}</NativeSelectOption>
+                              <NativeSelectOption value="dedicated">{t('Dedicated sandbox')}</NativeSelectOption>
+                            </NativeSelect>
+                            <p className="text-xs text-muted-foreground">{t('Attaching an existing E2B sandbox requires a Git checkout in its working directory.')}</p>
+                          </div>
+                        </details>
+                      </>
+                    )}
+                  </FieldGroup>
+                  <DialogFooter>
+                    <DialogClose render={<Button type="button" variant="outline" />}>{t('Cancel')}</DialogClose>
+                    <Button type="submit" disabled={creatingSandbox}>{creatingSandbox ? <LoaderCircle className="animate-spin" /> : null}{t('Create')}</Button>
+                  </DialogFooter>
+                </form>
+              </DialogContent>
+            </Dialog>
+            <Dialog open={editingWorkspace !== null} onOpenChange={(open) => { if (!open) setEditingWorkspace(null); }}>
+              <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
+                {editingWorkspace ? <form key={editingWorkspace.id} onSubmit={(event) => void saveWorkspace(event)}>
+                  <DialogHeader>
+                    <DialogTitle>{t('Edit workspace')}</DialogTitle>
+                    <DialogDescription>{editingWorkspace.kind === 'local' ? t('Local workspace') : t('E2B sandbox')}</DialogDescription>
+                  </DialogHeader>
+                  {editWorkspaceError ? <Alert variant="destructive" className="mt-4">
+                    <TriangleAlert /><AlertTitle>{t('Failed to update workspace')}</AlertTitle>
+                    <AlertDescription>{editWorkspaceError}</AlertDescription>
+                  </Alert> : null}
+                  <FieldGroup className="my-5 gap-4">
+                    <Field>
+                      <FieldLabel htmlFor="edit-workspace-name">{t('Workspace name')}</FieldLabel>
+                      <Input id="edit-workspace-name" name="name" required maxLength={80} defaultValue={editingWorkspace.name} />
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="edit-workspace-cwd">{t(editingWorkspace.kind === 'local' ? 'Local directory' : 'Remote working directory')}</FieldLabel>
+                      <Input id="edit-workspace-cwd" name="cwd" required defaultValue={editingWorkspace.cwd} />
+                    </Field>
+                    {editingWorkspace.kind === 'e2b' ? <>
+                      <Field>
+                        <FieldLabel htmlFor="edit-workspace-domain">{t('E2B domain')}</FieldLabel>
+                        <Input id="edit-workspace-domain" name="domain" required defaultValue={editingWorkspace.domain ?? ''} />
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="edit-workspace-key">{t('E2B API key')}</FieldLabel>
+                        <Input id="edit-workspace-key" name="apiKey" type="password" autoComplete="off"
+                          placeholder={t('Leave blank to keep current key')} />
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="edit-workspace-sharing">{t('Sandbox sharing')}</FieldLabel>
+                        <NativeSelect id="edit-workspace-sharing" name="sharing" className="w-full"
+                          defaultValue={editingWorkspace.sharing ?? 'shared'}>
+                          <NativeSelectOption value="shared">{t('Shared sandbox')}</NativeSelectOption>
+                          <NativeSelectOption value="dedicated">{t('Dedicated sandbox')}</NativeSelectOption>
+                        </NativeSelect>
+                      </Field>
+                    </> : null}
+                  </FieldGroup>
+                  <DialogFooter>
+                    <DialogClose render={<Button type="button" variant="outline" />}>{t('Cancel')}</DialogClose>
+                    <Button type="submit" disabled={savingWorkspace}>{savingWorkspace ? <LoaderCircle className="animate-spin" /> : null}{t('Save changes')}</Button>
+                  </DialogFooter>
+                </form> : null}
+              </DialogContent>
+            </Dialog>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {sandboxes.filter((sandbox) => `${sandbox.name} ${sandbox.cwd} ${sandbox.providerSandboxId ?? ''}`.toLowerCase().includes(query.trim().toLowerCase())).map((sandbox) => (
                 <div key={sandbox.id} className="rounded-xl border border-border bg-card p-4">
-                  <div className="text-sm font-semibold">{sandbox.name}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{sandbox.kind === 'local' ? t('Local execution') : sandbox.kind === 'e2b' ? t('E2B cloud sandbox') : t('Local sandbox worktree')}</div>
+                  <div className="text-sm font-semibold">{sandbox.id === 'local' ? t('Default workspace') : sandbox.name}</div>
+                  {sandbox.id !== 'local' ? <div className="mt-1 text-xs text-muted-foreground">{sandbox.kind === 'local' ? t('Local workspace') : t('E2B sandbox')}</div> : null}
                   {sandbox.kind === 'e2b' ? <div className="mt-1 text-xs text-muted-foreground">{
                     sandbox.status === 'running' ? t('Running') : sandbox.status === 'paused' ? t('Paused')
                       : sandbox.status === 'terminated' ? t('Terminated') : sandbox.status === 'unreachable' ? t('Unreachable') : t('Unknown')
@@ -3683,13 +3843,18 @@ function Dashboard() {
                   {sandbox.kind === 'e2b' ? <div className="mt-1 break-all text-[10px] text-muted-foreground">{sandbox.template} · {sandbox.domain} · {sandbox.credentialRef ?? sandbox.credentialEnvVar}</div> : null}
                   {sandbox.repositoryUrl ? <div className="mt-1 break-all text-[10px] text-muted-foreground">{sandbox.repositoryUrl}</div> : null}
                   {sandbox.checkedAt ? <div className="mt-1 text-[10px] text-muted-foreground">{t('Last checked')}: {new Date(sandbox.checkedAt).toLocaleString(locale)}</div> : null}
-                  <div className="mt-2 text-xs text-muted-foreground">{requirements.filter((item) => item.provider === 'native-agent' && (item.sandboxId ?? 'local') === sandbox.id).length} {t('Requirements')}</div>
+                  <div className="mt-2 text-xs text-muted-foreground">{requirements.filter((item) => (item.sandboxId ?? 'local') === sandbox.id).length} {t('Requirements')}</div>
+                  {sandbox.id !== 'local' ? <Button size="xs" variant="outline" className="mt-3"
+                    onClick={() => { setEditingWorkspace(sandbox); setEditWorkspaceError(null); }}>{t('Edit workspace')}</Button> : null}
                   {sandbox.kind === 'e2b' ? <div className="mt-3 flex flex-wrap gap-2">
                     <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id} onClick={() => void changeSandbox(sandbox.id, 'health')}>{t('Check health')}</Button>
                     {sandbox.status === 'paused'
                       ? <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id} onClick={() => void changeSandbox(sandbox.id, 'resume')}>{t('Resume')}</Button>
                       : <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id || sandbox.status === 'terminated'} onClick={() => void changeSandbox(sandbox.id, 'pause')}>{t('Pause')}</Button>}
                     <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id || requirements.some((item) => item.sandboxId === sandbox.id)} onClick={() => void changeSandbox(sandbox.id, 'delete')}>{t('Delete')}</Button>
+                  </div> : sandbox.id !== 'local' ? <div className="mt-3">
+                    <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id || requirements.some((item) => item.sandboxId === sandbox.id)}
+                      onClick={() => void changeSandbox(sandbox.id, 'delete')}>{t('Delete')}</Button>
                   </div> : null}
                 </div>
               ))}
@@ -3774,6 +3939,9 @@ function Dashboard() {
         pullRequests={selectedPullRequests}
         reviewRequests={reviewRequests}
         modelCatalog={modelCatalog}
+        sandboxes={sandboxes.filter((sandbox) => sandbox.status !== 'terminated' &&
+          (sandbox.sharing !== 'dedicated' || sandbox.id === selectedRequirement?.sandboxId ||
+            !requirements.some((item) => item.sandboxId === sandbox.id)))}
         messageLoading={selectedMessageLoading}
         busy={selectedRequirement
           ? busyId === selectedRequirement.id || interruptingRequirementIds.has(selectedRequirement.id)
