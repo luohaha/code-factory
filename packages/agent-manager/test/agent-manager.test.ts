@@ -1485,8 +1485,11 @@ test('a human-requested PR review writes to the requirement conversation and wak
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new DeferredRunner();
   const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-review-workspace-'));
   try {
-    const requirement = manager.createRequirement({ title: 'Review me', description: 'Open a PR', provider: 'codex' });
+    const workspace = manager.createLocalExecution({ name: 'Review checkout', cwd: directory });
+    const requirement = manager.createRequirement({ title: 'Review me', description: 'Open a PR',
+      provider: 'codex', sandboxId: workspace.id });
     const pullRequest = manager.trackPullRequest({
       requirementId: requirement.id,
       repository: 'acme/repo',
@@ -1503,6 +1506,7 @@ test('a human-requested PR review writes to the requirement conversation and wak
       model: 'claude-opus-4-6',
       reasoningEffort: 'high',
     });
+    assert.equal(runner.requests[0]?.workspaceRoot, workspace.cwd);
     assert.equal(runner.requests[0]?.invocation.input, 'Review GitHub PR https://github.com/acme/repo/pull/7');
     assert.doesNotMatch(runner.requests[0]?.invocation.input ?? '', /abc123def456/);
     assert.ok(runner.requests[0]?.invocation.args.some((value) => value.includes('GitHub pull request reviewer')));
@@ -1541,7 +1545,8 @@ test('a human-requested PR review writes to the requirement conversation and wak
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
   } finally {
-    manager.close();
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

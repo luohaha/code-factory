@@ -34,9 +34,9 @@ flowchart LR
   W[Web dashboard] <-->|HTTP + SSE| M
   S[Optional daemon supervisor] -->|Start / restart| M
   M <--> DB[(SQLite)]
-  M -->|Same cwd, long-lived resume| RD[Codex / Claude Code RD]
+  M -->|Selected local cwd, long-lived resume| RD[Codex / Claude Code RD]
   M -->|Durable conversation, selected ExecutionEnv| NRD[Native RD / pi-durable]
-  M -->|Short-lived, no persistent session| RV[Codex / Claude Code Reviewer]
+  M -->|Requirement workspace, short-lived| RV[Codex / Claude Code Reviewer]
   RD -->|Register PR / Propose requirement / Schedule wake-up| CLI[code-factory-cli]
   NRD -->|Typed PR / Requirement / Timer tools| CLI
   CLI --> API[Agent API]
@@ -49,11 +49,13 @@ flowchart LR
   RV -->|Reviewer message| M
 ~~~
 
-At startup, Agent Manager fixes the workspace to `realpath(process.cwd())`. Every RD and Reviewer child process uses that directory and inherits Agent Manager's environment. Codex and Claude Code load their provider-specific project/user instructions, Skills, plugins, configuration, and enabled local memory features according to their native discovery rules.
+At startup, Agent Manager fixes the built-in Default workspace to `realpath(process.cwd())`; it cannot be edited or deleted. A Requirement may instead select a named local workspace for its RD Runs. Codex and Claude Code RD child processes start in that selected directory. A Reviewer starts in the same workspace selected by its Requirement, regardless of the RD provider. Local children inherit Agent Manager's environment. Codex and Claude Code load their provider-specific project/user instructions, Skills, plugins, configuration, and enabled local memory features according to their native discovery rules.
 
 Native RD conversations use pi-durable and a separate workspace SQLite file. Each Requirement stores its pi-durable conversation ID as the native session ID. Human steering waits for native conversation setup, then submits numbered messages and attachment details with `whenBusy: "steer"` so accepted input joins the current Run. The Run input boundary advances after submission succeeds; input that cannot be steered remains queued. Stop Run before the initial submission prevents model or tool execution. Native coding tools run through pi-durable `ExecutionEnv`. Code Factory control-plane actions are named native tools that call the existing CLI implementation with the Requirement's session context.
 
-A Native Agent's Local execution uses the managed workspace directly. An E2B sandbox record persists the provider sandbox ID, domain, repository URL when provisioned, remote working directory, template, shared or dedicated mode, last observed lifecycle state, and an opaque credential reference. The key is kept in an owner-only credential database outside the application database. pi-durable constructs an E2B `ExecutionEnv` for the selected sandbox; all coding tools and `gh_pr` use its remote filesystem and command runner. New sandboxes clone an explicit repository URL; attached sandboxes require an existing checkout. Setup checks remote Git, `gh`, and `gh` authentication. Shared records can serve multiple Native Agent Requirements, while dedicated records permit one Requirement. Agent Manager uses E2B pause-on-timeout and auto-resume, and the Sandboxes page can check health, pause, resume, or delete an unbound sandbox.
+A Native Agent uses the Default workspace or a named local workspace through `NodeExecutionEnv`. Named local workspaces are existing absolute directories on the Manager host, shared by whichever Requirements select them. An E2B sandbox record persists the provider sandbox ID, domain, repository URL when provisioned, remote working directory, template, shared or dedicated mode, last observed lifecycle state, and an opaque credential reference. The key is kept in an owner-only credential database outside the application database. pi-durable constructs an E2B `ExecutionEnv` for the selected sandbox; all coding tools and `gh_pr` use its remote filesystem and command runner. New sandboxes clone the managed workspace's Git origin by default, with an optional HTTPS repository URL override; attached sandboxes require an existing checkout. Setup checks remote Git, `gh`, and `gh` authentication. Shared records can serve multiple Native Agent Requirements, while dedicated records permit one Requirement. Agent Manager uses E2B pause-on-timeout and auto-resume. The Workspaces page creates, edits, and removes named local workspaces without deleting local files; it also creates or attaches E2B sandboxes, edits their connection settings, checks health, pauses, resumes, and deletes unbound sandboxes.
+
+When a Requirement uses E2B, its Reviewer runs the selected Codex or Claude Code CLI inside the same remote checkout through the E2B command SDK. That sandbox must also have the Reviewer CLI installed and authenticated. The Reviewer remains a separate short-lived Run; it does not share the Native Agent conversation.
 
 Before opening its application database or HTTP listener, Agent Manager takes an exclusive process-lifetime lock under the canonical workspace's default data directory. Foreground and daemon-managed processes use the same lock, so a second Manager cannot bypass workspace ownership by selecting a different port, configuration file, or database. A live daemon supervisor also reserves the workspace between Manager restart attempts. The operating system releases the underlying SQLite lock if the Manager process crashes.
 
@@ -72,11 +74,11 @@ cd ~/starrocks
 npx --package @luoyixin/code-factory code-factory-agent-manager start
 ~~~
 
-Headless agents launched by that process initially use `~/starrocks` as their working directory and are instructed to create or reuse a Requirement-specific Git worktree before editing. Native Agents use the managed directory for Local execution. E2B cloud sandboxes are a separate remote execution option.
+Headless RD agents using Default workspace start in `~/starrocks`; those selecting a named local workspace start there instead. They are instructed to create or reuse a Requirement-specific Git worktree before editing. Native Agents support Default workspace, named local workspaces, and E2B sandboxes. Codex and Claude Code RD agents support Default and named local workspaces. A Reviewer uses its Requirement's workspace, including E2B when selected.
 
 Agent Manager may run in the foreground or beneath its workspace-scoped daemon supervisor. `start --daemon` detaches the supervisor, which starts Agent Manager with the original CLI options and waits for a readiness message emitted only after the HTTP listener is active. A startup error emitted before readiness is persisted in daemon state and returned directly to the starting CLI instead of being retried. An unexpected exit after readiness is restarted indefinitely with capped exponential backoff. `stop` terminates the supervisor and Manager intentionally, while `restart` reuses a running daemon's stored options unless replacements are supplied. `daemon.json`, `daemon.lock`, `daemon.guard.sqlite`, and `logs/daemon.log` live beside the workspace database under `~/.code-factory/workspaces/<workspace-hash>/`. The persistent SQLite guard provides process-lifetime supervisor ownership; only its current owner may replace or remove the PID metadata and daemon state. This is application-level process supervision, not operating-system service installation or boot-time activation.
 
-Every headless RD and Reviewer invocation skips interactive approval and CLI sandbox checks. It therefore inherits the launching user's full filesystem, network, and command-execution permissions. Agent Manager must only be started in a trusted workspace. Reviewers remain behaviorally read-only through their task instructions; this is not an operating-system security boundary.
+Every local headless RD and Reviewer invocation skips interactive approval and CLI sandbox checks. It therefore inherits the launching user's full filesystem, network, and command-execution permissions. An E2B Reviewer has the remote sandbox's command and file access instead. Agent Manager must only be started in a trusted workspace. Reviewers remain behaviorally read-only through their task instructions; this is not an operating-system security boundary.
 
 ## 3. Entities
 
@@ -160,7 +162,7 @@ Open PR
   → An idle RD resumes immediately; a running RD resumes after its current Run
 ~~~
 
-Codex and Claude Code Reviewers both run as ordinary short-lived headless agents; neither invokes a native review command or skill that targets the local working tree. A Reviewer does not change Requirement or RD AgentSession state and does not need to run serially with RD. It must read the specified PR through the GitHub API without checking out or modifying the shared working directory. Agent Manager still records the trigger-time revision internally as `ReviewRequest.targetHeadSha`.
+Codex and Claude Code Reviewers both run as ordinary short-lived headless agents in the workspace selected by the PR's Requirement; neither invokes a native review command or skill that targets the working tree. A Reviewer does not change Requirement or RD AgentSession state and does not need to run serially with RD. It must read the specified PR through the GitHub API without checking out or modifying the selected working directory. Agent Manager still records the trigger-time revision internally as `ReviewRequest.targetHeadSha`.
 
 If the PR head SHA changes, previous reviews remain historical results for the old revision. A human must request another review for the new revision.
 
