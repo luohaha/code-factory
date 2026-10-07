@@ -149,6 +149,7 @@ import {
 } from '@/lib/dashboard-state';
 import { formatDuration } from '@/lib/format-duration';
 import { summarizeRequirementRelations } from '@/lib/requirement-tree';
+import { summarizeWorkspaceRequirements } from '@/lib/workspace-board';
 import {
   useDesktopNotifications,
   type DesktopNotificationAvailability,
@@ -219,6 +220,16 @@ const agentTimerColumns: Array<{
   { status: 'active', title: 'ACTIVE', description: 'Waiting for the next scheduled wake-up', tone: 'bg-emerald-500' },
   { status: 'completed', title: 'COMPLETED', description: 'One-time wake-up delivered', tone: 'bg-violet-500' },
   { status: 'cancelled', title: 'CANCELLED', description: 'Stopped manually or with its Requirement', tone: 'bg-slate-400' },
+];
+
+const workspaceColumns: Array<{
+  state: 'running' | 'idle';
+  title: TranslationKey;
+  description: TranslationKey;
+  tone: string;
+}> = [
+  { state: 'running', title: 'Running workspaces', description: 'At least one Requirement is doing', tone: 'bg-emerald-500' },
+  { state: 'idle', title: 'Idle workspaces', description: 'No Requirements are doing', tone: 'bg-slate-400' },
 ];
 
 const stateLabel: Record<SessionState, TranslationKey> = {
@@ -3119,6 +3130,14 @@ function Dashboard() {
     () => new Map(requirements.map((requirement) => [requirement.id, requirement])),
     [requirements],
   );
+  const workspaceRequirements = useMemo(
+    () => summarizeWorkspaceRequirements(requirements),
+    [requirements],
+  );
+  const filteredSandboxes = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return sandboxes.filter((sandbox) => `${sandbox.name} ${sandbox.cwd} ${sandbox.providerSandboxId ?? ''}`.toLowerCase().includes(needle));
+  }, [query, sandboxes]);
   const relationshipSummary = useMemo(
     () => summarizeRequirementRelations(requirements),
     [requirements],
@@ -3455,6 +3474,8 @@ function Dashboard() {
   const activeTimers = agentTimers.filter((item) => item.status === 'active');
   const oneTimeTimers = activeTimers.filter((item) => item.schedule === 'once').length;
   const recurringTimers = activeTimers.filter((item) => item.schedule === 'recurring').length;
+  const runningWorkspaces = sandboxes.filter((sandbox) => (workspaceRequirements.get(sandbox.id)?.doing ?? 0) > 0).length;
+  const idleWorkspaces = sandboxes.length - runningWorkspaces;
   const workspaceLabel = workspace?.root ?? t('Workspace not connected');
   const viewTitle: TranslationKey = view === 'requirements'
     ? 'Requirement workflow'
@@ -3579,6 +3600,11 @@ function Dashboard() {
                 <div><span className="mr-1.5 text-lg font-semibold tabular-nums">{relationshipSummary.roots}</span><span className="text-muted-foreground">{t('Roots')}</span></div>
                 <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-sky-600">{relationshipSummary.linked}</span><span className="text-muted-foreground">{t('Linked')}</span></div>
                 <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-violet-600">{relationshipSummary.levels}</span><span className="text-muted-foreground">{t('Levels')}</span></div>
+              </>
+            ) : view === 'sandboxes' ? (
+              <>
+                <div><span className="mr-1.5 text-lg font-semibold tabular-nums text-emerald-600">{runningWorkspaces}</span><span className="text-muted-foreground">{t('Running workspaces')}</span></div>
+                <div><span className="mr-1.5 text-lg font-semibold tabular-nums">{idleWorkspaces}</span><span className="text-muted-foreground">{t('Idle workspaces')}</span></div>
               </>
             ) : view === 'timers' ? (
               <>
@@ -3841,35 +3867,76 @@ function Dashboard() {
                 </form> : null}
               </DialogContent>
             </Dialog>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {sandboxes.filter((sandbox) => `${sandbox.name} ${sandbox.cwd} ${sandbox.providerSandboxId ?? ''}`.toLowerCase().includes(query.trim().toLowerCase())).map((sandbox) => (
-                <div key={sandbox.id} className="rounded-xl border border-border bg-card p-4">
-                  <div className="text-sm font-semibold">{sandbox.id === 'local' ? t('Default workspace') : sandbox.name}</div>
-                  {sandbox.id !== 'local' ? <div className="mt-1 text-xs text-muted-foreground">{sandbox.kind === 'local' ? t('Local workspace') : t('E2B sandbox')}</div> : null}
-                  {sandbox.kind === 'e2b' ? <div className="mt-1 text-xs text-muted-foreground">{
-                    sandbox.status === 'running' ? t('Running') : sandbox.status === 'paused' ? t('Paused')
-                      : sandbox.status === 'terminated' ? t('Terminated') : sandbox.status === 'unreachable' ? t('Unreachable') : t('Unknown')
-                  }</div> : null}
-                  {sandbox.providerSandboxId ? <div className="mt-2 break-all font-mono text-[10px] text-muted-foreground">{sandbox.providerSandboxId}</div> : null}
-                  <div className="mt-2 break-all font-mono text-[10px] text-muted-foreground">{sandbox.cwd}</div>
-                  {sandbox.kind === 'e2b' ? <div className="mt-1 break-all text-[10px] text-muted-foreground">{sandbox.template} · {sandbox.domain} · {sandbox.credentialRef ?? sandbox.credentialEnvVar}</div> : null}
-                  {sandbox.repositoryUrl ? <div className="mt-1 break-all text-[10px] text-muted-foreground">{sandbox.repositoryUrl}</div> : null}
-                  {sandbox.checkedAt ? <div className="mt-1 text-[10px] text-muted-foreground">{t('Last checked')}: {new Date(sandbox.checkedAt).toLocaleString(locale)}</div> : null}
-                  <div className="mt-2 text-xs text-muted-foreground">{requirements.filter((item) => (item.sandboxId ?? 'local') === sandbox.id).length} {t('Requirements')}</div>
-                  {sandbox.id !== 'local' ? <Button size="xs" variant="outline" className="mt-3"
-                    onClick={() => { setEditingWorkspace(sandbox); setEditWorkspaceError(null); }}>{t('Edit workspace')}</Button> : null}
-                  {sandbox.kind === 'e2b' ? <div className="mt-3 flex flex-wrap gap-2">
-                    <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id} onClick={() => void changeSandbox(sandbox.id, 'health')}>{t('Check health')}</Button>
-                    {sandbox.status === 'paused'
-                      ? <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id} onClick={() => void changeSandbox(sandbox.id, 'resume')}>{t('Resume')}</Button>
-                      : <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id || sandbox.status === 'terminated'} onClick={() => void changeSandbox(sandbox.id, 'pause')}>{t('Pause')}</Button>}
-                    <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id || requirements.some((item) => item.sandboxId === sandbox.id)} onClick={() => void changeSandbox(sandbox.id, 'delete')}>{t('Delete')}</Button>
-                  </div> : sandbox.id !== 'local' ? <div className="mt-3">
-                    <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id || requirements.some((item) => item.sandboxId === sandbox.id)}
-                      onClick={() => void changeSandbox(sandbox.id, 'delete')}>{t('Delete')}</Button>
-                  </div> : null}
-                </div>
-              ))}
+            <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-2 gap-3">
+              {workspaceColumns.map((column) => {
+                const items = filteredSandboxes.filter((sandbox) =>
+                  ((workspaceRequirements.get(sandbox.id)?.doing ?? 0) > 0 ? 'running' : 'idle') === column.state);
+                return (
+                  <section key={column.state} className="w-[266px]" aria-labelledby={`workspace-${column.state}`}>
+                    <header className="mb-3 h-11 px-1">
+                      <div className="flex items-center gap-2">
+                        <span className={`size-1.5 rounded-full ${column.tone}`} />
+                        <h2 id={`workspace-${column.state}`} className="text-xs font-semibold">{t(column.title)}</h2>
+                        <span className="font-mono text-[10px] text-muted-foreground">{items.length}</span>
+                      </div>
+                      <p className="mt-1 pl-3.5 text-[10px] text-muted-foreground">{t(column.description)}</p>
+                    </header>
+                    <div className="space-y-2.5">
+                      {items.map((sandbox) => {
+                        const summary = workspaceRequirements.get(sandbox.id);
+                        const sandboxStatus: TranslationKey = sandbox.status === 'running' ? 'Running' : sandbox.status === 'paused' ? 'Paused'
+                          : sandbox.status === 'terminated' ? 'Terminated' : sandbox.status === 'unreachable' ? 'Unreachable' : 'Unknown';
+                        return (
+                          <article key={sandbox.id} className="min-w-0 rounded-xl border border-border/80 bg-card p-3.5 shadow-[0_1px_2px_oklch(0.18_0.02_255/0.05)]">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <span className={`size-2 shrink-0 rounded-full ${column.tone}`} />
+                              <h3 className="min-w-0 truncate text-xs font-semibold" title={sandbox.id === 'local' ? t('Default workspace') : sandbox.name}>
+                                {sandbox.id === 'local' ? t('Default workspace') : sandbox.name}
+                              </h3>
+                            </div>
+                            {sandbox.id !== 'local' ? <p className="mt-1.5 text-[10px] text-muted-foreground">
+                              {t(sandbox.kind === 'e2b' ? 'E2B sandbox' : 'Local workspace')}
+                              {sandbox.kind === 'e2b' ? ` · ${t(sandboxStatus)}` : null}
+                            </p> : null}
+                            <p className="mt-2 truncate font-mono text-[10px] text-muted-foreground" title={sandbox.cwd}>{sandbox.cwd}</p>
+                            <p className="mt-2 text-[10px] text-muted-foreground">{summary?.total ?? 0} {t('Requirements')}</p>
+                            {sandbox.kind === 'e2b' ? (
+                              <details className="mt-2 border-t border-border/70 pt-2 text-[10px] text-muted-foreground">
+                                <summary className="cursor-pointer font-medium text-foreground">{t('Workspace details')}</summary>
+                                <div className="mt-2 space-y-1 break-all">
+                                  <p>{t('Sandbox status')}: {t(sandboxStatus)}</p>
+                                  {sandbox.providerSandboxId ? <p>{sandbox.providerSandboxId}</p> : null}
+                                  <p>{sandbox.template} · {sandbox.domain} · {sandbox.credentialRef ?? sandbox.credentialEnvVar}</p>
+                                  {sandbox.repositoryUrl ? <p>{sandbox.repositoryUrl}</p> : null}
+                                  {sandbox.checkedAt ? <p>{t('Last checked')}: {new Date(sandbox.checkedAt).toLocaleString(locale)}</p> : null}
+                                </div>
+                              </details>
+                            ) : null}
+                            {sandbox.id !== 'local' ? (
+                              <div className="mt-3 flex flex-wrap gap-1.5">
+                                <Button size="xs" variant="outline" onClick={() => { setEditingWorkspace(sandbox); setEditWorkspaceError(null); }}>{t('Edit workspace')}</Button>
+                                {sandbox.kind === 'e2b' ? <>
+                                  <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id} onClick={() => void changeSandbox(sandbox.id, 'health')}>{t('Check health')}</Button>
+                                  {sandbox.status === 'paused'
+                                    ? <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id} onClick={() => void changeSandbox(sandbox.id, 'resume')}>{t('Resume')}</Button>
+                                    : <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id || sandbox.status === 'terminated'} onClick={() => void changeSandbox(sandbox.id, 'pause')}>{t('Pause')}</Button>}
+                                </> : null}
+                                <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id || (summary?.total ?? 0) > 0}
+                                  onClick={() => void changeSandbox(sandbox.id, 'delete')}>{t('Delete')}</Button>
+                              </div>
+                            ) : null}
+                          </article>
+                        );
+                      })}
+                      {items.length === 0 ? (
+                        <div className="grid min-h-24 place-items-center rounded-xl border border-dashed border-border text-[10px] text-muted-foreground">
+                          {loading ? t('Loading…') : t('No workspaces')}
+                        </div>
+                      ) : null}
+                    </div>
+                  </section>
+                );
+              })}
             </div>
           </div>
         ) : view === 'timers' ? (
