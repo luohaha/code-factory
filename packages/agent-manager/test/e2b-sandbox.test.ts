@@ -77,7 +77,7 @@ function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; revie
     get killed() { return killed; } };
 }
 
-test('E2B sandbox API provisions, binds exclusively, checks health and controls lifecycle', async () => {
+test('E2B sandbox API provisions, allows reuse, checks health and controls lifecycle', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-api-'));
   const databasePath = join(directory, 'factory.sqlite');
   const sdk = fakeE2B();
@@ -94,16 +94,16 @@ test('E2B sandbox API provisions, binds exclusively, checks health and controls 
     method, ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   });
   try {
-    assert.equal((await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Missing URL', sharing: 'shared',
+    assert.equal((await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Missing URL',
       ...credentials })).status, 400);
     for (const repositoryUrl of ['https://user:secret@github.com/example/repo.git',
       'https://github.com/example/repo.git?token=secret']) {
       const rejected = await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Unsafe URL',
-        sharing: 'shared', ...credentials, repositoryUrl });
+        ...credentials, repositoryUrl });
       assert.equal(rejected.status, 400);
       assert.equal((await rejected.text()).includes('secret'), false);
     }
-    const created = await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Dedicated', sharing: 'dedicated',
+    const created = await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Reusable',
       ...credentials, repositoryUrl: 'https://github.com/example/repo.git' });
     assert.equal(created.status, 201);
     const sandbox = await created.json() as { id: string; providerSandboxId: string; status: string;
@@ -115,17 +115,23 @@ test('E2B sandbox API provisions, binds exclusively, checks health and controls 
     assert.equal(sandbox.repositoryUrl, 'https://github.com/example/repo.git');
     assert.equal(JSON.stringify(sandbox).includes('test-key'), false);
     assert.equal(sandbox.status, 'running');
+    assert.equal('sharing' in sandbox, false);
     assert(sdk.calls.includes('clone:https://github.com/example/repo.git:/home/user/repo'));
     assert(sdk.calls.includes('command:gh auth status'));
-    assert.equal((await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Duplicate', sharing: 'shared',
+    assert.equal((await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Duplicate',
       ...credentials, providerSandboxId: 'created-e2b-id' })).status, 409);
+    assert.equal((await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Old option', sharing: 'dedicated',
+      ...credentials, repositoryUrl: 'https://github.com/example/repo.git' })).status, 400);
 
     const first = await request('/requirements', 'POST', { title: 'First', description: 'Uses E2B',
       provider: 'native-agent', sandboxId: sandbox.id });
     assert.equal(first.status, 201);
     const requirement = await first.json() as { id: string };
-    assert.equal((await request('/requirements', 'POST', { title: 'Second', description: 'Conflicts',
-      provider: 'native-agent', sandboxId: sandbox.id })).status, 409);
+    const second = await request('/requirements', 'POST', { title: 'Second', description: 'Reuses E2B',
+      provider: 'native-agent', sandboxId: sandbox.id });
+    assert.equal(second.status, 201);
+    const secondRequirement = await second.json() as { id: string; sandboxId: string };
+    assert.equal(secondRequirement.sandboxId, sandbox.id);
     assert.equal((await request('/requirements', 'POST', { title: 'Headless', description: 'Cannot use E2B',
       provider: 'codex', sandboxId: sandbox.id })).status, 400);
 
@@ -139,9 +145,11 @@ test('E2B sandbox API provisions, binds exclusively, checks health and controls 
     const switched = await request(`/requirements/${requirement.id}`, 'PATCH', { provider: 'codex' });
     assert.equal(switched.status, 200);
     assert.equal((await switched.json() as { sandboxId: string | null }).sandboxId, null);
+    assert.equal((await request(`/sandboxes/${sandbox.id}`, 'DELETE')).status, 409);
+    assert.equal((await request(`/requirements/${secondRequirement.id}`, 'PATCH', { provider: 'codex' })).status, 200);
     assert.equal((await request(`/sandboxes/${sandbox.id}`, 'DELETE')).status, 204);
     assert.equal(sdk.killed, true);
-    const attached = await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Attached', sharing: 'shared',
+    const attached = await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Attached',
       ...credentials, providerSandboxId: 'external-e2b-id' });
     assert.equal(attached.status, 201);
     const attachedRecord = await attached.json() as { id: string; credentialRef: string };
@@ -159,7 +167,7 @@ test('E2B sandbox API provisions, binds exclusively, checks health and controls 
       const reopened = new SqliteAgentManagerStore(databasePath);
       try {
         assert.equal(reopened.getSandbox(attachedId)?.providerSandboxId, 'external-e2b-id');
-        assert.equal(reopened.getSandbox(attachedId)?.sharing, 'shared');
+        assert.equal('sharing' in reopened.getSandbox(attachedId)!, false);
         assert.equal(reopened.getSandbox(attachedId)?.domain, 'e2b.example');
         assert.equal(reopened.getSandbox(attachedId)?.credentialRef, attachedRef);
       } finally { reopened.close(); }
@@ -195,10 +203,10 @@ test('E2B creation uses the managed workspace Git origin when only name, domain,
       body: JSON.stringify({ kind: 'e2b', name: 'Simple', domain: 'e2b.example', apiKey: 'test-key' }),
     });
     assert.equal(response.status, 201);
-    const sandbox = await response.json() as { id: string; repositoryUrl: string; cwd: string; sharing: string };
+    const sandbox = await response.json() as { id: string; repositoryUrl: string; cwd: string };
     assert.equal(sandbox.repositoryUrl, 'https://github.com/example/repo.git');
     assert.equal(sandbox.cwd, '/home/user/repo');
-    assert.equal(sandbox.sharing, 'shared');
+    assert.equal('sharing' in sandbox, false);
     assert.deepEqual(sdk.cloneAuth, [{ url: sandbox.repositoryUrl, hasToken: Boolean(process.env.GH_TOKEN || process.env.GITHUB_TOKEN) }]);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -224,13 +232,15 @@ test('E2B workspace settings can be edited and credentials rotate without exposi
     assert.equal(created.status, 201);
     const first = await created.json() as { id: string; credentialRef: string };
     const updated = await fetch(`${base}/${first.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'Renamed', domain: 'new.e2b.example', apiKey: 'new-key', sharing: 'dedicated' }) });
+      body: JSON.stringify({ name: 'Renamed', domain: 'new.e2b.example', apiKey: 'new-key' }) });
     assert.equal(updated.status, 200);
-    const second = await updated.json() as { id: string; name: string; domain: string; sharing: string;
+    const second = await updated.json() as { id: string; name: string; domain: string;
       credentialRef: string };
     assert.equal(second.name, 'Renamed');
     assert.equal(second.domain, 'new.e2b.example');
-    assert.equal(second.sharing, 'dedicated');
+    assert.equal('sharing' in second, false);
+    assert.equal((await fetch(`${base}/${first.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sharing: 'dedicated' }) })).status, 400);
     assert.notEqual(second.credentialRef, first.credentialRef);
     assert.equal(JSON.stringify(second).includes('new-key'), false);
     const secrets = new E2BCredentialStore(e2bCredentialsPath(databasePath));
@@ -295,7 +305,7 @@ test('E2B provisioning rejects missing remote gh and removes the new sandbox', a
   try {
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
     const response = await fetch(`${base}/sandboxes`, { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'e2b', name: 'Missing gh', sharing: 'shared', domain: 'e2b.example',
+      body: JSON.stringify({ kind: 'e2b', name: 'Missing gh', domain: 'e2b.example',
         apiKey: 'test-key', repositoryUrl: 'https://github.com/example/repo.git' }) });
     assert.equal(response.status, 400);
     const body = await response.text();
@@ -321,7 +331,7 @@ test('GitHub token is sent to clone and remote gh only for github.com repositori
     logger: createLogger({ level: 'silent' }) });
   try {
     for (const repositoryUrl of ['https://git.example/org/repo.git', 'https://github.com/org/repo.git']) {
-      const sandbox = await manager.createE2BSandbox({ name: 'Scoped token', sharing: 'shared',
+      const sandbox = await manager.createE2BSandbox({ name: 'Scoped token',
         domain: 'e2b.example', apiKey: 'test-key', repositoryUrl });
       await manager.deleteSandbox(sandbox.id);
     }
@@ -353,12 +363,12 @@ test('legacy sandbox records survive E2B schema migration', () => {
       assert.deepEqual(store.getSandbox('old'), { id: 'old', name: 'Existing', kind: 'local-sandbox',
         cwd: '/tmp/existing', providerSandboxId: null, credentialEnvVar: null, domain: null,
         credentialRef: null, repositoryUrl: null, template: null,
-        sharing: null, status: 'unknown', checkedAt: null, createdAt: '2026-01-01T00:00:00Z' });
+        status: 'unknown', checkedAt: null, createdAt: '2026-01-01T00:00:00Z' });
     } finally { store.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('E2B records created before per-sandbox credentials gain nullable settings', () => {
+test('legacy dedicated E2B records migrate and can be selected by multiple Requirements', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-settings-'));
   const databasePath = join(directory, 'factory.sqlite');
   const legacy = new DatabaseSync(databasePath);
@@ -368,7 +378,7 @@ test('E2B records created before per-sandbox credentials gain nullable settings'
     status TEXT NOT NULL, checked_at TEXT, created_at TEXT NOT NULL) STRICT`);
   legacy.prepare('INSERT INTO sandboxes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
     'old-e2b', 'Existing E2B', 'e2b', '/home/user/repo', 'provider-id', 'E2B_API_KEY',
-    'base', 'shared', 'running', null, '2026-01-01T00:00:00Z');
+    'base', 'dedicated', 'running', null, '2026-01-01T00:00:00Z');
   legacy.close();
   try {
     const store = new SqliteAgentManagerStore(databasePath);
@@ -379,6 +389,53 @@ test('E2B records created before per-sandbox credentials gain nullable settings'
       assert.equal(sandbox?.domain, null);
       assert.equal(sandbox?.credentialRef, null);
       assert.equal(sandbox?.repositoryUrl, null);
+      assert.equal('sharing' in sandbox!, false);
+      const migrated = new DatabaseSync(databasePath);
+      try {
+        const columns = migrated.prepare('PRAGMA table_info(sandboxes)').all();
+        assert.equal(columns.some((column) => column.name === 'sharing'), false);
+      } finally { migrated.close(); }
     } finally { store.close(); }
+    const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+      store: new SqliteAgentManagerStore(databasePath), logger: createLogger({ level: 'silent' }) });
+    try {
+      for (const number of [1, 2]) {
+        const requirement = manager.createRequirement({ title: `Native ${number}`, description: 'Reuse old E2B',
+          provider: 'native-agent', sandboxId: 'old-e2b' });
+        assert.equal(requirement.sandboxId, 'old-e2b');
+      }
+    } finally { await manager.close(); }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('removing legacy E2B sharing preserves an existing Requirement binding', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-sharing-migrate-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const store = new SqliteAgentManagerStore(databasePath);
+  store.createSandbox({ id: 'old-e2b', name: 'Existing E2B', kind: 'e2b', cwd: '/home/user/repo',
+    providerSandboxId: 'provider-id', credentialEnvVar: 'E2B_API_KEY', domain: 'e2b.example',
+    credentialRef: null, repositoryUrl: null, template: 'base', status: 'running', checkedAt: null,
+    createdAt: '2026-01-01T00:00:00Z' });
+  store.createRequirement({ requirementId: 'req-existing', sessionId: 'ses-existing', title: 'Existing',
+    description: 'Keep workspace binding', provider: 'native-agent', sandboxId: 'old-e2b',
+    now: '2026-01-01T00:00:00Z' });
+  store.close();
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec("ALTER TABLE sandboxes ADD COLUMN sharing TEXT CHECK (sharing IN ('shared', 'dedicated'))");
+  legacy.prepare("UPDATE sandboxes SET sharing = 'dedicated' WHERE id = 'old-e2b'").run();
+  legacy.close();
+  try {
+    const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+      store: new SqliteAgentManagerStore(databasePath), logger: createLogger({ level: 'silent' }) });
+    try {
+      assert.equal(manager.getRequirement('req-existing')?.sandboxId, 'old-e2b');
+      assert.equal(manager.createRequirement({ title: 'Second', description: 'Reuse E2B',
+        provider: 'native-agent', sandboxId: 'old-e2b' }).sandboxId, 'old-e2b');
+    } finally { await manager.close(); }
+    const migrated = new DatabaseSync(databasePath);
+    try {
+      const columns = migrated.prepare('PRAGMA table_info(sandboxes)').all();
+      assert.equal(columns.some((column) => column.name === 'sharing'), false);
+    } finally { migrated.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

@@ -16,7 +16,7 @@ Read `README.md` for the product and operator-facing overview. Treat `docs/archi
 
 Preserve these rules unless the task explicitly changes the product architecture:
 
-- One Agent Manager owns the directory from which it was started. The built-in Default workspace uses that directory and cannot be removed. A Requirement may select a named local workspace for any RD provider, or E2B for Native Agent. A Reviewer runs in the same workspace selected by its Requirement.
+- One Agent Manager owns the directory from which it was started. The built-in Default workspace uses that directory and cannot be removed. A Requirement may select a named local workspace for any RD provider, or E2B for Native Agent. Multiple Native Agent Requirements may select the same E2B sandbox. A Reviewer runs in the same workspace selected by its Requirement.
 - Each Requirement has exactly one long-lived RD `AgentSession`, created when the Requirement is created. There is no shared agent pool or scheduling queue.
 - A session may have many `AgentRun` records but at most one active RD run. Sessions for different Requirements may run concurrently.
 - Native Codex thread IDs and Claude Code session IDs preserve agent context across runs.

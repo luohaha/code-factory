@@ -1,6 +1,5 @@
 export type AgentProvider = 'codex' | 'claude-code' | 'native-agent';
 export type SandboxKind = 'local' | 'local-sandbox' | 'e2b';
-export type SandboxSharing = 'shared' | 'dedicated';
 export type SandboxStatus = 'running' | 'paused' | 'terminated' | 'unreachable' | 'unknown';
 export interface Sandbox {
   id: string;
@@ -13,7 +12,6 @@ export interface Sandbox {
   credentialRef: string | null;
   repositoryUrl: string | null;
   template: string | null;
-  sharing: SandboxSharing | null;
   status: SandboxStatus;
   checkedAt: string | null;
   createdAt: string;

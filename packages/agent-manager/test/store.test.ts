@@ -36,16 +36,16 @@ test('a requirement is created atomically with exactly one RD session', () => {
   }
 });
 
-test('native requirements can share a persisted sandbox', () => {
+test('multiple native requirements can select one persisted sandbox', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {
-    const sandbox = store.createSandbox({ id: 'sbx-shared', name: 'Shared E2B', kind: 'e2b', cwd: '/home/user/repo',
-      providerSandboxId: 'provider-shared', credentialEnvVar: null, domain: 'e2b.example',
-      credentialRef: 'e2b-test', repositoryUrl: 'https://github.com/example/repo.git', template: 'base', sharing: 'shared',
+    const sandbox = store.createSandbox({ id: 'sbx-reused', name: 'Reusable E2B', kind: 'e2b', cwd: '/home/user/repo',
+      providerSandboxId: 'provider-reused', credentialEnvVar: null, domain: 'e2b.example',
+      credentialRef: 'e2b-test', repositoryUrl: 'https://github.com/example/repo.git', template: 'base',
       status: 'running', checkedAt: now, createdAt: now });
     for (const number of [1, 2]) {
       const requirement = store.createRequirement({ requirementId: `req-native-${number}`, sessionId: `ses-native-${number}`,
-        title: 'Native work', description: 'Use shared sandbox', provider: 'native-agent', sandboxId: sandbox.id,
+        title: 'Native work', description: 'Reuse sandbox', provider: 'native-agent', sandboxId: sandbox.id,
         createdBy: 'human', now });
       assert.equal(requirement.sandboxId, sandbox.id);
     }

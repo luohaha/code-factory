@@ -22,7 +22,6 @@ export const sandboxesTableSql = `CREATE TABLE IF NOT EXISTS sandboxes (
     credential_ref TEXT,
     repository_url TEXT,
     template TEXT,
-    sharing TEXT CHECK (sharing IN ('shared', 'dedicated')),
     status TEXT NOT NULL DEFAULT 'unknown' CHECK (status IN ('running', 'paused', 'terminated', 'unreachable', 'unknown')),
     checked_at TEXT,
     created_at TEXT NOT NULL
