@@ -72,7 +72,12 @@ test('named local execution paths set RD cwd for Codex and Claude while Default 
     headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   try {
     assert.equal((await post('/sandboxes', { kind: 'local', name: 'Relative', cwd: 'checkout' })).status, 400);
-    assert.equal((await post('/sandboxes', { kind: 'local', name: 'Missing', cwd: join(directory, 'missing') })).status, 400);
+    const missing = await post('/sandboxes', { kind: 'local', name: 'Missing', cwd: join(directory, 'missing') });
+    assert.equal(missing.status, 400);
+    assert.deepEqual(await missing.json(), {
+      error: 'local workspace path must be an existing directory on the Agent Manager host',
+    });
+    assert.equal(manager.listSandboxes().length, 1);
     assert.equal((await post('/sandboxes', { kind: 'local', name: 'Duplicate default', cwd: workspace })).status, 400);
     const created = await post('/sandboxes', { kind: 'local', name: 'Feature checkout', cwd: checkout });
     assert.equal(created.status, 201);
@@ -83,6 +88,16 @@ test('named local execution paths set RD cwd for Codex and Claude while Default 
     assert.equal(manager.listSandboxes().length, 2);
     const unused = await post('/sandboxes', { kind: 'local', name: 'Unused', cwd: directory });
     const unusedPath = await unused.json() as { id: string };
+    const missingUpdate = await fetch(`${base}/sandboxes/${unusedPath.id}`, { method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Invalid update', cwd: join(directory, 'missing') }) });
+    assert.equal(missingUpdate.status, 400);
+    assert.deepEqual(await missingUpdate.json(), {
+      error: 'local workspace path must be an existing directory on the Agent Manager host',
+    });
+    const unchanged = manager.listSandboxes().find((sandbox) => sandbox.id === unusedPath.id);
+    assert.equal(unchanged?.name, 'Unused');
+    assert.equal(unchanged?.cwd, realpathSync(directory));
     const patched = await fetch(`${base}/sandboxes/${unusedPath.id}`, { method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'Renamed checkout', cwd: checkout }) });
