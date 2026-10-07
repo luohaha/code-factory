@@ -6,6 +6,32 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-07
+
+### Added
+
+- Added a persistent Native Agent powered by pi-durable, with live Steering, trace events, and saved OpenAI-compatible or Anthropic API profiles.
+- Added E2B cloud sandboxes for Native Agent file and command tools, alongside named local workspaces that all RD providers can select. Multiple Native Agent Requirements may use the same E2B sandbox.
+- Added Native Agent PR reviews in the Requirement's selected workspace. Native Agent Requirements use a fresh Native Agent Reviewer; Codex and Claude Code continue to use headless Reviewers.
+
+### Changed
+
+- Removed Requirement forking while retaining ordinary parent-child Requirements and existing records.
+- Replaced Native Agent's fixed provider credentials and Codex subscription login with selectable API profiles. Existing saved OpenAI and Anthropic keys are migrated to profiles, and existing direct-model Requirements remain supported.
+- Moved the GitHub Actions checkout and Node setup steps to their Node.js 24-compatible releases.
+- Classified the dashboard's Vinext compiler as a development dependency so production dependency audits reflect the shipped package.
+
+### Fixed
+
+- Preserved detailed Codex failure messages when a generic `turn.failed` event follows them.
+- Cancelled remote E2B commands when a Native Agent Run stops, and corrected headless Steering and Stop Run cleanup.
+- Confirmed that saving a local workspace rejects a missing directory without changing its existing configuration.
+
+### Upgrade notes
+
+- E2B sandboxes require an E2B domain and API key. New sandboxes need a credential-free HTTPS repository URL and a remote template with Git and `gh`; attached sandboxes need an existing checkout and remote `gh` authentication.
+- Databases created by intermediate, unreleased builds that stored an E2B sandbox `sharing` column require the one-time manual schema update described in [PR #128](https://github.com/luohaha/code-factory/pull/128). Databases from the published v0.2.1 release do not contain this column.
+
 ## [0.2.1] - 2026-10-02
 
 ### Security
