@@ -228,8 +228,8 @@ const workspaceColumns: Array<{
   description: TranslationKey;
   tone: string;
 }> = [
-  { state: 'running', title: 'Running workspaces', description: 'At least one Requirement is doing', tone: 'bg-emerald-500' },
   { state: 'idle', title: 'Idle workspaces', description: 'No Requirements are doing', tone: 'bg-slate-400' },
+  { state: 'running', title: 'Running workspaces', description: 'At least one Requirement is doing', tone: 'bg-emerald-500' },
 ];
 
 const stateLabel: Record<SessionState, TranslationKey> = {
