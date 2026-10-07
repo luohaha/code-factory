@@ -120,8 +120,6 @@ test('E2B sandbox API provisions, allows reuse, checks health and controls lifec
     assert(sdk.calls.includes('command:gh auth status'));
     assert.equal((await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Duplicate',
       ...credentials, providerSandboxId: 'created-e2b-id' })).status, 409);
-    assert.equal((await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Old option', sharing: 'dedicated',
-      ...credentials, repositoryUrl: 'https://github.com/example/repo.git' })).status, 400);
 
     const first = await request('/requirements', 'POST', { title: 'First', description: 'Uses E2B',
       provider: 'native-agent', sandboxId: sandbox.id });
@@ -239,8 +237,6 @@ test('E2B workspace settings can be edited and credentials rotate without exposi
     assert.equal(second.name, 'Renamed');
     assert.equal(second.domain, 'new.e2b.example');
     assert.equal('sharing' in second, false);
-    assert.equal((await fetch(`${base}/${first.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sharing: 'dedicated' }) })).status, 400);
     assert.notEqual(second.credentialRef, first.credentialRef);
     assert.equal(JSON.stringify(second).includes('new-key'), false);
     const secrets = new E2BCredentialStore(e2bCredentialsPath(databasePath));
@@ -368,17 +364,17 @@ test('legacy sandbox records survive E2B schema migration', () => {
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('legacy dedicated E2B records migrate and can be selected by multiple Requirements', async () => {
+test('E2B records created before per-sandbox credentials gain nullable settings', () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-settings-'));
   const databasePath = join(directory, 'factory.sqlite');
   const legacy = new DatabaseSync(databasePath);
   legacy.exec(`CREATE TABLE sandboxes (id TEXT PRIMARY KEY, name TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('local', 'local-sandbox', 'e2b')), cwd TEXT NOT NULL,
-    provider_sandbox_id TEXT, credential_env_var TEXT, template TEXT, sharing TEXT,
+    provider_sandbox_id TEXT, credential_env_var TEXT, template TEXT,
     status TEXT NOT NULL, checked_at TEXT, created_at TEXT NOT NULL) STRICT`);
-  legacy.prepare('INSERT INTO sandboxes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+  legacy.prepare('INSERT INTO sandboxes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
     'old-e2b', 'Existing E2B', 'e2b', '/home/user/repo', 'provider-id', 'E2B_API_KEY',
-    'base', 'dedicated', 'running', null, '2026-01-01T00:00:00Z');
+    'base', 'running', null, '2026-01-01T00:00:00Z');
   legacy.close();
   try {
     const store = new SqliteAgentManagerStore(databasePath);
@@ -390,52 +386,6 @@ test('legacy dedicated E2B records migrate and can be selected by multiple Requi
       assert.equal(sandbox?.credentialRef, null);
       assert.equal(sandbox?.repositoryUrl, null);
       assert.equal('sharing' in sandbox!, false);
-      const migrated = new DatabaseSync(databasePath);
-      try {
-        const columns = migrated.prepare('PRAGMA table_info(sandboxes)').all();
-        assert.equal(columns.some((column) => column.name === 'sharing'), false);
-      } finally { migrated.close(); }
     } finally { store.close(); }
-    const manager = new AgentManager({ workspaceRoot: directory, databasePath,
-      store: new SqliteAgentManagerStore(databasePath), logger: createLogger({ level: 'silent' }) });
-    try {
-      for (const number of [1, 2]) {
-        const requirement = manager.createRequirement({ title: `Native ${number}`, description: 'Reuse old E2B',
-          provider: 'native-agent', sandboxId: 'old-e2b' });
-        assert.equal(requirement.sandboxId, 'old-e2b');
-      }
-    } finally { await manager.close(); }
-  } finally { rmSync(directory, { recursive: true, force: true }); }
-});
-
-test('removing legacy E2B sharing preserves an existing Requirement binding', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-sharing-migrate-'));
-  const databasePath = join(directory, 'factory.sqlite');
-  const store = new SqliteAgentManagerStore(databasePath);
-  store.createSandbox({ id: 'old-e2b', name: 'Existing E2B', kind: 'e2b', cwd: '/home/user/repo',
-    providerSandboxId: 'provider-id', credentialEnvVar: 'E2B_API_KEY', domain: 'e2b.example',
-    credentialRef: null, repositoryUrl: null, template: 'base', status: 'running', checkedAt: null,
-    createdAt: '2026-01-01T00:00:00Z' });
-  store.createRequirement({ requirementId: 'req-existing', sessionId: 'ses-existing', title: 'Existing',
-    description: 'Keep workspace binding', provider: 'native-agent', sandboxId: 'old-e2b',
-    now: '2026-01-01T00:00:00Z' });
-  store.close();
-  const legacy = new DatabaseSync(databasePath);
-  legacy.exec("ALTER TABLE sandboxes ADD COLUMN sharing TEXT CHECK (sharing IN ('shared', 'dedicated'))");
-  legacy.prepare("UPDATE sandboxes SET sharing = 'dedicated' WHERE id = 'old-e2b'").run();
-  legacy.close();
-  try {
-    const manager = new AgentManager({ workspaceRoot: directory, databasePath,
-      store: new SqliteAgentManagerStore(databasePath), logger: createLogger({ level: 'silent' }) });
-    try {
-      assert.equal(manager.getRequirement('req-existing')?.sandboxId, 'old-e2b');
-      assert.equal(manager.createRequirement({ title: 'Second', description: 'Reuse E2B',
-        provider: 'native-agent', sandboxId: 'old-e2b' }).sandboxId, 'old-e2b');
-    } finally { await manager.close(); }
-    const migrated = new DatabaseSync(databasePath);
-    try {
-      const columns = migrated.prepare('PRAGMA table_info(sandboxes)').all();
-      assert.equal(columns.some((column) => column.name === 'sharing'), false);
-    } finally { migrated.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

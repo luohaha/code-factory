@@ -293,7 +293,6 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     this.migrateNativeReviewerProvider();
     this.migrateE2BSandboxes();
     this.migrateE2BSettings();
-    this.migrateE2BSharing();
     for (const statement of postMigrationSchemaStatements) this.#db.exec(statement);
     this.#ftsAvailable = this.initializeFullTextSearch();
     this.backfillSearchDocuments();
@@ -378,13 +377,6 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       if (!columns.has(name)) this.#db.exec(`ALTER TABLE sandboxes ADD COLUMN ${name} TEXT`);
     }
     this.#db.exec('DROP INDEX IF EXISTS sandboxes_provider_id');
-  }
-
-  private migrateE2BSharing(): void {
-    const columns = this.#db.prepare('PRAGMA table_info(sandboxes)').all() as Row[];
-    if (columns.some((column) => column.name === 'sharing')) {
-      this.#db.exec('ALTER TABLE sandboxes DROP COLUMN sharing');
-    }
   }
 
   createRequirement(input: CreateRequirementRecord): RequirementWithSession {

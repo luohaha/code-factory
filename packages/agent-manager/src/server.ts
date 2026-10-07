@@ -371,7 +371,6 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
       }
       if (request.method === 'POST' && url.pathname === '/api/sandboxes') {
         const body = await readJson(request);
-        if (Object.hasOwn(body, 'sharing')) throw new TypeError('sharing is no longer supported');
         if (body.kind === 'local') {
           sendJson(response, 201, manager.createLocalExecution({
             name: stringField(body, 'name', true)!, cwd: stringField(body, 'cwd', true)!,
@@ -410,7 +409,6 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
       const sandbox = url.pathname.match(/^\/api\/sandboxes\/([^/]+)$/);
       if (sandbox && request.method === 'PATCH') {
         const body = await readJson(request);
-        if (Object.hasOwn(body, 'sharing')) throw new TypeError('sharing is no longer supported');
         sendJson(response, 200, await manager.updateSandbox(decodeURIComponent(sandbox[1]!), {
           ...(body.name === undefined ? {} : { name: stringField(body, 'name', true)! }),
           ...(body.cwd === undefined ? {} : { cwd: stringField(body, 'cwd', true)! }),
