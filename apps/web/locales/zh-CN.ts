@@ -8,6 +8,8 @@ export const zhCN = {
   'No Requirements are doing': '没有进行中的需求',
   'No workspaces': '当前无工作区',
   'Workspace details': '工作区详情',
+  'Delete workspace?': '删除工作区？',
+  'Credential reference': '凭据引用',
   'Sandbox status': '沙箱状态',
   'Workspace name': '工作区名称',
   'The Reviewer uses this Requirement’s workspace.': 'Reviewer 使用此需求绑定的工作区。',

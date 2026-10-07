@@ -2518,9 +2518,10 @@ function Dashboard() {
   const [createPathOpen, setCreatePathOpen] = useState(false);
   const [createPathError, setCreatePathError] = useState<string | null>(null);
   const [createPathKind, setCreatePathKind] = useState<'local' | 'e2b'>('local');
-  const [editingWorkspace, setEditingWorkspace] = useState<SandboxDto | null>(null);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
+  const [workspaceDialogMode, setWorkspaceDialogMode] = useState<'details' | 'edit' | 'delete'>('details');
   const [savingWorkspace, setSavingWorkspace] = useState(false);
-  const [editWorkspaceError, setEditWorkspaceError] = useState<string | null>(null);
+  const [workspaceDialogError, setWorkspaceDialogError] = useState<string | null>(null);
   const [busySandboxId, setBusySandboxId] = useState<string | null>(null);
   const [runs, setRuns] = useState<AgentRunDto[]>([]);
   const [agentTraces, setAgentTraces] = useState<Record<string, AgentTraceEventDto[] | undefined>>({});
@@ -3402,47 +3403,46 @@ function Dashboard() {
 
   async function saveWorkspace(event: SyntheticEvent<HTMLFormElement, SubmitEvent>): Promise<void> {
     event.preventDefault();
-    if (!editingWorkspace || savingWorkspace) return;
+    if (!selectedWorkspace || savingWorkspace) return;
     const fields = new FormData(event.currentTarget);
     const value = (field: string) => {
       const entry = fields.get(field);
       return typeof entry === 'string' ? entry.trim() : '';
     };
     setSavingWorkspace(true);
-    setEditWorkspaceError(null);
+    setWorkspaceDialogError(null);
     try {
-      const updated = await client.updateWorkspace(editingWorkspace.id, {
+      const updated = await client.updateWorkspace(selectedWorkspace.id, {
         name: value('name'), cwd: value('cwd'),
-        ...(editingWorkspace.kind === 'e2b' ? {
+        ...(selectedWorkspace.kind === 'e2b' ? {
           domain: value('domain'),
           ...(value('apiKey') ? { apiKey: value('apiKey') } : {}),
         } : {}),
       });
       setSandboxes((current) => current.map((workspace) => workspace.id === updated.id ? updated : workspace));
-      setEditingWorkspace(null);
+      setWorkspaceDialogMode('details');
     } catch (caught) {
-      setEditWorkspaceError(caught instanceof Error ? caught.message : t('Failed to update workspace'));
+      setWorkspaceDialogError(caught instanceof Error ? caught.message : t('Failed to update workspace'));
     } finally {
       setSavingWorkspace(false);
     }
   }
 
   async function changeSandbox(id: string, action: 'health' | 'pause' | 'resume' | 'delete'): Promise<void> {
-    if (action === 'delete' && !window.confirm(t(sandboxes.find((sandbox) => sandbox.id === id)?.kind === 'e2b'
-      ? 'Delete this E2B sandbox and its remote files?' : 'Remove this local workspace?'))) return;
     setBusySandboxId(id);
-    setError(null);
+    setWorkspaceDialogError(null);
     try {
       if (action === 'delete') {
         await client.deleteSandbox(id);
         setSandboxes((current) => current.filter((sandbox) => sandbox.id !== id));
+        setSelectedWorkspaceId(null);
       } else {
         const sandbox = action === 'health' ? await client.checkSandboxHealth(id)
           : action === 'pause' ? await client.pauseSandbox(id) : await client.resumeSandbox(id);
         setSandboxes((current) => current.map((item) => item.id === id ? sandbox : item));
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t('Sandbox action failed'));
+      setWorkspaceDialogError(caught instanceof Error ? caught.message : t('Sandbox action failed'));
     } finally {
       setBusySandboxId(null);
     }
@@ -3476,6 +3476,10 @@ function Dashboard() {
   const recurringTimers = activeTimers.filter((item) => item.schedule === 'recurring').length;
   const runningWorkspaces = sandboxes.filter((sandbox) => (workspaceRequirements.get(sandbox.id)?.doing ?? 0) > 0).length;
   const idleWorkspaces = sandboxes.length - runningWorkspaces;
+  const selectedWorkspace = sandboxes.find((sandbox) => sandbox.id === selectedWorkspaceId);
+  const selectedWorkspaceStatus: TranslationKey = selectedWorkspace?.status === 'running' ? 'Running'
+    : selectedWorkspace?.status === 'paused' ? 'Paused' : selectedWorkspace?.status === 'terminated' ? 'Terminated'
+    : selectedWorkspace?.status === 'unreachable' ? 'Unreachable' : 'Unknown';
   const workspaceLabel = workspace?.root ?? t('Workspace not connected');
   const viewTitle: TranslationKey = view === 'requirements'
     ? 'Requirement workflow'
@@ -3828,30 +3832,36 @@ function Dashboard() {
                 </form>
               </DialogContent>
             </Dialog>
-            <Dialog open={editingWorkspace !== null} onOpenChange={(open) => { if (!open) setEditingWorkspace(null); }}>
+            <Dialog open={selectedWorkspace !== undefined} onOpenChange={(open) => {
+              if (!open) {
+                setSelectedWorkspaceId(null);
+                setWorkspaceDialogMode('details');
+                setWorkspaceDialogError(null);
+              }
+            }}>
               <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
-                {editingWorkspace ? <form key={editingWorkspace.id} onSubmit={(event) => void saveWorkspace(event)}>
+                {selectedWorkspace && workspaceDialogMode === 'edit' ? <form key={selectedWorkspace.id} onSubmit={(event) => void saveWorkspace(event)}>
                   <DialogHeader>
                     <DialogTitle>{t('Edit workspace')}</DialogTitle>
-                    <DialogDescription>{editingWorkspace.kind === 'local' ? t('Local workspace') : t('E2B sandbox')}</DialogDescription>
+                    <DialogDescription>{selectedWorkspace.kind === 'local' ? t('Local workspace') : t('E2B sandbox')}</DialogDescription>
                   </DialogHeader>
-                  {editWorkspaceError ? <Alert variant="destructive" className="mt-4">
+                  {workspaceDialogError ? <Alert variant="destructive" className="mt-4">
                     <TriangleAlert /><AlertTitle>{t('Failed to update workspace')}</AlertTitle>
-                    <AlertDescription>{editWorkspaceError}</AlertDescription>
+                    <AlertDescription>{workspaceDialogError}</AlertDescription>
                   </Alert> : null}
                   <FieldGroup className="my-5 gap-4">
                     <Field>
                       <FieldLabel htmlFor="edit-workspace-name">{t('Workspace name')}</FieldLabel>
-                      <Input id="edit-workspace-name" name="name" required maxLength={80} defaultValue={editingWorkspace.name} />
+                      <Input id="edit-workspace-name" name="name" required maxLength={80} defaultValue={selectedWorkspace.name} />
                     </Field>
                     <Field>
-                      <FieldLabel htmlFor="edit-workspace-cwd">{t(editingWorkspace.kind === 'local' ? 'Local directory' : 'Remote working directory')}</FieldLabel>
-                      <Input id="edit-workspace-cwd" name="cwd" required defaultValue={editingWorkspace.cwd} />
+                      <FieldLabel htmlFor="edit-workspace-cwd">{t(selectedWorkspace.kind === 'local' ? 'Local directory' : 'Remote working directory')}</FieldLabel>
+                      <Input id="edit-workspace-cwd" name="cwd" required defaultValue={selectedWorkspace.cwd} />
                     </Field>
-                    {editingWorkspace.kind === 'e2b' ? <>
+                    {selectedWorkspace.kind === 'e2b' ? <>
                       <Field>
                         <FieldLabel htmlFor="edit-workspace-domain">{t('E2B domain')}</FieldLabel>
-                        <Input id="edit-workspace-domain" name="domain" required defaultValue={editingWorkspace.domain ?? ''} />
+                        <Input id="edit-workspace-domain" name="domain" required defaultValue={selectedWorkspace.domain ?? ''} />
                       </Field>
                       <Field>
                         <FieldLabel htmlFor="edit-workspace-key">{t('E2B API key')}</FieldLabel>
@@ -3861,10 +3871,77 @@ function Dashboard() {
                     </> : null}
                   </FieldGroup>
                   <DialogFooter>
-                    <DialogClose render={<Button type="button" variant="outline" />}>{t('Cancel')}</DialogClose>
+                    <Button type="button" variant="outline" onClick={() => { setWorkspaceDialogMode('details'); setWorkspaceDialogError(null); }}>{t('Cancel')}</Button>
                     <Button type="submit" disabled={savingWorkspace}>{savingWorkspace ? <LoaderCircle className="animate-spin" /> : null}{t('Save changes')}</Button>
                   </DialogFooter>
-                </form> : null}
+                </form> : selectedWorkspace && workspaceDialogMode === 'delete' ? <>
+                  <DialogHeader>
+                    <DialogTitle>{t('Delete workspace?')}</DialogTitle>
+                    <DialogDescription>{t(selectedWorkspace.kind === 'e2b'
+                      ? 'Delete this E2B sandbox and its remote files?' : 'Remove this local workspace?')}</DialogDescription>
+                  </DialogHeader>
+                  {workspaceDialogError ? <Alert variant="destructive">
+                    <TriangleAlert /><AlertTitle>{t('Sandbox action failed')}</AlertTitle>
+                    <AlertDescription>{workspaceDialogError}</AlertDescription>
+                  </Alert> : null}
+                  <DialogFooter>
+                    <Button type="button" variant="outline" disabled={busySandboxId === selectedWorkspace.id}
+                      onClick={() => { setWorkspaceDialogMode('details'); setWorkspaceDialogError(null); }}>{t('Cancel')}</Button>
+                    <Button type="button" variant="destructive" disabled={busySandboxId === selectedWorkspace.id}
+                      onClick={() => void changeSandbox(selectedWorkspace.id, 'delete')}>
+                      {busySandboxId === selectedWorkspace.id ? <LoaderCircle className="animate-spin" /> : <Trash2 data-icon="inline-start" />}{t('Delete')}
+                    </Button>
+                  </DialogFooter>
+                </> : selectedWorkspace ? <>
+                  <DialogHeader>
+                    <DialogTitle>{selectedWorkspace.id === 'local' ? t('Default workspace') : selectedWorkspace.name}</DialogTitle>
+                    <DialogDescription>{t(selectedWorkspace.kind === 'e2b' ? 'E2B sandbox' : 'Local workspace')}</DialogDescription>
+                  </DialogHeader>
+                  {workspaceDialogError ? <Alert variant="destructive">
+                    <TriangleAlert /><AlertTitle>{t('Sandbox action failed')}</AlertTitle>
+                    <AlertDescription>{workspaceDialogError}</AlertDescription>
+                  </Alert> : null}
+                  <dl className="grid gap-3 rounded-lg border border-border p-3 text-xs sm:grid-cols-2">
+                    <div className="min-w-0 sm:col-span-2">
+                      <dt className="text-muted-foreground">{t(selectedWorkspace.kind === 'e2b' ? 'Remote working directory' : 'Local directory')}</dt>
+                      <dd className="mt-1 break-all font-mono">{selectedWorkspace.cwd}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">{t('Requirements')}</dt>
+                      <dd className="mt-1">{workspaceRequirements.get(selectedWorkspace.id)?.total ?? 0}</dd>
+                    </div>
+                    {selectedWorkspace.kind === 'e2b' ? <>
+                      <div><dt className="text-muted-foreground">{t('Sandbox status')}</dt><dd className="mt-1">{t(selectedWorkspaceStatus)}</dd></div>
+                      {selectedWorkspace.providerSandboxId ? <div className="min-w-0 sm:col-span-2"><dt className="text-muted-foreground">{t('Existing E2B sandbox ID')}</dt><dd className="mt-1 break-all font-mono">{selectedWorkspace.providerSandboxId}</dd></div> : null}
+                      <div><dt className="text-muted-foreground">{t('E2B template')}</dt><dd className="mt-1 break-all">{selectedWorkspace.template}</dd></div>
+                      <div><dt className="text-muted-foreground">{t('E2B domain')}</dt><dd className="mt-1 break-all">{selectedWorkspace.domain}</dd></div>
+                      <div className="min-w-0 sm:col-span-2"><dt className="text-muted-foreground">{t('Credential reference')}</dt><dd className="mt-1 break-all font-mono">{selectedWorkspace.credentialRef ?? selectedWorkspace.credentialEnvVar}</dd></div>
+                      {selectedWorkspace.repositoryUrl ? <div className="min-w-0 sm:col-span-2"><dt className="text-muted-foreground">{t('Repository HTTPS URL')}</dt><dd className="mt-1 break-all">{selectedWorkspace.repositoryUrl}</dd></div> : null}
+                      {selectedWorkspace.checkedAt ? <div className="sm:col-span-2"><dt className="text-muted-foreground">{t('Last checked')}</dt><dd className="mt-1">{new Date(selectedWorkspace.checkedAt).toLocaleString(locale)}</dd></div> : null}
+                    </> : null}
+                  </dl>
+                  <DialogFooter className="flex-wrap sm:justify-between">
+                    <div className="flex flex-wrap gap-2">
+                      {selectedWorkspace.id !== 'local' ? <>
+                        <Button type="button" variant="destructive" disabled={busySandboxId === selectedWorkspace.id || (workspaceRequirements.get(selectedWorkspace.id)?.total ?? 0) > 0}
+                          onClick={() => { setWorkspaceDialogMode('delete'); setWorkspaceDialogError(null); }}>
+                          <Trash2 data-icon="inline-start" />{t('Delete')}
+                        </Button>
+                        {selectedWorkspace.kind === 'e2b' ? <>
+                          <Button type="button" variant="outline" disabled={busySandboxId === selectedWorkspace.id}
+                            onClick={() => void changeSandbox(selectedWorkspace.id, 'health')}>{t('Check health')}</Button>
+                          <Button type="button" variant="outline" disabled={busySandboxId === selectedWorkspace.id || selectedWorkspace.status === 'terminated'}
+                            onClick={() => void changeSandbox(selectedWorkspace.id, selectedWorkspace.status === 'paused' ? 'resume' : 'pause')}>
+                            {t(selectedWorkspace.status === 'paused' ? 'Resume' : 'Pause')}
+                          </Button>
+                        </> : null}
+                      </> : null}
+                    </div>
+                    {selectedWorkspace.id === 'local'
+                      ? <DialogClose render={<Button type="button" variant="outline" />}>{t('Close')}</DialogClose>
+                      : <Button type="button" onClick={() => { setWorkspaceDialogMode('edit'); setWorkspaceDialogError(null); }}>{t('Edit workspace')}</Button>}
+                  </DialogFooter>
+                </> : null}
               </DialogContent>
             </Dialog>
             <div className="grid min-h-[calc(100vh-176px)] min-w-max grid-cols-2 gap-3">
@@ -3887,45 +3964,21 @@ function Dashboard() {
                         const sandboxStatus: TranslationKey = sandbox.status === 'running' ? 'Running' : sandbox.status === 'paused' ? 'Paused'
                           : sandbox.status === 'terminated' ? 'Terminated' : sandbox.status === 'unreachable' ? 'Unreachable' : 'Unknown';
                         return (
-                          <article key={sandbox.id} className="min-w-0 rounded-xl border border-border/80 bg-card p-3.5 shadow-[0_1px_2px_oklch(0.18_0.02_255/0.05)]">
-                            <div className="flex min-w-0 items-center gap-2">
+                          <button key={sandbox.id} type="button" onClick={() => { setSelectedWorkspaceId(sandbox.id); setWorkspaceDialogMode('details'); setWorkspaceDialogError(null); }}
+                            className="group block w-full min-w-0 rounded-xl border border-border/80 bg-card p-3.5 text-left shadow-[0_1px_2px_oklch(0.18_0.02_255/0.05)] transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                            <span className="flex min-w-0 items-center gap-2">
                               <span className={`size-2 shrink-0 rounded-full ${column.tone}`} />
-                              <h3 className="min-w-0 truncate text-xs font-semibold" title={sandbox.id === 'local' ? t('Default workspace') : sandbox.name}>
+                              <span className="min-w-0 truncate text-xs font-semibold group-hover:underline" title={sandbox.id === 'local' ? t('Default workspace') : sandbox.name}>
                                 {sandbox.id === 'local' ? t('Default workspace') : sandbox.name}
-                              </h3>
-                            </div>
-                            {sandbox.id !== 'local' ? <p className="mt-1.5 text-[10px] text-muted-foreground">
+                              </span>
+                            </span>
+                            {sandbox.id !== 'local' ? <span className="mt-1.5 block text-[10px] text-muted-foreground">
                               {t(sandbox.kind === 'e2b' ? 'E2B sandbox' : 'Local workspace')}
                               {sandbox.kind === 'e2b' ? ` · ${t(sandboxStatus)}` : null}
-                            </p> : null}
-                            <p className="mt-2 truncate font-mono text-[10px] text-muted-foreground" title={sandbox.cwd}>{sandbox.cwd}</p>
-                            <p className="mt-2 text-[10px] text-muted-foreground">{summary?.total ?? 0} {t('Requirements')}</p>
-                            {sandbox.kind === 'e2b' ? (
-                              <details className="mt-2 border-t border-border/70 pt-2 text-[10px] text-muted-foreground">
-                                <summary className="cursor-pointer font-medium text-foreground">{t('Workspace details')}</summary>
-                                <div className="mt-2 space-y-1 break-all">
-                                  <p>{t('Sandbox status')}: {t(sandboxStatus)}</p>
-                                  {sandbox.providerSandboxId ? <p>{sandbox.providerSandboxId}</p> : null}
-                                  <p>{sandbox.template} · {sandbox.domain} · {sandbox.credentialRef ?? sandbox.credentialEnvVar}</p>
-                                  {sandbox.repositoryUrl ? <p>{sandbox.repositoryUrl}</p> : null}
-                                  {sandbox.checkedAt ? <p>{t('Last checked')}: {new Date(sandbox.checkedAt).toLocaleString(locale)}</p> : null}
-                                </div>
-                              </details>
-                            ) : null}
-                            {sandbox.id !== 'local' ? (
-                              <div className="mt-3 flex flex-wrap gap-1.5">
-                                <Button size="xs" variant="outline" onClick={() => { setEditingWorkspace(sandbox); setEditWorkspaceError(null); }}>{t('Edit workspace')}</Button>
-                                {sandbox.kind === 'e2b' ? <>
-                                  <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id} onClick={() => void changeSandbox(sandbox.id, 'health')}>{t('Check health')}</Button>
-                                  {sandbox.status === 'paused'
-                                    ? <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id} onClick={() => void changeSandbox(sandbox.id, 'resume')}>{t('Resume')}</Button>
-                                    : <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id || sandbox.status === 'terminated'} onClick={() => void changeSandbox(sandbox.id, 'pause')}>{t('Pause')}</Button>}
-                                </> : null}
-                                <Button size="xs" variant="outline" disabled={busySandboxId === sandbox.id || (summary?.total ?? 0) > 0}
-                                  onClick={() => void changeSandbox(sandbox.id, 'delete')}>{t('Delete')}</Button>
-                              </div>
-                            ) : null}
-                          </article>
+                            </span> : null}
+                            <span className="mt-2 block truncate font-mono text-[10px] text-muted-foreground" title={sandbox.cwd}>{sandbox.cwd}</span>
+                            <span className="mt-2 block text-[10px] text-muted-foreground">{summary?.total ?? 0} {t('Requirements')}</span>
+                          </button>
                         );
                       })}
                       {items.length === 0 ? (
