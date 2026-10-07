@@ -3365,7 +3365,6 @@ function Dashboard() {
         ? await client.createLocalExecution({ name: name.trim(), cwd: value('cwd') })
         : await client.createSandbox({ name: name.trim(),
           domain: value('domain'), apiKey: value('apiKey'),
-          sharing: value('sharing') === 'dedicated' ? 'dedicated' : 'shared',
           ...(value('providerSandboxId') ? { providerSandboxId: value('providerSandboxId') } : {}),
           ...(value('repositoryUrl') ? { repositoryUrl: value('repositoryUrl') } : {}),
           ...(value('template') ? { template: value('template') } : {}),
@@ -3396,7 +3395,7 @@ function Dashboard() {
       const updated = await client.updateWorkspace(editingWorkspace.id, {
         name: value('name'), cwd: value('cwd'),
         ...(editingWorkspace.kind === 'e2b' ? {
-          domain: value('domain'), sharing: value('sharing') === 'dedicated' ? 'dedicated' as const : 'shared' as const,
+          domain: value('domain'),
           ...(value('apiKey') ? { apiKey: value('apiKey') } : {}),
         } : {}),
       });
@@ -3554,8 +3553,7 @@ function Dashboard() {
             />
             <ConnectionDialog apiUrl={apiUrl} onConnect={connect} />
             <NewRequirementDialog client={client} disabled={connection !== 'online'} modelCatalog={modelCatalog}
-              sandboxes={sandboxes.filter((sandbox) => sandbox.status !== 'terminated' &&
-                (sandbox.sharing !== 'dedicated' || !requirements.some((requirement) => requirement.sandboxId === sandbox.id)))}
+              sandboxes={sandboxes.filter((sandbox) => sandbox.status !== 'terminated')}
               onCreate={createRequirement} />
           </div>
         </div>
@@ -3791,10 +3789,6 @@ function Dashboard() {
                             <Input name="providerSandboxId" aria-label={t('Existing E2B sandbox ID')} placeholder={t('Existing E2B sandbox ID (optional)')} />
                             <Input name="template" aria-label={t('E2B template')} placeholder={t('E2B template (default: base)')} />
                             <Input name="cwd" aria-label={t('Remote working directory')} placeholder={t('Remote working directory (default: /home/user/repo)')} />
-                            <NativeSelect name="sharing" aria-label={t('Sandbox sharing')} defaultValue="shared">
-                              <NativeSelectOption value="shared">{t('Shared sandbox')}</NativeSelectOption>
-                              <NativeSelectOption value="dedicated">{t('Dedicated sandbox')}</NativeSelectOption>
-                            </NativeSelect>
                             <p className="text-xs text-muted-foreground">{t('Attaching an existing E2B sandbox requires a Git checkout in its working directory.')}</p>
                           </div>
                         </details>
@@ -3838,14 +3832,6 @@ function Dashboard() {
                         <Input id="edit-workspace-key" name="apiKey" type="password" autoComplete="off"
                           placeholder={t('Leave blank to keep current key')} />
                       </Field>
-                      <Field>
-                        <FieldLabel htmlFor="edit-workspace-sharing">{t('Sandbox sharing')}</FieldLabel>
-                        <NativeSelect id="edit-workspace-sharing" name="sharing" className="w-full"
-                          defaultValue={editingWorkspace.sharing ?? 'shared'}>
-                          <NativeSelectOption value="shared">{t('Shared sandbox')}</NativeSelectOption>
-                          <NativeSelectOption value="dedicated">{t('Dedicated sandbox')}</NativeSelectOption>
-                        </NativeSelect>
-                      </Field>
                     </> : null}
                   </FieldGroup>
                   <DialogFooter>
@@ -3863,7 +3849,7 @@ function Dashboard() {
                   {sandbox.kind === 'e2b' ? <div className="mt-1 text-xs text-muted-foreground">{
                     sandbox.status === 'running' ? t('Running') : sandbox.status === 'paused' ? t('Paused')
                       : sandbox.status === 'terminated' ? t('Terminated') : sandbox.status === 'unreachable' ? t('Unreachable') : t('Unknown')
-                  } · {sandbox.sharing === 'dedicated' ? t('Dedicated sandbox') : t('Shared sandbox')}</div> : null}
+                  }</div> : null}
                   {sandbox.providerSandboxId ? <div className="mt-2 break-all font-mono text-[10px] text-muted-foreground">{sandbox.providerSandboxId}</div> : null}
                   <div className="mt-2 break-all font-mono text-[10px] text-muted-foreground">{sandbox.cwd}</div>
                   {sandbox.kind === 'e2b' ? <div className="mt-1 break-all text-[10px] text-muted-foreground">{sandbox.template} · {sandbox.domain} · {sandbox.credentialRef ?? sandbox.credentialEnvVar}</div> : null}
@@ -3965,9 +3951,7 @@ function Dashboard() {
         pullRequests={selectedPullRequests}
         reviewRequests={reviewRequests}
         modelCatalog={modelCatalog}
-        sandboxes={sandboxes.filter((sandbox) => sandbox.status !== 'terminated' &&
-          (sandbox.sharing !== 'dedicated' || sandbox.id === selectedRequirement?.sandboxId ||
-            !requirements.some((item) => item.sandboxId === sandbox.id)))}
+        sandboxes={sandboxes.filter((sandbox) => sandbox.status !== 'terminated')}
         messageLoading={selectedMessageLoading}
         messagesReady={loadedConversationRequirementId === selectedId && !selectedMessageLoading}
         busy={selectedRequirement

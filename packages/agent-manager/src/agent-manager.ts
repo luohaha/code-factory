@@ -75,7 +75,6 @@ import type {
   AgentTimer,
   AgentTimerSchedule,
   Sandbox,
-  SandboxSharing,
   TrackPullRequestInput,
   UpdateRequirementAgentConfigurationInput,
 } from './types.js';
@@ -611,7 +610,7 @@ export class AgentManager extends EventEmitter {
     if (input.provider === 'native-agent' && model?.startsWith('profile:')
       && !this.nativeAuth().get(profileIdFromModel(model)!)) throw new StoreNotFoundError('Native API profile not found');
     const sandboxId = input.sandboxId === 'local' ? null : input.sandboxId;
-    if (sandboxId) this.requireAvailableSandbox(sandboxId, undefined, input.provider);
+    if (sandboxId) this.requireAvailableSandbox(sandboxId, input.provider);
     if (input.createdBy === 'rd_agent') {
       if (!input.sourceSessionId) throw new TypeError('sourceSessionId is required for an Agent-created requirement');
       const source = this.#store.listSessions().find((session) => session.id === input.sourceSessionId);
@@ -690,7 +689,7 @@ export class AgentManager extends EventEmitter {
     const sandboxId = providerChanged && provider !== 'native-agent' && requestedSandboxId
       && this.#store.getSandbox(requestedSandboxId)?.kind === 'e2b' && !hasSandbox
       ? null : requestedSandboxId;
-    if (sandboxId) this.requireAvailableSandbox(sandboxId, id, provider);
+    if (sandboxId) this.requireAvailableSandbox(sandboxId, provider);
     if (provider === current.provider && model === current.model && reasoningEffort === current.reasoningEffort && sandboxId === current.sandboxId) return current;
 
     const requirement = this.#store.updateRequirementAgentConfiguration({
@@ -720,7 +719,7 @@ export class AgentManager extends EventEmitter {
   listSandboxes(): Sandbox[] {
     return [{ id: 'local', name: 'Default workspace', kind: 'local', cwd: this.workspaceRoot,
       providerSandboxId: null, credentialEnvVar: null, domain: null, credentialRef: null,
-      repositoryUrl: null, template: null, sharing: null,
+      repositoryUrl: null, template: null,
       status: 'running', checkedAt: null,
       createdAt: '1970-01-01T00:00:00.000Z' },
       ...this.#store.listSandboxes().filter((sandbox) => sandbox.kind !== 'local-sandbox')];
@@ -734,7 +733,7 @@ export class AgentManager extends EventEmitter {
     const now = new Date().toISOString();
     return this.#store.createSandbox({ id: `sbx_${randomUUID()}`, name, kind: 'local', cwd,
       providerSandboxId: null, credentialEnvVar: null, domain: null, credentialRef: null,
-      repositoryUrl: null, template: null, sharing: null, status: 'running', checkedAt: null, createdAt: now });
+      repositoryUrl: null, template: null, status: 'running', checkedAt: null, createdAt: now });
   }
 
   private resolveLocalWorkspace(input: string): string {
@@ -808,7 +807,7 @@ export class AgentManager extends EventEmitter {
     } catch { throw new TypeError('Authenticate gh in the E2B sandbox or set GH_TOKEN on Agent Manager'); }
   }
 
-  private requireAvailableSandbox(id: string, requirementId?: string, provider?: AgentProvider): Sandbox {
+  private requireAvailableSandbox(id: string, provider?: AgentProvider): Sandbox {
     const sandbox = this.#store.getSandbox(id);
     if (!sandbox) throw new StoreNotFoundError(`Sandbox ${id} not found`);
     if (sandbox.kind === 'local-sandbox') throw new StoreNotFoundError(`Sandbox ${id} not found`);
@@ -816,19 +815,13 @@ export class AgentManager extends EventEmitter {
       throw new TypeError('E2B execution requires native-agent');
     }
     if (sandbox.status === 'terminated') throw new StoreConflictError(`Sandbox ${id} is terminated`);
-    if (sandbox.sharing === 'dedicated' && this.#store.listRequirements().some((requirement) =>
-      requirement.sandboxId === id && requirement.id !== requirementId)) {
-      throw new StoreConflictError(`Sandbox ${id} is dedicated to another Requirement`);
-    }
     return sandbox;
   }
 
-  async createE2BSandbox(input: { name: string; sharing?: SandboxSharing; template?: string; cwd?: string;
+  async createE2BSandbox(input: { name: string; template?: string; cwd?: string;
     providerSandboxId?: string; domain: string; apiKey: string; repositoryUrl?: string }): Promise<Sandbox> {
     const name = input.name.trim();
     if (!name || name.length > 80) throw new TypeError('sandbox name must contain 1 to 80 characters');
-    const sharing = input.sharing ?? 'shared';
-    if (sharing !== 'shared' && sharing !== 'dedicated') throw new TypeError('sharing must be shared or dedicated');
     const domain = input.domain.trim().toLowerCase();
     if (!/^[a-zA-Z0-9.-]+(?::[0-9]+)?$/.test(domain)) throw new TypeError('E2B_DOMAIN must be a domain name');
     const apiKey = input.apiKey.trim();
@@ -870,7 +863,7 @@ export class AgentManager extends EventEmitter {
       return this.#store.createSandbox({ id: `sbx_${randomUUID()}`, name, kind: 'e2b', cwd,
         providerSandboxId: handle.sandboxId, credentialEnvVar: null, domain, credentialRef,
         repositoryUrl: attached ? null : repositoryUrl,
-        template: attached ? info.templateId : template, sharing,
+        template: attached ? info.templateId : template,
         status: info.state, checkedAt: now, createdAt: now });
     } catch (error) {
       this.#e2bCredentials?.delete(credentialRef);
@@ -881,7 +874,7 @@ export class AgentManager extends EventEmitter {
   }
 
   async updateSandbox(id: string, input: { name?: string; cwd?: string; domain?: string;
-    apiKey?: string; sharing?: SandboxSharing }): Promise<Sandbox> {
+    apiKey?: string }): Promise<Sandbox> {
     if (id === 'local') throw new TypeError('Default workspace cannot be edited');
     if (Object.keys(input).length === 0) throw new TypeError('at least one workspace field is required');
     const current = this.#store.getSandbox(id);
@@ -889,7 +882,7 @@ export class AgentManager extends EventEmitter {
     const name = input.name === undefined ? current.name : input.name.trim();
     if (!name || name.length > 80) throw new TypeError('workspace name must contain 1 to 80 characters');
     if (current.kind === 'local') {
-      if (input.domain !== undefined || input.apiKey !== undefined || input.sharing !== undefined) {
+      if (input.domain !== undefined || input.apiKey !== undefined) {
         throw new TypeError('E2B fields cannot be used for a local workspace');
       }
       const cwd = input.cwd === undefined ? current.cwd : this.resolveLocalWorkspace(input.cwd);
@@ -904,11 +897,6 @@ export class AgentManager extends EventEmitter {
     if (input.apiKey !== undefined && !apiKey) throw new TypeError('E2B_API_KEY must be non-empty');
     const cwd = input.cwd === undefined ? current.cwd : input.cwd.trim();
     if (!posix.isAbsolute(cwd) || cwd.includes('\0')) throw new TypeError('cwd must be an absolute remote path');
-    const sharing = input.sharing ?? current.sharing ?? 'shared';
-    if (sharing !== 'shared' && sharing !== 'dedicated') throw new TypeError('sharing must be shared or dedicated');
-    if (sharing === 'dedicated' && this.#store.listRequirements().filter((item) => item.sandboxId === id).length > 1) {
-      throw new StoreConflictError('A dedicated E2B sandbox cannot be shared by multiple Requirements');
-    }
     const needsConnection = domain !== current.domain || apiKey !== undefined || cwd !== current.cwd;
     if (needsConnection) this.ensureSandboxIdle(id);
     let status = current.status;
@@ -923,7 +911,7 @@ export class AgentManager extends EventEmitter {
     const credentialRef = apiKey === undefined ? current.credentialRef : `e2b_${randomUUID()}`;
     if (apiKey && credentialRef) this.e2bCredentialStore().save(credentialRef, apiKey);
     try {
-      const updated = this.#store.updateSandbox({ ...current, name, cwd, domain, sharing,
+      const updated = this.#store.updateSandbox({ ...current, name, cwd, domain,
         credentialRef, credentialEnvVar: apiKey ? null : current.credentialEnvVar, status, checkedAt });
       if (apiKey && current.credentialRef) this.e2bCredentialStore().delete(current.credentialRef);
       return updated;

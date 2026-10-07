@@ -79,7 +79,6 @@ export interface SandboxDto {
   credentialRef: string | null;
   repositoryUrl: string | null;
   template: string | null;
-  sharing: 'shared' | 'dedicated' | null;
   status: 'running' | 'paused' | 'terminated' | 'unreachable' | 'unknown';
   checkedAt: string | null;
   createdAt: string;
@@ -428,13 +427,13 @@ export class AgentManagerClient {
     return this.request('/api/sandboxes', { method: 'POST', body: JSON.stringify({ kind: 'local', ...input }) });
   }
 
-  createSandbox(input: { name: string; sharing?: 'shared' | 'dedicated'; domain: string; apiKey: string;
+  createSandbox(input: { name: string; domain: string; apiKey: string;
     providerSandboxId?: string; repositoryUrl?: string; template?: string; cwd?: string }): Promise<SandboxDto> {
     return this.request('/api/sandboxes', { method: 'POST', body: JSON.stringify({ kind: 'e2b', ...input }) });
   }
 
   updateWorkspace(id: string, input: { name?: string; cwd?: string; domain?: string;
-    apiKey?: string; sharing?: 'shared' | 'dedicated' }): Promise<SandboxDto> {
+    apiKey?: string }): Promise<SandboxDto> {
     return this.request(`/api/sandboxes/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) });
   }
 
