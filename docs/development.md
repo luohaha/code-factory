@@ -89,3 +89,9 @@ npm run build
 ~~~
 
 Before a release, follow the additional audit, version, changelog, and package-content checks in the [release guide](releasing.md).
+
+## Dashboard development dependency audit
+
+The dashboard's October 2026 dependency refresh reduced `npm audit` from 21 findings (3 critical, 15 high, 3 moderate) to 10 high findings. `npm audit --omit=dev` reports zero production findings. The refresh updates Vinext, the Cloudflare Vite plugin, Wrangler, workers types, oxfmt, and shadcn; it also refreshes compatible transitive packages. Vite itself has no finding in the audit. The remaining 10 entries all trace to the same [unpatched `braces` stack exhaustion advisory](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm); npm counts each affected package in the dependency chain. The paths are `vinext` → `vite-plugin-commonjs` → `vite-plugin-dynamic-import` → `fast-glob` → `micromatch` → `braces`, and `shadcn` → `fast-glob` / `ts-morph` / `@shadcn/registry` → `micromatch` → `braces`. The dashboard imports `shadcn/tailwind.css`, so removing the CLI package is not a drop-in fix. Recheck these paths when `braces`, `fast-glob`, Vinext, or shadcn publish a compatible fix; do not use npm's suggested downgrades to older Vinext or shadcn releases.
+
+The dashboard overrides `sharp` to `0.35.5` and `fflate` to `0.7.5` because current Miniflare and Satori releases still select vulnerable patch versions. Both overrides stay within their existing release lines. Remove each override once its parent selects a patched version, then rerun `npm ci`, the dashboard checks above, and `npm audit`.
