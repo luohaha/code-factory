@@ -674,6 +674,10 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         return;
       }
 
+      if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
+        sendJson(response, 404, { error: 'API route not found' });
+        return;
+      }
       if (await dashboard.handle(request, response)) return;
       sendJson(response, 404, {
         error: 'Dashboard bundle not found. Run npm run build before starting Agent Manager.',
