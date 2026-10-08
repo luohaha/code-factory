@@ -6,6 +6,13 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-08
+
+### Changed
+
+- Grouped compact workspace cards into Running and Idle columns based on whether a workspace has a `DOING` Requirement.
+- Moved workspace actions and details into a dedicated dialog, making the workspace board easier to scan.
+
 ## [0.2.2] - 2026-10-07
 
 ### Added

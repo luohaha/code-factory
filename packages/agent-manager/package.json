@@ -1,6 +1,6 @@
 {
   "name": "@luoyixin/code-factory",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Workspace-scoped manager for long-running Codex, Claude Code, and native development sessions.",
   "license": "Apache-2.0",
   "type": "module",
