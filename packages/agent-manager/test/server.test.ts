@@ -65,6 +65,34 @@ class InterruptibleWaitingRunner implements AgentProcessRunner {
   }
 }
 
+test('unsupported API paths and methods return JSON 404 without reaching the dashboard', async () => {
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'),
+    logger: createLogger({ level: 'silent' }),
+  });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  try {
+    for (const [path, method] of [
+      ['/api', 'GET'],
+      ['/api/unknown', 'GET'],
+      ['/api/unknown', 'POST'],
+      ['/api/health', 'POST'],
+    ]) {
+      const response = await fetch(`${baseUrl}${path}`, { method });
+      assert.equal(response.status, 404, `${method} ${path}`);
+      assert.match(response.headers.get('content-type') ?? '', /^application\/json/);
+      assert.deepEqual(await response.json(), { error: 'API route not found' });
+    }
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
+
 test('HTTP API exposes the cached provider model catalog', async () => {
   let stopped = false;
   const modelCatalog: AgentModelCatalogService = {

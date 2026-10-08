@@ -29,6 +29,8 @@ curl http://127.0.0.1:4310/api/health
 
 Requests and responses use JSON except for attachment uploads and SSE. JSON request bodies are limited to 1 MB. Attachment uploads use a raw binary body and are limited to 20 MB per file. The API currently has no version prefix.
 
+Unrecognized `/api` paths and unsupported non-`OPTIONS` methods return a JSON 404 response. They are never routed to the bundled Web dashboard, even when its generated files are present. Preflight `OPTIONS` requests return 204.
+
 The service listens only on the loopback interface by default and currently has no authentication. Assess the risk before exposing it. Changes to `host`, `port`, and `allowedOrigin` are persisted through the configuration API and require a restart.
 
 ## 2. Endpoint summary
