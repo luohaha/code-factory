@@ -77,6 +77,7 @@ import type {
   Sandbox,
   TrackPullRequestInput,
   UpdateRequirementAgentConfigurationInput,
+  UpdateRequirementInput,
 } from './types.js';
 
 export interface AgentManagerOptions {
@@ -663,18 +664,28 @@ export class AgentManager extends EventEmitter {
     id: string,
     input: UpdateRequirementAgentConfigurationInput,
   ): RequirementWithSession {
+    return this.updateRequirement(id, input);
+  }
+
+  updateRequirement(id: string, input: UpdateRequirementInput): RequirementWithSession {
+    const hasTitle = Object.hasOwn(input, 'title');
+    const hasDescription = Object.hasOwn(input, 'description');
     const hasProvider = Object.hasOwn(input, 'provider');
     const hasModel = Object.hasOwn(input, 'model');
     const hasReasoningEffort = Object.hasOwn(input, 'reasoningEffort');
     const hasSandbox = Object.hasOwn(input, 'sandboxId');
-    if (!hasProvider && !hasModel && !hasReasoningEffort && !hasSandbox) {
-      throw new TypeError('provider, model, reasoningEffort, or sandboxId is required');
+    if (!hasTitle && !hasDescription && !hasProvider && !hasModel && !hasReasoningEffort && !hasSandbox) {
+      throw new TypeError('title, description, provider, model, reasoningEffort, or sandboxId is required');
     }
     const current = this.#store.getRequirement(id);
     if (!current) throw new StoreNotFoundError(`Requirement ${id} not found`);
     if (current.status !== 'todo') {
-      throw new StoreConflictError(`Requirement ${id} configuration can only be changed while it is todo`);
+      throw new StoreConflictError(`Requirement ${id} can only be changed while it is todo`);
     }
+    const title = hasTitle ? input.title?.trim() : current.title;
+    const description = hasDescription ? input.description?.trim() : current.description;
+    if (!title) throw new TypeError('title is required');
+    if (!description) throw new TypeError('description is required');
     const provider = input.provider ?? current.provider;
     const providerChanged = provider !== current.provider;
     const model = hasModel ? input.model?.trim() || null : providerChanged ? null : current.model;
@@ -690,10 +701,13 @@ export class AgentManager extends EventEmitter {
       && this.#store.getSandbox(requestedSandboxId)?.kind === 'e2b' && !hasSandbox
       ? null : requestedSandboxId;
     if (sandboxId) this.requireAvailableSandbox(sandboxId, provider);
-    if (provider === current.provider && model === current.model && reasoningEffort === current.reasoningEffort && sandboxId === current.sandboxId) return current;
+    if (title === current.title && description === current.description && provider === current.provider
+      && model === current.model && reasoningEffort === current.reasoningEffort && sandboxId === current.sandboxId) return current;
 
-    const requirement = this.#store.updateRequirementAgentConfiguration({
+    const requirement = this.#store.updateRequirement({
       requirementId: id,
+      title,
+      description,
       provider,
       model,
       reasoningEffort,
@@ -706,7 +720,7 @@ export class AgentManager extends EventEmitter {
       sessionId: requirement.session.id,
       payload: { requirement, provider, model, reasoningEffort },
     });
-    this.logger.info('Requirement Agent configuration updated', {
+    this.logger.info('Requirement updated', {
       requirementId: id,
       sessionId: requirement.session.id,
       provider,

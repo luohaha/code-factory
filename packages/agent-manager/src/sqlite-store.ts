@@ -24,7 +24,7 @@ import {
   type CreateAgentTimerRecord,
   type CreateMessageAttachmentRecord,
   type CreateRequirementRecord,
-  type UpdateRequirementAgentConfigurationRecord,
+  type UpdateRequirementRecord,
   type PurgeExpiredRequirementsRecord,
   type PurgeExpiredRequirementsResult,
   type PullRequestObservation,
@@ -408,20 +408,20 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     return this.requireBundle(input.requirementId);
   }
 
-  updateRequirementAgentConfiguration(
-    input: UpdateRequirementAgentConfigurationRecord,
+  updateRequirement(
+    input: UpdateRequirementRecord,
   ): RequirementWithSession {
     this.#db.exec('BEGIN IMMEDIATE');
     try {
       const current = this.getRequirement(input.requirementId);
       if (!current) throw new StoreNotFoundError(`Requirement ${input.requirementId} not found`);
       if (current.status !== 'todo') {
-        throw new StoreConflictError(`Requirement ${input.requirementId} configuration can only be changed while it is todo`);
+        throw new StoreConflictError(`Requirement ${input.requirementId} can only be changed while it is todo`);
       }
       this.#db.prepare(`UPDATE requirements
-        SET provider = ?, model = ?, reasoning_effort = ?, sandbox_id = ?, updated_at = ?
+        SET title = ?, description = ?, provider = ?, model = ?, reasoning_effort = ?, sandbox_id = ?, updated_at = ?
         WHERE id = ? AND status = 'todo'`)
-        .run(input.provider, input.model, input.reasoningEffort, input.sandboxId, input.now, input.requirementId);
+        .run(input.title, input.description, input.provider, input.model, input.reasoningEffort, input.sandboxId, input.now, input.requirementId);
       this.#db.prepare(`UPDATE agent_sessions SET provider = ?, updated_at = ? WHERE id = ?`)
         .run(input.provider, input.now, current.session.id);
       const updated = this.requireBundle(input.requirementId);

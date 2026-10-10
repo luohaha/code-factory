@@ -246,6 +246,11 @@ export interface UpdateRequirementAgentConfigurationInput {
   sandboxId?: string | null;
 }
 
+export interface UpdateRequirementInput extends UpdateRequirementAgentConfigurationInput {
+  title?: string;
+  description?: string;
+}
+
 export interface TrackPullRequestInput {
   requirementId: string;
   /** Case-insensitive GitHub repository key; normalized to lowercase on writes. */
