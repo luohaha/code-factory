@@ -556,7 +556,7 @@ test('Agent Manager updates TODO Agent configuration and uses it for the first R
     assert.ok(runner.requests[0]?.invocation.args.includes('model_reasoning_effort="max"'));
     assert.throws(
       () => manager.updateRequirementAgentConfiguration(created.id, { model: null }),
-      /only be changed while it is todo/,
+      /only be changed while it is todo or waiting for confirmation/,
     );
     runner.resolvers[0]?.({
       status: 'succeeded',
@@ -609,7 +609,7 @@ test('Agent Manager switches a TODO Requirement and Session to another provider 
     assert.equal(manager.listRuns(created.id)[0]?.provider, 'claude-code');
     assert.throws(
       () => manager.updateRequirementAgentConfiguration(created.id, { provider: 'codex' }),
-      /only be changed while it is todo/,
+      /only be changed while it is todo or waiting for confirmation/,
     );
     runner.resolvers[0]?.({
       status: 'succeeded',
@@ -619,6 +619,106 @@ test('Agent Manager switches a TODO Requirement and Session to another provider 
       error: null,
     });
     await runPromise;
+  } finally {
+    await manager.close();
+  }
+});
+
+test('Agent Manager resumes the same provider conversation after changing model and reasoning effort while waiting', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
+  try {
+    const created = manager.createRequirement({ title: 'Tune later Run', description: 'Keep context', provider: 'codex' });
+    const first = manager.runRequirement(created.id);
+    runner.resolvers[0]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'codex-thread', finalMessage: 'first', error: null });
+    await first;
+
+    const updated = manager.updateRequirementAgentConfiguration(created.id, { model: 'gpt-new', reasoningEffort: 'high' });
+    assert.equal(updated.status, 'waiting_confirmation');
+    assert.equal(updated.session.id, created.session.id);
+    assert.equal(updated.session.nativeSessionId, 'codex-thread');
+
+    const second = manager.runRequirement(created.id, 'Continue the task');
+    const invocation = runner.requests[1]?.invocation;
+    assert.equal(invocation?.command, 'codex');
+    assert.ok(invocation?.args.includes('codex-thread'));
+    assert.ok(invocation?.args.includes('gpt-new'));
+    assert.ok(invocation?.args.includes('model_reasoning_effort="high"'));
+    assert.equal(manager.listRuns(created.id)[0]?.model, 'gpt-new');
+    runner.resolvers[1]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'codex-thread', finalMessage: 'second', error: null });
+    await second;
+  } finally {
+    await manager.close();
+  }
+});
+
+test('Agent Manager switches providers after a Run and hands the visible conversation to a new native session', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
+  try {
+    const created = manager.createRequirement({ title: 'Switch later', description: 'Continue prior work', provider: 'codex' });
+    const first = manager.runRequirement(created.id, 'Original human instruction');
+    runner.requests[0]?.onEvent?.({ kind: 'message', message: 'Previous RD progress', raw: {} });
+    runner.resolvers[0]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'codex-thread', finalMessage: 'Previous RD progress', error: null });
+    await first;
+    const consumedBeforeSwitch = store.getRequirement(created.id)?.session.lastConsumedMessageSequence;
+
+    const switched = manager.updateRequirementAgentConfiguration(created.id, { provider: 'claude-code', model: 'claude-new' });
+    assert.equal(switched.session.id, created.session.id);
+    assert.equal(switched.session.provider, 'claude-code');
+    assert.equal(switched.session.nativeSessionId, null);
+    assert.equal(switched.session.lastConsumedMessageSequence, consumedBeforeSwitch);
+
+    const second = manager.runRequirement(created.id, 'New human instruction');
+    const invocation = runner.requests[1]?.invocation;
+    assert.equal(invocation?.command, 'claude');
+    assert.ok(invocation?.args.includes('claude-new'));
+    assert.ok(!invocation?.args.includes('codex-thread'));
+    assert.match(invocation?.input ?? '', /Previous requirement conversation history/);
+    assert.match(invocation?.input ?? '', /\[Human #1\]\nOriginal human instruction/);
+    assert.match(invocation?.input ?? '', /\[Previous RD Agent #2\]\nPrevious RD progress/);
+    assert.equal((invocation?.input ?? '').split('New human instruction').length - 1, 1);
+    runner.resolvers[1]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'claude-session', finalMessage: 'done', error: null });
+    await second;
+    assert.equal(store.getRequirement(created.id)?.session.nativeSessionId, 'claude-session');
+    assert.deepEqual(manager.listRuns(created.id).map((run) => run.provider), ['claude-code', 'codex']);
+
+    const third = manager.runRequirement(created.id, 'Continue with Claude');
+    assert.ok(runner.requests[2]?.invocation.args.includes('claude-session'));
+    assert.ok(!(runner.requests[2]?.invocation.input ?? '').includes('Previous requirement conversation history'));
+    runner.resolvers[2]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'claude-session', finalMessage: 'done', error: null });
+    await third;
+  } finally {
+    await manager.close();
+  }
+});
+
+test('Agent configuration remains locked until a stopped RD Run reaches waiting confirmation', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new InterruptibleRunner();
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
+  try {
+    const created = manager.createRequirement({ title: 'Stop before switch', description: 'Wait for stop', provider: 'codex' });
+    const first = manager.runRequirement(created.id, 'Original instruction');
+    assert.throws(() => manager.updateRequirementAgentConfiguration(created.id, { provider: 'claude-code' }),
+      /only be changed while it is todo or waiting for confirmation/);
+    manager.postHumanMessage(created.id, 'Queued direction');
+    manager.interruptRdRun(created.id);
+    await first;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(runner.requests.length, 1);
+    assert.equal(store.getRequirement(created.id)?.status, 'waiting_confirmation');
+    assert.equal(store.getRequirement(created.id)?.session.pendingMessageCount, 2);
+    assert.equal(manager.updateRequirementAgentConfiguration(created.id, { provider: 'claude-code' }).provider, 'claude-code');
+    assert.throws(() => manager.updateRequirementAgentConfiguration(created.id, { sandboxId: null }),
+      /workspace can only be changed while it is todo/);
+    const second = manager.runRequirement(created.id);
+    assert.equal(runner.requests[1]?.invocation.command, 'claude');
+    assert.equal((runner.requests[1]?.invocation.input ?? '').split('Queued direction').length - 1, 1);
+    runner.resolvers[1]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'claude-session', finalMessage: 'done', error: null });
+    await second;
   } finally {
     await manager.close();
   }
@@ -1214,7 +1314,7 @@ test('a pluggable Agent Trigger delivers, deduplicates, and wakes the target RD 
   }
 });
 
-test('a queued correction does not interrupt until a human explicitly interrupts the running RD Agent', async () => {
+test('a queued correction does not interrupt until a human explicitly steers the running RD Agent', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new InterruptibleRunner();
   const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
@@ -1228,7 +1328,7 @@ test('a queued correction does not interrupt until a human explicitly interrupts
     assert.equal(reply.queued, true);
     assert.equal(runner.requests[0]?.signal?.aborted, false);
 
-    manager.interruptRdRun(requirement.id);
+    manager.interruptRdRun(requirement.id, 'steer');
     assert.equal(runner.requests[0]?.signal?.aborted, true);
 
     const interrupted = await firstExecution;

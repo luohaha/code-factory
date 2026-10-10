@@ -161,6 +161,8 @@ export const zhCN = {
   'Default reasoning': '使用默认思考强度',
   'Edit Agent configuration': '修改 Agent 配置',
   'Choose the Agent, model, and reasoning effort to use when this TODO requirement starts.': '选择此 TODO 需求启动时使用的 Agent、模型和思考强度。',
+  'Changes take effect on the next Run. Switching Agent starts a new provider conversation with the previous requirement messages; the previous provider context cannot be resumed.': '更改将在下一次运行时生效。切换 Agent 会带着此前的需求对话开启新会话，无法直接恢复原 Provider 的上下文。',
+  'Headless Agents use the Default workspace when switching from an E2B workspace.': '从 E2B 工作区切换为 Headless Agent 时会使用默认工作区。',
   'Failed to update Agent configuration': '修改 Agent 配置失败',
   'Save changes': '保存修改',
   'Reviewer': '审查 Agent',

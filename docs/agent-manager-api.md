@@ -572,7 +572,7 @@ Success: 201 Created with the new Requirement. Its initial status is todo and it
 
 ### PATCH /api/requirements/:id
 
-Changes the Agent configuration used when a human starts a Requirement from the dashboard. The Requirement must still be in `todo`. At least one field is required. Changing the provider also updates its bound RD Session; omitted model and reasoning effort fields reset to their CLI defaults for the new provider.
+Changes the Agent configuration used by the next RD Run. The Requirement must be in `todo` or `waiting_confirmation` with no active RD Run. At least one field is required. While waiting for confirmation, the workspace cannot be changed directly. Changing the provider also updates its bound RD Session, clears the old provider's native session ID, and resets omitted model and reasoning effort fields to their defaults for the new provider. The next Run starts a new native provider conversation with the Requirement title, description, and previous conversation messages; later Runs resume that new conversation. Changing only model or reasoning effort keeps the current provider's native session ID and resumes it on the next Run.
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -587,7 +587,7 @@ curl -X PATCH http://127.0.0.1:4310/api/requirements/req_... \
   -d '{"provider":"claude-code","model":"claude-sonnet-4-6","reasoningEffort":"high"}'
 ~~~
 
-Success: `200 OK` with the updated Requirement. Returns `404 Not Found` for an unknown Requirement, `409 Conflict` after execution has started, and `400 Bad Request` for missing or invalid fields. The RD Agent CLI intentionally does not expose this mutation.
+Success: `200 OK` with the updated Requirement. Returns `404 Not Found` for an unknown Requirement, `409 Conflict` when the Requirement is running or otherwise ineligible, and `400 Bad Request` for missing or invalid fields. The RD Agent CLI intentionally does not expose this mutation.
 
 ### DELETE /api/requirements/:id
 
@@ -684,7 +684,7 @@ message may be empty when attachmentIds is non-empty. requirement is the latest 
 
 ### POST /api/requirements/:id/interrupt
 
-Interrupts the current Requirement's RD Run without appending a message. The optional request body is `{"mode":"stop"|"steer"}`; only an omitted mode defaults to `stop`, while an empty or invalid mode returns 400. `steer` requires an RD-deliverable message newer than the active Run's captured input. For Codex and Claude Code it interrupts the CLI and starts a replacement Run with the new input. For Native Agent it submits `whenBusy: "steer"` to pi-durable so the new direction joins the current Run after its tool round. `stop` interrupts the active Run even without newer input. Headless CLI interruption terminates the complete tool-process tree; Native Agent calls pi-durable conversation abort.
+Interrupts the current Requirement's RD Run without appending a message. The optional request body is `{"mode":"stop"|"steer"}`; only an omitted mode defaults to `stop`, while an empty or invalid mode returns 400. `steer` requires an RD-deliverable message newer than the active Run's captured input. For Codex and Claude Code it interrupts the CLI and starts a replacement Run with the new input. For Native Agent it submits `whenBusy: "steer"` to pi-durable so the new direction joins the current Run after its tool round. `stop` interrupts and pauses the active Run even when newer input is queued; the queued input is preserved for an explicit later Run. Headless CLI interruption terminates the complete tool-process tree; Native Agent calls pi-durable conversation abort.
 
 ~~~json
 {

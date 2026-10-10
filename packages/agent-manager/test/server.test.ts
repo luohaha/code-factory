@@ -403,7 +403,7 @@ test('HTTP API rejects unsupported reasoning effort values', async () => {
   }
 });
 
-test('HTTP API updates and clears Agent configuration only for TODO requirements', async () => {
+test('HTTP API edits Agent configuration before execution and while waiting, but rejects active Runs', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const manager = new AgentManager({
     workspaceRoot: process.cwd(),
@@ -501,13 +501,26 @@ test('HTTP API updates and clears Agent configuration only for TODO requirements
     });
     assert.equal(emptyResponse.status, 400);
 
-    store.transitionRequirement(requirement.id, ['todo'], 'doing', new Date().toISOString());
+    store.beginRun({ runId: 'run-edit-api', requirementId: requirement.id, role: 'rd', provider: 'codex',
+      taskSummary: 'Start RD session', now: new Date().toISOString() });
     const conflictResponse = await fetch(endpoint, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ provider: 'codex' }),
+      body: JSON.stringify({ provider: 'claude-code' }),
     });
     assert.equal(conflictResponse.status, 409);
+
+    store.finishRdRun('run-edit-api', { status: 'succeeded', exitCode: 0,
+      nativeSessionId: 'codex-thread', finalMessage: 'done', error: null }, new Date().toISOString());
+    const waitingResponse = await fetch(endpoint, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'claude-code', model: 'claude-new' }),
+    });
+    assert.equal(waitingResponse.status, 200);
+    const waiting = await waitingResponse.json() as { status: string; session: { nativeSessionId: string | null } };
+    assert.equal(waiting.status, 'waiting_confirmation');
+    assert.equal(waiting.session.nativeSessionId, null);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();

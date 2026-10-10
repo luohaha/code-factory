@@ -560,6 +560,9 @@ function EditRequirementAgentConfigurationDialog({
   const [model, setModel] = useState(requirement.model ?? '');
   const [reasoningEffort, setReasoningEffort] = useState(requirement.reasoningEffort ?? '');
   const [sandboxId, setSandboxId] = useState(requirement.sandboxId ?? '');
+  const movesFromE2B = requirement.status === 'waiting_confirmation'
+    && requirement.provider === 'native-agent' && provider !== 'native-agent'
+    && sandboxes.some((sandbox) => sandbox.id === requirement.sandboxId && sandbox.kind === 'e2b');
 
   async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
     event.preventDefault();
@@ -572,7 +575,7 @@ function EditRequirementAgentConfigurationDialog({
         reasoningEffort: reasoningEffort
           ? reasoningEffort as AgentReasoningEffort
           : null,
-        sandboxId: sandboxId || null,
+        ...(requirement.status === 'todo' ? { sandboxId: sandboxId || null } : {}),
       });
       setOpen(false);
     } catch (caught) {
@@ -604,7 +607,10 @@ function EditRequirementAgentConfigurationDialog({
           <DialogHeader>
             <DialogTitle>{t('Edit Agent configuration')}</DialogTitle>
             <DialogDescription>
-              {t('Choose the Agent, model, and reasoning effort to use when this TODO requirement starts.')}
+              {requirement.status === 'todo'
+                ? t('Choose the Agent, model, and reasoning effort to use when this TODO requirement starts.')
+                : t('Changes take effect on the next Run. Switching Agent starts a new provider conversation with the previous requirement messages; the previous provider context cannot be resumed.')}
+              {movesFromE2B ? ` ${t('Headless Agents use the Default workspace when switching from an E2B workspace.')}` : null}
             </DialogDescription>
           </DialogHeader>
           {submitError ? (
@@ -667,16 +673,18 @@ function EditRequirementAgentConfigurationDialog({
                 <NativeSelectOption value="max">Max</NativeSelectOption>
               </NativeSelect>
             </Field>
-            <Field>
-              <FieldLabel htmlFor={`${fieldId}-sandbox`}>{t('Workspace')}</FieldLabel>
-              <NativeSelect id={`${fieldId}-sandbox`} name="sandboxId" className="w-full"
-                value={sandboxId} disabled={submitting} onChange={(event) => setSandboxId(event.target.value)}>
-                {sandboxes.filter((sandbox) => sandbox.id === 'local' || sandbox.kind === 'local' || provider === 'native-agent')
-                  .map((sandbox) => <NativeSelectOption key={sandbox.id} value={sandbox.id === 'local' ? '' : sandbox.id}>
-                    {sandbox.id === 'local' ? t('Default workspace') : sandbox.name} · {sandbox.cwd}
-                  </NativeSelectOption>)}
-              </NativeSelect>
-            </Field>
+            {requirement.status === 'todo' ? (
+              <Field>
+                <FieldLabel htmlFor={`${fieldId}-sandbox`}>{t('Workspace')}</FieldLabel>
+                <NativeSelect id={`${fieldId}-sandbox`} name="sandboxId" className="w-full"
+                  value={sandboxId} disabled={submitting} onChange={(event) => setSandboxId(event.target.value)}>
+                  {sandboxes.filter((sandbox) => sandbox.id === 'local' || sandbox.kind === 'local' || provider === 'native-agent')
+                    .map((sandbox) => <NativeSelectOption key={sandbox.id} value={sandbox.id === 'local' ? '' : sandbox.id}>
+                      {sandbox.id === 'local' ? t('Default workspace') : sandbox.name} · {sandbox.cwd}
+                    </NativeSelectOption>)}
+                </NativeSelect>
+              </Field>
+            ) : null}
           </FieldGroup>
           <DialogFooter>
             <DialogClose render={<Button type="button" variant="outline" />}>{t('Cancel')}</DialogClose>
@@ -2283,7 +2291,8 @@ function RequirementDetail({
             <span aria-hidden="true">·</span>
             <span className="font-mono">ses-{shortId(requirement.session.id)}</span>
           </SheetDescription>
-          {requirement.status === 'todo' ? (
+          {(requirement.status === 'todo' || requirement.status === 'waiting_confirmation')
+            && requirement.session.state !== 'running' ? (
             <div className="mt-3">
               <EditRequirementAgentConfigurationDialog
                 client={client}

@@ -415,15 +415,25 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     try {
       const current = this.getRequirement(input.requirementId);
       if (!current) throw new StoreNotFoundError(`Requirement ${input.requirementId} not found`);
-      if (current.status !== 'todo') {
-        throw new StoreConflictError(`Requirement ${input.requirementId} configuration can only be changed while it is todo`);
+      if (current.status !== 'todo' && current.status !== 'waiting_confirmation') {
+        throw new StoreConflictError(`Requirement ${input.requirementId} configuration can only be changed while it is todo or waiting for confirmation`);
+      }
+      if (current.session.state === 'running') {
+        throw new StoreConflictError(`Requirement ${input.requirementId} configuration cannot be changed during an active RD Run`);
+      }
+      if (current.status === 'waiting_confirmation' && input.sandboxId !== current.sandboxId
+        && !(current.provider === 'native-agent' && input.provider !== 'native-agent'
+          && current.sandboxId && this.getSandbox(current.sandboxId)?.kind === 'e2b'
+          && input.sandboxId === null)) {
+        throw new StoreConflictError(`Requirement ${input.requirementId} workspace can only be changed while it is todo`);
       }
       this.#db.prepare(`UPDATE requirements
         SET provider = ?, model = ?, reasoning_effort = ?, sandbox_id = ?, updated_at = ?
-        WHERE id = ? AND status = 'todo'`)
+        WHERE id = ? AND status IN ('todo', 'waiting_confirmation')`)
         .run(input.provider, input.model, input.reasoningEffort, input.sandboxId, input.now, input.requirementId);
-      this.#db.prepare(`UPDATE agent_sessions SET provider = ?, updated_at = ? WHERE id = ?`)
-        .run(input.provider, input.now, current.session.id);
+      this.#db.prepare(`UPDATE agent_sessions SET provider = ?, native_session_id = ?, updated_at = ? WHERE id = ?`)
+        .run(input.provider, input.provider === current.provider ? current.session.nativeSessionId : null,
+          input.now, current.session.id);
       const updated = this.requireBundle(input.requirementId);
       this.upsertSearchDocument({
         kind: 'requirement',
@@ -955,7 +965,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     }
   }
 
-  finishRdRun(runId: string, outcome: RunOutcome, now: string): RequirementWithSession {
+  finishRdRun(runId: string, outcome: RunOutcome, now: string, pauseOnCancel = false): RequirementWithSession {
     const run = this.requireRun(runId);
     if (run.role !== 'rd' || !run.sessionId) throw new StoreConflictError(`${runId} is not an RD run`);
     this.#db.exec('BEGIN IMMEDIATE');
@@ -970,7 +980,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
           updated_at = ? WHERE id = ?`)
           .run(outcome.nativeSessionId, run.inputToSequence, now, run.sessionId);
       } else if (outcome.status === 'cancelled') {
-        const hasNewMessages = this.#db.prepare(`SELECT 1 FROM requirement_messages
+        const hasNewMessages = !pauseOnCancel && this.#db.prepare(`SELECT 1 FROM requirement_messages
           WHERE requirement_id = ? AND deliver_to_rd = 1 AND sequence > COALESCE(?, 0)
             AND sequence > (SELECT last_consumed_message_sequence FROM agent_sessions WHERE id = ?)
           LIMIT 1`)
