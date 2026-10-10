@@ -16,6 +16,11 @@ export interface RequirementAgentConfigurationUpdate {
   sandboxId?: string | null;
 }
 
+export interface RequirementUpdate extends RequirementAgentConfigurationUpdate {
+  title?: string;
+  description?: string;
+}
+
 export interface AgentModelDto {
   id: string;
   displayName: string;
@@ -457,6 +462,10 @@ export class AgentManagerClient {
     id: string,
     input: RequirementAgentConfigurationUpdate,
   ): Promise<RequirementDto> {
+    return this.updateRequirement(id, input);
+  }
+
+  updateRequirement(id: string, input: RequirementUpdate): Promise<RequirementDto> {
     return this.request(`/api/requirements/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify(input),

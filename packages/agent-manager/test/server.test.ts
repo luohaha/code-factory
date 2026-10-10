@@ -403,7 +403,7 @@ test('HTTP API rejects unsupported reasoning effort values', async () => {
   }
 });
 
-test('HTTP API updates and clears Agent configuration only for TODO requirements', async () => {
+test('HTTP API updates TODO Requirement content and Agent configuration', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const manager = new AgentManager({
     workspaceRoot: process.cwd(),
@@ -426,6 +426,38 @@ test('HTTP API updates and clears Agent configuration only for TODO requirements
   const endpoint = `http://127.0.0.1:${port}/api/requirements/${requirement.id}`;
 
   try {
+    const contentResponse = await fetch(endpoint, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: '  Revised title  ', description: '  Revised body  ', model: 'gpt-content' }),
+    });
+    assert.equal(contentResponse.status, 200);
+    const content = await contentResponse.json() as { title: string; description: string; model: string | null };
+    assert.equal(content.title, 'Revised title');
+    assert.equal(content.description, 'Revised body');
+    assert.equal(content.model, 'gpt-content');
+    assert.equal(store.getRequirement(requirement.id)?.title, 'Revised title');
+    assert.equal(store.getRequirement(requirement.id)?.description, 'Revised body');
+    assert.equal(store.search('Revised body')[0]?.requirementId, requirement.id);
+
+    const titleResponse = await fetch(endpoint, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Title only' }),
+    });
+    assert.equal(titleResponse.status, 200);
+    assert.equal((await titleResponse.json() as { description: string }).description, 'Revised body');
+
+    for (const input of [{ title: '  ' }, { description: null }, { description: '\n  ' }]) {
+      const invalidContentResponse = await fetch(endpoint, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+      assert.equal(invalidContentResponse.status, 400);
+    }
+    assert.equal(store.getRequirement(requirement.id)?.title, 'Title only');
+
     const updateResponse = await fetch(endpoint, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
@@ -508,6 +540,13 @@ test('HTTP API updates and clears Agent configuration only for TODO requirements
       body: JSON.stringify({ provider: 'codex' }),
     });
     assert.equal(conflictResponse.status, 409);
+    const contentConflictResponse = await fetch(endpoint, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Too late', description: 'Run already started' }),
+    });
+    assert.equal(contentConflictResponse.status, 409);
+    assert.equal(store.getRequirement(requirement.id)?.title, 'Title only');
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();

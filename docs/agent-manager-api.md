@@ -572,10 +572,12 @@ Success: 201 Created with the new Requirement. Its initial status is todo and it
 
 ### PATCH /api/requirements/:id
 
-Changes the Agent configuration used when a human starts a Requirement from the dashboard. The Requirement must still be in `todo`. At least one field is required. Changing the provider also updates its bound RD Session; omitted model and reasoning effort fields reset to their CLI defaults for the new provider.
+Changes a TODO Requirement's title, description, or Agent configuration before its first Run. The Requirement must still be in `todo`. At least one field is required. Fields can be combined in one atomic update. Changing the provider also updates its bound RD Session; omitted model and reasoning effort fields reset to their CLI defaults for the new provider. Updated title and description are used when the RD Session starts and in Requirement search.
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
+| title | string | no | Non-empty after trimming |
+| description | string | no | Non-empty after trimming |
 | provider | string | no | codex, claude-code, or native-agent |
 | model | string or null | no | Headless model identifier or Native Agent `profile:<id>`; null restores the previous default behavior |
 | reasoningEffort | string or null | no | low, medium, high, xhigh, or max; null restores the CLI default |
@@ -584,7 +586,7 @@ Changes the Agent configuration used when a human starts a Requirement from the 
 ~~~bash
 curl -X PATCH http://127.0.0.1:4310/api/requirements/req_... \
   -H 'Content-Type: application/json' \
-  -d '{"provider":"claude-code","model":"claude-sonnet-4-6","reasoningEffort":"high"}'
+  -d '{"title":"Add an export timeout","description":"Stop the child process and record the failure"}'
 ~~~
 
 Success: `200 OK` with the updated Requirement. Returns `404 Not Found` for an unknown Requirement, `409 Conflict` after execution has started, and `400 Bad Request` for missing or invalid fields. The RD Agent CLI intentionally does not expose this mutation.
