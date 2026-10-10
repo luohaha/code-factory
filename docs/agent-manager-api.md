@@ -572,16 +572,22 @@ Success: 201 Created with the new Requirement. Its initial status is todo and it
 
 ### PATCH /api/requirements/:id
 
-Changes the Agent configuration used by the next RD Run. The Requirement must be in `todo` or `waiting_confirmation` with no active RD Run. At least one field is required. While waiting for confirmation, the workspace cannot be changed directly. Changing the provider also updates its bound RD Session, clears the old provider's native session ID, and resets omitted model and reasoning effort fields to their defaults for the new provider. The next Run starts a new native provider conversation with the Requirement title, description, and previous conversation messages; later Runs resume that new conversation. Changing only model or reasoning effort keeps the current provider's native session ID and resumes it on the next Run.
+Changes a Requirement's title, description, or Agent configuration. The Requirement must be in `todo` or `waiting_confirmation` with no active RD Run. At least one field is required. Title and description can change only while TODO, and their updated values are used when the RD Session starts and in Requirement search. Agent configuration can also change while waiting for confirmation; the workspace cannot be changed directly then. Changing the provider updates its bound RD Session, clears the old provider's native session ID, and resets omitted model and reasoning effort fields to defaults for the new provider. The next Run starts a new native provider conversation with the Requirement title, description, and previous conversation messages; later Runs resume that conversation. Changing only model or reasoning effort keeps the provider's native session ID and resumes it on the next Run.
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
+| title | string | no | Non-empty after trimming |
+| description | string | no | Non-empty after trimming |
 | provider | string | no | codex, claude-code, or native-agent |
 | model | string or null | no | Headless model identifier or Native Agent `profile:<id>`; null restores the previous default behavior |
 | reasoningEffort | string or null | no | low, medium, high, xhigh, or max; null restores the CLI default |
 | sandboxId | string or null | no | Workspace ID; null or `local` restores Default workspace. Codex and Claude Code RD cannot select E2B |
 
 ~~~bash
+curl -X PATCH http://127.0.0.1:4310/api/requirements/req_... \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Add an export timeout","description":"Stop the child process and record the failure"}'
+
 curl -X PATCH http://127.0.0.1:4310/api/requirements/req_... \
   -H 'Content-Type: application/json' \
   -d '{"provider":"claude-code","model":"claude-sonnet-4-6","reasoningEffort":"high"}'

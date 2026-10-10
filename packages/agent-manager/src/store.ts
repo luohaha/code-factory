@@ -42,8 +42,10 @@ export interface CreateRequirementRecord {
   now: string;
 }
 
-export interface UpdateRequirementAgentConfigurationRecord {
+export interface UpdateRequirementRecord {
   requirementId: string;
+  title: string;
+  description: string;
   provider: AgentProvider;
   model: string | null;
   reasoningEffort: AgentReasoningEffort | null;
@@ -182,7 +184,7 @@ export interface AgentManagerStore {
   listSandboxes(): Sandbox[];
   getSandbox(id: string): Sandbox | null;
   createRequirement(input: CreateRequirementRecord): RequirementWithSession;
-  updateRequirementAgentConfiguration(input: UpdateRequirementAgentConfigurationRecord): RequirementWithSession;
+  updateRequirement(input: UpdateRequirementRecord): RequirementWithSession;
   getRequirement(id: string): RequirementWithSession | null;
   listRequirements(): RequirementWithSession[];
   listChildRequirements(parentRequirementId: string): RequirementWithSession[];

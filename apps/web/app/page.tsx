@@ -536,6 +536,84 @@ function DeleteRequirementDialog({
   );
 }
 
+function EditRequirementDetailsDialog({ requirement, busy, onUpdate }: {
+  requirement: RequirementDto;
+  busy: boolean;
+  onUpdate: (input: { title: string; description: string }) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const fieldId = useId();
+  const [open, setOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [title, setTitle] = useState(requirement.title);
+  const [description, setDescription] = useState(requirement.description);
+
+  async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
+    event.preventDefault();
+    setSubmitError(null);
+    setSubmitting(true);
+    try {
+      await onUpdate({ title: title.trim(), description: description.trim() });
+      setOpen(false);
+    } catch (caught) {
+      setSubmitError(caught instanceof Error ? caught.message : t('Failed to update requirement'));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => {
+      setOpen(nextOpen);
+      if (nextOpen) {
+        setTitle(requirement.title);
+        setDescription(requirement.description);
+        setSubmitError(null);
+      }
+    }}>
+      <DialogTrigger render={<Button type="button" variant="outline" size="xs" disabled={busy} />}>
+        <FileText data-icon="inline-start" />{t('Edit requirement')}
+      </DialogTrigger>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-w-lg">
+        <form className="flex max-h-[calc(100dvh-2rem)] min-h-0 flex-col" onSubmit={submit}>
+          <DialogHeader className="shrink-0 px-4 pt-4 pr-12">
+            <DialogTitle>{t('Edit requirement')}</DialogTitle>
+            <DialogDescription>{t('Update the title and description before this TODO requirement starts.')}</DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 overflow-y-auto px-4">
+            {submitError ? (
+              <Alert variant="destructive" className="mt-5">
+                <TriangleAlert />
+                <AlertTitle>{t('Failed to update requirement')}</AlertTitle>
+                <AlertDescription>{submitError}</AlertDescription>
+              </Alert>
+            ) : null}
+            <FieldGroup className="my-5 gap-4">
+              <Field>
+                <FieldLabel htmlFor={`${fieldId}-title`}>{t('Requirement title')}</FieldLabel>
+                <Input id={`${fieldId}-title`} value={title} required disabled={submitting}
+                  onChange={(event) => setTitle(event.target.value)} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor={`${fieldId}-description`}>{t('Task and acceptance criteria')}</FieldLabel>
+                <Textarea id={`${fieldId}-description`} value={description} required disabled={submitting}
+                  className="max-h-56 overflow-y-auto" onChange={(event) => setDescription(event.target.value)} />
+              </Field>
+            </FieldGroup>
+          </div>
+          <DialogFooter className="shrink-0 px-4 pb-4">
+            <DialogClose render={<Button type="button" variant="outline" />}>{t('Cancel')}</DialogClose>
+            <Button type="submit" disabled={submitting || !title.trim() || !description.trim()}>
+              {submitting ? <LoaderCircle className="animate-spin" /> : null}{t('Save changes')}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function EditRequirementAgentConfigurationDialog({
   client,
   requirement,
@@ -2099,6 +2177,7 @@ function RequirementDetail({
   detailMode,
   onOpenChange,
   onStart,
+  onUpdateDetails,
   onUpdateAgentConfiguration,
   onReply,
   onDelete,
@@ -2128,6 +2207,7 @@ function RequirementDetail({
   detailMode: RequirementDetailMode;
   onOpenChange: (open: boolean) => void;
   onStart: (message?: string, attachments?: File[]) => Promise<void>;
+  onUpdateDetails: (input: { title: string; description: string }) => Promise<void>;
   onUpdateAgentConfiguration: (input: RequirementAgentConfigurationUpdate) => Promise<void>;
   onReply: (message: string, attachments?: File[]) => Promise<void>;
   onDelete: () => void;
@@ -2293,7 +2373,14 @@ function RequirementDetail({
           </SheetDescription>
           {(requirement.status === 'todo' || requirement.status === 'waiting_confirmation')
             && requirement.session.state !== 'running' ? (
-            <div className="mt-3">
+            <div className="mt-3 flex flex-wrap gap-2">
+              {requirement.status === 'todo' ? (
+                <EditRequirementDetailsDialog
+                  requirement={requirement}
+                  busy={busy}
+                  onUpdate={onUpdateDetails}
+                />
+              ) : null}
               <EditRequirementAgentConfigurationDialog
                 client={client}
                 requirement={requirement}
@@ -4097,6 +4184,19 @@ function Dashboard() {
             return await client.startRequirement(selectedRequirement.id, message, attachmentIds);
           },
           applyRequirementAction,
+        ).then(() => undefined) : Promise.resolve()}
+        onUpdateDetails={(input) => selectedRequirement ? runAction(
+          selectedRequirement.id,
+          () => client.updateRequirement(selectedRequirement.id, input),
+          (requirement) => {
+            setRequirements((current) => applyRequirementScopedUpdate(
+              current,
+              requirement.id,
+              removedRequirementIdsRef.current,
+              (acceptedCurrent) => upsertRequirement(acceptedCurrent, requirement),
+            ));
+            setSearchRevision((value) => value + 1);
+          },
         ).then(() => undefined) : Promise.resolve()}
         onUpdateAgentConfiguration={(configuration) => selectedRequirement ? runAction(
           selectedRequirement.id,

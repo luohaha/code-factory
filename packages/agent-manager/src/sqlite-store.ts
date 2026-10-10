@@ -24,7 +24,7 @@ import {
   type CreateAgentTimerRecord,
   type CreateMessageAttachmentRecord,
   type CreateRequirementRecord,
-  type UpdateRequirementAgentConfigurationRecord,
+  type UpdateRequirementRecord,
   type PurgeExpiredRequirementsRecord,
   type PurgeExpiredRequirementsResult,
   type PullRequestObservation,
@@ -408,8 +408,8 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     return this.requireBundle(input.requirementId);
   }
 
-  updateRequirementAgentConfiguration(
-    input: UpdateRequirementAgentConfigurationRecord,
+  updateRequirement(
+    input: UpdateRequirementRecord,
   ): RequirementWithSession {
     this.#db.exec('BEGIN IMMEDIATE');
     try {
@@ -421,6 +421,9 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       if (current.session.state === 'running') {
         throw new StoreConflictError(`Requirement ${input.requirementId} configuration cannot be changed during an active RD Run`);
       }
+      if (current.status === 'waiting_confirmation' && (input.title !== current.title || input.description !== current.description)) {
+        throw new StoreConflictError(`Requirement ${input.requirementId} title and description can only be changed while it is todo`);
+      }
       if (current.status === 'waiting_confirmation' && input.sandboxId !== current.sandboxId
         && !(current.provider === 'native-agent' && input.provider !== 'native-agent'
           && current.sandboxId && this.getSandbox(current.sandboxId)?.kind === 'e2b'
@@ -428,9 +431,9 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
         throw new StoreConflictError(`Requirement ${input.requirementId} workspace can only be changed while it is todo`);
       }
       this.#db.prepare(`UPDATE requirements
-        SET provider = ?, model = ?, reasoning_effort = ?, sandbox_id = ?, updated_at = ?
+        SET title = ?, description = ?, provider = ?, model = ?, reasoning_effort = ?, sandbox_id = ?, updated_at = ?
         WHERE id = ? AND status IN ('todo', 'waiting_confirmation')`)
-        .run(input.provider, input.model, input.reasoningEffort, input.sandboxId, input.now, input.requirementId);
+        .run(input.title, input.description, input.provider, input.model, input.reasoningEffort, input.sandboxId, input.now, input.requirementId);
       this.#db.prepare(`UPDATE agent_sessions SET provider = ?, native_session_id = ?, updated_at = ? WHERE id = ?`)
         .run(input.provider, input.provider === current.provider ? current.session.nativeSessionId : null,
           input.now, current.session.id);

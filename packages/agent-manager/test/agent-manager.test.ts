@@ -523,7 +523,7 @@ test('Agent Manager removes a TODO requirement from active lists and publishes a
   }
 });
 
-test('Agent Manager updates TODO Agent configuration and uses it for the first Run', async () => {
+test('Agent Manager updates TODO content and Agent configuration for the first Run', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new DeferredRunner();
   const manager = new AgentManager({
@@ -540,18 +540,25 @@ test('Agent Manager updates TODO Agent configuration and uses it for the first R
       model: 'gpt-old',
       reasoningEffort: 'low',
     });
-    const updated = manager.updateRequirementAgentConfiguration(created.id, {
+    const updated = manager.updateRequirement(created.id, {
+      title: '  Updated first Run  ',
+      description: '  Use the edited acceptance criteria  ',
       model: 'gpt-new',
       reasoningEffort: 'max',
     });
 
+    assert.equal(updated.title, 'Updated first Run');
+    assert.equal(updated.description, 'Use the edited acceptance criteria');
     assert.equal(updated.model, 'gpt-new');
     assert.equal(updated.reasoningEffort, 'max');
     const updateEvent = manager.listEvents().findLast((event) => event.type === 'requirement.updated');
     assert.equal(updateEvent?.requirementId, created.id);
     assert.equal((updateEvent?.payload.requirement as { model?: string })?.model, 'gpt-new');
+    assert.equal((updateEvent?.payload.requirement as { title?: string })?.title, 'Updated first Run');
 
     const runPromise = manager.runRequirement(created.id);
+    assert.match(runner.requests[0]?.invocation.input ?? '', /Title: Updated first Run/);
+    assert.match(runner.requests[0]?.invocation.input ?? '', /Description:\nUse the edited acceptance criteria/);
     assert.ok(runner.requests[0]?.invocation.args.includes('gpt-new'));
     assert.ok(runner.requests[0]?.invocation.args.includes('model_reasoning_effort="max"'));
     assert.throws(

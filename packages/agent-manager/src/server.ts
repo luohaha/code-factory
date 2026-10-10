@@ -436,7 +436,9 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         const body = await readJson(request);
         const model = nullableStringField(body, 'model');
         const reasoningEffort = nullableReasoningEffortField(body.reasoningEffort);
-        sendJson(response, 200, manager.updateRequirementAgentConfiguration(requirementId, {
+        sendJson(response, 200, manager.updateRequirement(requirementId, {
+          ...(body.title !== undefined ? { title: stringField(body, 'title', true)! } : {}),
+          ...(body.description !== undefined ? { description: stringField(body, 'description', true)! } : {}),
           ...(body.provider !== undefined ? { provider: providerField(body.provider) } : {}),
           ...(model !== undefined ? { model } : {}),
           ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
