@@ -555,7 +555,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         const sourceRequirementId = decodeURIComponent(agentRelatedMessages[1]!);
         const targetRequirementId = decodeURIComponent(agentRelatedMessages[2]!);
         const body = await readJson(request);
-        const result = manager.postRelatedRequirementMessage(
+        const result = manager.postRequirementAgentMessage(
           sourceRequirementId,
           stringField(body, 'sourceSessionId', true)!,
           targetRequirementId,

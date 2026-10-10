@@ -795,7 +795,7 @@ test('Agent Manager includes a human start message in the initial RD Run', async
   }
 });
 
-test('related Requirements can inspect each other and deliver visible RD Agent messages', async () => {
+test('RD Agents can inspect relations and message any other Requirement by ID', async () => {
   const runner = new DeferredRunner();
   const manager = new AgentManager({
     workspaceRoot: process.cwd(),
@@ -817,9 +817,17 @@ test('related Requirements can inspect each other and deliver visible RD Agent m
       parentRequirementId: parent.id,
       sourceSessionId: parent.session.id,
     });
+    const sibling = manager.createRequirement({
+      title: 'Sibling implementation',
+      description: 'Coordinate with the other child',
+      provider: 'codex',
+      createdBy: 'rd_agent',
+      parentRequirementId: parent.id,
+      sourceSessionId: parent.session.id,
+    });
     const unrelated = manager.createRequirement({
       title: 'Unrelated work',
-      description: 'Must not receive this message',
+      description: 'Can receive an addressed message',
       provider: 'codex',
     });
     const cancelledChild = manager.createRequirement({
@@ -836,7 +844,7 @@ test('related Requirements can inspect each other and deliver visible RD Agent m
     assert.equal(parentRelations.parent, null);
     assert.deepEqual(
       new Set(parentRelations.children.map((requirement) => requirement.id)),
-      new Set([child.id, cancelledChild.id]),
+      new Set([child.id, sibling.id, cancelledChild.id]),
     );
     const childRelations = manager.listRelatedRequirements(child.id, child.session.id);
     assert.equal(childRelations.parent?.id, parent.id);
@@ -846,16 +854,20 @@ test('related Requirements can inspect each other and deliver visible RD Agent m
       /sourceSessionId must belong to source Requirement/,
     );
     assert.throws(
-      () => manager.postRelatedRequirementMessage(
+      () => manager.postRequirementAgentMessage(
         child.id,
-        child.session.id,
-        unrelated.id,
-        'This must be rejected.',
+        parent.session.id,
+        sibling.id,
+        'This session does not own the sender.',
       ),
-      /is not a parent or child/,
+      /sourceSessionId must belong to source Requirement/,
+    );
+    assert.throws(
+      () => manager.postRequirementAgentMessage(child.id, child.session.id, child.id, 'No self-message.'),
+      /cannot message its own Requirement/,
     );
 
-    const delivered = manager.postRelatedRequirementMessage(
+    const delivered = manager.postRequirementAgentMessage(
       child.id,
       child.session.id,
       parent.id,
@@ -869,14 +881,26 @@ test('related Requirements can inspect each other and deliver visible RD Agent m
     assert.deepEqual(manager.listMessages(parent.id).map((message) => message.body), [
       'The shared contract now uses field version 2.',
     ]);
-    assert.match(runner.requests[0]?.invocation.input ?? '', /Related RD Agent from Child implementation/);
+    assert.match(runner.requests[0]?.invocation.input ?? '', /RD Agent from Child implementation/);
     assert.match(runner.requests[0]?.invocation.input ?? '', /The shared contract now uses field version 2\./);
+
+    for (const target of [sibling, unrelated]) {
+      const result = manager.postRequirementAgentMessage(
+        child.id, child.session.id, target.id, `Coordinate with ${target.title}.`,
+      );
+      assert.equal(result.queued, false);
+      assert.equal(result.message.sourceRequirementId, child.id);
+      assert.equal(result.message.deliverToRd, true);
+      assert.equal(manager.listMessages(target.id)[0]?.body, `Coordinate with ${target.title}.`);
+      assert.equal(manager.getRequirement(target.id)?.session.state, 'running');
+    }
+    assert.equal(runner.requests.length, 3);
   } finally {
     await manager.close();
   }
 });
 
-test('a related RD Agent message reactivates done work and rejects a cancelled target', async () => {
+test('an RD Agent message reactivates done work and rejects a cancelled target', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new DeferredRunner();
   const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
@@ -911,7 +935,7 @@ test('a related RD Agent message reactivates done work and rejects a cancelled t
     }, '2026-09-18T00:01:00.000Z');
     manager.confirmRequirement(completedParent.id);
 
-    const reactivated = manager.postRelatedRequirementMessage(
+    const reactivated = manager.postRequirementAgentMessage(
       completedChild.id,
       completedChild.session.id,
       completedParent.id,
@@ -938,7 +962,7 @@ test('a related RD Agent message reactivates done work and rejects a cancelled t
     });
     manager.deleteRequirement(cancelledParent.id);
     assert.throws(
-      () => manager.postRelatedRequirementMessage(
+      () => manager.postRequirementAgentMessage(
         cancelledChild.id,
         cancelledChild.session.id,
         cancelledParent.id,
@@ -977,7 +1001,7 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
       'register PRs', 'propose separate TODO follow-ups',
       'manage those proposals with lifecycle actions',
       'inspect direct parent/child requirements',
-      'message their RD Agents', 'manage wake-up timers', 'code-factory-cli --help',
+      'message any other Requirement by ID', 'manage wake-up timers', 'code-factory-cli --help',
       'Track started tasks to completion', 'provider wait/monitor tools',
       'only for work guaranteed to continue independently afterward', 'cancel unneeded recurring timers',
     ]) {

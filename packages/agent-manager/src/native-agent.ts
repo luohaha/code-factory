@@ -125,7 +125,7 @@ export class NativeAgentService {
     });
     const related = defineTool({ name: 'requirement_related', description: 'Show direct parent and child requirements and their RD session states.',
       parameters: Type.Object({}), execute: async (_args, api) => output(await invokeCli(['requirement', 'related'], api.conversationId)) });
-    const message = defineTool({ name: 'requirement_message', description: 'Send a message to a direct parent or child RD Agent.',
+    const message = defineTool({ name: 'requirement_message', description: 'Send a message to any other Requirement RD Agent by ID.',
       parameters: Type.Object({ requirementId: Type.String(), message: Type.String() }),
       execute: async ({ requirementId, message }, api) => output(await invokeCli(['requirement', 'message', '--requirement-id', requirementId, '--message', message], api.conversationId)) });
     const timerRegister = defineTool({ name: 'timer_register', description: 'Schedule one wake-up or recurring independent work.',
@@ -138,7 +138,7 @@ export class NativeAgentService {
     registry.install(defineExtension({
       name: 'code-factory',
       tools: [prRegister, ghPr, propose, action, related, message, timerRegister, timerShow, timerCancel],
-      sections: [section('code-factory', () => 'You are this Requirement’s long-lived RD Agent. Use the Code Factory tools to register PRs, propose TODO follow-ups, message related agents, and manage timers. Humans confirm completion.'),
+      sections: [section('code-factory', () => 'You are this Requirement’s long-lived RD Agent. Use the Code Factory tools to register PRs, propose TODO follow-ups, message other Requirement agents by ID, and manage timers. Humans confirm completion.'),
         section('workspace', (input) => input.env?.cwd)],
     }));
     this.#harness = await Harness.open(await openNodeSqliteStorage(this.#databasePath), {

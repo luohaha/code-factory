@@ -145,14 +145,14 @@ code-factory-cli requirement action --requirement-id req_child --delete
 code-factory-cli requirement action --requirement-id req_child --done
 ~~~
 
-Inspect and message directly related Requirements:
+Inspect direct relationships and message another Requirement when its ID is known:
 
 ~~~bash
 code-factory-cli requirement related
 code-factory-cli requirement message --requirement-id req_... --message "Use contract version 2."
 ~~~
 
-`requirement related` calls `GET /api/agent/requirements/:sourceRequirementId/related?sourceSessionId=...` and returns `{parent, children}` for the direct parent and children, including terminal records that have not yet expired. `requirement message` calls `POST /api/agent/requirements/:sourceRequirementId/related/:targetRequirementId/messages` with the injected `sourceSessionId` and the message. Agent Manager verifies that the Session owns the source Requirement and that the target is its direct parent or child. Accepted messages are stored in the target conversation with `author=rd_agent`, `sourceRequirementId` set to the sender, and `deliverToRd=true`; they start an idle target RD Session or queue behind its active Run.
+`requirement related` calls `GET /api/agent/requirements/:sourceRequirementId/related?sourceSessionId=...` and returns `{parent, children}` for the direct parent and children, including terminal records that have not yet expired. It does not discover siblings or unrelated Requirements. `requirement message` calls `POST /api/agent/requirements/:sourceRequirementId/related/:targetRequirementId/messages` with the injected `sourceSessionId` and the message. The existing `/related/` path remains for compatibility, but the target may be any other known Requirement ID. Agent Manager verifies that the Session owns the source Requirement and rejects self-messages and cancelled targets. Accepted messages are stored in the target conversation with `author=rd_agent`, `sourceRequirementId` set to the sender, and `deliverToRd=true`; they start an idle target RD Session or queue behind its active Run.
 
 Schedule or cancel a wake-up for the current Requirement:
 
@@ -171,12 +171,12 @@ The CLI uses the Requirement-scoped timer GET, POST, and DELETE endpoints with t
 
 - `sequence`: a monotonically increasing number within the Requirement;
 - `author`: `human | rd_agent | reviewer | system`;
-- `sourceRequirementId`: the sending Requirement for a related RD Agent message, otherwise null;
+- `sourceRequirementId`: the sending Requirement for a message from another RD Agent, otherwise null;
 - `deliverToRd`: whether RD must consume the message;
 - optional `runId`;
 - `attachments`: persisted attachments; Codex receives images through native image arguments and reads other files by local absolute path, while Claude Code reads every attachment from the local absolute paths in the message.
 
-An RD Run records `inputFromSequence` and `inputToSequence`. On success, only that captured input boundary is consumed. Messages arriving during the Run remain for the next Run. A Requirement's own RD output always uses `deliverToRd=false`; a message explicitly sent by a related Requirement's RD Agent uses `deliverToRd=true` for the target.
+An RD Run records `inputFromSequence` and `inputToSequence`. On success, only that captured input boundary is consumed. Messages arriving during the Run remain for the next Run. A Requirement's own RD output always uses `deliverToRd=false`; a message explicitly sent by another Requirement's RD Agent uses `deliverToRd=true` for the target.
 
 ## 5. SSE events
 
