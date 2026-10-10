@@ -233,7 +233,7 @@ test('code-factory-cli no longer exposes legacy Requirement mutation commands', 
   }
 });
 
-test('code-factory-cli lists related Requirements and messages a related RD Agent', async () => {
+test('code-factory-cli lists related Requirements and messages an RD Agent by ID', async () => {
   const requests: CapturedRequest[] = [];
   const output: string[] = [];
   const errors: string[] = [];
@@ -242,7 +242,7 @@ test('code-factory-cli lists related Requirements and messages a related RD Agen
   const relatedExitCode = await runCodeFactoryCli(['requirement', 'related'], runtime);
   const messageExitCode = await runCodeFactoryCli([
     'requirement', 'message',
-    '--requirement-id', 'req_parent',
+    '--requirement-id', 'req_sibling',
     '--message', 'The shared contract now uses field version 2.',
   ], runtime);
 
@@ -254,7 +254,7 @@ test('code-factory-cli lists related Requirements and messages a related RD Agen
     method: 'GET',
     body: {},
   }, {
-    url: 'http://127.0.0.1:4310/api/agent/requirements/req_cli/related/req_parent/messages',
+    url: 'http://127.0.0.1:4310/api/agent/requirements/req_cli/related/req_sibling/messages',
     method: 'POST',
     body: {
       sourceSessionId: 'ses_cli',
