@@ -136,7 +136,7 @@ The system does not maintain a separate RD message-queue table. `requirement_mes
 | --- | --- | --- |
 | Human | Yes | Yes |
 | Reviewer | Yes | Yes |
-| RD Agent | Yes | No for its own output; yes when explicitly sent from a directly related Requirement |
+| RD Agent | Yes | No for its own output; yes when explicitly sent from another Requirement |
 | System | Yes | Depends on the event |
 
 Each message has a monotonically increasing `sequence` and a `deliverToRd` flag. When an RD Run starts, it captures the pending external-message range as `inputFromSequence..inputToSequence`:
@@ -146,8 +146,8 @@ Each message has a monotonically increasing `sequence` and a `deliverToRd` flag.
 3. If external messages remain, Agent Manager automatically resumes the same RD Session.
 4. Multiple messages are delivered together in order during the next Run.
 5. A failed or interrupted Run does not advance the cursor, so retrying or corrective resumption cannot lose messages. The next Run receives all unconsumed input, including messages already sent to the interrupted Run. Each conversation message remains stored once, but its sequence can appear in more than one Run prompt; work partially performed before interruption may need an idempotency check. Headless Steering starts a replacement Run with newer input. An explicit Stop leaves the Requirement in WAITING_CONFIRMATION and the Session in WAITING_HUMAN even with newer input queued, so a human can edit Agent configuration before restarting. A failed or timed-out Run leaves the Requirement in WAITING_CONFIRMATION and the Session in FAILED, including when a manager restart detects an orphaned Run. Opening an older database also corrects DOING Requirements whose RD Sessions are already WAITING_HUMAN or FAILED.
-6. A Requirement's own RD output is never delivered back to that RD Agent as normal next-turn input. An explicit message from a directly related Requirement is external input and is delivered to the target RD Agent.
-7. A human reply or related-Agent message to a DONE Requirement reactivates it as DOING, clears its completion timestamp, and starts a new Run in the same long-lived RD Session. CANCELLED Requirements remain terminal.
+6. A Requirement's own RD output is never delivered back to that RD Agent as normal next-turn input. An RD Agent can explicitly message any other Requirement by ID; that message is external input for the target RD Agent. Source Session ownership is checked, and self-messages are rejected. Relationship lookup still lists direct parents and children only.
+7. A human reply or message from another RD Agent to a DONE Requirement reactivates it as DOING, clears its completion timestamp, and starts a new Run in the same long-lived RD Session. CANCELLED Requirements remain terminal.
 
 When a new native conversation starts after an earlier RD Run, including after a provider change or a missing native session ID, the next Run receives the Requirement title, description, and the full visible conversation history in sequence order, including earlier RD output. This handoff does not transfer the old provider's private context or in-progress reasoning. The normal delivery cursor is preserved, so pending external messages still advance only when the new Run succeeds. A same-provider Run with an available native session ID does not replay previous RD output.
 

@@ -18,7 +18,7 @@ Commands:
   requirement propose     Propose a separately tracked TODO requirement
   requirement action      Manage a requirement proposed by this RD Agent
   requirement related     Show this Requirement's direct parent and children
-  requirement message     Send a message to a related Requirement's RD Agent
+  requirement message     Send a message to another Requirement's RD Agent
   timer register          Register a one-time or recurring wake-up timer
   timer show              Show timers registered for this Requirement
   timer cancel            Cancel a registered wake-up timer
@@ -107,13 +107,13 @@ CODE_FACTORY_SESSION_ID.`;
 
 const REQUIREMENT_MESSAGE_HELP = `Usage: code-factory-cli requirement message [options]
 
-Send a message to a direct parent or child Requirement's RD Agent. The message
-is persisted in the target Requirement conversation and starts or queues its RD
-Agent. A completed target is reactivated; a cancelled target is rejected.
+Send a message to any other Requirement's RD Agent when its ID is known. The
+message is persisted in the target Requirement conversation and starts or queues
+its RD Agent. A completed target is reactivated; a cancelled target is rejected.
 
 Required options:
-  --requirement-id ID     Direct parent or child Requirement ID
-  --message TEXT          Message for the related Requirement's RD Agent
+  --requirement-id ID     Target Requirement ID
+  --message TEXT          Message for the target Requirement's RD Agent
 
 Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
 CODE_FACTORY_SESSION_ID.`;

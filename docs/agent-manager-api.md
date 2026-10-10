@@ -82,7 +82,7 @@ The service listens only on the loopback interface by default and currently has 
 | POST | /api/agent/requirements | Propose a follow-up Requirement from an RD Agent |
 | POST | /api/agent/requirements/:id/action | Apply a lifecycle action to a Requirement proposed by the current RD Agent |
 | GET | /api/agent/requirements/:id/related | List a source Requirement's direct parent and children |
-| POST | /api/agent/requirements/:id/related/:targetId/messages | Message a directly related Requirement's RD Agent |
+| POST | /api/agent/requirements/:id/related/:targetId/messages | Message any other Requirement's RD Agent by ID |
 
 URL-encode IDs used in path parameters. Requirement, Session, Run, PR, and ReviewRequest lists are ordered with the most recently updated or created items first. Messages and events are ordered by ascending sequence number. List responses use:
 
@@ -194,7 +194,7 @@ interface RequirementMessage {
   requirementId: string;
   sessionId: string;
   runId: string | null;
-  sourceRequirementId: string | null; // sender for a related RD Agent message
+  sourceRequirementId: string | null; // sender for a message from another RD Agent
   author: 'human' | 'rd_agent' | 'reviewer' | 'jev' | 'system';
   body: string;
   attachments: MessageAttachment[];
@@ -215,7 +215,7 @@ interface MessageAttachment {
 }
 ~~~
 
-sequence increases monotonically within a Requirement. deliverToRd=true means RD must consume the message. A Requirement's own RD output is never delivered back to itself. Messages explicitly sent by a directly related RD Agent have author=rd_agent, identify the sender through sourceRequirementId, and use deliverToRd=true in the target conversation.
+sequence increases monotonically within a Requirement. deliverToRd=true means RD must consume the message. A Requirement's own RD output is never delivered back to itself. Messages explicitly sent by another RD Agent have author=rd_agent, identify the sender through sourceRequirementId, and use deliverToRd=true in the target conversation.
 
 ### 3.6 PullRequest
 
@@ -927,7 +927,7 @@ Success: 200 OK. Returns 404 for an unknown source Requirement and 400 when the 
 
 ### POST /api/agent/requirements/:sourceRequirementId/related/:targetRequirementId/messages
 
-Persists an RD Agent message in a direct parent or child Requirement and starts or queues the target RD Session.
+Persists an RD Agent message in any other known Requirement and starts or queues the target RD Session. The `/related/` path is retained for compatibility; a parent-child relationship is not required. `GET /related` still lists only the direct parent and children.
 
 ~~~json
 {
@@ -936,7 +936,7 @@ Persists an RD Agent message in a direct parent or child Requirement and starts 
 }
 ~~~
 
-Success: 202 Accepted with `accepted`, source and target IDs, `queued`, the persisted `message`, and the current target `requirement`. The message has `author=rd_agent`, `sourceRequirementId` equal to the source, and `deliverToRd=true`. A DONE target is reactivated in its original Session. Returns 400 for invalid input or mismatched source Session, 404 for an unknown source or target, and 409 for an unrelated or CANCELLED target.
+Success: 202 Accepted with `accepted`, source and target IDs, `queued`, the persisted `message`, and the current target `requirement`. The message has `author=rd_agent`, `sourceRequirementId` equal to the source, and `deliverToRd=true`. A DONE target is reactivated in its original Session. Returns 400 for invalid input or mismatched source Session, 404 for an unknown source or target, and 409 for a self-message or CANCELLED target.
 
 ## 8. SSE event stream
 

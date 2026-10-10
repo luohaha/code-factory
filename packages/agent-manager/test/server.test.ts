@@ -920,6 +920,14 @@ test('RD Agent endpoints list related Requirements and deliver cross-Requirement
     parentRequirementId: parent.id,
     sourceSessionId: parent.session.id,
   });
+  const sibling = manager.createRequirement({
+    title: 'Sibling API implementation',
+    description: 'Coordinate directly with the child',
+    provider: 'codex',
+    createdBy: 'rd_agent',
+    parentRequirementId: parent.id,
+    sourceSessionId: parent.session.id,
+  });
   const startChild = manager.createRequirement({
     title: 'Start child API implementation',
     description: 'Start this proposed work',
@@ -1135,17 +1143,52 @@ test('RD Agent endpoints list related Requirements and deliver cross-Requirement
     assert.equal(conversation.items.length, 1);
     assert.equal(conversation.items[0]?.sourceRequirementId, child.id);
     assert.equal(conversation.items[0]?.body, 'Please consume contract version 2.');
-    assert.match(runner.requests.at(-1)?.invocation.input ?? '', /Related RD Agent from Child API implementation/);
+    assert.match(runner.requests.at(-1)?.invocation.input ?? '', /RD Agent from Child API implementation/);
+
+    const siblingResponse = await fetch(
+      `${baseUrl}/api/agent/requirements/${child.id}/related/${sibling.id}/messages`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sourceSessionId: child.session.id, message: 'Coordinate directly.' }),
+      },
+    );
+    assert.equal(siblingResponse.status, 202);
+    assert.equal(manager.listMessages(sibling.id)[0]?.sourceRequirementId, child.id);
+    assert.equal(manager.getRequirement(sibling.id)?.session.state, 'running');
 
     const unrelatedResponse = await fetch(
       `${baseUrl}/api/agent/requirements/${child.id}/related/${unrelated.id}/messages`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sourceSessionId: child.session.id, message: 'Coordinate across trees.' }),
+      },
+    );
+    assert.equal(unrelatedResponse.status, 202);
+    assert.equal(manager.listMessages(unrelated.id)[0]?.sourceRequirementId, child.id);
+
+    const wrongSessionResponse = await fetch(
+      `${baseUrl}/api/agent/requirements/${child.id}/related/${sibling.id}/messages`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sourceSessionId: parent.session.id, message: 'Must fail.' }),
+      },
+    );
+    assert.equal(wrongSessionResponse.status, 400);
+    assert.equal(manager.listMessages(sibling.id).length, 1);
+
+    const selfResponse = await fetch(
+      `${baseUrl}/api/agent/requirements/${child.id}/related/${child.id}/messages`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sourceSessionId: child.session.id, message: 'Must fail.' }),
       },
     );
-    assert.equal(unrelatedResponse.status, 409);
+    assert.equal(selfResponse.status, 409);
+    assert.equal(manager.listMessages(child.id).length, 0);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();
