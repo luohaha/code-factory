@@ -53,6 +53,7 @@ export const schemaStatements = [
     state TEXT NOT NULL CHECK (state IN ('idle', 'running', 'waiting_human', 'waiting_review', 'failed', 'completed')),
     last_error TEXT,
     last_consumed_message_sequence INTEGER NOT NULL DEFAULT 0,
+    auto_resume_paused INTEGER NOT NULL DEFAULT 0 CHECK (auto_resume_paused IN (0, 1)),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   ) STRICT`,

@@ -134,12 +134,13 @@ interface AgentSession {
   lastError: string | null;
   lastConsumedMessageSequence: number;
   pendingMessageCount: number;
+  autoResumePaused: boolean;
   createdAt: string;
   updatedAt: string;
 }
 ~~~
 
-nativeSessionId is the Codex or Claude Code session ID, or a pi-durable conversation ID for Native Agent. pendingMessageCount is the number of external messages that RD has not successfully consumed.
+nativeSessionId is the Codex or Claude Code session ID, or a pi-durable conversation ID for Native Agent. pendingMessageCount is the number of external messages that RD has not successfully consumed. autoResumePaused is set by an explicit Stop and persists until an explicit start or human reply.
 
 ### 3.3 AgentRun
 
@@ -572,7 +573,7 @@ Success: 201 Created with the new Requirement. Its initial status is todo and it
 
 ### PATCH /api/requirements/:id
 
-Changes a TODO Requirement's title, description, or Agent configuration before its first Run. The Requirement must still be in `todo`. At least one field is required. Fields can be combined in one atomic update. Changing the provider also updates its bound RD Session; omitted model and reasoning effort fields reset to their CLI defaults for the new provider. Updated title and description are used when the RD Session starts and in Requirement search.
+Changes a Requirement's title, description, or Agent configuration. The Requirement must be in `todo` or `waiting_confirmation` with no active RD Run. At least one field is required. Title and description can change only while TODO, and their updated values are used when the RD Session starts and in Requirement search. Agent configuration can also change while waiting for confirmation; the workspace cannot be changed directly then. Changing the provider updates its bound RD Session, clears the old provider's native session ID, and resets omitted model and reasoning effort fields to defaults for the new provider. The next Run starts a new native provider conversation with the Requirement title, description, and previous conversation messages; later Runs resume that conversation. Changing only model or reasoning effort keeps the provider's native session ID and resumes it on the next Run.
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -587,9 +588,13 @@ Changes a TODO Requirement's title, description, or Agent configuration before i
 curl -X PATCH http://127.0.0.1:4310/api/requirements/req_... \
   -H 'Content-Type: application/json' \
   -d '{"title":"Add an export timeout","description":"Stop the child process and record the failure"}'
+
+curl -X PATCH http://127.0.0.1:4310/api/requirements/req_... \
+  -H 'Content-Type: application/json' \
+  -d '{"provider":"claude-code","model":"claude-sonnet-4-6","reasoningEffort":"high"}'
 ~~~
 
-Success: `200 OK` with the updated Requirement. Returns `404 Not Found` for an unknown Requirement, `409 Conflict` after execution has started, and `400 Bad Request` for missing or invalid fields. The RD Agent CLI intentionally does not expose this mutation.
+Success: `200 OK` with the updated Requirement. Returns `404 Not Found` for an unknown Requirement, `409 Conflict` when the Requirement is running or otherwise ineligible, and `400 Bad Request` for missing or invalid fields. The RD Agent CLI intentionally does not expose this mutation.
 
 ### DELETE /api/requirements/:id
 
@@ -686,7 +691,7 @@ message may be empty when attachmentIds is non-empty. requirement is the latest 
 
 ### POST /api/requirements/:id/interrupt
 
-Interrupts the current Requirement's RD Run without appending a message. The optional request body is `{"mode":"stop"|"steer"}`; only an omitted mode defaults to `stop`, while an empty or invalid mode returns 400. `steer` requires an RD-deliverable message newer than the active Run's captured input. For Codex and Claude Code it interrupts the CLI and starts a replacement Run with the new input. For Native Agent it submits `whenBusy: "steer"` to pi-durable so the new direction joins the current Run after its tool round. `stop` interrupts the active Run even without newer input. Headless CLI interruption terminates the complete tool-process tree; Native Agent calls pi-durable conversation abort.
+Interrupts the current Requirement's RD Run without appending a message. The optional request body is `{"mode":"stop"|"steer"}`; only an omitted mode defaults to `stop`, while an empty or invalid mode returns 400. `steer` requires an RD-deliverable message newer than the active Run's captured input. For Codex and Claude Code it interrupts the CLI and starts a replacement Run with the new input. For Native Agent it submits `whenBusy: "steer"` to pi-durable so the new direction joins the current Run after its tool round. `stop` interrupts and pauses automatic RD resumption even when newer input is queued. Later Reviewer, Timer, or other Agent messages remain queued until an explicit start or human reply. The pause survives an Agent Manager restart. Headless CLI interruption terminates the complete tool-process tree; Native Agent calls pi-durable conversation abort.
 
 ~~~json
 {
@@ -713,7 +718,7 @@ Success: 200 OK with the updated Requirement. Returns 404 for an unknown Require
 
 ### POST /api/requirements/:id/timers
 
-Creates a persistent timer for an active Requirement. The first occurrence is the requested interval after creation. Each occurrence appends a System message containing the timer ID, schedule, and description; an idle RD Session starts immediately and a running Session queues the message for its next Run. Recurring messages also tell the RD Agent how to cancel the timer when the follow-up is complete. Jev-created one-time timers use `messageAuthor='jev'` and deliver `continue.` directly; timers created through this endpoint use `messageAuthor='system'`.
+Creates a persistent timer for an active Requirement. The first occurrence is the requested interval after creation. Each occurrence appends a System message containing the timer ID, schedule, and description; an idle RD Session starts immediately unless an explicit Stop paused automatic resumption, in which case the message remains queued. A running Session queues the message for its next Run. Recurring messages also tell the RD Agent how to cancel the timer when the follow-up is complete. Jev-created one-time timers use `messageAuthor='jev'` and deliver `continue.` directly; timers created through this endpoint use `messageAuthor='system'`.
 
 ~~~json
 {
@@ -884,7 +889,7 @@ Request body:
 The action uses the same state-machine controls as the human endpoints:
 
 - `start` starts TODO work or retries other non-terminal work. If its Session is already running, the request is accepted without creating a second Run.
-- `stop` requires a running RD Run and interrupts it with the same semantics as the dashboard's Steering control. The Run becomes cancelled after its process exits. The Requirement moves to WAITING_CONFIRMATION when no newer input arrived after the Run started; otherwise it remains DOING and resumes automatically. Its Session returns to WAITING_HUMAN until another Run starts.
+- `stop` requires a running RD Run and pauses automatic resumption, including later Reviewer, Timer, or other Agent messages. The Run becomes cancelled after its process exits. The Requirement moves to WAITING_CONFIRMATION, and its Session returns to WAITING_HUMAN until an explicit start or human reply.
 - `delete` requires TODO and moves it to CANCELLED under the normal retention policy.
 - `done` requires WAITING_CONFIRMATION and moves it to DONE.
 
@@ -923,7 +928,7 @@ Success: 200 OK. Returns 404 for an unknown source Requirement and 400 when the 
 
 ### POST /api/agent/requirements/:sourceRequirementId/related/:targetRequirementId/messages
 
-Persists an RD Agent message in any other known Requirement and starts or queues the target RD Session. The `/related/` path is retained for compatibility; a parent-child relationship is not required. `GET /related` still lists only the direct parent and children.
+Persists an RD Agent message in any other known Requirement and starts or queues the target RD Session. A target paused by an explicit Stop remains queued. The `/related/` path is retained for compatibility; a parent-child relationship is not required. `GET /related` still lists only the direct parent and children.
 
 ~~~json
 {

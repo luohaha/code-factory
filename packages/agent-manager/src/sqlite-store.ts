@@ -83,6 +83,7 @@ function sessionFrom(row: Row, prefix = ''): AgentSession {
     lastError: row[`${prefix}last_error`] === null ? null : String(row[`${prefix}last_error`]),
     lastConsumedMessageSequence: Number(row[`${prefix}last_consumed_message_sequence`] ?? 0),
     pendingMessageCount: Number(row[`${prefix}pending_message_count`] ?? 0),
+    autoResumePaused: Number(row[`${prefix}auto_resume_paused`] ?? 0) === 1,
     createdAt: String(row[`${prefix}created_at`]),
     updatedAt: String(row[`${prefix}updated_at`]),
   };
@@ -415,15 +416,28 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     try {
       const current = this.getRequirement(input.requirementId);
       if (!current) throw new StoreNotFoundError(`Requirement ${input.requirementId} not found`);
-      if (current.status !== 'todo') {
-        throw new StoreConflictError(`Requirement ${input.requirementId} can only be changed while it is todo`);
+      if (current.status !== 'todo' && current.status !== 'waiting_confirmation') {
+        throw new StoreConflictError(`Requirement ${input.requirementId} configuration can only be changed while it is todo or waiting for confirmation`);
+      }
+      if (current.session.state === 'running') {
+        throw new StoreConflictError(`Requirement ${input.requirementId} configuration cannot be changed during an active RD Run`);
+      }
+      if (current.status === 'waiting_confirmation' && (input.title !== current.title || input.description !== current.description)) {
+        throw new StoreConflictError(`Requirement ${input.requirementId} title and description can only be changed while it is todo`);
+      }
+      if (current.status === 'waiting_confirmation' && input.sandboxId !== current.sandboxId
+        && !(current.provider === 'native-agent' && input.provider !== 'native-agent'
+          && current.sandboxId && this.getSandbox(current.sandboxId)?.kind === 'e2b'
+          && input.sandboxId === null)) {
+        throw new StoreConflictError(`Requirement ${input.requirementId} workspace can only be changed while it is todo`);
       }
       this.#db.prepare(`UPDATE requirements
         SET title = ?, description = ?, provider = ?, model = ?, reasoning_effort = ?, sandbox_id = ?, updated_at = ?
-        WHERE id = ? AND status = 'todo'`)
+        WHERE id = ? AND status IN ('todo', 'waiting_confirmation')`)
         .run(input.title, input.description, input.provider, input.model, input.reasoningEffort, input.sandboxId, input.now, input.requirementId);
-      this.#db.prepare(`UPDATE agent_sessions SET provider = ?, updated_at = ? WHERE id = ?`)
-        .run(input.provider, input.now, current.session.id);
+      this.#db.prepare(`UPDATE agent_sessions SET provider = ?, native_session_id = ?, updated_at = ? WHERE id = ?`)
+        .run(input.provider, input.provider === current.provider ? current.session.nativeSessionId : null,
+          input.now, current.session.id);
       const updated = this.requireBundle(input.requirementId);
       this.upsertSearchDocument({
         kind: 'requirement',
@@ -447,6 +461,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       r.*, s.id AS s_id, s.requirement_id AS s_requirement_id, s.provider AS s_provider,
       s.native_session_id AS s_native_session_id, s.state AS s_state, s.last_error AS s_last_error,
       s.last_consumed_message_sequence AS s_last_consumed_message_sequence,
+      s.auto_resume_paused AS s_auto_resume_paused,
       (SELECT COUNT(*) FROM requirement_messages m WHERE m.requirement_id = r.id
         AND m.deliver_to_rd = 1 AND m.sequence > s.last_consumed_message_sequence) AS s_pending_message_count,
       s.created_at AS s_created_at, s.updated_at AS s_updated_at
@@ -460,6 +475,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       r.*, s.id AS s_id, s.requirement_id AS s_requirement_id, s.provider AS s_provider,
       s.native_session_id AS s_native_session_id, s.state AS s_state, s.last_error AS s_last_error,
       s.last_consumed_message_sequence AS s_last_consumed_message_sequence,
+      s.auto_resume_paused AS s_auto_resume_paused,
       (SELECT COUNT(*) FROM requirement_messages m WHERE m.requirement_id = r.id
         AND m.deliver_to_rd = 1 AND m.sequence > s.last_consumed_message_sequence) AS s_pending_message_count,
       s.created_at AS s_created_at, s.updated_at AS s_updated_at
@@ -473,6 +489,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       r.*, s.id AS s_id, s.requirement_id AS s_requirement_id, s.provider AS s_provider,
       s.native_session_id AS s_native_session_id, s.state AS s_state, s.last_error AS s_last_error,
       s.last_consumed_message_sequence AS s_last_consumed_message_sequence,
+      s.auto_resume_paused AS s_auto_resume_paused,
       (SELECT COUNT(*) FROM requirement_messages m WHERE m.requirement_id = r.id
         AND m.deliver_to_rd = 1 AND m.sequence > s.last_consumed_message_sequence) AS s_pending_message_count,
       s.created_at AS s_created_at, s.updated_at AS s_updated_at
@@ -923,7 +940,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
         }
         this.#db.prepare("UPDATE requirements SET status = 'doing', updated_at = ? WHERE id = ?")
           .run(input.now, input.requirementId);
-        this.#db.prepare("UPDATE agent_sessions SET state = 'running', last_error = NULL, updated_at = ? WHERE id = ?")
+        this.#db.prepare("UPDATE agent_sessions SET state = 'running', last_error = NULL, auto_resume_paused = 0, updated_at = ? WHERE id = ?")
           .run(input.now, bundle.session.id);
       }
 
@@ -955,7 +972,13 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     }
   }
 
-  finishRdRun(runId: string, outcome: RunOutcome, now: string): RequirementWithSession {
+  pauseRdAutoResume(requirementId: string, now: string): void {
+    const result = this.#db.prepare(`UPDATE agent_sessions SET auto_resume_paused = 1, updated_at = ?
+      WHERE requirement_id = ? AND state = 'running'`).run(now, requirementId);
+    if (result.changes === 0) throw new StoreConflictError(`Requirement ${requirementId} does not have a running RD Run`);
+  }
+
+  finishRdRun(runId: string, outcome: RunOutcome, now: string, pauseOnCancel = false): RequirementWithSession {
     const run = this.requireRun(runId);
     if (run.role !== 'rd' || !run.sessionId) throw new StoreConflictError(`${runId} is not an RD run`);
     this.#db.exec('BEGIN IMMEDIATE');
@@ -970,7 +993,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
           updated_at = ? WHERE id = ?`)
           .run(outcome.nativeSessionId, run.inputToSequence, now, run.sessionId);
       } else if (outcome.status === 'cancelled') {
-        const hasNewMessages = this.#db.prepare(`SELECT 1 FROM requirement_messages
+        const hasNewMessages = !pauseOnCancel && this.#db.prepare(`SELECT 1 FROM requirement_messages
           WHERE requirement_id = ? AND deliver_to_rd = 1 AND sequence > COALESCE(?, 0)
             AND sequence > (SELECT last_consumed_message_sequence FROM agent_sessions WHERE id = ?)
           LIMIT 1`)
@@ -1026,7 +1049,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
         throw new StoreConflictError(`Requirement ${requirementId} cannot transition to ${next}`);
       }
       if (next === 'done' || next === 'cancelled') {
-        this.#db.prepare("UPDATE agent_sessions SET state = 'completed', last_error = NULL, updated_at = ? WHERE requirement_id = ?")
+        this.#db.prepare("UPDATE agent_sessions SET state = 'completed', last_error = NULL, auto_resume_paused = 0, updated_at = ? WHERE requirement_id = ?")
           .run(now, requirementId);
         this.#db.prepare(`UPDATE agent_timers
           SET status = 'cancelled', next_fire_at = NULL, updated_at = ?
@@ -1209,6 +1232,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     this.#db.prepare(`UPDATE requirements SET sandbox_id = NULL
       WHERE sandbox_id IN (SELECT id FROM sandboxes WHERE kind = 'local-sandbox')`).run();
     ensureColumn('agent_sessions', 'last_consumed_message_sequence', 'INTEGER NOT NULL DEFAULT 0');
+    ensureColumn('agent_sessions', 'auto_resume_paused', 'INTEGER NOT NULL DEFAULT 0 CHECK (auto_resume_paused IN (0, 1))');
     ensureColumn('agent_runs', 'model', 'TEXT');
     ensureColumn('agent_runs', 'reasoning_effort', "TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max'))");
     ensureColumn('agent_runs', 'input_from_sequence', 'INTEGER');

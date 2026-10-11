@@ -51,6 +51,7 @@ export interface AgentSessionDto {
   lastError: string | null;
   lastConsumedMessageSequence: number;
   pendingMessageCount: number;
+  autoResumePaused: boolean;
   createdAt: string;
   updatedAt: string;
 }

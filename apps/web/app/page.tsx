@@ -638,6 +638,9 @@ function EditRequirementAgentConfigurationDialog({
   const [model, setModel] = useState(requirement.model ?? '');
   const [reasoningEffort, setReasoningEffort] = useState(requirement.reasoningEffort ?? '');
   const [sandboxId, setSandboxId] = useState(requirement.sandboxId ?? '');
+  const movesFromE2B = requirement.status === 'waiting_confirmation'
+    && requirement.provider === 'native-agent' && provider !== 'native-agent'
+    && sandboxes.some((sandbox) => sandbox.id === requirement.sandboxId && sandbox.kind === 'e2b');
 
   async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
     event.preventDefault();
@@ -650,7 +653,7 @@ function EditRequirementAgentConfigurationDialog({
         reasoningEffort: reasoningEffort
           ? reasoningEffort as AgentReasoningEffort
           : null,
-        sandboxId: sandboxId || null,
+        ...(requirement.status === 'todo' ? { sandboxId: sandboxId || null } : {}),
       });
       setOpen(false);
     } catch (caught) {
@@ -682,7 +685,10 @@ function EditRequirementAgentConfigurationDialog({
           <DialogHeader>
             <DialogTitle>{t('Edit Agent configuration')}</DialogTitle>
             <DialogDescription>
-              {t('Choose the Agent, model, and reasoning effort to use when this TODO requirement starts.')}
+              {requirement.status === 'todo'
+                ? t('Choose the Agent, model, and reasoning effort to use when this TODO requirement starts.')
+                : t('Changes take effect on the next Run. Switching Agent starts a new provider conversation with the previous requirement messages; the previous provider context cannot be resumed.')}
+              {movesFromE2B ? ` ${t('Headless Agents use the Default workspace when switching from an E2B workspace.')}` : null}
             </DialogDescription>
           </DialogHeader>
           {submitError ? (
@@ -745,16 +751,18 @@ function EditRequirementAgentConfigurationDialog({
                 <NativeSelectOption value="max">Max</NativeSelectOption>
               </NativeSelect>
             </Field>
-            <Field>
-              <FieldLabel htmlFor={`${fieldId}-sandbox`}>{t('Workspace')}</FieldLabel>
-              <NativeSelect id={`${fieldId}-sandbox`} name="sandboxId" className="w-full"
-                value={sandboxId} disabled={submitting} onChange={(event) => setSandboxId(event.target.value)}>
-                {sandboxes.filter((sandbox) => sandbox.id === 'local' || sandbox.kind === 'local' || provider === 'native-agent')
-                  .map((sandbox) => <NativeSelectOption key={sandbox.id} value={sandbox.id === 'local' ? '' : sandbox.id}>
-                    {sandbox.id === 'local' ? t('Default workspace') : sandbox.name} · {sandbox.cwd}
-                  </NativeSelectOption>)}
-              </NativeSelect>
-            </Field>
+            {requirement.status === 'todo' ? (
+              <Field>
+                <FieldLabel htmlFor={`${fieldId}-sandbox`}>{t('Workspace')}</FieldLabel>
+                <NativeSelect id={`${fieldId}-sandbox`} name="sandboxId" className="w-full"
+                  value={sandboxId} disabled={submitting} onChange={(event) => setSandboxId(event.target.value)}>
+                  {sandboxes.filter((sandbox) => sandbox.id === 'local' || sandbox.kind === 'local' || provider === 'native-agent')
+                    .map((sandbox) => <NativeSelectOption key={sandbox.id} value={sandbox.id === 'local' ? '' : sandbox.id}>
+                      {sandbox.id === 'local' ? t('Default workspace') : sandbox.name} · {sandbox.cwd}
+                    </NativeSelectOption>)}
+                </NativeSelect>
+              </Field>
+            ) : null}
           </FieldGroup>
           <DialogFooter>
             <DialogClose render={<Button type="button" variant="outline" />}>{t('Cancel')}</DialogClose>
@@ -2363,13 +2371,16 @@ function RequirementDetail({
             <span aria-hidden="true">·</span>
             <span className="font-mono">ses-{shortId(requirement.session.id)}</span>
           </SheetDescription>
-          {requirement.status === 'todo' ? (
+          {(requirement.status === 'todo' || requirement.status === 'waiting_confirmation')
+            && requirement.session.state !== 'running' ? (
             <div className="mt-3 flex flex-wrap gap-2">
-              <EditRequirementDetailsDialog
-                requirement={requirement}
-                busy={busy}
-                onUpdate={onUpdateDetails}
-              />
+              {requirement.status === 'todo' ? (
+                <EditRequirementDetailsDialog
+                  requirement={requirement}
+                  busy={busy}
+                  onUpdate={onUpdateDetails}
+                />
+              ) : null}
               <EditRequirementAgentConfigurationDialog
                 client={client}
                 requirement={requirement}
@@ -2547,9 +2558,16 @@ function RequirementDetail({
                 <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-emerald-500/12 text-emerald-600"><Bot className="size-3.5" /></span>
                 <span className="flex min-w-0 flex-1 items-center gap-2"><LoaderCircle className="size-3.5 shrink-0 animate-spin" />{t('RD Agent is working; new messages are queued by default.')}</span>
                 {activeRdRun && messagesReady ? (
-                  <Button type="button" variant="ghost" size="xs" className="shrink-0 text-amber-700 dark:text-amber-300" disabled={busy} onClick={() => void onInterrupt(hasNewerInput ? 'steer' : 'stop').catch(() => undefined)}>
-                    <Square data-icon="inline-start" />{t(hasNewerInput ? 'Steering' : 'Stop Run')}
-                  </Button>
+                  <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                    {hasNewerInput ? (
+                      <Button type="button" variant="ghost" size="xs" className="text-amber-700 dark:text-amber-300" disabled={busy} onClick={() => void onInterrupt('steer').catch(() => undefined)}>
+                        <Square data-icon="inline-start" />{t('Steering')}
+                      </Button>
+                    ) : null}
+                    <Button type="button" variant="ghost" size="xs" className="text-amber-700 dark:text-amber-300" disabled={busy} onClick={() => void onInterrupt('stop').catch(() => undefined)}>
+                      <Square data-icon="inline-start" />{t('Stop Run')}
+                    </Button>
+                  </div>
                 ) : null}
               </div>
             ) : null}

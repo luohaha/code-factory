@@ -403,7 +403,7 @@ test('HTTP API rejects unsupported reasoning effort values', async () => {
   }
 });
 
-test('HTTP API updates TODO Requirement content and Agent configuration', async () => {
+test('HTTP API updates TODO content and Agent configuration, then permits only configuration while waiting', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const manager = new AgentManager({
     workspaceRoot: process.cwd(),
@@ -533,20 +533,39 @@ test('HTTP API updates TODO Requirement content and Agent configuration', async 
     });
     assert.equal(emptyResponse.status, 400);
 
-    store.transitionRequirement(requirement.id, ['todo'], 'doing', new Date().toISOString());
+    store.beginRun({ runId: 'run-edit-api', requirementId: requirement.id, role: 'rd', provider: 'codex',
+      taskSummary: 'Start RD session', now: new Date().toISOString() });
     const conflictResponse = await fetch(endpoint, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ provider: 'codex' }),
+      body: JSON.stringify({ provider: 'claude-code' }),
     });
     assert.equal(conflictResponse.status, 409);
-    const contentConflictResponse = await fetch(endpoint, {
+    const activeContentConflictResponse = await fetch(endpoint, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ title: 'Too late', description: 'Run already started' }),
     });
-    assert.equal(contentConflictResponse.status, 409);
+    assert.equal(activeContentConflictResponse.status, 409);
     assert.equal(store.getRequirement(requirement.id)?.title, 'Title only');
+
+    store.finishRdRun('run-edit-api', { status: 'succeeded', exitCode: 0,
+      nativeSessionId: 'codex-thread', finalMessage: 'done', error: null }, new Date().toISOString());
+    const waitingContentConflictResponse = await fetch(endpoint, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Still too late' }),
+    });
+    assert.equal(waitingContentConflictResponse.status, 409);
+    const waitingResponse = await fetch(endpoint, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'claude-code', model: 'claude-new' }),
+    });
+    assert.equal(waitingResponse.status, 200);
+    const waiting = await waitingResponse.json() as { status: string; session: { nativeSessionId: string | null } };
+    assert.equal(waiting.status, 'waiting_confirmation');
+    assert.equal(waiting.session.nativeSessionId, null);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();

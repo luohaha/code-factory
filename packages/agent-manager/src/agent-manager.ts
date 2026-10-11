@@ -177,7 +177,7 @@ export class AgentManager extends EventEmitter {
   readonly #maxOutputBytes: number;
   readonly #agentCliBinDirectory: string | null;
   readonly #modelCatalog: AgentModelCatalogService;
-  readonly #activeRdRuns = new Map<string, { runId: string; controller: AbortController; steering: Promise<void> }>();
+  readonly #activeRdRuns = new Map<string, { runId: string; controller: AbortController; steering: Promise<void>; stopRequested: boolean }>();
   readonly #pendingJevDecisions = new Set<AbortController>();
   readonly #agentTriggers = new Map<string, AgentTrigger>();
   readonly #pullRequestReconciler: PullRequestReconciler;
@@ -679,8 +679,17 @@ export class AgentManager extends EventEmitter {
     }
     const current = this.#store.getRequirement(id);
     if (!current) throw new StoreNotFoundError(`Requirement ${id} not found`);
-    if (current.status !== 'todo') {
-      throw new StoreConflictError(`Requirement ${id} can only be changed while it is todo`);
+    if (current.status !== 'todo' && current.status !== 'waiting_confirmation') {
+      throw new StoreConflictError(`Requirement ${id} configuration can only be changed while it is todo or waiting for confirmation`);
+    }
+    if (current.session.state === 'running') {
+      throw new StoreConflictError(`Requirement ${id} configuration cannot be changed during an active RD Run`);
+    }
+    if (current.status === 'waiting_confirmation' && (hasTitle || hasDescription)) {
+      throw new StoreConflictError(`Requirement ${id} title and description can only be changed while it is todo`);
+    }
+    if (current.status === 'waiting_confirmation' && hasSandbox) {
+      throw new StoreConflictError(`Requirement ${id} workspace can only be changed while it is todo`);
     }
     const title = hasTitle ? input.title?.trim() : current.title;
     const description = hasDescription ? input.description?.trim() : current.description;
@@ -1393,7 +1402,7 @@ export class AgentManager extends EventEmitter {
         sourceRequirementId: source.id,
       });
     }
-    const queued = current.session.state === 'running';
+    const queued = current.session.state === 'running' || current.session.autoResumePaused;
     if (!queued) {
       void this.startRdRun(target.id).catch((error: unknown) => {
         this.logger.error('RD run failed unexpectedly', { requirementId: target.id, error });
@@ -1415,6 +1424,10 @@ export class AgentManager extends EventEmitter {
     }
     const active = this.#activeRdRuns.get(requirementId);
     if (!active) throw new StoreConflictError(`Requirement ${requirementId} RD Run cannot be interrupted`);
+    if (mode === 'stop') {
+      this.#store.pauseRdAutoResume(requirementId, new Date().toISOString());
+      active.stopRequested = true;
+    }
     if (mode === 'steer') {
       const run = this.#store.getRun(active.runId);
       const inputToSequence = run?.inputToSequence ?? 0;
@@ -1630,9 +1643,11 @@ export class AgentManager extends EventEmitter {
     const pendingMessages = this.#store.listPendingRdMessages(requirementId);
     const runId = `run_${randomUUID()}`;
     const isResume = requirement.session.nativeSessionId !== null;
+    const needsHistory = !isResume && this.#store.listRuns(requirementId).some((run) => run.role === 'rd');
     const inputFromSequence = pendingMessages.at(0)?.sequence;
     const inputToSequence = pendingMessages.at(-1)?.sequence;
-    const prompt = this.buildRdPrompt(requirement, pendingMessages, isResume);
+    const prompt = this.buildRdPrompt(requirement,
+      needsHistory ? this.#store.listMessages(requirementId) : pendingMessages, isResume, needsHistory);
     const imagePaths = pendingMessages.flatMap((message) => message.attachments
       .filter((attachment) => attachment.kind === 'image')
       .map((attachment) => attachment.localPath));
@@ -1651,7 +1666,7 @@ export class AgentManager extends EventEmitter {
       now: new Date().toISOString(),
     });
     const controller = new AbortController();
-    this.#activeRdRuns.set(requirementId, { runId, controller, steering: Promise.resolve() });
+    this.#activeRdRuns.set(requirementId, { runId, controller, steering: Promise.resolve(), stopRequested: false });
     this.publish({
       type: 'run.started',
       requirementId,
@@ -1729,8 +1744,9 @@ export class AgentManager extends EventEmitter {
     return execution.then(async (outcome) => {
       const active = this.#activeRdRuns.get(requirementId);
       if (active?.runId === runId) await active.steering;
+      const pauseOnCancel = outcome.status === 'cancelled' && active?.runId === runId && active.stopRequested;
       if (active?.runId === runId) this.#activeRdRuns.delete(requirementId);
-      const current = this.#store.finishRdRun(runId, outcome, new Date().toISOString());
+      const current = this.#store.finishRdRun(runId, outcome, new Date().toISOString(), pauseOnCancel);
       if (outcome.status !== 'succeeded') {
         this.appendMessage({
           requirementId,
@@ -1748,7 +1764,9 @@ export class AgentManager extends EventEmitter {
           outcome.status === 'succeeded' ? lastAgentMessage || outcome.finalMessage || '' : '');
       }
       if (outcome.status === 'succeeded') this.schedulePendingRdMessages(requirementId);
-      if (outcome.status === 'cancelled') this.schedulePendingRdMessages(requirementId, inputToSequence ?? 0);
+      if (outcome.status === 'cancelled' && !pauseOnCancel) {
+        this.schedulePendingRdMessages(requirementId, inputToSequence ?? 0);
+      }
       return current;
     });
   }
@@ -1890,7 +1908,8 @@ export class AgentManager extends EventEmitter {
       if (this.#closed) return;
       const current = this.#store.getRequirement(requirementId);
       if (!current) return;
-      if (current.status === 'done' || current.status === 'cancelled' || current.session.state === 'running') return;
+      if (current.status === 'done' || current.status === 'cancelled'
+        || current.session.state === 'running' || current.session.autoResumePaused) return;
       if (!this.#store.listPendingRdMessages(requirementId).some((message) => message.sequence > afterSequence)) return;
       void this.startRdRun(requirementId).catch((error: unknown) => {
         this.logger.error('RD run failed unexpectedly', { requirementId, error });
@@ -1945,6 +1964,7 @@ export class AgentManager extends EventEmitter {
     requirement: RequirementWithSession,
     messages: RequirementMessage[],
     isResume: boolean,
+    needsHistory = false,
   ): string {
     const incoming = this.formatRdMessages(messages);
     const context = `Requirement: ${requirement.id}\nTitle: ${requirement.title}\nDescription:\n${requirement.description}`;
@@ -1952,7 +1972,10 @@ export class AgentManager extends EventEmitter {
       return [
         'Handle the following requirement. Inspect repository instructions, make any necessary changes, validate them, and report the result.',
         context,
-        incoming ? `New requirement conversation messages:\n\n${incoming}` : '',
+        needsHistory
+          ? 'This is a new provider session for work that has already started. Review the conversation history and inspect the workspace, Git state, and any PR before acting. Earlier work may be partially complete; avoid repeating side effects.'
+          : '',
+        incoming ? `${needsHistory ? 'Previous requirement conversation history' : 'New requirement conversation messages'}:\n\n${incoming}` : '',
       ].filter(Boolean).join('\n\n');
     }
     return [
@@ -1974,8 +1997,10 @@ export class AgentManager extends EventEmitter {
           ? 'Reviewer'
           : message.author === 'jev'
             ? 'Jev'
-            : message.author === 'rd_agent' && message.sourceRequirementId
-              ? `RD Agent from ${sourceRequirement?.title ?? 'deleted Requirement'} (${message.sourceRequirementId})`
+            : message.author === 'rd_agent'
+              ? message.sourceRequirementId
+                ? `RD Agent from ${sourceRequirement?.title ?? 'deleted Requirement'} (${message.sourceRequirementId})`
+                : 'Previous RD Agent'
               : 'System';
       const attachments = message.attachments.map((attachment, index) =>
         `- Attachment ${index + 1} "${attachment.fileName}": ${attachment.localPath} (${attachment.mediaType}, ${attachment.byteSize} bytes)`).join('\n');
