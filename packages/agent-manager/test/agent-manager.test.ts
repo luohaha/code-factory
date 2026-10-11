@@ -6,7 +6,7 @@ import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 
 import type { AgentTrigger, AgentTriggerContext, AgentTriggerMessage } from '../src/agent-trigger.ts';
-import { AgentManager } from '../src/agent-manager.ts';
+import { AgentManager, MAX_HANDOFF_PROMPT_CHARS } from '../src/agent-manager.ts';
 import { DEFAULT_AGENT_MANAGER_CONFIGURATION } from '../src/configuration.ts';
 import {
   CODE_FACTORY_API_URL,
@@ -697,6 +697,109 @@ test('Agent Manager switches providers after a Run and hands the visible convers
     assert.ok(!(runner.requests[2]?.invocation.input ?? '').includes('Previous requirement conversation history'));
     runner.resolvers[2]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'claude-session', finalMessage: 'done', error: null });
     await third;
+  } finally {
+    await manager.close();
+  }
+});
+
+test('long provider handoff keeps decisions, attachments, recent progress, workspace, PR state, and pending input within its bound', async () => {
+  const attachmentDirectory = mkdtempSync(join(tmpdir(), 'code-factory-handoff-'));
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), attachmentDirectory, store, runner, logger: silentLogger });
+  try {
+    const created = manager.createRequirement({ title: 'Long handoff', description: 'Keep the agreed scope', provider: 'codex' });
+    const attachment = manager.uploadMessageAttachment(created.id, {
+      fileName: 'requirements.txt', mediaType: 'text/plain', data: Buffer.from('specification'),
+    });
+    store.appendMessage({
+      id: 'msg_handoff_decision', requirementId: created.id, sessionId: created.session.id,
+      author: 'human', body: 'Decision: keep the public API compatible with existing clients.',
+      attachmentIds: [attachment.id], deliverToRd: true, now: new Date().toISOString(),
+    });
+    const first = manager.runRequirement(created.id);
+    for (let index = 0; index < 100; index += 1) {
+      runner.requests[0]?.onEvent?.({ kind: 'message', message: `Old progress ${index}: ${'filler '.repeat(180)}`, raw: {} });
+    }
+    runner.requests[0]?.onEvent?.({ kind: 'message', message: 'Recent progress: migration is ready for review.', raw: {} });
+    runner.resolvers[0]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'old-thread', finalMessage: null, error: null });
+    await first;
+    manager.trackPullRequest({
+      requirementId: created.id, repository: 'owner/repo', number: 137,
+      url: 'https://github.com/owner/repo/pull/137', title: 'Keep API compatible',
+      baseBranch: 'main', headBranch: 'codex/long-handoff', headSha: 'a'.repeat(40), status: 'open',
+    });
+    manager.updateRequirementAgentConfiguration(created.id, { provider: 'claude-code' });
+    const consumedBefore = store.getRequirement(created.id)?.session.lastConsumedMessageSequence;
+    const second = manager.runRequirement(created.id, 'Pending human direction after switch');
+    const prompt = runner.requests[1]?.invocation.input ?? '';
+    assert.ok(prompt.length <= MAX_HANDOFF_PROMPT_CHARS, `handoff prompt has ${prompt.length} characters`);
+    assert.match(prompt, /Decision: keep the public API compatible/);
+    assert.match(prompt, /requirements\.txt/);
+    assert.ok(prompt.includes(attachment.localPath));
+    assert.match(prompt, /Recent progress: migration is ready for review/);
+    assert.match(prompt, /codex\/long-handoff/);
+    assert.match(prompt, /https:\/\/github.com\/owner\/repo\/pull\/137/);
+    assert.match(prompt, /Selected workspace:/);
+    assert.ok(!prompt.includes('Old progress 50:'), 'routine older output is omitted');
+    assert.equal(prompt.split('Pending human direction after switch').length - 1, 1);
+    assert.equal(store.getRequirement(created.id)?.session.lastConsumedMessageSequence, consumedBefore);
+    runner.resolvers[1]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'new-session', finalMessage: 'done', error: null });
+    await second;
+    assert.equal(store.getRequirement(created.id)?.session.pendingMessageCount, 0);
+  } finally {
+    await manager.close();
+    rmSync(attachmentDirectory, { recursive: true, force: true });
+  }
+});
+
+test('long provider handoff batches pending messages and retries the same range after failure', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
+  try {
+    const created = manager.createRequirement({ title: 'Batch handoff', description: 'Deliver every pending message', provider: 'codex' });
+    const first = manager.runRequirement(created.id, 'Initial task');
+    runner.resolvers[0]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'old-thread', finalMessage: 'started', error: null });
+    await first;
+    for (let index = 0; index < 40; index += 1) {
+      store.appendMessage({
+        id: `msg_batch_${index}`, requirementId: created.id, sessionId: created.session.id,
+        author: 'human', body: `Pending item ${index}: ${'content '.repeat(80)}`,
+        deliverToRd: true, now: new Date().toISOString(),
+      });
+    }
+    const lastPendingSequence = store.listPendingRdMessages(created.id).at(-1)?.sequence;
+    manager.updateRequirementAgentConfiguration(created.id, { provider: 'claude-code' });
+    const before = store.getRequirement(created.id)?.session.lastConsumedMessageSequence;
+    const firstHandoff = manager.runRequirement(created.id);
+    const firstRange = manager.listRuns(created.id)[0];
+    assert.ok(firstRange?.inputToSequence && firstRange.inputToSequence < store.listPendingRdMessages(created.id).at(-1)!.sequence);
+    assert.ok((runner.requests[1]?.invocation.input.length ?? 0) <= MAX_HANDOFF_PROMPT_CHARS);
+    runner.resolvers[1]?.({ status: 'failed', exitCode: 1, nativeSessionId: null, finalMessage: null, error: 'test failure' });
+    await firstHandoff;
+    assert.equal(store.getRequirement(created.id)?.session.lastConsumedMessageSequence, before);
+
+    const retry = manager.runRequirement(created.id);
+    assert.equal(manager.listRuns(created.id)[0]?.inputToSequence, firstRange.inputToSequence);
+    assert.match(runner.requests[2]?.invocation.input ?? '', /Pending item 0:/);
+    runner.resolvers[2]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'new-session', finalMessage: 'continued', error: null });
+    await retry;
+    for (let index = 3; store.listPendingRdMessages(created.id).length > 0; index += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.ok(runner.requests[index], `queued batch ${index} started`);
+      assert.ok((runner.requests[index]?.invocation.input.length ?? 0) < 15_000);
+      assert.ok(!(runner.requests[index]?.invocation.input ?? '').includes('Previous requirement conversation history'));
+      runner.resolvers[index]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'new-session', finalMessage: 'continued', error: null });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.ok(index < 10, 'pending delivery completes in a bounded number of Runs');
+    }
+    assert.equal(store.getRequirement(created.id)?.session.pendingMessageCount, 0);
+    assert.equal(store.getRequirement(created.id)?.session.lastConsumedMessageSequence, lastPendingSequence);
+    const successfulPrompts = runner.requests.slice(2).map((request) => request.invocation.input).join('\n');
+    for (let index = 0; index < 40; index += 1) {
+      assert.equal(successfulPrompts.split(`Pending item ${index}:`).length - 1, 1);
+    }
   } finally {
     await manager.close();
   }
