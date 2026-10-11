@@ -777,6 +777,35 @@ test('long provider handoff keeps decisions, attachments, recent progress, works
   }
 });
 
+test('provider handoff retains a decision near the end of a long recent human message', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
+  const decision = 'Decision: keep the final migration step mandatory.';
+  try {
+    const requirement = manager.createRequirement({ title: 'Recent decision', description: 'Migrate the data', provider: 'codex' });
+    const longMessage = `Requirement context ${'background detail '.repeat(150)}${decision}`;
+    const first = manager.runRequirement(requirement.id, longMessage);
+    runner.resolvers[0]?.({ status: 'succeeded', exitCode: 0,
+      nativeSessionId: 'old-thread', finalMessage: 'Initial work finished', error: null });
+    await first;
+    manager.updateRequirementAgentConfiguration(requirement.id, { provider: 'claude-code' });
+
+    const second = manager.runRequirement(requirement.id, 'Continue after switching providers');
+    const prompt = runner.requests[1]?.invocation.input ?? '';
+    assert.ok(prompt.length <= MAX_HANDOFF_PROMPT_CHARS);
+    assert.match(prompt, /Recent prior conversation/);
+    assert.match(prompt, /Decision and work excerpts from truncated recent messages/);
+    assert.match(prompt, /\[Human #1\][\s\S]*Decision: keep the final migration step mandatory\./);
+    assert.ok(!prompt.includes(longMessage), 'the long consumed message is not replayed in full');
+    runner.resolvers[1]?.({ status: 'succeeded', exitCode: 0,
+      nativeSessionId: 'new-thread', finalMessage: 'Done', error: null });
+    await second;
+  } finally {
+    await manager.close();
+  }
+});
+
 test('long provider handoff batches pending messages and retries the same range after failure', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new DeferredRunner();

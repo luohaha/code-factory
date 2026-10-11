@@ -160,10 +160,22 @@ function handoffExcerpt(value: string, limit: number): string {
   return `${value.slice(0, Math.max(0, limit - 24))}\n[excerpt truncated]`;
 }
 
-function decisionExcerpt(body: string): string {
+function decisionExcerpt(body: string, limit = 500): string {
   const lines = body.split('\n').map((line) => line.trim()).filter(Boolean);
   const matching = lines.filter((line) => HANDOFF_DECISION_PATTERN.test(line));
-  return handoffExcerpt((matching.length > 0 ? matching : lines).slice(0, 3).join('\n'), 500);
+  const selected = matching.length > 3 ? [matching[0]!, ...matching.slice(-2)]
+    : matching.length > 0 ? matching : lines.slice(0, 3);
+  const lineLimit = Math.floor((limit - Math.max(0, selected.length - 1)) / Math.max(1, selected.length));
+  return selected.map((line) => {
+    if (line.length <= lineLimit) return line;
+    const explicitDecision = [...line.matchAll(/\bdecis(?:ion|ions)\b|\bdecid(?:e|ed|ing)\b|决定|确认/gi)].at(-1);
+    const match = explicitDecision ?? [...line.matchAll(new RegExp(HANDOFF_DECISION_PATTERN.source, 'gi'))].at(-1);
+    const start = Math.max(0, Math.min(line.length - lineLimit + 1, (match?.index ?? line.length) - 24));
+    const prefix = start > 0 ? '…' : '';
+    const fitsTail = start + lineLimit - prefix.length >= line.length;
+    const end = Math.min(line.length, start + lineLimit - prefix.length - (fitsTail ? 0 : 1));
+    return `${prefix}${line.slice(start, end)}${end < line.length ? '…' : ''}`;
+  }).join('\n');
 }
 
 const REVIEWER_DEVELOPER_INSTRUCTIONS = [
@@ -2110,8 +2122,22 @@ export class AgentManager extends EventEmitter {
       sections.push(section);
       remaining -= section.length + 2;
     };
-    const recentText = recent.map((message) => handoffExcerpt(this.formatRdMessages([message]), 750)).join('\n\n');
+    const recentDecisionCandidates = recent.filter((message) => HANDOFF_DECISION_PATTERN.test(message.body));
+    const decisionTextFor = (message: RequirementMessage) => this.formatRdMessages([{
+      ...message, body: decisionExcerpt(message.body, 300), attachments: [],
+    }]);
+    // Reserve room for decision lines that disappear from the ordinary recent-message excerpts.
+    const recentDecisionReserve = recentDecisionCandidates.length > 0
+      ? Math.min(3_500, recentDecisionCandidates.map(decisionTextFor).join('\n\n').length) + 100 : 0;
+    const recentMessageLimit = recent.length > 0
+      ? Math.min(750, Math.max(120, Math.floor((remaining - recentDecisionReserve - 100 - 2 * (recent.length - 1)) / recent.length)))
+      : 750;
+    const recentText = recent.map((message) => handoffExcerpt(this.formatRdMessages([message]), recentMessageLimit)).join('\n\n');
+    const recentDecisionText = recentDecisionCandidates
+      .filter((message) => this.formatRdMessages([message]).length > recentMessageLimit)
+      .map(decisionTextFor).join('\n\n');
     addSection('Recent prior conversation (sequence order)', recentText, 8_500);
+    addSection('Decision and work excerpts from truncated recent messages (verify before relying on them)', recentDecisionText, 3_500);
     const decisions = older.filter((message) => HANDOFF_DECISION_PATTERN.test(message.body));
     const selectedDecisions = [...new Map([...decisions.slice(0, 3), ...decisions.slice(-6)]
       .map((message) => [message.id, message])).values()].sort((a, b) => a.sequence - b.sequence);
