@@ -1402,7 +1402,7 @@ export class AgentManager extends EventEmitter {
         sourceRequirementId: source.id,
       });
     }
-    const queued = current.session.state === 'running';
+    const queued = current.session.state === 'running' || current.session.autoResumePaused;
     if (!queued) {
       void this.startRdRun(target.id).catch((error: unknown) => {
         this.logger.error('RD run failed unexpectedly', { requirementId: target.id, error });
@@ -1424,7 +1424,10 @@ export class AgentManager extends EventEmitter {
     }
     const active = this.#activeRdRuns.get(requirementId);
     if (!active) throw new StoreConflictError(`Requirement ${requirementId} RD Run cannot be interrupted`);
-    if (mode === 'stop') active.stopRequested = true;
+    if (mode === 'stop') {
+      this.#store.pauseRdAutoResume(requirementId, new Date().toISOString());
+      active.stopRequested = true;
+    }
     if (mode === 'steer') {
       const run = this.#store.getRun(active.runId);
       const inputToSequence = run?.inputToSequence ?? 0;
@@ -1905,7 +1908,8 @@ export class AgentManager extends EventEmitter {
       if (this.#closed) return;
       const current = this.#store.getRequirement(requirementId);
       if (!current) return;
-      if (current.status === 'done' || current.status === 'cancelled' || current.session.state === 'running') return;
+      if (current.status === 'done' || current.status === 'cancelled'
+        || current.session.state === 'running' || current.session.autoResumePaused) return;
       if (!this.#store.listPendingRdMessages(requirementId).some((message) => message.sequence > afterSequence)) return;
       void this.startRdRun(requirementId).catch((error: unknown) => {
         this.logger.error('RD run failed unexpectedly', { requirementId, error });

@@ -2558,9 +2558,16 @@ function RequirementDetail({
                 <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-emerald-500/12 text-emerald-600"><Bot className="size-3.5" /></span>
                 <span className="flex min-w-0 flex-1 items-center gap-2"><LoaderCircle className="size-3.5 shrink-0 animate-spin" />{t('RD Agent is working; new messages are queued by default.')}</span>
                 {activeRdRun && messagesReady ? (
-                  <Button type="button" variant="ghost" size="xs" className="shrink-0 text-amber-700 dark:text-amber-300" disabled={busy} onClick={() => void onInterrupt(hasNewerInput ? 'steer' : 'stop').catch(() => undefined)}>
-                    <Square data-icon="inline-start" />{t(hasNewerInput ? 'Steering' : 'Stop Run')}
-                  </Button>
+                  <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                    {hasNewerInput ? (
+                      <Button type="button" variant="ghost" size="xs" className="text-amber-700 dark:text-amber-300" disabled={busy} onClick={() => void onInterrupt('steer').catch(() => undefined)}>
+                        <Square data-icon="inline-start" />{t('Steering')}
+                      </Button>
+                    ) : null}
+                    <Button type="button" variant="ghost" size="xs" className="text-amber-700 dark:text-amber-300" disabled={busy} onClick={() => void onInterrupt('stop').catch(() => undefined)}>
+                      <Square data-icon="inline-start" />{t('Stop Run')}
+                    </Button>
+                  </div>
                 ) : null}
               </div>
             ) : null}

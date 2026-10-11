@@ -223,6 +223,7 @@ export interface AgentManagerStore {
   finishReviewRequest(id: string, outcome: RunOutcome, now: string): ReviewRequest;
   listReviewRequests(pullRequestId?: string): ReviewRequest[];
   beginRun(input: BeginRunRecord): { requirement: Requirement; session: AgentSession; run: AgentRun };
+  pauseRdAutoResume(requirementId: string, now: string): void;
   finishRdRun(runId: string, outcome: RunOutcome, now: string, pauseOnCancel?: boolean): RequirementWithSession;
   finishReviewRun(runId: string, outcome: RunOutcome, now: string): AgentRun;
   setNativeSessionId(sessionId: string, nativeSessionId: string, now: string): void;

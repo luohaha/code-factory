@@ -36,6 +36,39 @@ test('a requirement is created atomically with exactly one RD session', () => {
   }
 });
 
+test('explicit Stop pause survives a store reopen and clears when an RD Run starts', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-paused-session-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  try {
+    const initial = new SqliteAgentManagerStore(databasePath);
+    try {
+      initial.createRequirement({ requirementId: 'req-paused', sessionId: 'ses-paused',
+        title: 'Paused work', description: 'Resume deliberately', provider: 'codex', now });
+      initial.beginRun({ runId: 'run-paused', requirementId: 'req-paused', role: 'rd',
+        provider: 'codex', taskSummary: 'Start', now });
+      initial.pauseRdAutoResume('req-paused', now);
+      initial.finishRdRun('run-paused', { status: 'cancelled', exitCode: null,
+        nativeSessionId: null, finalMessage: null, error: null }, now, true);
+      assert.equal(initial.getRequirement('req-paused')?.session.autoResumePaused, true);
+    } finally {
+      initial.close();
+    }
+
+    const reopened = new SqliteAgentManagerStore(databasePath);
+    try {
+      assert.equal(reopened.getRequirement('req-paused')?.session.autoResumePaused, true);
+      const started = reopened.beginRun({ runId: 'run-resumed', requirementId: 'req-paused', role: 'rd',
+        provider: 'codex', taskSummary: 'Resume', now });
+      assert.equal(started.session.autoResumePaused, false);
+      assert.equal(reopened.getRequirement('req-paused')?.session.autoResumePaused, false);
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('multiple native requirements can select one persisted sandbox', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {
@@ -1216,6 +1249,11 @@ test('legacy databases add nullable model and reasoning configuration columns', 
       id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL,
       provider TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
     ) STRICT;
+    CREATE TABLE agent_sessions (
+      id TEXT PRIMARY KEY, requirement_id TEXT NOT NULL, provider TEXT NOT NULL,
+      native_session_id TEXT, state TEXT NOT NULL, last_error TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    ) STRICT;
     CREATE TABLE agent_runs (
       id TEXT PRIMARY KEY, requirement_id TEXT NOT NULL, session_id TEXT, role TEXT NOT NULL,
       provider TEXT NOT NULL, status TEXT NOT NULL, task_summary TEXT NOT NULL, native_session_id TEXT,
@@ -1238,6 +1276,8 @@ test('legacy databases add nullable model and reasoning configuration columns', 
       assert.ok(columns.some((column) => column.name === 'model'), `${table} should contain model`);
       assert.ok(columns.some((column) => column.name === 'reasoning_effort'), `${table} should contain reasoning_effort`);
     }
+    const sessionColumns = migrated.prepare('PRAGMA table_info(agent_sessions)').all() as Array<{ name: string }>;
+    assert.ok(sessionColumns.some((column) => column.name === 'auto_resume_paused'));
     const parentIndexColumns = migrated.prepare('PRAGMA index_info(requirements_parent_updated)').all() as Array<{
       name: string;
     }>;
