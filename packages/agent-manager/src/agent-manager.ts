@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, posix, resolve } from 'node:path';
 
 import { normalizeRepositoryKey } from './repository-key.js';
@@ -127,6 +127,7 @@ export const MAX_AGENT_TRACE_DETAIL_BYTES = 65_536;
 export const MAX_HANDOFF_PROMPT_CHARS = 32_000;
 
 const MAX_HANDOFF_PENDING_CHARS = 12_000;
+const MAX_INLINE_DESCRIPTION_CHARS = 4_000;
 const HANDOFF_DECISION_PATTERN = /\b(decid(?:e|ed|ing)|decis(?:ion|ions)|agree(?:d|ment)?|approv(?:e|ed|al)|confirm(?:ed|ation)?|must|require(?:d|ment)?|scope|worktree|branch|pull request|pr #|commit|follow.up)\b|决定|确认|同意|必须|工作树|分支|拉取请求|待办/i;
 
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
@@ -1658,31 +1659,56 @@ export class AgentManager extends EventEmitter {
     const allPendingMessages = this.#store.listPendingRdMessages(requirementId);
     const pendingMessages = this.selectRdMessages(allPendingMessages);
     const runId = `run_${randomUUID()}`;
+    const remotePayloads = selectedSandbox?.kind === 'e2b';
+    const payloads: Array<{ path: string; content: string }> = [];
+    let localPayloadDirectory: string | null = null;
+    const addPayload = (name: string, content: string): string => {
+      const path = remotePayloads
+        ? `/tmp/code-factory-${runId}-${name}.txt`
+        : join(localPayloadDirectory ??= mkdtempSync(join(tmpdir(), 'code-factory-handoff-')), `${name}.txt`);
+      if (!remotePayloads) writeFileSync(path, content, { flag: 'wx', mode: 0o600 });
+      payloads.push({ path, content });
+      return path;
+    };
+    const promptRequirement = requirement.description.length > MAX_INLINE_DESCRIPTION_CHARS
+      ? { ...requirement, description: `The complete Requirement description (${requirement.description.length} characters) is in ${addPayload('description', requirement.description)}. Read the entire file, including its end, before acting.` }
+      : requirement;
+    const promptMessages = pendingMessages.map((message) => {
+      if (this.formatRdMessages([message]).length <= MAX_HANDOFF_PENDING_CHARS) return message;
+      const path = addPayload(`message-${message.sequence}`, message.body);
+      return { ...message, body: `The complete body of this pending message (${message.body.length} characters) is in ${path}. Read the entire file before acting.` };
+    });
     const isResume = requirement.session.nativeSessionId !== null;
     const needsHistory = !isResume && this.#store.listRuns(requirementId).some((run) => run.role === 'rd');
     const handoff = needsHistory
-      ? this.buildRdHandoff(requirement, this.#store.listMessages(requirementId), allPendingMessages, pendingMessages, selectedSandbox)
+      ? this.buildRdHandoff(promptRequirement, this.#store.listMessages(requirementId), allPendingMessages, promptMessages, selectedSandbox)
       : null;
     const inputFromSequence = pendingMessages.at(0)?.sequence;
     const inputToSequence = pendingMessages.at(-1)?.sequence;
-    const prompt = handoff ?? this.buildRdPrompt(requirement, pendingMessages, isResume);
+    const prompt = handoff ?? this.buildRdPrompt(promptRequirement, promptMessages, isResume);
     const imagePaths = pendingMessages.flatMap((message) => message.attachments
       .filter((attachment) => attachment.kind === 'image')
       .map((attachment) => attachment.localPath));
-    const started = this.#store.beginRun({
-      runId,
-      requirementId,
-      role: 'rd',
-      provider: requirement.provider,
-      ...(requirement.model ? { model: requirement.model } : {}),
-      ...(requirement.reasoningEffort ? { reasoningEffort: requirement.reasoningEffort } : {}),
-      taskSummary: pendingMessages.length > 0
-        ? `Process ${pendingMessages.length} new conversation message${pendingMessages.length === 1 ? '' : 's'}`
-        : isResume ? 'Resume RD session' : 'Start RD session',
-      ...(inputFromSequence === undefined ? {} : { inputFromSequence }),
-      ...(inputToSequence === undefined ? {} : { inputToSequence }),
-      now: new Date().toISOString(),
-    });
+    let started: ReturnType<AgentManagerStore['beginRun']>;
+    try {
+      started = this.#store.beginRun({
+        runId,
+        requirementId,
+        role: 'rd',
+        provider: requirement.provider,
+        ...(requirement.model ? { model: requirement.model } : {}),
+        ...(requirement.reasoningEffort ? { reasoningEffort: requirement.reasoningEffort } : {}),
+        taskSummary: pendingMessages.length > 0
+          ? `Process ${pendingMessages.length} new conversation message${pendingMessages.length === 1 ? '' : 's'}`
+          : isResume ? 'Resume RD session' : 'Start RD session',
+        ...(inputFromSequence === undefined ? {} : { inputFromSequence }),
+        ...(inputToSequence === undefined ? {} : { inputToSequence }),
+        now: new Date().toISOString(),
+      });
+    } catch (error) {
+      if (localPayloadDirectory) rmSync(localPayloadDirectory, { recursive: true, force: true });
+      throw error;
+    }
     const controller = new AbortController();
     this.#activeRdRuns.set(requirementId, { runId, controller, steering: Promise.resolve(), stopRequested: false });
     this.publish({
@@ -1728,8 +1754,7 @@ export class AgentManager extends EventEmitter {
       lastAgentMessage = body;
       this.appendMessage({ requirementId, sessionId: started.session.id, runId, author: 'rd_agent', body, deliverToRd: false });
     };
-    const execution = requirement.provider === 'native-agent'
-      ? this.#native.run({ requirementId, sessionId: started.session.id, nativeSessionId: requirement.session.nativeSessionId,
+    const runNative = () => this.#native.run({ requirementId, sessionId: started.session.id, nativeSessionId: requirement.session.nativeSessionId,
           prompt, model: requirement.model, reasoningEffort: requirement.reasoningEffort,
           cwd: selectedSandbox?.cwd ?? this.workspaceRoot,
           ...(selectedSandbox?.kind === 'e2b' && selectedSandbox.providerSandboxId && cloudCredentials
@@ -1738,7 +1763,11 @@ export class AgentManager extends EventEmitter {
                 forwardGitHubToken: selectedSandbox.repositoryUrl !== null
                   && new URL(selectedSandbox.repositoryUrl).hostname.toLowerCase() === 'github.com' } } : {}),
           environment: this.buildRdEnvironment(requirement), instructions: this.buildRdDeveloperInstructions(true, requirement.sandboxId),
-          signal: controller.signal, timeoutMs: this.#timeoutMs, onNativeSession, onEvent })
+          signal: controller.signal, timeoutMs: this.#timeoutMs, onNativeSession, onEvent });
+    const execution = requirement.provider === 'native-agent'
+      ? remotePayloads && payloads.length > 0 && selectedSandbox && cloudCredentials
+        ? this.runWithRemotePromptPayloads(selectedSandbox, cloudCredentials, payloads, runNative)
+        : runNative()
       : this.execute({
       invocation: this.#adapters[requirement.provider].buildRdInvocation({
         prompt,
@@ -1786,7 +1815,40 @@ export class AgentManager extends EventEmitter {
         this.schedulePendingRdMessages(requirementId, inputToSequence ?? 0);
       }
       return current;
+    }).finally(() => {
+      if (localPayloadDirectory) rmSync(localPayloadDirectory, { recursive: true, force: true });
     });
+  }
+
+  private async runWithRemotePromptPayloads(
+    sandbox: Sandbox,
+    credentials: E2BCredentials,
+    payloads: ReadonlyArray<{ path: string; content: string }>,
+    run: () => Promise<RunOutcome>,
+  ): Promise<RunOutcome> {
+    let handle: E2BHandle | null = null;
+    const uploaded: string[] = [];
+    try {
+      if (sandbox.kind !== 'e2b' || !sandbox.providerSandboxId) throw new Error('E2B sandbox is unavailable');
+      handle = await this.#e2b.connect(sandbox.providerSandboxId, credentials);
+      for (const payload of payloads) {
+        uploaded.push(payload.path);
+        await handle.files.write(payload.path, payload.content);
+      }
+      return await run();
+    } catch {
+      return {
+        status: 'failed', exitCode: null, nativeSessionId: null, finalMessage: null,
+        error: 'Could not deliver the complete Requirement input to the selected workspace',
+      };
+    } finally {
+      if (handle) {
+        const uploadedHandle = handle;
+        await Promise.all(uploaded.map(async (path) => {
+          try { await uploadedHandle.files.remove(path); } catch { /* Preserve the Run outcome. */ }
+        }));
+      }
+    }
   }
 
   private async considerJevWake(

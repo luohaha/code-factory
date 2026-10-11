@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -800,6 +800,58 @@ test('long provider handoff batches pending messages and retries the same range 
     for (let index = 0; index < 40; index += 1) {
       assert.equal(successfulPrompts.split(`Pending item ${index}:`).length - 1, 1);
     }
+  } finally {
+    await manager.close();
+  }
+});
+
+test('provider handoff references complete oversized description and pending body until the Run settles', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
+  const description = `${'Background details. '.repeat(300)}\nFinal acceptance criterion: retain this exact behavior.`;
+  const oversizedMessage = `${'Pasted specification. '.repeat(9_000)}\nFinal pending instruction: implement the final clause.`;
+  const descriptionPath = (prompt: string) => prompt.match(/complete Requirement description \(\d+ characters\) is in (.+?\.txt)\./)?.[1];
+  const messagePath = (prompt: string) => prompt.match(/complete body of this pending message \(\d+ characters\) is in (.+?\.txt)\./)?.[1];
+  try {
+    const created = manager.createRequirement({ title: 'Full input', description, provider: 'codex' });
+    const first = manager.runRequirement(created.id, 'Start work');
+    const firstDescriptionPath = descriptionPath(runner.requests[0]?.invocation.input ?? '');
+    assert.ok(firstDescriptionPath);
+    assert.equal(readFileSync(firstDescriptionPath, 'utf8'), description);
+    runner.resolvers[0]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'old-thread', finalMessage: 'started', error: null });
+    await first;
+    assert.equal(existsSync(firstDescriptionPath), false);
+
+    manager.updateRequirementAgentConfiguration(created.id, { provider: 'claude-code' });
+    const consumedBefore = store.getRequirement(created.id)?.session.lastConsumedMessageSequence;
+    const second = manager.runRequirement(created.id, oversizedMessage);
+    const prompt = runner.requests[1]?.invocation.input ?? '';
+    const fullDescriptionPath = descriptionPath(prompt);
+    const fullMessagePath = messagePath(prompt);
+    assert.ok(prompt.length <= MAX_HANDOFF_PROMPT_CHARS);
+    assert.ok(fullDescriptionPath);
+    assert.ok(fullMessagePath);
+    assert.equal(readFileSync(fullDescriptionPath, 'utf8'), description);
+    assert.equal(readFileSync(fullMessagePath, 'utf8'), oversizedMessage);
+    assert.equal(statSync(fullMessagePath).mode & 0o777, 0o600);
+    assert.ok(!prompt.includes('Final pending instruction: implement the final clause.'));
+    runner.resolvers[1]?.({ status: 'failed', exitCode: 1, nativeSessionId: null, finalMessage: null, error: 'context test failure' });
+    await second;
+    assert.equal(existsSync(fullDescriptionPath), false);
+    assert.equal(existsSync(fullMessagePath), false);
+    assert.equal(store.getRequirement(created.id)?.session.lastConsumedMessageSequence, consumedBefore);
+
+    const retry = manager.runRequirement(created.id);
+    const retryPrompt = runner.requests[2]?.invocation.input ?? '';
+    const retryMessagePath = messagePath(retryPrompt);
+    assert.ok(retryPrompt.length <= MAX_HANDOFF_PROMPT_CHARS);
+    assert.ok(retryMessagePath);
+    assert.equal(readFileSync(retryMessagePath, 'utf8'), oversizedMessage);
+    runner.resolvers[2]?.({ status: 'succeeded', exitCode: 0, nativeSessionId: 'new-session', finalMessage: 'done', error: null });
+    await retry;
+    assert.equal(existsSync(retryMessagePath), false);
+    assert.equal(store.getRequirement(created.id)?.session.pendingMessageCount, 0);
   } finally {
     await manager.close();
   }
