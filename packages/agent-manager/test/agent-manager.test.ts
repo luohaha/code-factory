@@ -877,10 +877,15 @@ test('RD Agents can inspect relations and message any other Requirement by ID', 
     assert.equal(delivered.message.author, 'rd_agent');
     assert.equal(delivered.message.sourceRequirementId, child.id);
     assert.equal(delivered.message.deliverToRd, true);
-    assert.equal(delivered.requirement.session.state, 'running');
+    assert.equal(delivered.requirement.status, 'todo');
+    assert.equal(delivered.requirement.session.state, 'idle');
+    assert.equal(delivered.requirement.session.pendingMessageCount, 1);
+    assert.equal(runner.requests.length, 0);
     assert.deepEqual(manager.listMessages(parent.id).map((message) => message.body), [
       'The shared contract now uses field version 2.',
     ]);
+    void manager.runRequirement(parent.id);
+    assert.equal(manager.getRequirement(parent.id)?.status, 'doing');
     assert.match(runner.requests[0]?.invocation.input ?? '', /RD Agent from Child implementation/);
     assert.match(runner.requests[0]?.invocation.input ?? '', /The shared contract now uses field version 2\./);
 
@@ -892,8 +897,21 @@ test('RD Agents can inspect relations and message any other Requirement by ID', 
       assert.equal(result.message.sourceRequirementId, child.id);
       assert.equal(result.message.deliverToRd, true);
       assert.equal(manager.listMessages(target.id)[0]?.body, `Coordinate with ${target.title}.`);
-      assert.equal(manager.getRequirement(target.id)?.session.state, 'running');
+      assert.equal(result.requirement.status, 'todo');
+      assert.equal(result.requirement.session.state, 'idle');
+      assert.equal(result.requirement.session.pendingMessageCount, 1);
     }
+    assert.equal(runner.requests.length, 1);
+    void manager.startProposedRequirement(parent.id, parent.session.id, sibling.id);
+    assert.match(runner.requests[1]?.invocation.input ?? '', /Coordinate with Sibling implementation\./);
+    void manager.runRequirement(unrelated.id);
+    assert.match(runner.requests[2]?.invocation.input ?? '', /Coordinate with Unrelated work\./);
+
+    const queued = manager.postRequirementAgentMessage(
+      child.id, child.session.id, sibling.id, 'A later update.',
+    );
+    assert.equal(queued.queued, true);
+    assert.equal(queued.requirement.session.pendingMessageCount, 2);
     assert.equal(runner.requests.length, 3);
   } finally {
     await manager.close();

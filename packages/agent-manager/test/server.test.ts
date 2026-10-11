@@ -1124,6 +1124,9 @@ test('RD Agent endpoints list related Requirements and deliver cross-Requirement
     assert.equal(conversation.items.length, 1);
     assert.equal(conversation.items[0]?.sourceRequirementId, child.id);
     assert.equal(conversation.items[0]?.body, 'Please consume contract version 2.');
+    assert.equal(manager.getRequirement(parent.id)?.status, 'todo');
+    assert.equal(manager.getRequirement(parent.id)?.session.pendingMessageCount, 1);
+    void manager.runRequirement(parent.id);
     assert.match(runner.requests.at(-1)?.invocation.input ?? '', /RD Agent from Child API implementation/);
 
     const siblingResponse = await fetch(
@@ -1136,7 +1139,8 @@ test('RD Agent endpoints list related Requirements and deliver cross-Requirement
     );
     assert.equal(siblingResponse.status, 202);
     assert.equal(manager.listMessages(sibling.id)[0]?.sourceRequirementId, child.id);
-    assert.equal(manager.getRequirement(sibling.id)?.session.state, 'running');
+    assert.equal(manager.getRequirement(sibling.id)?.status, 'todo');
+    assert.equal(manager.getRequirement(sibling.id)?.session.state, 'idle');
 
     const unrelatedResponse = await fetch(
       `${baseUrl}/api/agent/requirements/${child.id}/related/${unrelated.id}/messages`,
@@ -1148,6 +1152,8 @@ test('RD Agent endpoints list related Requirements and deliver cross-Requirement
     );
     assert.equal(unrelatedResponse.status, 202);
     assert.equal(manager.listMessages(unrelated.id)[0]?.sourceRequirementId, child.id);
+    assert.equal(manager.getRequirement(unrelated.id)?.status, 'todo');
+    assert.equal(manager.getRequirement(unrelated.id)?.session.pendingMessageCount, 1);
 
     const wrongSessionResponse = await fetch(
       `${baseUrl}/api/agent/requirements/${child.id}/related/${sibling.id}/messages`,

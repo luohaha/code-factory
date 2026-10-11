@@ -1394,7 +1394,7 @@ export class AgentManager extends EventEmitter {
       });
     }
     const queued = current.session.state === 'running';
-    if (!queued) {
+    if (!queued && current.status !== 'todo') {
       void this.startRdRun(target.id).catch((error: unknown) => {
         this.logger.error('RD run failed unexpectedly', { requirementId: target.id, error });
       });

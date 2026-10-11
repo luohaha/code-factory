@@ -923,7 +923,7 @@ Success: 200 OK. Returns 404 for an unknown source Requirement and 400 when the 
 
 ### POST /api/agent/requirements/:sourceRequirementId/related/:targetRequirementId/messages
 
-Persists an RD Agent message in any other known Requirement and starts or queues the target RD Session. The `/related/` path is retained for compatibility; a parent-child relationship is not required. `GET /related` still lists only the direct parent and children.
+Persists an RD Agent message in any other known Requirement. A TODO target keeps the message pending until an explicit start; another idle target starts, while a running target queues the message. The `/related/` path is retained for compatibility; a parent-child relationship is not required. `GET /related` still lists only the direct parent and children.
 
 ~~~json
 {
@@ -932,7 +932,7 @@ Persists an RD Agent message in any other known Requirement and starts or queues
 }
 ~~~
 
-Success: 202 Accepted with `accepted`, source and target IDs, `queued`, the persisted `message`, and the current target `requirement`. The message has `author=rd_agent`, `sourceRequirementId` equal to the source, and `deliverToRd=true`. A DONE target is reactivated in its original Session. Returns 400 for invalid input or mismatched source Session, 404 for an unknown source or target, and 409 for a self-message or CANCELLED target.
+Success: 202 Accepted with `accepted`, source and target IDs, `queued`, the persisted `message`, and the current target `requirement`. `queued` is true only when the target Session was already running; a TODO target returns false while its message remains pending. The message has `author=rd_agent`, `sourceRequirementId` equal to the source, and `deliverToRd=true`. A DONE target is reactivated in its original Session. Returns 400 for invalid input or mismatched source Session, 404 for an unknown source or target, and 409 for a self-message or CANCELLED target.
 
 ## 8. SSE event stream
 
