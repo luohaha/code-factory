@@ -15,6 +15,7 @@ import {
 } from '../src/code-factory-cli.ts';
 import type { GitHubClient, GitHubPullRequestSnapshot } from '../src/github-client.ts';
 import { silentLogger } from '../src/logger.ts';
+import { NativeAgentService, type NativeRunInput } from '../src/native-agent.ts';
 import type { AgentProcessRunner, ProcessRunRequest } from '../src/process-runner.ts';
 import {
   PULL_REQUEST_CI_FAILURE_TRIGGER_ID,
@@ -52,6 +53,29 @@ class InterruptibleRunner implements AgentProcessRunner {
         error: 'Agent Run interrupted by human',
       }), { once: true });
     });
+  }
+}
+
+class DeferredNativeService extends NativeAgentService {
+  requests: NativeRunInput[] = [];
+  resolvers: Array<(outcome: RunOutcome) => void> = [];
+  steeredMessages: string[] = [];
+
+  override run(input: NativeRunInput): Promise<RunOutcome> {
+    this.requests.push(input);
+    input.onNativeSession('native-test-session');
+    return new Promise((resolve) => {
+      this.resolvers.push(resolve);
+      const cancelled = () => resolve({ status: 'cancelled', exitCode: null,
+        nativeSessionId: 'native-test-session', finalMessage: null, error: 'Agent Run interrupted by human' });
+      if (input.signal.aborted) cancelled();
+      else input.signal.addEventListener('abort', cancelled, { once: true });
+    });
+  }
+
+  override steer(_requirementId: string, message: string): Promise<boolean> {
+    this.steeredMessages.push(message);
+    return Promise.resolve(true);
   }
 }
 
@@ -854,6 +878,124 @@ test('provider handoff references complete oversized description and pending bod
     assert.equal(store.getRequirement(created.id)?.session.pendingMessageCount, 0);
   } finally {
     await manager.close();
+  }
+});
+
+test('native Steering delivers a bounded prefix and later Runs consume the remaining backlog', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-native-steer-batch-'));
+  const store = new SqliteAgentManagerStore(':memory:');
+  const nativeService = new DeferredNativeService(join(directory, 'native.sqlite'));
+  const manager = new AgentManager({ workspaceRoot: directory, store, nativeService, logger: silentLogger });
+  const succeeded: RunOutcome = { status: 'succeeded', exitCode: 0,
+    nativeSessionId: 'native-test-session', finalMessage: 'done', error: null };
+  try {
+    const requirement = manager.createRequirement({ title: 'Native batch', description: 'Process every item', provider: 'native-agent' });
+    const first = manager.runRequirement(requirement.id, 'Initial instruction');
+    const firstRunId = manager.listRuns(requirement.id)[0]!.id;
+    for (let index = 0; index < 40; index += 1) {
+      store.appendMessage({ id: `msg_native_batch_${index}`, requirementId: requirement.id,
+        sessionId: requirement.session.id, author: 'human', body: `Native pending item ${index}: ${'detail '.repeat(110)}`,
+        deliverToRd: true, now: new Date().toISOString() });
+    }
+    const lastSequence = store.listPendingRdMessages(requirement.id).at(-1)!.sequence;
+    manager.interruptRdRun(requirement.id, 'steer');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const steered = nativeService.steeredMessages[0] ?? '';
+    const firstBoundary = manager.listRuns(requirement.id).find((run) => run.id === firstRunId)?.inputToSequence;
+    assert.ok(steered.length > 0 && steered.length <= 12_000);
+    assert.ok(firstBoundary && firstBoundary < lastSequence);
+    assert.doesNotMatch(steered, /Native pending item 39:/);
+
+    nativeService.resolvers[0]?.(succeeded);
+    await first;
+    assert.equal(store.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, firstBoundary);
+    for (let index = 1; store.listPendingRdMessages(requirement.id).length > 0; index += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.ok(nativeService.requests[index], `queued native batch ${index} started`);
+      assert.ok((nativeService.requests[index]?.prompt.length ?? 0) <= MAX_HANDOFF_PROMPT_CHARS);
+      nativeService.resolvers[index]?.(succeeded);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.ok(index < 10, 'native backlog completes in a bounded number of Runs');
+    }
+    assert.equal(store.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, lastSequence);
+    const delivered = [steered, ...nativeService.requests.slice(1).map((request) => request.prompt)].join('\n');
+    for (let index = 0; index < 40; index += 1) {
+      assert.equal(delivered.split(`Native pending item ${index}:`).length - 1, 1);
+    }
+  } finally {
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('native Steering resumes an oversized message through a complete temporary file', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-native-steer-large-'));
+  const store = new SqliteAgentManagerStore(':memory:');
+  const nativeService = new DeferredNativeService(join(directory, 'native.sqlite'));
+  const manager = new AgentManager({ workspaceRoot: directory, store, nativeService, logger: silentLogger });
+  const oversized = `${'Pasted specification. '.repeat(9_000)}\nFinal clause must be implemented.`;
+  try {
+    const requirement = manager.createRequirement({ title: 'Native large reply', description: 'Start work', provider: 'native-agent' });
+    const first = manager.runRequirement(requirement.id);
+    const queued = manager.postHumanMessage(requirement.id, oversized);
+    manager.interruptRdRun(requirement.id, 'steer');
+    await first;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(manager.listRuns(requirement.id).find((run) => run.status === 'cancelled')?.status, 'cancelled');
+    assert.equal(nativeService.steeredMessages.length, 0);
+    assert.equal(store.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, 0);
+    const resumed = nativeService.requests[1]?.prompt ?? '';
+    const path = resumed.match(/complete body of this pending message \(\d+ characters\) is in (.+?\.txt)\./)?.[1];
+    assert.ok(resumed.length <= MAX_HANDOFF_PROMPT_CHARS);
+    assert.ok(path);
+    assert.equal(readFileSync(path, 'utf8'), oversized);
+    assert.equal(manager.listRuns(requirement.id).find((run) => run.status === 'running')?.inputToSequence, queued.message.sequence);
+    nativeService.resolvers[1]?.({ status: 'succeeded', exitCode: 0,
+      nativeSessionId: 'native-test-session', finalMessage: 'done', error: null });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(existsSync(path), false);
+    assert.equal(store.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, queued.message.sequence);
+    assert.equal(store.getRequirement(requirement.id)?.session.pendingMessageCount, 0);
+  } finally {
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('repeated native Steering respects the same Run budget and replays on interruption', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-native-steer-repeat-'));
+  const store = new SqliteAgentManagerStore(':memory:');
+  const nativeService = new DeferredNativeService(join(directory, 'native.sqlite'));
+  const manager = new AgentManager({ workspaceRoot: directory, store, nativeService, logger: silentLogger });
+  const succeeded: RunOutcome = { status: 'succeeded', exitCode: 0,
+    nativeSessionId: 'native-test-session', finalMessage: 'done', error: null };
+  try {
+    const requirement = manager.createRequirement({ title: 'Repeated steering', description: 'Start work', provider: 'native-agent' });
+    const first = manager.runRequirement(requirement.id);
+    const firstMessage = manager.postHumanMessage(requirement.id, `First direction: ${'alpha '.repeat(1_200)}`);
+    manager.interruptRdRun(requirement.id, 'steer');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(nativeService.steeredMessages.length, 1);
+    assert.equal(manager.listRuns(requirement.id)[0]?.inputToSequence, firstMessage.message.sequence);
+
+    const secondMessage = manager.postHumanMessage(requirement.id, `Second direction: ${'beta '.repeat(1_200)}`);
+    manager.interruptRdRun(requirement.id, 'steer');
+    await first;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(nativeService.steeredMessages.length, 1);
+    assert.equal(store.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, 0);
+    assert.match(nativeService.requests[1]?.prompt ?? '', /First direction:/);
+    assert.doesNotMatch(nativeService.requests[1]?.prompt ?? '', /Second direction:/);
+    nativeService.resolvers[1]?.(succeeded);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(store.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, firstMessage.message.sequence);
+    assert.match(nativeService.requests[2]?.prompt ?? '', /Second direction:/);
+    nativeService.resolvers[2]?.(succeeded);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(store.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, secondMessage.message.sequence);
+  } finally {
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

@@ -193,7 +193,7 @@ export class AgentManager extends EventEmitter {
   readonly #maxOutputBytes: number;
   readonly #agentCliBinDirectory: string | null;
   readonly #modelCatalog: AgentModelCatalogService;
-  readonly #activeRdRuns = new Map<string, { runId: string; controller: AbortController; steering: Promise<void>; stopRequested: boolean }>();
+  readonly #activeRdRuns = new Map<string, { runId: string; controller: AbortController; steering: Promise<void>; stopRequested: boolean; pendingInputChars: number }>();
   readonly #pendingJevDecisions = new Set<AbortController>();
   readonly #agentTriggers = new Map<string, AgentTrigger>();
   readonly #pullRequestReconciler: PullRequestReconciler;
@@ -1454,11 +1454,23 @@ export class AgentManager extends EventEmitter {
       if (requirement.provider === 'native-agent') {
         active.steering = active.steering.then(async () => {
           const deliveredTo = this.#store.getRun(active.runId)?.inputToSequence ?? 0;
-          const messages = this.#store.listPendingRdMessages(requirementId)
+          const pending = this.#store.listPendingRdMessages(requirementId)
             .filter((message) => message.sequence > deliveredTo);
-          if (messages.length === 0) return;
-          const accepted = await this.#native.steer(requirementId, this.formatRdMessages(messages));
-          if (accepted) this.#store.extendRunInputToSequence(active.runId, messages.at(-1)!.sequence);
+          if (pending.length === 0) return;
+          const separatorChars = active.pendingInputChars > 0 ? 2 : 0;
+          const remainingChars = Math.max(0, MAX_HANDOFF_PENDING_CHARS - active.pendingInputChars - separatorChars);
+          const messages = this.selectRdMessages(pending, remainingChars);
+          const input = this.formatRdMessages(messages);
+          if (input.length > remainingChars) {
+            // The next Run can deliver an oversized message by file or use a fresh message budget.
+            if (!active.controller.signal.aborted) active.controller.abort();
+            return;
+          }
+          const accepted = await this.#native.steer(requirementId, input);
+          if (accepted) {
+            active.pendingInputChars += separatorChars + input.length;
+            this.#store.extendRunInputToSequence(active.runId, messages.at(-1)!.sequence);
+          }
         }).catch((error: unknown) => {
           this.logger.error('Native steering failed', { requirementId, error });
         });
@@ -1710,7 +1722,8 @@ export class AgentManager extends EventEmitter {
       throw error;
     }
     const controller = new AbortController();
-    this.#activeRdRuns.set(requirementId, { runId, controller, steering: Promise.resolve(), stopRequested: false });
+    this.#activeRdRuns.set(requirementId, { runId, controller, steering: Promise.resolve(), stopRequested: false,
+      pendingInputChars: this.formatRdMessages(promptMessages).length });
     this.publish({
       type: 'run.started',
       requirementId,
@@ -2115,12 +2128,12 @@ export class AgentManager extends EventEmitter {
     return [context, ...sections, pendingText].join('\n\n');
   }
 
-  private selectRdMessages(messages: RequirementMessage[]): RequirementMessage[] {
+  private selectRdMessages(messages: RequirementMessage[], maxChars = MAX_HANDOFF_PENDING_CHARS): RequirementMessage[] {
     const selected: RequirementMessage[] = [];
     let pendingChars = 0;
     for (const message of messages) {
       const length = this.formatRdMessages([message]).length + 2;
-      if (selected.length > 0 && pendingChars + length > MAX_HANDOFF_PENDING_CHARS) break;
+      if (selected.length > 0 && pendingChars + length > maxChars) break;
       selected.push(message);
       pendingChars += length;
     }
