@@ -6,6 +6,13 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-10-12
+
+### Added
+
+- Show the assigned workspace in the Requirement detail header, including the localized Default workspace and the working directory for named workspaces on hover.
+- Find Requirements directly by ID prefix, displayed short ID, or registered GitHub pull request URL.
+
 ## [0.2.5] - 2026-10-12
 
 ### Fixed
