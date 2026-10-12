@@ -408,7 +408,7 @@ Success: 200 OK with `AgentModelCatalog`.
 
 ### GET /api/search
 
-Searches non-cancelled Requirements, complete Requirement conversations, and registered Pull Request titles and metadata. Ranking combines full-text matching with cosine similarity over locally generated word and character n-gram vectors. When the Node.js SQLite build includes FTS5, its trigram rank also contributes; deterministic in-process full-text matching keeps the endpoint available on builds without FTS5. Indexing and search are local and do not require an external embedding service. Existing SQLite records are indexed automatically when Agent Manager starts.
+Searches non-cancelled Requirements, complete Requirement conversations, and registered Pull Request titles and metadata. A case-insensitive query beginning with `req_` followed by an ID prefix, a displayed short ID such as `REQ-8D66E422`, or a bare prefix of at least eight hexadecimal characters such as `8d66e422`, directly looks up matching Requirements. A registered GitHub Pull Request URL (including an optional trailing slash, query string, or fragment) directly looks up its PR and owning Requirement. Direct matches use SQLite indexes and skip full-text and vector ranking. If direct lookup finds no match, the query falls back to hybrid search. Other queries combine full-text matching with cosine similarity over locally generated word and character n-gram vectors. When the Node.js SQLite build includes FTS5, its trigram rank also contributes; deterministic in-process full-text matching keeps the endpoint available on builds without FTS5. Indexing and search are local and do not require an external embedding service. Existing SQLite records are indexed automatically when Agent Manager starts.
 
 | Parameter | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -419,7 +419,7 @@ Searches non-cancelled Requirements, complete Requirement conversations, and reg
 curl 'http://127.0.0.1:4310/api/search?q=database%20deadlock&limit=20'
 ~~~
 
-Success: 200 OK with `{"items": SearchResult[]}` ordered by descending hybrid score. At most two hits of each kind are returned per Requirement so a long conversation cannot crowd every other result out. Invalid queries return 400 Bad Request.
+Success: 200 OK with `{"items": SearchResult[]}`. Direct ID matches are ordered by most recent update; all direct matches have `score` and `fullTextScore` equal to 1 and `vectorScore` equal to 0. Hybrid results are ordered by descending score, with at most two hits of each kind per Requirement so a long conversation cannot crowd every other result out. Invalid queries return 400 Bad Request.
 
 ### GET /api/requirements
 

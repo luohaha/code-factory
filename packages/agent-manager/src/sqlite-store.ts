@@ -9,6 +9,7 @@ import {
   createSearchEmbedding,
   fullTextQuery,
   localFullTextScore,
+  quickSearchTarget,
   searchEmbeddingSimilarity,
   searchExcerpt,
 } from './search.js';
@@ -502,6 +503,43 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     const trimmed = query.trim();
     if (!trimmed) return [];
     const safeLimit = Math.max(1, Math.min(Math.trunc(limit), 200));
+    const quickTarget = quickSearchTarget(trimmed);
+    if (quickTarget?.kind === 'requirement_prefix') {
+      const rows = this.#db.prepare(`SELECT id, title, updated_at
+        FROM requirements
+        WHERE id >= ? AND id < ? AND status != 'cancelled'
+        ORDER BY updated_at DESC LIMIT ?`)
+        .all(quickTarget.prefix, `${quickTarget.prefix}\uffff`, safeLimit) as Row[];
+      if (rows.length > 0) return rows.map((row): SearchResult => ({
+        kind: 'requirement',
+        sourceId: String(row.id),
+        requirementId: String(row.id),
+        title: String(row.title),
+        excerpt: String(row.id),
+        score: 1,
+        fullTextScore: 1,
+        vectorScore: 0,
+        updatedAt: String(row.updated_at),
+      }));
+    }
+    if (quickTarget?.kind === 'pull_request_url') {
+      const rows = this.#db.prepare(`SELECT pr.id, pr.requirement_id, pr.title, pr.url, pr.updated_at
+        FROM pull_requests pr
+        JOIN requirements r ON r.id = pr.requirement_id
+        WHERE pr.repository = ? COLLATE NOCASE AND pr.number = ? AND r.status != 'cancelled'`)
+        .all(quickTarget.repository, quickTarget.number) as Row[];
+      if (rows.length > 0) return rows.map((row): SearchResult => ({
+        kind: 'pull_request',
+        sourceId: String(row.id),
+        requirementId: String(row.requirement_id),
+        title: String(row.title),
+        excerpt: String(row.url),
+        score: 1,
+        fullTextScore: 1,
+        vectorScore: 0,
+        updatedAt: String(row.updated_at),
+      })).slice(0, safeLimit);
+    }
     const ftsScores = new Map<string, number>();
     const matchQuery = fullTextQuery(trimmed);
     if (matchQuery && this.#ftsAvailable) {
