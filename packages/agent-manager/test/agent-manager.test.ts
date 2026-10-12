@@ -777,6 +777,53 @@ test('long provider handoff keeps decisions, attachments, recent progress, works
   }
 });
 
+test('provider handoff keeps an earlier attachment path when pending and history fill the budget', async () => {
+  const attachmentDirectory = mkdtempSync(join(tmpdir(), 'code-factory-attachment-handoff-'));
+  const store = new SqliteAgentManagerStore(':memory:');
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), attachmentDirectory, store, runner, logger: silentLogger });
+  try {
+    const requirement = manager.createRequirement({ title: 'Attachment handoff',
+      description: 'Scope '.repeat(650), provider: 'codex' });
+    const attachment = manager.uploadMessageAttachment(requirement.id, {
+      fileName: 'earlier-acceptance-criteria.txt', mediaType: 'text/plain', data: Buffer.from('Retain the criteria'),
+    });
+    for (let index = 0; index < 9; index += 1) {
+      store.appendMessage({ id: `msg_earlier_decision_${index}`, requirementId: requirement.id,
+        sessionId: requirement.session.id, author: 'human',
+        body: `Decision ${index}: ${'keep the agreed workflow '.repeat(13)}`,
+        ...(index === 0 ? { attachmentIds: [attachment.id] } : {}),
+        deliverToRd: true, now: new Date().toISOString() });
+    }
+    const first = manager.runRequirement(requirement.id);
+    for (let index = 0; index < 10; index += 1) {
+      runner.requests[0]?.onEvent?.({ kind: 'message',
+        message: `Recent work ${index}: ${'implementation detail '.repeat(65)} Decision: verify this result.`, raw: {} });
+    }
+    runner.resolvers[0]?.({ status: 'succeeded', exitCode: 0,
+      nativeSessionId: 'old-thread', finalMessage: null, error: null });
+    await first;
+    for (let index = 0; index < 10; index += 1) {
+      manager.trackPullRequest({ requirementId: requirement.id, repository: 'owner/repo', number: 200 + index,
+        url: `https://github.com/owner/repo/pull/${200 + index}`, title: `PR ${index} ${'context '.repeat(40)}`,
+        baseBranch: 'main', headBranch: `codex/attachment-${index}`, headSha: 'a'.repeat(40), status: 'open' });
+    }
+    manager.updateRequirementAgentConfiguration(requirement.id, { provider: 'claude-code' });
+    const second = manager.runRequirement(requirement.id, 'Pending content '.repeat(700));
+    const prompt = runner.requests[1]?.invocation.input ?? '';
+    assert.ok(prompt.length <= MAX_HANDOFF_PROMPT_CHARS, `handoff prompt has ${prompt.length} characters`);
+    assert.ok(prompt.includes(attachment.localPath), 'the earlier attachment path remains available');
+    assert.match(prompt, /Recent work 9:/);
+    assert.match(prompt, /Pending content/);
+    runner.resolvers[1]?.({ status: 'succeeded', exitCode: 0,
+      nativeSessionId: 'new-thread', finalMessage: 'Done', error: null });
+    await second;
+  } finally {
+    await manager.close();
+    rmSync(attachmentDirectory, { recursive: true, force: true });
+  }
+});
+
 test('provider handoff retains a decision near the end of a long recent human message', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new DeferredRunner();

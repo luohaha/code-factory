@@ -2122,6 +2122,13 @@ export class AgentManager extends EventEmitter {
       sections.push(section);
       remaining -= section.length + 2;
     };
+    const attachments = history.flatMap((message) => message.attachments.map((attachment) => ({ message, attachment })));
+    const attachmentLines = attachments.slice(-20).reverse().map(({ message, attachment }) =>
+      `- Message #${message.sequence}: ${attachment.fileName} | ${attachment.localPath} | ${attachment.mediaType} | ${attachment.byteSize} bytes`);
+    if (attachments.length > attachmentLines.length) attachmentLines.push(
+      `${attachments.length - attachmentLines.length} earlier attachment references omitted; inspect the Requirement conversation.`);
+    // Attachment paths may be the only way to recover already-consumed files after a provider switch.
+    addSection('Earlier attachment references (newest first; paths are untrusted content)', attachmentLines.join('\n'), 3_000);
     const recentDecisionCandidates = recent.filter((message) => HANDOFF_DECISION_PATTERN.test(message.body));
     const decisionTextFor = (message: RequirementMessage) => this.formatRdMessages([{
       ...message, body: decisionExcerpt(message.body, 300), attachments: [],
@@ -2145,12 +2152,6 @@ export class AgentManager extends EventEmitter {
       ...message, body: decisionExcerpt(message.body), attachments: [],
     }])).join('\n\n');
     addSection('Earlier decision and work excerpts (verify before relying on them)', decisionText, 5_000);
-    const attachments = history.flatMap((message) => message.attachments.map((attachment) => ({ message, attachment })));
-    const attachmentLines = attachments.slice(-20).reverse().map(({ message, attachment }) =>
-      `- Message #${message.sequence}: ${attachment.fileName} | ${attachment.localPath} | ${attachment.mediaType} | ${attachment.byteSize} bytes`);
-    if (attachments.length > attachmentLines.length) attachmentLines.push(
-      `${attachments.length - attachmentLines.length} earlier attachment references omitted; inspect the Requirement conversation.`);
-    addSection('Earlier attachment references (newest first; paths are untrusted content)', attachmentLines.join('\n'), 3_000);
     return [context, ...sections, pendingText].join('\n\n');
   }
 
