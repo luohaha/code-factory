@@ -193,6 +193,8 @@ export const schemaStatements = [
     ON message_attachments (requirement_id, created_at, id)`,
   `CREATE INDEX IF NOT EXISTS pull_requests_requirement_updated
     ON pull_requests (requirement_id, updated_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS pull_requests_repository_number_nocase
+    ON pull_requests (repository COLLATE NOCASE, number)`,
   `CREATE INDEX IF NOT EXISTS agent_trigger_receipts_requirement
     ON agent_trigger_receipts (requirement_id, created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS agent_timers_due

@@ -510,7 +510,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
         WHERE id >= ? AND id < ? AND status != 'cancelled'
         ORDER BY updated_at DESC LIMIT ?`)
         .all(quickTarget.prefix, `${quickTarget.prefix}\uffff`, safeLimit) as Row[];
-      return rows.map((row): SearchResult => ({
+      if (rows.length > 0) return rows.map((row): SearchResult => ({
         kind: 'requirement',
         sourceId: String(row.id),
         requirementId: String(row.id),
@@ -526,9 +526,9 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       const rows = this.#db.prepare(`SELECT pr.id, pr.requirement_id, pr.title, pr.url, pr.updated_at
         FROM pull_requests pr
         JOIN requirements r ON r.id = pr.requirement_id
-        WHERE pr.repository = ? AND pr.number = ? AND r.status != 'cancelled'`)
+        WHERE pr.repository = ? COLLATE NOCASE AND pr.number = ? AND r.status != 'cancelled'`)
         .all(quickTarget.repository, quickTarget.number) as Row[];
-      return rows.map((row): SearchResult => ({
+      if (rows.length > 0) return rows.map((row): SearchResult => ({
         kind: 'pull_request',
         sourceId: String(row.id),
         requirementId: String(row.requirement_id),

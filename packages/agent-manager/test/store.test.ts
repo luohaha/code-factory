@@ -220,7 +220,7 @@ test('hybrid search indexes requirements, conversations, and pull request metada
   }
 });
 
-test('ID prefixes and registered PR URLs use exact indexed search results', () => {
+test('ID prefixes and PR URLs use indexed results then fall back to hybrid search', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {
     for (const suffix of ['8d66e422-a', '8d66e422-b', '8d67-other']) {
@@ -238,7 +238,7 @@ test('ID prefixes and registered PR URLs use exact indexed search results', () =
       requirementId: 'req_8d67-other',
       sessionId: 'ses-8d67-other',
       author: 'human',
-      body: 'See req_8d66e422-a and https://github.com/Acme/Repo/pull/42',
+      body: 'See req_8d66e422-a, req_8d66e423, and https://github.com/Acme/Repo/pull/42 or https://github.com/Acme/Repo/pull/43',
       deliverToRd: true,
       now,
     });
@@ -259,21 +259,63 @@ test('ID prefixes and registered PR URLs use exact indexed search results', () =
     const matches = store.search('req_8d66e422');
     assert.deepEqual(matches.map((item) => item.requirementId), ['req_8d66e422-a', 'req_8d66e422-b']);
     assert.ok(matches.every((item) => item.kind === 'requirement' && item.vectorScore === 0));
+    assert.deepEqual(store.search('REQ_8D66E422').map((item) => item.requirementId),
+      ['req_8d66e422-a', 'req_8d66e422-b']);
     assert.equal(store.search('REQ-8D66E422', 1)[0]?.requirementId, 'req_8d66e422-a');
-    assert.deepEqual(store.search('req_8d66e423'), []);
+    assert.deepEqual(store.search('  8D66E422  ').map((item) => item.requirementId),
+      ['req_8d66e422-a', 'req_8d66e422-b']);
+    assert.ok(store.search('req_8d66e423').some((item) => item.sourceId === 'msg-id-reference'));
+    assert.ok(store.search('8D66E423').some((item) => item.sourceId === 'msg-id-reference'));
 
     const prMatches = store.search('https://github.com/acme/repo/pull/42/?view=files#discussion');
     assert.deepEqual(prMatches.map((item) => [item.kind, item.sourceId, item.requirementId]),
       [['pull_request', 'pr-fast', 'req_8d66e422-a']]);
     assert.equal(prMatches[0]?.vectorScore, 0);
-    assert.deepEqual(store.search('https://github.com/acme/repo/pull/43'), []);
+    assert.ok(store.search('https://github.com/Acme/Repo/pull/43')
+      .some((item) => item.sourceId === 'msg-id-reference'));
     assert.ok(store.search('shared description').some((item) => item.requirementId === 'req_8d67-other'));
 
     store.transitionRequirement('req_8d66e422-a', ['todo'], 'cancelled', now);
     assert.deepEqual(store.search('req_8d66e422').map((item) => item.requirementId), ['req_8d66e422-b']);
-    assert.deepEqual(store.search('https://github.com/acme/repo/pull/42'), []);
+    assert.ok(store.search('https://github.com/Acme/Repo/pull/42')
+      .some((item) => item.sourceId === 'msg-id-reference'));
   } finally {
     store.close();
+  }
+});
+
+test('registered PR URL lookup uses the case-insensitive index after reopening a legacy database', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-legacy-pr-search-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  try {
+    const initial = new SqliteAgentManagerStore(databasePath);
+    try {
+      initial.createRequirement({ requirementId: 'req_legacy', sessionId: 'ses-legacy',
+        title: 'Legacy PR', description: 'Find its registered URL', provider: 'codex', now });
+      initial.upsertPullRequest({ id: 'pr-legacy-search', requirementId: 'req_legacy',
+        repository: 'acme/widgets', number: 8, url: 'https://github.com/Acme/Widgets/pull/8',
+        title: 'Legacy PR', baseBranch: 'main', headBranch: 'feature', headSha: 'abc123', status: 'closed', now });
+    } finally {
+      initial.close();
+    }
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.exec('DROP INDEX pull_requests_repository_number_nocase');
+      database.prepare('UPDATE pull_requests SET repository = ? WHERE id = ?')
+        .run('Acme/Widgets', 'pr-legacy-search');
+    } finally {
+      database.close();
+    }
+
+    const reopened = new SqliteAgentManagerStore(databasePath);
+    try {
+      assert.deepEqual(reopened.search('https://github.com/acme/widgets/pull/8')
+        .map((item) => [item.sourceId, item.vectorScore]), [['pr-legacy-search', 0]]);
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

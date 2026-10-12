@@ -12,6 +12,10 @@ export function quickSearchTarget(query: string): QuickSearchTarget | null {
   const displayedId = query.match(/^req-([a-f0-9]{1,36})$/i);
   if (displayedId) return { kind: 'requirement_prefix', prefix: `req_${displayedId[1]!.toLowerCase()}` };
 
+  if (/^[a-f0-9]{8}(?:-[a-f0-9]+)*$/i.test(query) && query.length <= 36) {
+    return { kind: 'requirement_prefix', prefix: `req_${query.toLowerCase()}` };
+  }
+
   if (!/^https:\/\//i.test(query)) return null;
   let url: URL;
   try {
