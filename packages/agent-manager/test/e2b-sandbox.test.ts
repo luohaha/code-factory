@@ -27,6 +27,8 @@ function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; revie
   const authTokenForwarded: boolean[] = [];
   const reviews: Array<{ command: string; cwd: string | undefined; input: string }> = [];
   const remoteCommands: Array<{ command: string; cwd: string | undefined }> = [];
+  const remoteFiles = new Map<string, string>();
+  const remoteWrites: Array<{ path: string; content: string }> = [];
   const check = (credentials: { apiKey?: string; domain?: string }) => {
     if (settings.acceptRotated && credentials.apiKey === 'new-key' &&
       credentials.domain === 'new.e2b.example') return;
@@ -34,7 +36,14 @@ function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; revie
     assert.equal(credentials.domain, 'e2b.example');
   };
   const handle = (id: string) => ({ sandboxId: id,
-    files: { exists: async (path: string) => path === '/home/user/repo' },
+    files: {
+      exists: async (path: string) => path === '/home/user/repo' || remoteFiles.has(path),
+      write: async (path: string, content: string) => {
+        remoteFiles.set(path, content);
+        remoteWrites.push({ path, content });
+      },
+      remove: async (path: string) => { remoteFiles.delete(path); },
+    },
     commands: { run: async (command: string, runOptions?: { envs?: Record<string, string>; cwd?: string;
       background?: boolean; onStdout?: (chunk: string) => void }) => { calls.push(`command:${command}`);
       remoteCommands.push({ command, cwd: runOptions?.cwd });
@@ -74,6 +83,7 @@ function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; revie
     async kill(id, options) { check(options); calls.push(`kill:${id}`); killed = true; return true; },
   };
   return { service: new E2BSandboxService(client), calls, cloneAuth, authTokenForwarded, reviews, remoteCommands,
+    remoteFiles, remoteWrites,
     get killed() { return killed; } };
 }
 
@@ -283,6 +293,37 @@ test('a Native Reviewer for an E2B Requirement uses the same remote execution en
     assert.equal(sdk.reviews.length, 0);
     assert(sdk.remoteCommands.some((entry) => entry.command.includes('gh pr view') && entry.cwd === '/home/user/repo'));
     assert.equal(manager.listMessages(requirement.id).find((message) => message.author === 'reviewer')?.body, 'Remote review completed');
+  } finally {
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('large Native Agent input is available in E2B during the Run and removed afterward', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-handoff-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const sdk = fakeE2B();
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  faux.setResponses([fauxAssistantMessage('Remote input handled')]);
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    nativeService: new NativeAgentService(join(directory, 'native.sqlite'), models, sdk.service),
+    logger: createLogger({ level: 'silent' }) });
+  const description = `${'Long description. '.repeat(300)}Final acceptance criterion.`;
+  const pendingBody = `${'Long pending instruction. '.repeat(6_000)}Final pending clause.`;
+  try {
+    const workspace = await manager.createE2BSandbox({ name: 'Large remote input', domain: 'e2b.example',
+      apiKey: 'test-key', repositoryUrl: 'https://github.com/example/repo.git' });
+    const requirement = manager.createRequirement({ title: 'Remote input', description,
+      provider: 'native-agent', model: 'faux/faux-1', sandboxId: workspace.id });
+    const completed = await manager.runRequirement(requirement.id, pendingBody);
+    assert.equal(completed.status, 'waiting_confirmation');
+    assert.equal(completed.session.pendingMessageCount, 0);
+    assert.deepEqual(sdk.remoteWrites.map((write) => write.content), [description, pendingBody]);
+    assert.ok(sdk.remoteWrites.every((write) => write.path.startsWith('/tmp/code-factory-')));
+    assert.equal(sdk.remoteFiles.size, 0);
   } finally {
     await manager.close();
     rmSync(directory, { recursive: true, force: true });

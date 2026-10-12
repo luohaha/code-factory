@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, posix, resolve } from 'node:path';
 
 import { normalizeRepositoryKey } from './repository-key.js';
@@ -124,6 +124,11 @@ export const MAX_AGENT_TIMER_INTERVAL_SECONDS = 365 * 24 * 60 * 60;
 export const MAX_AGENT_TIMER_DESCRIPTION_LENGTH = 500;
 export const MAX_SEARCH_QUERY_LENGTH = 500;
 export const MAX_AGENT_TRACE_DETAIL_BYTES = 65_536;
+export const MAX_HANDOFF_PROMPT_CHARS = 32_000;
+
+const MAX_HANDOFF_PENDING_CHARS = 12_000;
+const MAX_INLINE_DESCRIPTION_CHARS = 4_000;
+const HANDOFF_DECISION_PATTERN = /\b(decid(?:e|ed|ing)|decis(?:ion|ions)|agree(?:d|ment)?|approv(?:e|ed|al)|confirm(?:ed|ation)?|must|require(?:d|ment)?|scope|worktree|branch|pull request|pr #|commit|follow.up)\b|决定|确认|同意|必须|工作树|分支|拉取请求|待办/i;
 
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
 const REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS = DAY_MILLISECONDS;
@@ -148,6 +153,29 @@ function truncateAgentTraceDetail(detail: string): string {
     prefixEnd -= 1;
   }
   return `${bytes.subarray(0, prefixEnd).toString('utf8')}${AGENT_TRACE_TRUNCATION_SUFFIX}`;
+}
+
+function handoffExcerpt(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  return `${value.slice(0, Math.max(0, limit - 24))}\n[excerpt truncated]`;
+}
+
+function decisionExcerpt(body: string, limit = 500): string {
+  const lines = body.split('\n').map((line) => line.trim()).filter(Boolean);
+  const matching = lines.filter((line) => HANDOFF_DECISION_PATTERN.test(line));
+  const selected = matching.length > 3 ? [matching[0]!, ...matching.slice(-2)]
+    : matching.length > 0 ? matching : lines.slice(0, 3);
+  const lineLimit = Math.floor((limit - Math.max(0, selected.length - 1)) / Math.max(1, selected.length));
+  return selected.map((line) => {
+    if (line.length <= lineLimit) return line;
+    const explicitDecision = [...line.matchAll(/\bdecis(?:ion|ions)\b|\bdecid(?:e|ed|ing)\b|决定|确认/gi)].at(-1);
+    const match = explicitDecision ?? [...line.matchAll(new RegExp(HANDOFF_DECISION_PATTERN.source, 'gi'))].at(-1);
+    const start = Math.max(0, Math.min(line.length - lineLimit + 1, (match?.index ?? line.length) - 24));
+    const prefix = start > 0 ? '…' : '';
+    const fitsTail = start + lineLimit - prefix.length >= line.length;
+    const end = Math.min(line.length, start + lineLimit - prefix.length - (fitsTail ? 0 : 1));
+    return `${prefix}${line.slice(start, end)}${end < line.length ? '…' : ''}`;
+  }).join('\n');
 }
 
 const REVIEWER_DEVELOPER_INSTRUCTIONS = [
@@ -177,7 +205,7 @@ export class AgentManager extends EventEmitter {
   readonly #maxOutputBytes: number;
   readonly #agentCliBinDirectory: string | null;
   readonly #modelCatalog: AgentModelCatalogService;
-  readonly #activeRdRuns = new Map<string, { runId: string; controller: AbortController; steering: Promise<void>; stopRequested: boolean }>();
+  readonly #activeRdRuns = new Map<string, { runId: string; controller: AbortController; steering: Promise<void>; stopRequested: boolean; pendingInputChars: number }>();
   readonly #pendingJevDecisions = new Set<AbortController>();
   readonly #agentTriggers = new Map<string, AgentTrigger>();
   readonly #pullRequestReconciler: PullRequestReconciler;
@@ -1438,11 +1466,23 @@ export class AgentManager extends EventEmitter {
       if (requirement.provider === 'native-agent') {
         active.steering = active.steering.then(async () => {
           const deliveredTo = this.#store.getRun(active.runId)?.inputToSequence ?? 0;
-          const messages = this.#store.listPendingRdMessages(requirementId)
+          const pending = this.#store.listPendingRdMessages(requirementId)
             .filter((message) => message.sequence > deliveredTo);
-          if (messages.length === 0) return;
-          const accepted = await this.#native.steer(requirementId, this.formatRdMessages(messages));
-          if (accepted) this.#store.extendRunInputToSequence(active.runId, messages.at(-1)!.sequence);
+          if (pending.length === 0) return;
+          const separatorChars = active.pendingInputChars > 0 ? 2 : 0;
+          const remainingChars = Math.max(0, MAX_HANDOFF_PENDING_CHARS - active.pendingInputChars - separatorChars);
+          const messages = this.selectRdMessages(pending, remainingChars);
+          const input = this.formatRdMessages(messages);
+          if (input.length > remainingChars) {
+            // The next Run can deliver an oversized message by file or use a fresh message budget.
+            if (!active.controller.signal.aborted) active.controller.abort();
+            return;
+          }
+          const accepted = await this.#native.steer(requirementId, input);
+          if (accepted) {
+            active.pendingInputChars += separatorChars + input.length;
+            this.#store.extendRunInputToSequence(active.runId, messages.at(-1)!.sequence);
+          }
         }).catch((error: unknown) => {
           this.logger.error('Native steering failed', { requirementId, error });
         });
@@ -1640,33 +1680,62 @@ export class AgentManager extends EventEmitter {
     const selectedSandbox = requirement.sandboxId ? this.#store.getSandbox(requirement.sandboxId) : null;
     if (requirement.sandboxId && !selectedSandbox) throw new StoreNotFoundError(`Sandbox ${requirement.sandboxId} not found`);
     const cloudCredentials = selectedSandbox?.kind === 'e2b' ? this.e2bCredentials(selectedSandbox) : null;
-    const pendingMessages = this.#store.listPendingRdMessages(requirementId);
+    const allPendingMessages = this.#store.listPendingRdMessages(requirementId);
+    const pendingMessages = this.selectRdMessages(allPendingMessages);
     const runId = `run_${randomUUID()}`;
+    const remotePayloads = selectedSandbox?.kind === 'e2b';
+    const payloads: Array<{ path: string; content: string }> = [];
+    let localPayloadDirectory: string | null = null;
+    const addPayload = (name: string, content: string): string => {
+      const path = remotePayloads
+        ? `/tmp/code-factory-${runId}-${name}.txt`
+        : join(localPayloadDirectory ??= mkdtempSync(join(tmpdir(), 'code-factory-handoff-')), `${name}.txt`);
+      if (!remotePayloads) writeFileSync(path, content, { flag: 'wx', mode: 0o600 });
+      payloads.push({ path, content });
+      return path;
+    };
+    const promptRequirement = requirement.description.length > MAX_INLINE_DESCRIPTION_CHARS
+      ? { ...requirement, description: `The complete Requirement description (${requirement.description.length} characters) is in ${addPayload('description', requirement.description)}. Read the entire file, including its end, before acting.` }
+      : requirement;
+    const promptMessages = pendingMessages.map((message) => {
+      if (this.formatRdMessages([message]).length <= MAX_HANDOFF_PENDING_CHARS) return message;
+      const path = addPayload(`message-${message.sequence}`, message.body);
+      return { ...message, body: `The complete body of this pending message (${message.body.length} characters) is in ${path}. Read the entire file before acting.` };
+    });
     const isResume = requirement.session.nativeSessionId !== null;
     const needsHistory = !isResume && this.#store.listRuns(requirementId).some((run) => run.role === 'rd');
+    const handoff = needsHistory
+      ? this.buildRdHandoff(promptRequirement, this.#store.listMessages(requirementId), allPendingMessages, promptMessages, selectedSandbox)
+      : null;
     const inputFromSequence = pendingMessages.at(0)?.sequence;
     const inputToSequence = pendingMessages.at(-1)?.sequence;
-    const prompt = this.buildRdPrompt(requirement,
-      needsHistory ? this.#store.listMessages(requirementId) : pendingMessages, isResume, needsHistory);
+    const prompt = handoff ?? this.buildRdPrompt(promptRequirement, promptMessages, isResume);
     const imagePaths = pendingMessages.flatMap((message) => message.attachments
       .filter((attachment) => attachment.kind === 'image')
       .map((attachment) => attachment.localPath));
-    const started = this.#store.beginRun({
-      runId,
-      requirementId,
-      role: 'rd',
-      provider: requirement.provider,
-      ...(requirement.model ? { model: requirement.model } : {}),
-      ...(requirement.reasoningEffort ? { reasoningEffort: requirement.reasoningEffort } : {}),
-      taskSummary: pendingMessages.length > 0
-        ? `Process ${pendingMessages.length} new conversation message${pendingMessages.length === 1 ? '' : 's'}`
-        : isResume ? 'Resume RD session' : 'Start RD session',
-      ...(inputFromSequence === undefined ? {} : { inputFromSequence }),
-      ...(inputToSequence === undefined ? {} : { inputToSequence }),
-      now: new Date().toISOString(),
-    });
+    let started: ReturnType<AgentManagerStore['beginRun']>;
+    try {
+      started = this.#store.beginRun({
+        runId,
+        requirementId,
+        role: 'rd',
+        provider: requirement.provider,
+        ...(requirement.model ? { model: requirement.model } : {}),
+        ...(requirement.reasoningEffort ? { reasoningEffort: requirement.reasoningEffort } : {}),
+        taskSummary: pendingMessages.length > 0
+          ? `Process ${pendingMessages.length} new conversation message${pendingMessages.length === 1 ? '' : 's'}`
+          : isResume ? 'Resume RD session' : 'Start RD session',
+        ...(inputFromSequence === undefined ? {} : { inputFromSequence }),
+        ...(inputToSequence === undefined ? {} : { inputToSequence }),
+        now: new Date().toISOString(),
+      });
+    } catch (error) {
+      if (localPayloadDirectory) rmSync(localPayloadDirectory, { recursive: true, force: true });
+      throw error;
+    }
     const controller = new AbortController();
-    this.#activeRdRuns.set(requirementId, { runId, controller, steering: Promise.resolve(), stopRequested: false });
+    this.#activeRdRuns.set(requirementId, { runId, controller, steering: Promise.resolve(), stopRequested: false,
+      pendingInputChars: this.formatRdMessages(promptMessages).length });
     this.publish({
       type: 'run.started',
       requirementId,
@@ -1710,8 +1779,7 @@ export class AgentManager extends EventEmitter {
       lastAgentMessage = body;
       this.appendMessage({ requirementId, sessionId: started.session.id, runId, author: 'rd_agent', body, deliverToRd: false });
     };
-    const execution = requirement.provider === 'native-agent'
-      ? this.#native.run({ requirementId, sessionId: started.session.id, nativeSessionId: requirement.session.nativeSessionId,
+    const runNative = () => this.#native.run({ requirementId, sessionId: started.session.id, nativeSessionId: requirement.session.nativeSessionId,
           prompt, model: requirement.model, reasoningEffort: requirement.reasoningEffort,
           cwd: selectedSandbox?.cwd ?? this.workspaceRoot,
           ...(selectedSandbox?.kind === 'e2b' && selectedSandbox.providerSandboxId && cloudCredentials
@@ -1720,7 +1788,11 @@ export class AgentManager extends EventEmitter {
                 forwardGitHubToken: selectedSandbox.repositoryUrl !== null
                   && new URL(selectedSandbox.repositoryUrl).hostname.toLowerCase() === 'github.com' } } : {}),
           environment: this.buildRdEnvironment(requirement), instructions: this.buildRdDeveloperInstructions(true, requirement.sandboxId),
-          signal: controller.signal, timeoutMs: this.#timeoutMs, onNativeSession, onEvent })
+          signal: controller.signal, timeoutMs: this.#timeoutMs, onNativeSession, onEvent });
+    const execution = requirement.provider === 'native-agent'
+      ? remotePayloads && payloads.length > 0 && selectedSandbox && cloudCredentials
+        ? this.runWithRemotePromptPayloads(selectedSandbox, cloudCredentials, payloads, runNative)
+        : runNative()
       : this.execute({
       invocation: this.#adapters[requirement.provider].buildRdInvocation({
         prompt,
@@ -1768,7 +1840,40 @@ export class AgentManager extends EventEmitter {
         this.schedulePendingRdMessages(requirementId, inputToSequence ?? 0);
       }
       return current;
+    }).finally(() => {
+      if (localPayloadDirectory) rmSync(localPayloadDirectory, { recursive: true, force: true });
     });
+  }
+
+  private async runWithRemotePromptPayloads(
+    sandbox: Sandbox,
+    credentials: E2BCredentials,
+    payloads: ReadonlyArray<{ path: string; content: string }>,
+    run: () => Promise<RunOutcome>,
+  ): Promise<RunOutcome> {
+    let handle: E2BHandle | null = null;
+    const uploaded: string[] = [];
+    try {
+      if (sandbox.kind !== 'e2b' || !sandbox.providerSandboxId) throw new Error('E2B sandbox is unavailable');
+      handle = await this.#e2b.connect(sandbox.providerSandboxId, credentials);
+      for (const payload of payloads) {
+        uploaded.push(payload.path);
+        await handle.files.write(payload.path, payload.content);
+      }
+      return await run();
+    } catch {
+      return {
+        status: 'failed', exitCode: null, nativeSessionId: null, finalMessage: null,
+        error: 'Could not deliver the complete Requirement input to the selected workspace',
+      };
+    } finally {
+      if (handle) {
+        const uploadedHandle = handle;
+        await Promise.all(uploaded.map(async (path) => {
+          try { await uploadedHandle.files.remove(path); } catch { /* Preserve the Run outcome. */ }
+        }));
+      }
+    }
   }
 
   private async considerJevWake(
@@ -1964,7 +2069,6 @@ export class AgentManager extends EventEmitter {
     requirement: RequirementWithSession,
     messages: RequirementMessage[],
     isResume: boolean,
-    needsHistory = false,
   ): string {
     const incoming = this.formatRdMessages(messages);
     const context = `Requirement: ${requirement.id}\nTitle: ${requirement.title}\nDescription:\n${requirement.description}`;
@@ -1972,10 +2076,7 @@ export class AgentManager extends EventEmitter {
       return [
         'Handle the following requirement. Inspect repository instructions, make any necessary changes, validate them, and report the result.',
         context,
-        needsHistory
-          ? 'This is a new provider session for work that has already started. Review the conversation history and inspect the workspace, Git state, and any PR before acting. Earlier work may be partially complete; avoid repeating side effects.'
-          : '',
-        incoming ? `${needsHistory ? 'Previous requirement conversation history' : 'New requirement conversation messages'}:\n\n${incoming}` : '',
+        incoming ? `New requirement conversation messages:\n\n${incoming}` : '',
       ].filter(Boolean).join('\n\n');
     }
     return [
@@ -1984,6 +2085,118 @@ export class AgentManager extends EventEmitter {
         ? `Continue this requirement with the new conversation messages below. Preserve its objective unless the human changes it. Your own previous output is already in this session and is intentionally omitted.\n\n${incoming}`
         : 'Continue the current requirement. Inspect the current repository state, complete remaining work, and run necessary tests.',
     ].join('\n\n');
+  }
+
+  private buildRdHandoff(
+    requirement: RequirementWithSession,
+    messages: RequirementMessage[],
+    allPendingMessages: RequirementMessage[],
+    pendingMessages: RequirementMessage[],
+    selectedSandbox: Sandbox | null,
+  ): string {
+    const pendingIds = new Set(allPendingMessages.map((message) => message.id));
+    const history = messages.filter((message) => !pendingIds.has(message.id));
+    const recent = history.slice(-10);
+    const older = history.slice(0, -recent.length || history.length);
+    const pullRequests = this.#store.listPullRequests(requirement.id);
+    const prLines = pullRequests.slice(-10).map((pullRequest) =>
+      `- ${pullRequest.url} | ${pullRequest.status} | ${pullRequest.title} | ${pullRequest.headBranch} -> ${pullRequest.baseBranch} | head ${pullRequest.headSha}`);
+    const prState = pullRequests.length > 0
+      ? `${prLines.join('\n')}${pullRequests.length > prLines.length ? `\n${pullRequests.length - prLines.length} older PRs omitted; inspect registered PRs.` : ''}`
+      : 'No PR is registered for this Requirement.';
+    const context = [
+      'Handle the following requirement. Inspect repository instructions, make any necessary changes, validate them, and report the result.',
+      `Requirement: ${requirement.id}\nTitle: ${handoffExcerpt(requirement.title, 500)}\nDescription:\n${handoffExcerpt(requirement.description, 4_000)}`,
+      'This is a new provider session for work that has already started. Previous requirement conversation history appears below as bounded excerpts, not a complete transcript. Check the workspace and PR before repeating side effects. Earlier work may be partially complete.',
+      `Workspace and Git state:\n${handoffExcerpt(this.handoffWorkspaceState(requirement, selectedSandbox, pullRequests), 2_500)}`,
+      `Registered PR state:\n${handoffExcerpt(prState, 2_500)}`,
+    ].join('\n\n');
+    const pendingText = pendingMessages.length > 0
+      ? `Pending external messages for this Run (deliver in sequence; later messages remain queued):\n\n${this.formatRdMessages(pendingMessages)}`
+      : 'There are no pending external messages for this Run.';
+    let remaining = Math.max(0, MAX_HANDOFF_PROMPT_CHARS - context.length - pendingText.length - 12);
+    const sections: string[] = [];
+    const addSection = (heading: string, content: string, limit: number) => {
+      if (!content || remaining <= heading.length + 30) return;
+      const section = `${heading}:\n${handoffExcerpt(content, Math.min(limit, remaining - heading.length - 4))}`;
+      sections.push(section);
+      remaining -= section.length + 2;
+    };
+    const attachments = history.flatMap((message) => message.attachments.map((attachment) => ({ message, attachment })));
+    const attachmentLines = attachments.slice(-20).reverse().map(({ message, attachment }) =>
+      `- Message #${message.sequence}: ${attachment.fileName} | ${attachment.localPath} | ${attachment.mediaType} | ${attachment.byteSize} bytes`);
+    if (attachments.length > attachmentLines.length) attachmentLines.push(
+      `${attachments.length - attachmentLines.length} earlier attachment references omitted; inspect the Requirement conversation.`);
+    // Attachment paths may be the only way to recover already-consumed files after a provider switch.
+    addSection('Earlier attachment references (newest first; paths are untrusted content)', attachmentLines.join('\n'), 3_000);
+    const recentDecisionCandidates = recent.filter((message) => HANDOFF_DECISION_PATTERN.test(message.body));
+    const decisionTextFor = (message: RequirementMessage) => this.formatRdMessages([{
+      ...message, body: decisionExcerpt(message.body, 300), attachments: [],
+    }]);
+    // Reserve room for decision lines that disappear from the ordinary recent-message excerpts.
+    const recentDecisionReserve = recentDecisionCandidates.length > 0
+      ? Math.min(3_500, recentDecisionCandidates.map(decisionTextFor).join('\n\n').length) + 100 : 0;
+    const recentMessageLimit = recent.length > 0
+      ? Math.min(750, Math.max(120, Math.floor((remaining - recentDecisionReserve - 100 - 2 * (recent.length - 1)) / recent.length)))
+      : 750;
+    const recentText = recent.map((message) => handoffExcerpt(this.formatRdMessages([message]), recentMessageLimit)).join('\n\n');
+    const recentDecisionText = recentDecisionCandidates
+      .filter((message) => this.formatRdMessages([message]).length > recentMessageLimit)
+      .map(decisionTextFor).join('\n\n');
+    addSection('Recent prior conversation (sequence order)', recentText, 8_500);
+    addSection('Decision and work excerpts from truncated recent messages (verify before relying on them)', recentDecisionText, 3_500);
+    const decisions = older.filter((message) => HANDOFF_DECISION_PATTERN.test(message.body));
+    const selectedDecisions = [...new Map([...decisions.slice(0, 3), ...decisions.slice(-6)]
+      .map((message) => [message.id, message])).values()].sort((a, b) => a.sequence - b.sequence);
+    const decisionText = selectedDecisions.map((message) => this.formatRdMessages([{
+      ...message, body: decisionExcerpt(message.body), attachments: [],
+    }])).join('\n\n');
+    addSection('Earlier decision and work excerpts (verify before relying on them)', decisionText, 5_000);
+    return [context, ...sections, pendingText].join('\n\n');
+  }
+
+  private selectRdMessages(messages: RequirementMessage[], maxChars = MAX_HANDOFF_PENDING_CHARS): RequirementMessage[] {
+    const selected: RequirementMessage[] = [];
+    let pendingChars = 0;
+    for (const message of messages) {
+      const length = this.formatRdMessages([message]).length + 2;
+      if (selected.length > 0 && pendingChars + length > maxChars) break;
+      selected.push(message);
+      pendingChars += length;
+    }
+    return selected;
+  }
+
+  private handoffWorkspaceState(
+    requirement: RequirementWithSession,
+    selectedSandbox: Sandbox | null,
+    pullRequests: PullRequest[],
+  ): string {
+    const cwd = selectedSandbox?.cwd ?? this.workspaceRoot;
+    if (selectedSandbox?.kind === 'e2b') {
+      return `Selected E2B workspace: ${cwd}. Inspect its remote Git worktrees, branch, and status before acting.`;
+    }
+    try {
+      const output = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+        cwd, encoding: 'utf8', timeout: 2_000, maxBuffer: 256_000,
+      });
+      const worktrees = output.trim().split('\n\n').map((entry) => ({
+        path: entry.match(/^worktree (.+)$/m)?.[1],
+        branch: entry.match(/^branch refs\/heads\/(.+)$/m)?.[1],
+      })).filter((entry) => entry.path && entry.branch);
+      const matching = worktrees.filter((entry) => entry.path === cwd || (entry.path && cwd.startsWith(`${entry.path}/`))
+        || entry.path?.includes(requirement.id.slice(4, 12))
+        || pullRequests.some((pullRequest) => entry.branch === pullRequest.headBranch));
+      const lines = matching.slice(0, 5).map((entry) => {
+        const status = execFileSync('git', ['status', '--porcelain'], {
+          cwd: entry.path!, encoding: 'utf8', timeout: 2_000, maxBuffer: 256_000,
+        }).trim().split('\n').filter(Boolean);
+        return `- ${entry.path} | branch ${entry.branch} | ${status.length === 0 ? 'clean' : `${status.length} changed paths: ${status.slice(0, 3).join(', ')}`}`;
+      });
+      return `Selected workspace: ${cwd}. ${lines.length > 0 ? `Matching Git worktrees:\n${lines.join('\n')}` : 'No matching Git worktree found; inspect Git state before acting.'}`;
+    } catch {
+      return `Selected workspace: ${cwd}. Git worktree status was unavailable; inspect it before acting.`;
+    }
   }
 
   private formatRdMessages(messages: RequirementMessage[]): string {
