@@ -46,7 +46,7 @@ Review these settings before each release and whenever repository or npm ownersh
    npm --prefix packages/agent-manager run release:check
    ```
 
-   `release:audit` blocks high-severity production dependency findings. `release:check` verifies synchronized versions and Apache-2.0 license files, runs backend tests and type checking, builds the dashboard and Agent Manager, and runs `npm pack --dry-run` so the publishable file list can be inspected. `prepublishOnly` and `prepack` enforce the same core build and test checks when publishing; the tag workflow also enforces the audit.
+   `release:audit` blocks high-severity production dependency findings. `release:check` verifies synchronized versions and Apache-2.0 license files, runs backend tests and type checking, builds a tarball, installs it in a disposable Git workspace, and checks that `GET /api/health` reports the release version and `GET /` serves HTML. The tag workflow runs this check before publishing. `prepublishOnly` and `prepack` also enforce the core build and test checks when publishing.
 
 4. Merge the release preparation pull request. From the resulting `main` commit, create and push the signed or annotated tag:
 
