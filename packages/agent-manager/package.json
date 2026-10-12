@@ -1,6 +1,6 @@
 {
   "name": "@luoyixin/code-factory",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Workspace-scoped manager for long-running Codex, Claude Code, and native development sessions.",
   "license": "Apache-2.0",
   "type": "module",
@@ -51,7 +51,8 @@
     "prepack": "npm run build",
     "prepublishOnly": "npm run check:version && npm run check:license && npm test && npm run typecheck",
     "release:audit": "npm audit --omit=dev --audit-level=high && npm --prefix ../../apps/web audit --omit=dev --audit-level=high",
-    "release:check": "npm run check:version && npm run check:license && npm test && npm run typecheck && npm pack --dry-run",
+    "release:check": "npm run check:version && npm run check:license && npm test && npm run typecheck && npm run release:smoke",
+    "release:smoke": "node scripts/smoke-package-install.mjs",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

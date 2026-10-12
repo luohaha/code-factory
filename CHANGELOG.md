@@ -6,6 +6,13 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-12
+
+### Fixed
+
+- Restored the published dashboard on supported Node.js versions. In 0.2.4, `GET /` returned HTTP 500 because the bundled worker imported `cloudflare:workers`, which Node.js cannot load. The API health endpoint continued to work; upgrade to 0.2.5 to restore the dashboard.
+- Added a release gate that installs the built npm tarball in a disposable Git workspace and requests both the API health endpoint and dashboard root before publication.
+
 ## [0.2.4] - 2026-10-12
 
 ### Added
