@@ -220,6 +220,63 @@ test('hybrid search indexes requirements, conversations, and pull request metada
   }
 });
 
+test('ID prefixes and registered PR URLs use exact indexed search results', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    for (const suffix of ['8d66e422-a', '8d66e422-b', '8d67-other']) {
+      store.createRequirement({
+        requirementId: `req_${suffix}`,
+        sessionId: `ses-${suffix}`,
+        title: `Work ${suffix}`,
+        description: 'A shared description',
+        provider: 'codex',
+        now,
+      });
+    }
+    store.appendMessage({
+      id: 'msg-id-reference',
+      requirementId: 'req_8d67-other',
+      sessionId: 'ses-8d67-other',
+      author: 'human',
+      body: 'See req_8d66e422-a and https://github.com/Acme/Repo/pull/42',
+      deliverToRd: true,
+      now,
+    });
+    store.upsertPullRequest({
+      id: 'pr-fast',
+      requirementId: 'req_8d66e422-a',
+      repository: 'Acme/Repo',
+      number: 42,
+      url: 'https://github.com/Acme/Repo/pull/42',
+      title: 'Fast lookup',
+      baseBranch: 'main',
+      headBranch: 'fast-lookup',
+      headSha: 'abc123',
+      status: 'open',
+      now,
+    });
+
+    const matches = store.search('req_8d66e422');
+    assert.deepEqual(matches.map((item) => item.requirementId), ['req_8d66e422-a', 'req_8d66e422-b']);
+    assert.ok(matches.every((item) => item.kind === 'requirement' && item.vectorScore === 0));
+    assert.equal(store.search('REQ-8D66E422', 1)[0]?.requirementId, 'req_8d66e422-a');
+    assert.deepEqual(store.search('req_8d66e423'), []);
+
+    const prMatches = store.search('https://github.com/acme/repo/pull/42/?view=files#discussion');
+    assert.deepEqual(prMatches.map((item) => [item.kind, item.sourceId, item.requirementId]),
+      [['pull_request', 'pr-fast', 'req_8d66e422-a']]);
+    assert.equal(prMatches[0]?.vectorScore, 0);
+    assert.deepEqual(store.search('https://github.com/acme/repo/pull/43'), []);
+    assert.ok(store.search('shared description').some((item) => item.requirementId === 'req_8d67-other'));
+
+    store.transitionRequirement('req_8d66e422-a', ['todo'], 'cancelled', now);
+    assert.deepEqual(store.search('req_8d66e422').map((item) => item.requirementId), ['req_8d66e422-b']);
+    assert.deepEqual(store.search('https://github.com/acme/repo/pull/42'), []);
+  } finally {
+    store.close();
+  }
+});
+
 test('search backfills existing records and hides cancelled requirements', () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-search-backfill-'));
   const databasePath = join(directory, 'factory.sqlite');

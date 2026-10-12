@@ -1,6 +1,36 @@
 const EMBEDDING_DIMENSIONS = 384;
 export const SEARCH_EMBEDDING_VERSION = 1;
 
+export type QuickSearchTarget =
+  | { kind: 'requirement_prefix'; prefix: string }
+  | { kind: 'pull_request_url'; repository: string; number: number };
+
+export function quickSearchTarget(query: string): QuickSearchTarget | null {
+  const requirementId = query.match(/^req_([a-z0-9-]+)$/i);
+  if (requirementId) return { kind: 'requirement_prefix', prefix: query.toLowerCase() };
+
+  const displayedId = query.match(/^req-([a-f0-9]{1,36})$/i);
+  if (displayedId) return { kind: 'requirement_prefix', prefix: `req_${displayedId[1]!.toLowerCase()}` };
+
+  if (!/^https:\/\//i.test(query)) return null;
+  let url: URL;
+  try {
+    url = new URL(query);
+  } catch {
+    return null;
+  }
+  const path = url.pathname.match(/^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/([1-9][0-9]*)\/?$/);
+  if (url.protocol !== 'https:' || url.username || url.password || url.port || !path) return null;
+  const number = Number(path[3]);
+  if (!Number.isSafeInteger(number)) return null;
+  const repository = `${path[1]}/${path[2]}`.toLowerCase();
+  return {
+    kind: 'pull_request_url',
+    repository: url.hostname === 'github.com' ? repository : `${url.hostname}/${repository}`,
+    number,
+  };
+}
+
 function normalizedText(value: string): string {
   return value.normalize('NFKC').toLocaleLowerCase('und').replace(/\s+/gu, ' ').trim();
 }

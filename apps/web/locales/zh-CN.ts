@@ -378,7 +378,7 @@ export const zhCN = {
   'Last synced {time}': '最后同步于 {time}',
   'Search requirements or Sessions': '搜索需求或会话',
   'Search timers or Requirements': '搜索定时任务或需求',
-  'Search requirements, conversations, or PRs': '搜索需求、对话或 PR',
+  'Search requirements, IDs, conversations, or PR URLs': '搜索需求、ID、对话或 PR 链接',
   'Requirement match': '命中需求',
   'Conversation match': '命中对话',
   'Pull Request match': '命中 Pull Request',

@@ -3603,7 +3603,7 @@ function Dashboard() {
     ? 'Search workspaces'
     : view === 'timers'
     ? 'Search timers or Requirements'
-    : 'Search requirements, conversations, or PRs';
+    : 'Search requirements, IDs, conversations, or PR URLs';
   const boardLabel: TranslationKey = view === 'requirements'
     ? 'Requirement board'
     : view === 'relationships' ? 'Requirement relationship tree'
