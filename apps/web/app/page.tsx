@@ -2170,6 +2170,7 @@ function RequirementDetail({
   reviewRequests,
   modelCatalog,
   sandboxes,
+  assignedWorkspace,
   messageLoading,
   messagesReady,
   busy,
@@ -2200,6 +2201,7 @@ function RequirementDetail({
   reviewRequests: ReviewRequestDto[];
   modelCatalog: AgentModelCatalogDto | null;
   sandboxes: SandboxDto[];
+  assignedWorkspace: SandboxDto | null;
   messageLoading: boolean;
   messagesReady: boolean;
   busy: boolean;
@@ -2349,6 +2351,10 @@ function RequirementDetail({
 
   if (!requirement) return <Sheet open={false} onOpenChange={onOpenChange} />;
 
+  const workspaceName = requirement.sandboxId && requirement.sandboxId !== 'local'
+    ? assignedWorkspace?.name ?? requirement.sandboxId
+    : t('Default workspace');
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -2370,6 +2376,10 @@ function RequirementDetail({
             <span>{agentConfigurationLabel(requirement)}</span>
             <span aria-hidden="true">·</span>
             <span className="font-mono">ses-{shortId(requirement.session.id)}</span>
+            <span aria-hidden="true">·</span>
+            <span className="max-w-full truncate" title={assignedWorkspace?.cwd}>
+              {t('Workspace')}: {workspaceName}
+            </span>
           </SheetDescription>
           {(requirement.status === 'todo' || requirement.status === 'waiting_confirmation')
             && requirement.session.state !== 'running' ? (
@@ -4175,6 +4185,7 @@ function Dashboard() {
         reviewRequests={reviewRequests}
         modelCatalog={modelCatalog}
         sandboxes={sandboxes.filter((sandbox) => sandbox.status !== 'terminated')}
+        assignedWorkspace={sandboxes.find((sandbox) => sandbox.id === (selectedRequirement?.sandboxId ?? 'local')) ?? null}
         messageLoading={selectedMessageLoading}
         messagesReady={loadedConversationRequirementId === selectedId && !selectedMessageLoading}
         busy={selectedRequirement
