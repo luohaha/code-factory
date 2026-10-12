@@ -6,6 +6,25 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-12
+
+### Added
+
+- Allowed humans to edit the title and description of a TODO Requirement before its first Run.
+- Allowed RD Agents to message any known Requirement, including Requirements outside their parent-child tree.
+- Allowed humans to change a Requirement's RD provider, model, and reasoning effort while it waits for confirmation, preserving the visible conversation across provider switches.
+
+### Changed
+
+- Bounded cross-provider handoffs and delivered large pending-message backlogs in ordered batches while preserving references to earlier attachments.
+- Updated dashboard development tooling and patched transitive `sharp` and `fflate` dependencies.
+- Translated the Simplified Chinese Steering button label as “插队”.
+
+### Fixed
+
+- Kept explicitly stopped RD sessions paused across wake events.
+- Returned JSON 404 responses for unsupported API routes and methods when the dashboard build is present.
+
 ## [0.2.3] - 2026-10-08
 
 ### Changed
