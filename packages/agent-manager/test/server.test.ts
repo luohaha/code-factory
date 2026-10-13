@@ -1429,6 +1429,24 @@ test('HTTP API exposes the persisted human and RD Agent conversation', async () 
     assert.equal(body.items[0]?.attachments[0]?.id, uploaded.id);
     assert.equal(body.items[0]?.attachments[1]?.id, uploadedFile.id);
 
+    const latestMessagesResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/messages?limit=2`);
+    assert.equal(latestMessagesResponse.status, 200);
+    const latestMessages = await latestMessagesResponse.json() as { items: Array<{ sequence: number }>; hasMore: boolean };
+    assert.deepEqual(latestMessages.items.map((message) => message.sequence), [2, 3]);
+    assert.equal(latestMessages.hasMore, true);
+    const olderMessagesResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/messages?limit=2&before=2`);
+    assert.equal(olderMessagesResponse.status, 200);
+    const olderMessages = await olderMessagesResponse.json() as { items: Array<{ sequence: number }>; hasMore: boolean };
+    assert.deepEqual(olderMessages.items.map((message) => message.sequence), [1]);
+    assert.equal(olderMessages.hasMore, false);
+    const newerMessagesResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/messages?limit=1&after=1`);
+    assert.equal(newerMessagesResponse.status, 200);
+    const newerMessages = await newerMessagesResponse.json() as { items: Array<{ sequence: number }>; hasMore: boolean };
+    assert.deepEqual(newerMessages.items.map((message) => message.sequence), [2]);
+    assert.equal(newerMessages.hasMore, true);
+    const invalidMessagesResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/messages?limit=0`);
+    assert.equal(invalidMessagesResponse.status, 400);
+
     const prResponse = await fetch(`${baseUrl}/api/agent/pull-requests`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

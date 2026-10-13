@@ -1,7 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import { memo, type RefObject, type SyntheticEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { memo, type RefObject, type SyntheticEvent, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -2172,6 +2172,9 @@ function RequirementDetail({
   sandboxes,
   assignedWorkspace,
   messageLoading,
+  hasOlderMessages,
+  olderMessagesLoading,
+  onLoadOlderMessages,
   messagesReady,
   busy,
   busyPullRequestId,
@@ -2203,6 +2206,9 @@ function RequirementDetail({
   sandboxes: SandboxDto[];
   assignedWorkspace: SandboxDto | null;
   messageLoading: boolean;
+  hasOlderMessages: boolean;
+  olderMessagesLoading: boolean;
+  onLoadOlderMessages: () => Promise<void>;
   messagesReady: boolean;
   busy: boolean;
   busyPullRequestId: string | null;
@@ -2234,6 +2240,7 @@ function RequirementDetail({
   const initializedRequirementIdRef = useRef<string | undefined>(undefined);
   const loadedRequirementIdRef = useRef<string | undefined>(undefined);
   const previousMessageIdsRef = useRef<Set<string>>(new Set());
+  const prependScrollRef = useRef<{ firstSequence: number; height: number; top: number } | null>(null);
   const open = requirement !== null;
   const requirementId = requirement?.id;
   const activeRdRun = runs.find((run) => run.role === 'rd' && run.status === 'running');
@@ -2271,6 +2278,25 @@ function RequirementDetail({
     setScrollToTopRequirementId(null);
     scrollViewportRef.current?.scrollTo({ top: 0, behavior: 'auto' });
   }, []);
+
+  const loadOlderMessages = useCallback(() => {
+    const viewport = scrollViewportRef.current;
+    const firstSequence = messages[0]?.sequence;
+    if (viewport && firstSequence !== undefined) {
+      followsLatestRef.current = false;
+      prependScrollRef.current = { firstSequence, height: viewport.scrollHeight, top: viewport.scrollTop };
+    }
+    void onLoadOlderMessages();
+  }, [messages, onLoadOlderMessages]);
+
+  useLayoutEffect(() => {
+    const previous = prependScrollRef.current;
+    const viewport = scrollViewportRef.current;
+    if (previous && viewport && messages[0] && messages[0].sequence < previous.firstSequence) {
+      viewport.scrollTop = previous.top + viewport.scrollHeight - previous.height;
+      prependScrollRef.current = null;
+    }
+  }, [messages]);
 
   const updateScrollPosition = useCallback((viewport: HTMLDivElement) => {
     const awayFromBottom = isAwayFromConversationBottom(viewport);
@@ -2502,9 +2528,22 @@ function RequirementDetail({
                 <span className="grid size-7 place-items-center rounded-lg bg-primary/8 text-primary"><MessagesSquare className="size-3.5" /></span>
                 <div>
                   <h3 id="requirement-conversation" className="text-xs font-semibold">{t('Activity and conversation')}</h3>
-                  <p className="mt-0.5 text-[9px] text-muted-foreground">{t('{count} messages · Continue with the same RD Session', { count: messages.length })}</p>
+                  <p className="mt-0.5 text-[9px] text-muted-foreground">
+                    {t(hasOlderMessages
+                      ? '{count} messages loaded · Continue with the same RD Session'
+                      : '{count} messages · Continue with the same RD Session', { count: messages.length })}
+                  </p>
                 </div>
               </div>
+
+            {hasOlderMessages ? (
+              <div className="mb-4 flex justify-center">
+                <Button type="button" variant="outline" size="sm" disabled={olderMessagesLoading} onClick={loadOlderMessages}>
+                  {olderMessagesLoading ? <LoaderCircle className="size-3.5 animate-spin" /> : <ArrowUp className="size-3.5" />}
+                  {t('Load earlier messages')}
+                </Button>
+              </div>
+            ) : null}
 
             {messageLoading ? (
               <div className="flex items-center justify-center gap-2 py-10 text-xs text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />{t('Loading messages')}</div>
@@ -2646,11 +2685,15 @@ function Dashboard() {
     items: RequirementMessageDto[];
   }>({ requirementId: null, items: [] });
   const [loadedConversationRequirementId, setLoadedConversationRequirementId] = useState<string | null>(null);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const [olderMessagesLoading, setOlderMessagesLoading] = useState(false);
   const [agentTimers, setAgentTimers] = useState<AgentTimerDto[]>([]);
   const [messageLoading, setMessageLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detailMode, setDetailMode] = useState<RequirementDetailMode>('conversation');
   const selectedIdRef = useRef<string | null>(null);
+  const conversationRef = useRef(conversation);
+  const loadedConversationRequirementIdRef = useRef<string | null>(null);
   const detailModeRef = useRef<RequirementDetailMode>('conversation');
   const pendingRefreshTargetsRef = useRef<DashboardRefreshTarget[]>([]);
   const refreshTimerRef = useRef<number | null>(null);
@@ -2680,7 +2723,13 @@ function Dashboard() {
     const nextDetailMode = requirementDetailModeForView(sourceView);
     detailModeRef.current = nextDetailMode;
     setDetailMode(nextDetailMode);
-    if (nextDetailMode === 'conversation') setLoadedConversationRequirementId(null);
+    if (nextDetailMode === 'conversation') {
+      loadedConversationRequirementIdRef.current = null;
+      setLoadedConversationRequirementId(null);
+      setConversation({ requirementId, items: [] });
+      setHasOlderMessages(false);
+    }
+    selectedIdRef.current = requirementId;
     setSelectedId(requirementId);
   }, []);
   const {
@@ -2712,6 +2761,10 @@ function Dashboard() {
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
+
+  useEffect(() => {
+    conversationRef.current = conversation;
+  }, [conversation]);
 
   useEffect(() => {
     detailModeRef.current = detailMode;
@@ -2871,9 +2924,15 @@ function Dashboard() {
           case 'messages':
             if (selectedIdRef.current === target.requirementId
               && detailModeRef.current === 'conversation'
+              && loadedConversationRequirementIdRef.current === target.requirementId
               && !removedRequirementIdsRef.current.has(target.requirementId)) {
-              const items = await client.listMessages(target.requirementId);
-              if (selectedIdRef.current === target.requirementId) {
+              let after = conversationRef.current.requirementId === target.requirementId
+                ? conversationRef.current.items.at(-1)?.sequence ?? 0
+                : 0;
+              let hasMore = true;
+              while (hasMore && selectedIdRef.current === target.requirementId) {
+                const page = await client.listMessagePage(target.requirementId, { after });
+                if (selectedIdRef.current !== target.requirementId || page.items.length === 0) break;
                 setConversation((current) => applyRequirementScopedUpdate(
                   current,
                   target.requirementId,
@@ -2881,10 +2940,11 @@ function Dashboard() {
                   (acceptedCurrent) => mergeConversationSnapshot(
                     acceptedCurrent,
                     target.requirementId,
-                    items,
+                    page.items,
                   ),
                 ));
-                setLoadedConversationRequirementId(target.requirementId);
+                after = page.items.at(-1)!.sequence;
+                hasMore = page.hasMore;
               }
             }
             return;
@@ -3128,8 +3188,8 @@ function Dashboard() {
     let cancelled = false;
     const timer = window.setTimeout(() => {
       setMessageLoading(true);
-      client.listMessages(selectedId)
-        .then((received) => {
+      client.listMessagePage(selectedId)
+        .then((page) => {
           if (!cancelled) {
             setConversation((current) => applyRequirementScopedUpdate(
               current,
@@ -3138,9 +3198,11 @@ function Dashboard() {
               (acceptedCurrent) => mergeConversationSnapshot(
                 acceptedCurrent,
                 selectedId,
-                received,
+                page.items,
               ),
             ));
+            setHasOlderMessages(page.hasMore);
+            loadedConversationRequirementIdRef.current = selectedId;
             setLoadedConversationRequirementId(selectedId);
           }
         })
@@ -3152,6 +3214,30 @@ function Dashboard() {
       window.clearTimeout(timer);
     };
   }, [client, detailMode, selectedId, t]);
+
+  const loadOlderMessages = useCallback(async () => {
+    const requirementId = selectedIdRef.current;
+    const before = conversationRef.current.requirementId === requirementId
+      ? conversationRef.current.items[0]?.sequence
+      : undefined;
+    if (!requirementId || before === undefined || olderMessagesLoading) return;
+    setOlderMessagesLoading(true);
+    try {
+      const page = await client.listMessagePage(requirementId, { before });
+      if (selectedIdRef.current !== requirementId) return;
+      setConversation((current) => applyRequirementScopedUpdate(
+        current,
+        requirementId,
+        removedRequirementIdsRef.current,
+        (acceptedCurrent) => mergeConversationSnapshot(acceptedCurrent, requirementId, page.items),
+      ));
+      setHasOlderMessages(page.hasMore);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t('Failed to load messages'));
+    } finally {
+      setOlderMessagesLoading(false);
+    }
+  }, [client, olderMessagesLoading, t]);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -4187,6 +4273,9 @@ function Dashboard() {
         sandboxes={sandboxes.filter((sandbox) => sandbox.status !== 'terminated')}
         assignedWorkspace={sandboxes.find((sandbox) => sandbox.id === (selectedRequirement?.sandboxId ?? 'local')) ?? null}
         messageLoading={selectedMessageLoading}
+        hasOlderMessages={hasOlderMessages}
+        olderMessagesLoading={olderMessagesLoading}
+        onLoadOlderMessages={loadOlderMessages}
         messagesReady={loadedConversationRequirementId === selectedId && !selectedMessageLoading}
         busy={selectedRequirement
           ? busyId === selectedRequirement.id || interruptingRequirementIds.has(selectedRequirement.id)

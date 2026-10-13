@@ -740,9 +740,30 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
 
   listMessages(requirementId: string): RequirementMessage[] {
     if (!this.getRequirement(requirementId)) throw new StoreNotFoundError(`Requirement ${requirementId} not found`);
-    return (this.#db.prepare(`SELECT * FROM requirement_messages
-      WHERE requirement_id = ? ORDER BY sequence ASC`).all(requirementId) as Row[])
-      .map((row) => messageFrom(row, this.listMessageAttachments(String(row.id))));
+    return this.messagesFromRows(this.#db.prepare(`SELECT * FROM requirement_messages
+      WHERE requirement_id = ? ORDER BY sequence ASC`).all(requirementId) as Row[]);
+  }
+
+  listMessagePage(requirementId: string, limit: number, beforeSequence?: number, afterSequence?: number): {
+    items: RequirementMessage[];
+    hasMore: boolean;
+  } {
+    if (!this.getRequirement(requirementId)) throw new StoreNotFoundError(`Requirement ${requirementId} not found`);
+    const descending = afterSequence === undefined;
+    const rows = (beforeSequence !== undefined
+      ? this.#db.prepare(`SELECT * FROM requirement_messages
+        WHERE requirement_id = ? AND sequence < ? ORDER BY sequence DESC LIMIT ?`)
+        .all(requirementId, beforeSequence, limit + 1)
+      : afterSequence !== undefined
+        ? this.#db.prepare(`SELECT * FROM requirement_messages
+          WHERE requirement_id = ? AND sequence > ? ORDER BY sequence ASC LIMIT ?`)
+          .all(requirementId, afterSequence, limit + 1)
+        : this.#db.prepare(`SELECT * FROM requirement_messages
+          WHERE requirement_id = ? ORDER BY sequence DESC LIMIT ?`)
+          .all(requirementId, limit + 1)) as Row[];
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    return { items: this.messagesFromRows(descending ? page.reverse() : page), hasMore };
   }
 
   listRecentConversationMessages(requirementId: string, limit: number): Array<{
@@ -761,10 +782,9 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
 
   listPendingRdMessages(requirementId: string): RequirementMessage[] {
     const bundle = this.requireBundle(requirementId);
-    return (this.#db.prepare(`SELECT * FROM requirement_messages
+    return this.messagesFromRows(this.#db.prepare(`SELECT * FROM requirement_messages
       WHERE requirement_id = ? AND deliver_to_rd = 1 AND sequence > ? ORDER BY sequence ASC`)
-      .all(requirementId, bundle.session.lastConsumedMessageSequence) as Row[])
-      .map((row) => messageFrom(row, this.listMessageAttachments(String(row.id))));
+      .all(requirementId, bundle.session.lastConsumedMessageSequence) as Row[]);
   }
 
   createAgentTimer(input: CreateAgentTimerRecord): AgentTimer {
@@ -1228,6 +1248,24 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
   private listMessageAttachments(messageId: string): MessageAttachment[] {
     return (this.#db.prepare(`SELECT * FROM message_attachments
       WHERE message_id = ? ORDER BY created_at ASC, id ASC`).all(messageId) as Row[]).map(attachmentFrom);
+  }
+
+  private messagesFromRows(rows: Row[]): RequirementMessage[] {
+    if (rows.length === 0) return [];
+    const attachmentsByMessage = new Map<string, MessageAttachment[]>();
+    for (let start = 0; start < rows.length; start += 500) {
+      const ids = rows.slice(start, start + 500).map((row) => String(row.id));
+      const attachments = this.#db.prepare(`SELECT * FROM message_attachments
+        WHERE message_id IN (${ids.map(() => '?').join(', ')}) ORDER BY created_at ASC, id ASC`)
+        .all(...ids) as Row[];
+      for (const row of attachments) {
+        const messageId = String(row.message_id);
+        const current = attachmentsByMessage.get(messageId) ?? [];
+        current.push(attachmentFrom(row));
+        attachmentsByMessage.set(messageId, current);
+      }
+    }
+    return rows.map((row) => messageFrom(row, attachmentsByMessage.get(String(row.id)) ?? []));
   }
 
   private requireRun(id: string): AgentRun {

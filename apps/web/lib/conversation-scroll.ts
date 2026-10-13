@@ -95,13 +95,12 @@ export function mergeConversationSnapshot<
   snapshot: readonly T[],
 ): RequirementConversation<T> {
   const scopedSnapshot = snapshot.filter((message) => message.requirementId === requirementId);
+  const merged = new Map(scopedSnapshot.map((message) => [message.id, message]));
+  if (conversation.requirementId === requirementId) {
+    for (const message of conversation.items) merged.set(message.id, message);
+  }
   return {
     requirementId,
-    items: conversation.requirementId === requirementId
-      ? conversation.items.reduce(
-          (messages, message) => upsertConversationMessage(messages, message),
-          scopedSnapshot,
-        )
-      : [...scopedSnapshot],
+    items: [...merged.values()].sort((left, right) => left.sequence - right.sequence),
   };
 }

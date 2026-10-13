@@ -1136,6 +1136,43 @@ test('human and Agent messages are stored as an ordered requirement conversation
   }
 });
 
+test('message pages preserve order, boundaries, and attachments', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-page', sessionId: 'ses-page', title: 'Paged conversation',
+      description: '', provider: 'codex', createdBy: 'human', now,
+    });
+    store.createMessageAttachment({
+      id: 'att-page', requirementId: 'req-page', fileName: 'note.txt', kind: 'file',
+      mediaType: 'text/plain', byteSize: 4, localPath: '/tmp/note-page.txt', now,
+    });
+    for (let sequence = 1; sequence <= 5; sequence += 1) {
+      store.appendMessage({
+        id: `msg-${sequence}`, requirementId: 'req-page', sessionId: 'ses-page',
+        author: 'human', body: `Message ${sequence}`, deliverToRd: true, now,
+        ...(sequence === 3 ? { attachmentIds: ['att-page'] } : {}),
+      });
+    }
+    const latest = store.listMessagePage('req-page', 2);
+    assert.deepEqual(latest.items.map((message) => message.sequence), [4, 5]);
+    assert.equal(latest.hasMore, true);
+    const older = store.listMessagePage('req-page', 2, 4);
+    assert.deepEqual(older.items.map((message) => message.sequence), [2, 3]);
+    assert.equal(older.items[1]?.attachments[0]?.id, 'att-page');
+    assert.equal(older.hasMore, true);
+    const oldest = store.listMessagePage('req-page', 2, 2);
+    assert.deepEqual(oldest.items.map((message) => message.sequence), [1]);
+    assert.equal(oldest.hasMore, false);
+    const newer = store.listMessagePage('req-page', 2, undefined, 2);
+    assert.deepEqual(newer.items.map((message) => message.sequence), [3, 4]);
+    assert.equal(newer.hasMore, true);
+    assert.deepEqual(store.listMessages('req-page')[2]?.attachments.map((attachment) => attachment.id), ['att-page']);
+  } finally {
+    store.close();
+  }
+});
+
 test('image attachments are claimed by one requirement message', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {

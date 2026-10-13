@@ -184,6 +184,23 @@ void test('keeps a selected Requirement message received while its conversation 
   );
 });
 
+void test('merges older pages without replacing live messages or changing sequence order', () => {
+  const current = {
+    requirementId: 'requirement-1',
+    items: [
+      { id: 'message-3', requirementId: 'requirement-1', sequence: 3, body: 'live' },
+      { id: 'message-4', requirementId: 'requirement-1', sequence: 4, body: 'latest' },
+    ],
+  };
+  const merged = mergeConversationSnapshot(current, 'requirement-1', [
+    { id: 'message-1', requirementId: 'requirement-1', sequence: 1, body: 'oldest' },
+    { id: 'message-2', requirementId: 'requirement-1', sequence: 2, body: 'older' },
+    { id: 'message-3', requirementId: 'requirement-1', sequence: 3, body: 'stale snapshot' },
+  ]);
+  assert.deepEqual(merged.items.map((message) => message.sequence), [1, 2, 3, 4]);
+  assert.equal(merged.items[2]?.body, 'live');
+});
+
 void test('does not merge a message from another Requirement into the selected conversation', () => {
   const conversation = {
     requirementId: 'requirement-1',
