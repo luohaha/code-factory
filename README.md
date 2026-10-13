@@ -59,6 +59,8 @@ The startup directory becomes the managed workspace. Only one Agent Manager may 
 
 Prerequisites, daemon operation, configuration, CLI options, and log locations are documented in [Running Code Factory](docs/running-code-factory.md). To install dependencies or run a source checkout manually, see the [Development guide](docs/development.md).
 
+To use a Manager running on a development machine from a laptop or phone, use [Tailscale remote access](docs/tailscale.md). Keep the Manager on loopback and let Tailscale Serve provide a private HTTPS URL for your tailnet; the bundled dashboard connects to that same origin.
+
 ## How It Works
 
 <p align="center">

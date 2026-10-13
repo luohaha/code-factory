@@ -1,4 +1,7 @@
 import { MANAGER_EVENT_TYPES } from './manager-event-types.ts';
+import { DEFAULT_AGENT_MANAGER_URL, normalizeManagerUrl } from './agent-manager-url.ts';
+
+export { DEFAULT_AGENT_MANAGER_URL, defaultManagerUrlForLocation, normalizeManagerUrl } from './agent-manager-url.ts';
 
 export type AgentProvider = 'codex' | 'claude-code' | 'native-agent';
 export type AgentReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -277,8 +280,6 @@ export interface RequirementActionAcceptedDto {
   message: RequirementMessageDto | null;
 }
 
-export const DEFAULT_AGENT_MANAGER_URL = 'http://127.0.0.1:4310';
-
 export class AgentManagerApiError extends Error {
   constructor(
     message: string,
@@ -286,12 +287,6 @@ export class AgentManagerApiError extends Error {
   ) {
     super(message);
   }
-}
-
-export function normalizeManagerUrl(value: string): string {
-  const url = new URL(value.trim());
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new TypeError('Only HTTP and HTTPS URLs are supported');
-  return url.toString().replace(/\/$/, '');
 }
 
 export class AgentManagerClient {
