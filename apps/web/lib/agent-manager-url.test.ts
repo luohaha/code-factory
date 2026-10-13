@@ -5,10 +5,10 @@ import { DEFAULT_AGENT_MANAGER_URL, defaultManagerUrlForLocation, normalizeManag
 
 void test('remote dashboards connect to their own origin, including Tailscale HTTPS', () => {
   for (const address of [
-    'https://dev3.example-tailnet.ts.net/',
-    'https://dev3.example-tailnet.ts.net:8443/',
+    'https://dev-host.example-tailnet.ts.net/',
+    'https://dev-host.example-tailnet.ts.net:8443/',
     'http://100.101.102.103:4310/',
-    'http://dev3:4310/',
+    'http://dev-host:4310/',
     'http://192.168.1.10:3000/',
     'https://code-factory.example.com/requirements',
   ]) {
@@ -35,8 +35,8 @@ void test('standalone local development dashboards still connect to the default 
 });
 
 void test('Manager URLs accept HTTPS and custom ports and reject non-HTTP schemes', () => {
-  assert.equal(normalizeManagerUrl(' https://dev3.example-tailnet.ts.net/ '), 'https://dev3.example-tailnet.ts.net');
-  assert.equal(normalizeManagerUrl('https://dev3.example-tailnet.ts.net:8443/'), 'https://dev3.example-tailnet.ts.net:8443');
+  assert.equal(normalizeManagerUrl(' https://dev-host.example-tailnet.ts.net/ '), 'https://dev-host.example-tailnet.ts.net');
+  assert.equal(normalizeManagerUrl('https://dev-host.example-tailnet.ts.net:8443/'), 'https://dev-host.example-tailnet.ts.net:8443');
   assert.throws(() => normalizeManagerUrl('invalid url'), TypeError);
   assert.throws(() => normalizeManagerUrl('file:///tmp/factory'), /Only HTTP and HTTPS/);
 });

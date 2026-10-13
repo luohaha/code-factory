@@ -1,17 +1,17 @@
 # Tailscale remote access
 
-Run Code Factory on a development machine such as `dev3`, then use its bundled dashboard from a MacBook or phone through Tailscale Serve. The Manager keeps listening on `127.0.0.1:4310`; Serve provides HTTPS within your tailnet and proxies the dashboard, API, attachments, and live SSE events through one origin. Agent execution and workspace files stay on the Manager host or the Requirement's selected workspace.
+Run Code Factory on a development machine such as `dev-host`, then use its bundled dashboard from a MacBook or phone through Tailscale Serve. The Manager keeps listening on `127.0.0.1:4310`; Serve provides HTTPS within your tailnet and proxies the dashboard, API, attachments, and live SSE events through one origin. Agent execution and workspace files stay on the Manager host or the Requirement's selected workspace.
 
 ## Prerequisites
 
-- Install and connect [Tailscale](https://tailscale.com/download) on `dev3` and each client device, including the phone. They must be in the same tailnet with access to the server.
+- Install and connect [Tailscale](https://tailscale.com/download) on `dev-host` and each client device, including the phone. They must be in the same tailnet with access to the server.
 - Use Tailscale 1.52 or newer for the commands below. Enable MagicDNS and [HTTPS certificates](https://tailscale.com/kb/1153/enabling-https) in the tailnet. Serve prints a setup link if required settings are missing.
-- Follow the normal [Code Factory prerequisites](running-code-factory.md#prerequisites) on `dev3`. The MacBook and phone only need Tailscale and a browser.
-- Restrict tailnet access to `dev3`'s Serve port to trusted operators using [Tailscale access controls](https://tailscale.com/docs/features/access-control). Manager has no application login or per-user permissions: anyone allowed to connect can operate its agents and workspaces. A default tailnet policy may allow all members, so membership alone is not a personal allowlist.
+- Follow the normal [Code Factory prerequisites](running-code-factory.md#prerequisites) on `dev-host`. The MacBook and phone only need Tailscale and a browser.
+- Restrict tailnet access to `dev-host`'s Serve port to trusted operators using [Tailscale access controls](https://tailscale.com/docs/features/access-control). Manager has no application login or per-user permissions: anyone allowed to connect can operate its agents and workspaces. A default tailnet policy may allow all members, so membership alone is not a personal allowlist.
 
-## Start on dev3
+## Start on the development host
 
-SSH to `luoyixin@dev3`, then run these commands on **dev3** from the repository to manage:
+SSH to `user@dev-host` (replace both placeholders with your own username and hostname), then run these commands on **the development host** from the repository to manage:
 
 ~~~bash
 cd /path/to/the/repository/to-manage
@@ -27,14 +27,14 @@ tailscale serve --bg --https=443 http://127.0.0.1:4310
 tailscale serve status
 ~~~
 
-If Tailscale reports insufficient permission, run the Serve commands with `sudo` on dev3 or ask its administrator to configure a Tailscale operator. Complete any HTTPS setup link printed by Serve and rerun the command.
+If Tailscale reports insufficient permission, run the Serve commands with `sudo` on the development host or ask its administrator to configure a Tailscale operator. Complete any HTTPS setup link printed by Serve and rerun the command.
 
 If Manager is already running with different network options, run `code-factory-agent-manager restart --host 127.0.0.1 --port 4310` using the same installed package or `npx --package @luoyixin/code-factory code-factory-agent-manager restart --host 127.0.0.1 --port 4310`. Repeating daemon `start` does not change an existing daemon's options. For an existing foreground process, stop it in its terminal before starting the daemon.
 
 Serve prints an address similar to:
 
 ~~~text
-https://dev3.example-tailnet.ts.net
+https://dev-host.example-tailnet.ts.net
 |-- / proxy http://127.0.0.1:4310
 ~~~
 
@@ -49,7 +49,7 @@ The bundled dashboard automatically connects to the URL you opened. Its API requ
 Check the remote path from the MacBook while Tailscale is connected (replace the example hostname):
 
 ~~~bash
-curl --fail https://dev3.example-tailnet.ts.net/api/health
+curl --fail https://dev-host.example-tailnet.ts.net/api/health
 ~~~
 
 In the dashboard, verify that it reports an online connection, can create a TODO Requirement, and receives live updates. Repeat in the phone browser. Disable Tailscale on the client and verify that a fresh request cannot reach the private service.
@@ -60,7 +60,7 @@ Use **Serve** for tailnet-only access. **Funnel** publishes a service to the int
 
 `--bg` keeps Serve configured after the SSH terminal closes and restores it when Tailscale restarts. The Manager daemon runs independently, and `code-factory-agent-manager stop` does not remove the Serve configuration. The Manager daemon does not automatically start after a host reboot; start it again or configure host-level service supervision separately.
 
-Disable this listener on dev3 with the flags used when enabling it:
+Disable this listener on the development host with the flags used when enabling it:
 
 ~~~bash
 tailscale serve --bg --https=443 off
