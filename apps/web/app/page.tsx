@@ -2378,7 +2378,7 @@ function RequirementDetail({
             <span className="font-mono">ses-{shortId(requirement.session.id)}</span>
             <span aria-hidden="true">·</span>
             <span className="max-w-full truncate" title={assignedWorkspace?.cwd}>
-              {t('Workspace')}: {workspaceName}
+              {workspaceName}
             </span>
           </SheetDescription>
           {(requirement.status === 'todo' || requirement.status === 'waiting_confirmation')
