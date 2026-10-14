@@ -118,7 +118,7 @@ import {
   type WorkspaceDto,
 } from '@/lib/agent-manager-client';
 import {
-  confirmedSequenceAfterPage,
+  ConversationRefreshCursor,
   countAppendedMessages,
   isAwayFromConversationBottom,
   isAwayFromConversationTop,
@@ -2695,8 +2695,7 @@ function Dashboard() {
   const [detailMode, setDetailMode] = useState<RequirementDetailMode>('conversation');
   const selectedIdRef = useRef<string | null>(null);
   const conversationRef = useRef(conversation);
-  const confirmedConversationRef = useRef<{ requirementId: string; sequence: number } | null>(null);
-  const loadedConversationRequirementIdRef = useRef<string | null>(null);
+  const conversationRefreshRef = useRef(new ConversationRefreshCursor());
   const detailModeRef = useRef<RequirementDetailMode>('conversation');
   const pendingRefreshTargetsRef = useRef<DashboardRefreshTarget[]>([]);
   const refreshTimerRef = useRef<number | null>(null);
@@ -2730,8 +2729,7 @@ function Dashboard() {
     detailModeRef.current = nextDetailMode;
     setDetailMode(nextDetailMode);
     if (resetConversation) {
-      confirmedConversationRef.current = null;
-      loadedConversationRequirementIdRef.current = null;
+      conversationRefreshRef.current.reset(requirementId);
       setLoadedConversationRequirementId(null);
       setConversation({ requirementId, items: [] });
       setHasOlderMessages(false);
@@ -2931,11 +2929,9 @@ function Dashboard() {
           case 'messages':
             if (selectedIdRef.current === target.requirementId
               && detailModeRef.current === 'conversation'
-              && loadedConversationRequirementIdRef.current === target.requirementId
               && !removedRequirementIdsRef.current.has(target.requirementId)) {
-              let after = confirmedConversationRef.current?.requirementId === target.requirementId
-                ? confirmedConversationRef.current.sequence
-                : 0;
+              let after = conversationRefreshRef.current.request(target.requirementId);
+              if (after === null) return;
               let hasMore = true;
               while (hasMore && selectedIdRef.current === target.requirementId) {
                 const page = await client.listMessagePage(target.requirementId, { after });
@@ -2950,8 +2946,7 @@ function Dashboard() {
                     page.items,
                   ),
                 ));
-                after = confirmedSequenceAfterPage(after, page.items);
-                confirmedConversationRef.current = { requirementId: target.requirementId, sequence: after };
+                after = conversationRefreshRef.current.confirmPage(target.requirementId, page.items) ?? after;
                 hasMore = page.hasMore;
               }
             }
@@ -3198,7 +3193,9 @@ function Dashboard() {
       setMessageLoading(true);
       client.listMessagePage(selectedId)
         .then((page) => {
-          if (!cancelled) {
+          if (!cancelled && selectedIdRef.current === selectedId
+            && detailModeRef.current === 'conversation'
+            && !removedRequirementIdsRef.current.has(selectedId)) {
             setConversation((current) => applyRequirementScopedUpdate(
               current,
               selectedId,
@@ -3210,12 +3207,9 @@ function Dashboard() {
               ),
             ));
             setHasOlderMessages(page.hasMore);
-            confirmedConversationRef.current = {
-              requirementId: selectedId,
-              sequence: confirmedSequenceAfterPage(0, page.items),
-            };
-            loadedConversationRequirementIdRef.current = selectedId;
+            const refreshAfterLoad = conversationRefreshRef.current.confirmInitialPage(selectedId, page.items);
             setLoadedConversationRequirementId(selectedId);
+            if (refreshAfterLoad) enqueueRefreshTargets([{ scope: 'messages', requirementId: selectedId }]);
           }
         })
         .catch((caught: unknown) => { if (!cancelled) setError(caught instanceof Error ? caught.message : t('Failed to load messages')); })
@@ -3225,7 +3219,7 @@ function Dashboard() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [client, detailMode, selectedId, t]);
+  }, [client, detailMode, enqueueRefreshTargets, selectedId, t]);
 
   const loadOlderMessages = useCallback(async () => {
     const requirementId = selectedIdRef.current;

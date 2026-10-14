@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  ConversationRefreshCursor,
   conversationBottomThreshold,
   confirmedSequenceAfterPage,
   countAppendedMessages,
@@ -110,6 +111,29 @@ void test('keeps the refresh boundary behind live messages until a page confirms
   assert.deepEqual(refreshed.items.map((message) => message.sequence), [201, 202, 203]);
   assert.equal(confirmedSequenceAfterPage(confirmedThrough, page), 203);
   assert.equal(confirmedSequenceAfterPage(203, [legacy]), 203);
+});
+
+void test('repairs a legacy message event received before the initial page finishes loading', () => {
+  const requirementId = 'req-1';
+  const cursor = new ConversationRefreshCursor();
+  cursor.reset(requirementId);
+  const initialPage = [{ id: 'msg-201', sequence: 201, requirementId }];
+  const legacy = { id: 'msg-202', sequence: 202, requirementId };
+  const live = { id: 'msg-203', sequence: 203, requirementId };
+
+  assert.equal(cursor.request(requirementId), null); // Legacy event has no message payload.
+  let conversation = mergeSelectedConversationMessage(
+    { requirementId, items: [] as typeof initialPage }, requirementId, live,
+  );
+  assert.equal(cursor.confirmInitialPage(requirementId, initialPage), true);
+  conversation = mergeConversationSnapshot(conversation, requirementId, initialPage);
+  assert.deepEqual(conversation.items.map((message) => message.sequence), [201, 203]);
+
+  assert.equal(cursor.request(requirementId), 201);
+  const repairPage = [legacy, live];
+  conversation = mergeConversationSnapshot(conversation, requirementId, repairPage);
+  assert.equal(cursor.confirmPage(requirementId, repairPage), 203);
+  assert.deepEqual(conversation.items.map((message) => message.sequence), [201, 202, 203]);
 });
 
 void test('reopening the same conversation keeps its loaded history', () => {
