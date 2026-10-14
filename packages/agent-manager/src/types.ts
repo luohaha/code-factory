@@ -88,6 +88,7 @@ export interface AgentSession {
   lastError: string | null;
   lastConsumedMessageSequence: number;
   pendingMessageCount: number;
+  queuedMessageCount: number;
   autoResumePaused: boolean;
   createdAt: string;
   updatedAt: string;

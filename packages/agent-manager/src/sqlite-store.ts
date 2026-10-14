@@ -55,6 +55,17 @@ import type {
 
 type Row = Record<string, SQLInputValue>;
 
+const pendingMessageCountSql = `(SELECT COUNT(*) FROM requirement_messages m
+  WHERE m.requirement_id = r.id AND m.deliver_to_rd = 1
+    AND m.sequence > s.last_consumed_message_sequence)`;
+const queuedMessageCountSql = `CASE WHEN s.state = 'running' THEN
+  (SELECT COUNT(*) FROM requirement_messages m
+    WHERE m.requirement_id = r.id AND m.deliver_to_rd = 1
+      AND m.sequence > COALESCE((SELECT run.input_to_sequence FROM agent_runs run
+        WHERE run.session_id = s.id AND run.role = 'rd' AND run.status = 'running' LIMIT 1),
+        s.last_consumed_message_sequence))
+  ELSE NULL END`;
+
 function requirementFrom(row: Row): Requirement {
   return {
     id: String(row.id),
@@ -75,6 +86,7 @@ function requirementFrom(row: Row): Requirement {
 }
 
 function sessionFrom(row: Row, prefix = ''): AgentSession {
+  const pendingMessageCount = Number(row[`${prefix}pending_message_count`] ?? 0);
   return {
     id: String(row[`${prefix}id`]),
     requirementId: String(row[`${prefix}requirement_id`]),
@@ -83,7 +95,8 @@ function sessionFrom(row: Row, prefix = ''): AgentSession {
     state: String(row[`${prefix}state`]) as AgentSession['state'],
     lastError: row[`${prefix}last_error`] === null ? null : String(row[`${prefix}last_error`]),
     lastConsumedMessageSequence: Number(row[`${prefix}last_consumed_message_sequence`] ?? 0),
-    pendingMessageCount: Number(row[`${prefix}pending_message_count`] ?? 0),
+    pendingMessageCount,
+    queuedMessageCount: Number(row[`${prefix}queued_message_count`] ?? pendingMessageCount),
     autoResumePaused: Number(row[`${prefix}auto_resume_paused`] ?? 0) === 1,
     createdAt: String(row[`${prefix}created_at`]),
     updatedAt: String(row[`${prefix}updated_at`]),
@@ -463,8 +476,8 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       s.native_session_id AS s_native_session_id, s.state AS s_state, s.last_error AS s_last_error,
       s.last_consumed_message_sequence AS s_last_consumed_message_sequence,
       s.auto_resume_paused AS s_auto_resume_paused,
-      (SELECT COUNT(*) FROM requirement_messages m WHERE m.requirement_id = r.id
-        AND m.deliver_to_rd = 1 AND m.sequence > s.last_consumed_message_sequence) AS s_pending_message_count,
+      ${pendingMessageCountSql} AS s_pending_message_count,
+      ${queuedMessageCountSql} AS s_queued_message_count,
       s.created_at AS s_created_at, s.updated_at AS s_updated_at
       FROM requirements r JOIN agent_sessions s ON s.requirement_id = r.id WHERE r.id = ?`).get(id) as Row | undefined;
     if (!row) return null;
@@ -477,8 +490,8 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       s.native_session_id AS s_native_session_id, s.state AS s_state, s.last_error AS s_last_error,
       s.last_consumed_message_sequence AS s_last_consumed_message_sequence,
       s.auto_resume_paused AS s_auto_resume_paused,
-      (SELECT COUNT(*) FROM requirement_messages m WHERE m.requirement_id = r.id
-        AND m.deliver_to_rd = 1 AND m.sequence > s.last_consumed_message_sequence) AS s_pending_message_count,
+      ${pendingMessageCountSql} AS s_pending_message_count,
+      ${queuedMessageCountSql} AS s_queued_message_count,
       s.created_at AS s_created_at, s.updated_at AS s_updated_at
       FROM requirements r JOIN agent_sessions s ON s.requirement_id = r.id
       WHERE r.status != 'cancelled' ORDER BY r.updated_at DESC`).all() as Row[];
@@ -491,8 +504,8 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       s.native_session_id AS s_native_session_id, s.state AS s_state, s.last_error AS s_last_error,
       s.last_consumed_message_sequence AS s_last_consumed_message_sequence,
       s.auto_resume_paused AS s_auto_resume_paused,
-      (SELECT COUNT(*) FROM requirement_messages m WHERE m.requirement_id = r.id
-        AND m.deliver_to_rd = 1 AND m.sequence > s.last_consumed_message_sequence) AS s_pending_message_count,
+      ${pendingMessageCountSql} AS s_pending_message_count,
+      ${queuedMessageCountSql} AS s_queued_message_count,
       s.created_at AS s_created_at, s.updated_at AS s_updated_at
       FROM requirements r JOIN agent_sessions s ON s.requirement_id = r.id
       WHERE r.parent_requirement_id = ? ORDER BY r.updated_at DESC`).all(parentRequirementId) as Row[];
@@ -597,7 +610,11 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
   }
 
   listSessions(): AgentSession[] {
-    return (this.#db.prepare('SELECT * FROM agent_sessions ORDER BY updated_at DESC').all() as Row[]).map((row) => sessionFrom(row));
+    return (this.#db.prepare(`SELECT s.*,
+      ${pendingMessageCountSql} AS pending_message_count,
+      ${queuedMessageCountSql} AS queued_message_count
+      FROM agent_sessions s JOIN requirements r ON r.id = s.requirement_id
+      ORDER BY s.updated_at DESC`).all() as Row[]).map((row) => sessionFrom(row));
   }
 
   listRuns(requirementId?: string): AgentRun[] {

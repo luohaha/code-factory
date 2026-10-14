@@ -1173,6 +1173,42 @@ test('message pages preserve order, boundaries, and attachments', () => {
   }
 });
 
+test('queued input count stays accurate when recent conversation pages contain only RD output', () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  try {
+    store.createRequirement({
+      requirementId: 'req-queue', sessionId: 'ses-queue', title: 'Queue',
+      description: '', provider: 'codex', createdBy: 'human', now,
+    });
+    store.appendMessage({
+      id: 'msg-input', requirementId: 'req-queue', sessionId: 'ses-queue',
+      author: 'human', body: 'Start', deliverToRd: true, now,
+    });
+    store.beginRun({
+      runId: 'run-queue', requirementId: 'req-queue', role: 'rd', provider: 'codex',
+      taskSummary: 'Run', inputFromSequence: 1, inputToSequence: 1, now,
+    });
+    store.appendMessage({
+      id: 'msg-correction', requirementId: 'req-queue', sessionId: 'ses-queue',
+      author: 'human', body: 'Correction', deliverToRd: true, now,
+    });
+    for (let index = 0; index < 150; index += 1) {
+      store.appendMessage({
+        id: `msg-output-${index}`, requirementId: 'req-queue', sessionId: 'ses-queue',
+        author: 'rd_agent', body: `Output ${index}`, deliverToRd: false, now,
+      });
+    }
+    assert.equal(store.listMessagePage('req-queue', 100).items.some((message) => message.deliverToRd), false);
+    assert.equal(store.getRequirement('req-queue')?.session.queuedMessageCount, 1);
+    assert.equal(store.listRequirements()[0]?.session.queuedMessageCount, 1);
+    assert.equal(store.listSessions()[0]?.queuedMessageCount, 1);
+    store.extendRunInputToSequence('run-queue', 2);
+    assert.equal(store.getRequirement('req-queue')?.session.queuedMessageCount, 0);
+  } finally {
+    store.close();
+  }
+});
+
 test('image attachments are claimed by one requirement message', () => {
   const store = new SqliteAgentManagerStore(':memory:');
   try {

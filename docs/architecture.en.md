@@ -104,6 +104,7 @@ Every local headless RD and Reviewer invocation skips interactive approval and C
 - `state`: `idle | running | waiting_human | failed | completed`;
 - `lastConsumedMessageSequence` is the conversation boundary successfully consumed by the RD Agent;
 - `pendingMessageCount` is the number of external messages not yet consumed.
+- `queuedMessageCount` excludes input already assigned to an active RD Run and is used for Steering availability, independently of which conversation messages the dashboard has loaded.
 - `autoResumePaused` records an explicit Stop across Manager restarts; automatic message sources still queue input but cannot start another RD Run until an explicit start or human reply.
 
 ### PullRequest

@@ -134,13 +134,14 @@ interface AgentSession {
   lastError: string | null;
   lastConsumedMessageSequence: number;
   pendingMessageCount: number;
+  queuedMessageCount: number;
   autoResumePaused: boolean;
   createdAt: string;
   updatedAt: string;
 }
 ~~~
 
-nativeSessionId is the Codex or Claude Code session ID, or a pi-durable conversation ID for Native Agent. pendingMessageCount is the number of external messages that RD has not successfully consumed. autoResumePaused is set by an explicit Stop and persists until an explicit start or human reply.
+nativeSessionId is the Codex or Claude Code session ID, or a pi-durable conversation ID for Native Agent. pendingMessageCount is the number of external messages that RD has not successfully consumed. queuedMessageCount excludes input already assigned to the active RD Run, so it reports messages waiting for a subsequent Run or Steering. Outside an active Run it equals pendingMessageCount. autoResumePaused is set by an explicit Stop and persists until an explicit start or human reply.
 
 ### 3.3 AgentRun
 

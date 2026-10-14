@@ -118,13 +118,15 @@ import {
   type WorkspaceDto,
 } from '@/lib/agent-manager-client';
 import {
-  countAddedMessages,
+  confirmedSequenceAfterPage,
+  countAppendedMessages,
   isAwayFromConversationBottom,
   isAwayFromConversationTop,
   mergeConversationSnapshot,
   mergeSelectedConversationMessage,
   requirementDetailModeForView,
   shouldAutoScrollTrace,
+  shouldResetConversationOnOpen,
   type RequirementDetailMode,
   type RequirementDetailSourceView,
 } from '@/lib/conversation-scroll';
@@ -2239,14 +2241,12 @@ function RequirementDetail({
   const previousTraceEventCountRef = useRef<number | undefined>(undefined);
   const initializedRequirementIdRef = useRef<string | undefined>(undefined);
   const loadedRequirementIdRef = useRef<string | undefined>(undefined);
-  const previousMessageIdsRef = useRef<Set<string>>(new Set());
+  const previousLatestSequenceRef = useRef(0);
   const prependScrollRef = useRef<{ firstSequence: number; height: number; top: number } | null>(null);
   const open = requirement !== null;
   const requirementId = requirement?.id;
   const activeRdRun = runs.find((run) => run.role === 'rd' && run.status === 'running');
-  const queuedMessageCount = activeRdRun
-    ? messages.filter((item) => item.deliverToRd && item.sequence > (activeRdRun.inputToSequence ?? 0)).length
-    : requirement?.session.pendingMessageCount ?? 0;
+  const queuedMessageCount = requirement?.session.queuedMessageCount ?? 0;
   const hasNewerInput = activeRdRun !== undefined && queuedMessageCount > 0;
   const newMessageCount = newMessages && newMessages.requirementId === requirementId
     ? newMessages.count
@@ -2338,7 +2338,7 @@ function RequirementDetail({
       followsLatestRef.current = true;
       initializedRequirementIdRef.current = undefined;
       loadedRequirementIdRef.current = undefined;
-      previousMessageIdsRef.current = new Set();
+      previousLatestSequenceRef.current = 0;
       return;
     }
     if (messageLoading) {
@@ -2350,13 +2350,15 @@ function RequirementDetail({
       || messages.some((item) => item.requirementId !== requirementId)
     ) return;
 
-    const nextMessageIds = new Set(messages.map((item) => item.id));
     const isInitialLoad = initializedRequirementIdRef.current !== requirementId;
     const addedMessageCount = isInitialLoad
       ? 0
-      : countAddedMessages(previousMessageIdsRef.current, messages);
+      : countAppendedMessages(previousLatestSequenceRef.current, messages);
     initializedRequirementIdRef.current = requirementId;
-    previousMessageIdsRef.current = nextMessageIds;
+    previousLatestSequenceRef.current = Math.max(
+      previousLatestSequenceRef.current,
+      messages.at(-1)?.sequence ?? 0,
+    );
 
     if (isInitialLoad || (addedMessageCount > 0 && followsLatestRef.current)) {
       const frame = window.requestAnimationFrame(scrollToLatest);
@@ -2693,6 +2695,7 @@ function Dashboard() {
   const [detailMode, setDetailMode] = useState<RequirementDetailMode>('conversation');
   const selectedIdRef = useRef<string | null>(null);
   const conversationRef = useRef(conversation);
+  const confirmedConversationRef = useRef<{ requirementId: string; sequence: number } | null>(null);
   const loadedConversationRequirementIdRef = useRef<string | null>(null);
   const detailModeRef = useRef<RequirementDetailMode>('conversation');
   const pendingRefreshTargetsRef = useRef<DashboardRefreshTarget[]>([]);
@@ -2721,9 +2724,13 @@ function Dashboard() {
     sourceView: RequirementDetailSourceView = 'requirements',
   ) => {
     const nextDetailMode = requirementDetailModeForView(sourceView);
+    const resetConversation = shouldResetConversationOnOpen(
+      selectedIdRef.current, detailModeRef.current, requirementId, nextDetailMode,
+    );
     detailModeRef.current = nextDetailMode;
     setDetailMode(nextDetailMode);
-    if (nextDetailMode === 'conversation') {
+    if (resetConversation) {
+      confirmedConversationRef.current = null;
       loadedConversationRequirementIdRef.current = null;
       setLoadedConversationRequirementId(null);
       setConversation({ requirementId, items: [] });
@@ -2926,8 +2933,8 @@ function Dashboard() {
               && detailModeRef.current === 'conversation'
               && loadedConversationRequirementIdRef.current === target.requirementId
               && !removedRequirementIdsRef.current.has(target.requirementId)) {
-              let after = conversationRef.current.requirementId === target.requirementId
-                ? conversationRef.current.items.at(-1)?.sequence ?? 0
+              let after = confirmedConversationRef.current?.requirementId === target.requirementId
+                ? confirmedConversationRef.current.sequence
                 : 0;
               let hasMore = true;
               while (hasMore && selectedIdRef.current === target.requirementId) {
@@ -2943,7 +2950,8 @@ function Dashboard() {
                     page.items,
                   ),
                 ));
-                after = page.items.at(-1)!.sequence;
+                after = confirmedSequenceAfterPage(after, page.items);
+                confirmedConversationRef.current = { requirementId: target.requirementId, sequence: after };
                 hasMore = page.hasMore;
               }
             }
@@ -3202,6 +3210,10 @@ function Dashboard() {
               ),
             ));
             setHasOlderMessages(page.hasMore);
+            confirmedConversationRef.current = {
+              requirementId: selectedId,
+              sequence: confirmedSequenceAfterPage(0, page.items),
+            };
             loadedConversationRequirementIdRef.current = selectedId;
             setLoadedConversationRequirementId(selectedId);
           }

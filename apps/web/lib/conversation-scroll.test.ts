@@ -3,13 +3,15 @@ import test from 'node:test';
 
 import {
   conversationBottomThreshold,
-  countAddedMessages,
+  confirmedSequenceAfterPage,
+  countAppendedMessages,
   isAwayFromConversationBottom,
   isAwayFromConversationTop,
   isNearConversationBottom,
   mergeConversationSnapshot,
   mergeSelectedConversationMessage,
   requirementDetailModeForView,
+  shouldResetConversationOnOpen,
   shouldAutoScrollTrace,
   upsertConversationMessage,
 } from './conversation-scroll.ts';
@@ -83,25 +85,37 @@ void test('keeps Trace pinned to new events only while the viewport follows the 
   assert.equal(shouldAutoScrollTrace(4, 4, true), false);
 });
 
-void test('counts only message ids that were not present in the previous refresh', () => {
-  const previousMessageIds = new Set(['message-1', 'message-2']);
+void test('counts appended messages without treating older pages as new', () => {
+  assert.equal(countAppendedMessages(203, [
+    { sequence: 102 }, { sequence: 202 }, { sequence: 203 },
+  ]), 0);
+  assert.equal(countAppendedMessages(203, [
+    { sequence: 102 }, { sequence: 203 }, { sequence: 204 }, { sequence: 205 },
+  ]), 2);
+});
 
-  assert.equal(
-    countAddedMessages(previousMessageIds, [
-      { id: 'message-1' },
-      { id: 'message-2' },
-      { id: 'message-3' },
-      { id: 'message-4' },
-    ]),
-    2,
+void test('keeps the refresh boundary behind live messages until a page confirms them', () => {
+  const requirementId = 'req-1';
+  const existing = { id: 'msg-201', sequence: 201, requirementId };
+  const legacy = { id: 'msg-202', sequence: 202, requirementId };
+  const live = { id: 'msg-203', sequence: 203, requirementId };
+  const displayed = mergeSelectedConversationMessage(
+    { requirementId, items: [existing] }, requirementId, live,
   );
-  assert.equal(
-    countAddedMessages(previousMessageIds, [
-      { id: 'message-1' },
-      { id: 'message-2' },
-    ]),
-    0,
-  );
+  assert.deepEqual(displayed.items.map((message) => message.sequence), [201, 203]);
+
+  const confirmedThrough = 201; // A live SSE message does not advance the fetch cursor.
+  const page = [legacy, live];
+  const refreshed = mergeConversationSnapshot(displayed, requirementId, page);
+  assert.deepEqual(refreshed.items.map((message) => message.sequence), [201, 202, 203]);
+  assert.equal(confirmedSequenceAfterPage(confirmedThrough, page), 203);
+  assert.equal(confirmedSequenceAfterPage(203, [legacy]), 203);
+});
+
+void test('reopening the same conversation keeps its loaded history', () => {
+  assert.equal(shouldResetConversationOnOpen('req-1', 'conversation', 'req-1', 'conversation'), false);
+  assert.equal(shouldResetConversationOnOpen('req-1', 'conversation', 'req-2', 'conversation'), true);
+  assert.equal(shouldResetConversationOnOpen('req-1', 'trace', 'req-1', 'conversation'), true);
 });
 
 void test('inserts an echoed reply in conversation order', () => {

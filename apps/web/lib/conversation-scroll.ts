@@ -43,14 +43,28 @@ export function shouldAutoScrollTrace(
   return followsLatest && previousEventCount !== nextEventCount;
 }
 
-export function countAddedMessages(
-  previousMessageIds: ReadonlySet<string>,
-  messages: ReadonlyArray<{ id: string }>,
+export function countAppendedMessages(
+  previousLatestSequence: number,
+  messages: ReadonlyArray<{ sequence: number }>,
 ): number {
-  return messages.reduce(
-    (count, message) => count + (previousMessageIds.has(message.id) ? 0 : 1),
-    0,
-  );
+  return messages.filter((message) => message.sequence > previousLatestSequence).length;
+}
+
+export function confirmedSequenceAfterPage(
+  previousSequence: number,
+  page: ReadonlyArray<{ sequence: number }>,
+): number {
+  return Math.max(previousSequence, page.at(-1)?.sequence ?? previousSequence);
+}
+
+export function shouldResetConversationOnOpen(
+  selectedRequirementId: string | null,
+  detailMode: RequirementDetailMode,
+  nextRequirementId: string,
+  nextDetailMode: RequirementDetailMode,
+): boolean {
+  return nextDetailMode === 'conversation'
+    && (selectedRequirementId !== nextRequirementId || detailMode !== nextDetailMode);
 }
 
 export function upsertConversationMessage<T extends { id: string; sequence: number }>(
