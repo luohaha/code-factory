@@ -51,6 +51,7 @@ export interface AgentSessionDto {
   lastError: string | null;
   lastConsumedMessageSequence: number;
   pendingMessageCount: number;
+  queuedMessageCount: number;
   autoResumePaused: boolean;
   createdAt: string;
   updatedAt: string;
@@ -374,6 +375,16 @@ export class AgentManagerClient {
       `/api/requirements/${encodeURIComponent(requirementId)}/messages`,
     );
     return response.items;
+  }
+
+  async listMessagePage(requirementId: string, options: { limit?: number; before?: number; after?: number } = {}): Promise<{
+    items: RequirementMessageDto[];
+    hasMore: boolean;
+  }> {
+    const query = new URLSearchParams({ limit: String(options.limit ?? 100) });
+    if (options.before !== undefined) query.set('before', String(options.before));
+    if (options.after !== undefined) query.set('after', String(options.after));
+    return this.request(`/api/requirements/${encodeURIComponent(requirementId)}/messages?${query}`);
   }
 
   async listAgentTimers(requirementId?: string): Promise<AgentTimerDto[]> {

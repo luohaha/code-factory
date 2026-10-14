@@ -43,14 +43,66 @@ export function shouldAutoScrollTrace(
   return followsLatest && previousEventCount !== nextEventCount;
 }
 
-export function countAddedMessages(
-  previousMessageIds: ReadonlySet<string>,
-  messages: ReadonlyArray<{ id: string }>,
+export function countAppendedMessages(
+  previousLatestSequence: number,
+  messages: ReadonlyArray<{ sequence: number }>,
 ): number {
-  return messages.reduce(
-    (count, message) => count + (previousMessageIds.has(message.id) ? 0 : 1),
-    0,
-  );
+  return messages.filter((message) => message.sequence > previousLatestSequence).length;
+}
+
+export function confirmedSequenceAfterPage(
+  previousSequence: number,
+  page: ReadonlyArray<{ sequence: number }>,
+): number {
+  return Math.max(previousSequence, page.at(-1)?.sequence ?? previousSequence);
+}
+
+export class ConversationRefreshCursor {
+  #requirementId: string | null = null;
+  #confirmedSequence = 0;
+  #loaded = false;
+  #refreshAfterLoad = false;
+
+  reset(requirementId: string): void {
+    this.#requirementId = requirementId;
+    this.#confirmedSequence = 0;
+    this.#loaded = false;
+    this.#refreshAfterLoad = false;
+  }
+
+  request(requirementId: string): number | null {
+    if (this.#requirementId !== requirementId) return null;
+    if (!this.#loaded) {
+      this.#refreshAfterLoad = true;
+      return null;
+    }
+    return this.#confirmedSequence;
+  }
+
+  confirmInitialPage(requirementId: string, page: ReadonlyArray<{ sequence: number }>): boolean {
+    if (this.#requirementId !== requirementId) return false;
+    this.#confirmedSequence = confirmedSequenceAfterPage(0, page);
+    this.#loaded = true;
+    const refreshAfterLoad = this.#refreshAfterLoad;
+    this.#refreshAfterLoad = false;
+    return refreshAfterLoad;
+  }
+
+  confirmPage(requirementId: string, page: ReadonlyArray<{ sequence: number }>): number | null {
+    if (this.#requirementId !== requirementId || !this.#loaded) return null;
+    this.#confirmedSequence = confirmedSequenceAfterPage(this.#confirmedSequence, page);
+    return this.#confirmedSequence;
+  }
+}
+
+export function shouldResetConversationOnOpen(
+  selectedRequirementId: string | null,
+  detailMode: RequirementDetailMode,
+  nextRequirementId: string,
+  nextDetailMode: RequirementDetailMode,
+): boolean {
+  return nextDetailMode === 'conversation'
+    && (selectedRequirementId !== nextRequirementId || detailMode !== nextDetailMode);
 }
 
 export function upsertConversationMessage<T extends { id: string; sequence: number }>(
@@ -95,13 +147,12 @@ export function mergeConversationSnapshot<
   snapshot: readonly T[],
 ): RequirementConversation<T> {
   const scopedSnapshot = snapshot.filter((message) => message.requirementId === requirementId);
+  const merged = new Map(scopedSnapshot.map((message) => [message.id, message]));
+  if (conversation.requirementId === requirementId) {
+    for (const message of conversation.items) merged.set(message.id, message);
+  }
   return {
     requirementId,
-    items: conversation.requirementId === requirementId
-      ? conversation.items.reduce(
-          (messages, message) => upsertConversationMessage(messages, message),
-          scopedSnapshot,
-        )
-      : [...scopedSnapshot],
+    items: [...merged.values()].sort((left, right) => left.sequence - right.sequence),
   };
 }

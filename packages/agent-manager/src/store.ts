@@ -202,6 +202,10 @@ export interface AgentManagerStore {
   /** @deprecated Use appendAgentTriggerMessage for source-neutral trigger delivery. */
   appendExternalMessage(input: AppendExternalMessageRecord): RequirementMessage | null;
   listMessages(requirementId: string): RequirementMessage[];
+  listMessagePage(requirementId: string, limit: number, beforeSequence?: number, afterSequence?: number): {
+    items: RequirementMessage[];
+    hasMore: boolean;
+  };
   listRecentConversationMessages(requirementId: string, limit: number): Array<{
     author: MessageAuthor;
     body: string;

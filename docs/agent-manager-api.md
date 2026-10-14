@@ -134,13 +134,14 @@ interface AgentSession {
   lastError: string | null;
   lastConsumedMessageSequence: number;
   pendingMessageCount: number;
+  queuedMessageCount: number;
   autoResumePaused: boolean;
   createdAt: string;
   updatedAt: string;
 }
 ~~~
 
-nativeSessionId is the Codex or Claude Code session ID, or a pi-durable conversation ID for Native Agent. pendingMessageCount is the number of external messages that RD has not successfully consumed. autoResumePaused is set by an explicit Stop and persists until an explicit start or human reply.
+nativeSessionId is the Codex or Claude Code session ID, or a pi-durable conversation ID for Native Agent. pendingMessageCount is the number of external messages that RD has not successfully consumed. queuedMessageCount excludes input already assigned to the active RD Run, so it reports messages waiting for a subsequent Run or Steering. Outside an active Run it equals pendingMessageCount. autoResumePaused is set by an explicit Stop and persists until an explicit start or human reply.
 
 ### 3.3 AgentRun
 
@@ -461,9 +462,9 @@ Success: 200 OK with `{"items": AgentTraceEvent[]}`. Returns 404 Not Found for a
 
 ### GET /api/requirements/:id/messages
 
-Returns the complete Requirement conversation ordered by ascending sequence.
+Returns the complete Requirement conversation ordered by ascending sequence when called without query parameters. For dashboard paging, `limit` (1–200, default 100) returns the latest messages. `before=<sequence>` returns older messages, and `after=<sequence>` returns newer messages. `before` and `after` cannot be combined. Each page is ordered by ascending sequence; `hasMore` indicates whether another page exists in the requested direction.
 
-Success: 200 OK with {"items": RequirementMessage[]}. Returns 404 Not Found for an unknown Requirement.
+Success: 200 OK with `{"items": RequirementMessage[]}` for the complete conversation, or `{"items": RequirementMessage[], "hasMore": boolean}` for a page. Returns 400 Bad Request for invalid paging parameters and 404 Not Found for an unknown Requirement.
 
 ### GET /api/timers
 

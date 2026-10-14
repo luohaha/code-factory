@@ -273,6 +273,8 @@ export const zhCN = {
   'Activity and conversation': '活动与对话',
   '{count} messages · Continue with the same RD Session': '{count} 条消息 · 持续与同一个 RD 会话沟通',
   'Loading messages': '正在加载消息',
+  'Load earlier messages': '加载更早的消息',
+  '{count} messages loaded · Continue with the same RD Session': '已加载 {count} 条消息 · 持续与同一个 RD 会话沟通',
   'No Agent output yet': '还没有 Agent 输出',
   'RD Agent messages will appear here in real time after the requirement starts.': '需求开始后，RD Agent 的消息会实时显示在这里。',
   'Back to top': '返回顶部',

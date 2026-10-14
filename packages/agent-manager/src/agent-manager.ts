@@ -1145,6 +1145,10 @@ export class AgentManager extends EventEmitter {
     return this.#store.listMessages(requirementId);
   }
 
+  listMessagePage(requirementId: string, limit: number, beforeSequence?: number, afterSequence?: number) {
+    return this.#store.listMessagePage(requirementId, limit, beforeSequence, afterSequence);
+  }
+
   listRelatedRequirements(requirementId: string, sourceSessionId: string): RelatedRequirements {
     const source = this.requireAgentSource(requirementId, sourceSessionId);
     return {

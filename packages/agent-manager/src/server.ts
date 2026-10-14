@@ -285,6 +285,20 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
       const messages = url.pathname.match(/^\/api\/requirements\/([^/]+)\/messages$/);
       if (request.method === 'GET' && messages) {
         const requirementId = decodeURIComponent(messages[1]!);
+        const rawLimit = url.searchParams.get('limit');
+        const rawBefore = url.searchParams.get('before');
+        const rawAfter = url.searchParams.get('after');
+        if (rawLimit !== null || rawBefore !== null || rawAfter !== null) {
+          const limit = rawLimit === null ? 100 : Number(rawLimit);
+          const before = rawBefore === null ? undefined : Number(rawBefore);
+          const after = rawAfter === null ? undefined : Number(rawAfter);
+          if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new TypeError('limit must be an integer from 1 to 200');
+          if (rawBefore !== null && (!Number.isSafeInteger(before) || before! < 1)) throw new TypeError('before must be a positive sequence');
+          if (rawAfter !== null && (!Number.isSafeInteger(after) || after! < 0)) throw new TypeError('after must be a nonnegative sequence');
+          if (before !== undefined && after !== undefined) throw new TypeError('before and after cannot be combined');
+          sendJson(response, 200, manager.listMessagePage(requirementId, limit, before, after));
+          return;
+        }
         sendJson(response, 200, { items: manager.listMessages(requirementId) });
         return;
       }
