@@ -6,6 +6,8 @@ Code Factory follows [Semantic Versioning](https://semver.org/). Until `1.0.0`, 
 
 `packages/agent-manager/package.json` is the canonical product and published-package version. `scripts/set-version.mjs` updates it together with the private dashboard manifest and both npm lockfiles. `scripts/check-version.mjs` rejects invalid SemVer, an unexpected published package name, mismatched files, a mismatched release tag, or a missing changelog entry.
 
+The dashboard header displays its build version from `apps/web/package.json`, which the release scripts keep synchronized with the product version.
+
 At runtime, Agent Manager reads its installed `package.json`. The same value is exposed by:
 
 - `code-factory-agent-manager --version` (also `-v` or `version`);

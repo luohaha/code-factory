@@ -4,6 +4,7 @@ import Image from 'next/image';
 import { memo, type RefObject, type SyntheticEvent, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { version } from '@/package.json';
 import {
   Activity,
   ArrowDown,
@@ -3690,17 +3691,6 @@ function Dashboard() {
     ? 'Requirement workflow'
     : view === 'relationships' ? 'Requirement relationships'
     : view === 'pull_requests' ? 'Pull Requests' : view === 'sessions' ? 'RD Agent Sessions' : view === 'sandboxes' ? 'Workspaces' : 'Scheduled wake-ups';
-  const viewDescription: TranslationKey = view === 'requirements'
-    ? 'The requirement conversation is the RD Agent message stream; messages remain available while it runs'
-    : view === 'relationships'
-      ? 'Trace each follow-up Requirement back to the work that created it'
-    : view === 'pull_requests'
-      ? 'A human can select Codex or Claude to run a one-off review on an Open PR'
-      : view === 'sandboxes'
-        ? 'Choose a workspace for RD Agents'
-      : view === 'sessions'
-        ? 'Sessions use their selected workspace and native Skills'
-        : 'Track timers and the Requirements they will wake';
   const searchLabel: TranslationKey = view === 'sandboxes'
     ? 'Search workspaces'
     : view === 'timers'
@@ -3730,7 +3720,7 @@ function Dashboard() {
             <Image src="/logo.svg" alt="" aria-hidden="true" width={32} height={32} className="size-8 shrink-0" />
             <div className="hidden sm:block">
               <p className="text-sm leading-4 font-semibold tracking-[-0.02em]">Code Factory</p>
-              <p className="text-[9px] font-medium tracking-[0.14em] text-muted-foreground uppercase">Agent Manager</p>
+              <p className="font-mono text-[9px] text-muted-foreground">v{version}</p>
             </div>
           </div>
 
@@ -3798,9 +3788,6 @@ function Dashboard() {
               </h1>
               <Badge variant="secondary" className="font-mono text-[9px]">{connection === 'online' ? t('LIVE') : t('OFFLINE')}</Badge>
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t(viewDescription)}
-            </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-5 text-xs">
