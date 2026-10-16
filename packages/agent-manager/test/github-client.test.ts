@@ -36,6 +36,7 @@ for (const [state, isDraft, status] of [
       headRefName: pullRequest.headBranch, headRefOid: pullRequest.headSha, updatedAt: pullRequest.updatedAt,
     };
     const activityDetails = {
+      ...lifecycle,
       mergeable: 'CONFLICTING', comments: [activity], reviews: [{ ...activity, id: '2' }],
       statusCheckRollup: [{ name: 'test', status: 'COMPLETED', conclusion: 'FAILURE' }],
     };
@@ -47,7 +48,7 @@ for (const [state, isDraft, status] of [
       `const lifecycle = ${JSON.stringify(lifecycle)};`,
       `const activity = ${JSON.stringify(activityDetails)};`,
       `const inlineComments = ${JSON.stringify([[{ ...activity, id: 3, created_at: activity.createdAt }]])};`,
-      "const result = args[0] === 'api' ? inlineComments : args.at(-1).includes('state') ? lifecycle : activity;",
+      "const result = args[0] === 'api' ? inlineComments : args.at(-1).includes('statusCheckRollup') ? activity : lifecycle;",
       'process.stdout.write(JSON.stringify(result));',
     ].join('\n'), { mode: 0o700 });
     try {
@@ -67,6 +68,55 @@ for (const [state, isDraft, status] of [
         assert.equal(result.mergeable, 'UNKNOWN');
         assert.deepEqual(result.reviewActivity, []);
         assert.deepEqual(result.checks, []);
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const [state, isDraft, status] of [
+  ['OPEN', false, 'open'], ['OPEN', true, 'draft'], ['CLOSED', false, 'closed'], ['MERGED', false, 'merged'],
+] as const) {
+  test(`activity reads use their own head and lifecycle metadata when the PR changes to ${status}`, async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'code-factory-gh-race-'));
+    const executable = join(directory, 'gh');
+    const before = {
+      state: 'OPEN', isDraft: false, title: 'Before push', url: pullRequest.url,
+      baseRefName: 'main', headRefName: pullRequest.headBranch, headRefOid: 'head-a', updatedAt: pullRequest.updatedAt,
+    };
+    const after = {
+      ...before, state, isDraft, title: 'After push', headRefOid: 'head-b', baseRefName: 'release',
+      updatedAt: '2026-09-21T00:01:00.000Z',
+      mergeable: status === 'open' ? 'CONFLICTING' : null,
+      comments: [{ id: 'new-comment', author: { login: 'reviewer' }, createdAt: '2026-09-21T00:01:00Z' }],
+      reviews: [], statusCheckRollup: [{ name: 'test-b', status: 'COMPLETED', conclusion: 'FAILURE' }],
+    };
+    writeFileSync(executable, [
+      '#!/usr/bin/env node',
+      "const fs = require('node:fs');",
+      'const args = process.argv.slice(2);',
+      "if (args[0] === 'api') { process.stdout.write('[]'); process.exit(0); }",
+      `const result = fs.existsSync(${JSON.stringify(join(directory, 'read-once'))}) ? ${JSON.stringify(after)} : ${JSON.stringify(before)};`,
+      `fs.writeFileSync(${JSON.stringify(join(directory, 'read-once'))}, '');`,
+      'const fields = args.at(-1).split(",");',
+      'process.stdout.write(JSON.stringify(Object.fromEntries(fields.map(field => [field, result[field]]))));',
+    ].join('\n'), { mode: 0o700 });
+    try {
+      const result = await new GhCliGitHubClient(directory, { executable }).inspectPullRequest(pullRequest);
+      assert.equal(result.status, status);
+      assert.equal(result.headSha, 'head-b');
+      assert.equal(result.title, 'After push');
+      assert.equal(result.baseBranch, 'release');
+      assert.equal(result.updatedAt, after.updatedAt);
+      if (status === 'open') {
+        assert.equal(result.checks[0]?.name, 'test-b');
+        assert.equal(result.reviewActivity[0]?.id, 'new-comment');
+        assert.equal(result.mergeable, 'CONFLICTING');
+      } else {
+        assert.deepEqual(result.checks, []);
+        assert.deepEqual(result.reviewActivity, []);
+        assert.equal(result.mergeable, 'UNKNOWN');
       }
     } finally {
       rmSync(directory, { recursive: true, force: true });

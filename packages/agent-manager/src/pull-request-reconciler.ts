@@ -160,18 +160,27 @@ export class PullRequestReconciler {
     snapshot: Awaited<ReturnType<GitHubClient['inspectPullRequest']>>,
   ): void {
     const now = new Date().toISOString();
-    const opening = pullRequest.status === 'draft' && snapshot.status === 'open';
-    const { observation, created } = opening
-      ? { observation: this.#store.resetPullRequestObservation(pullRequest.id, now), created: true }
-      : this.#store.ensurePullRequestObservation(pullRequest.id, now);
+    const { observation, created } = this.#store.ensurePullRequestObservation(pullRequest.id, now);
+    const opening = (observation.observedStatus ?? pullRequest.status) === 'draft' && snapshot.status === 'open';
+    const baselineCreated = created || opening;
+    const checkStates = Object.fromEntries(snapshot.checks.map((check) => [check.key, gitHubCheckState(check)]));
+    // Save the first opening baseline and its observed status together, before
+    // fallible trigger delivery or lifecycle synchronization. Retries (including
+    // after restart) must retain activity that arrived after this observation.
+    const currentObservation = this.#store.updatePullRequestObservation({
+      ...observation,
+      observedStatus: snapshot.status,
+      initializedAt: opening ? now : observation.initializedAt,
+      checkStates: baselineCreated && snapshot.status === 'open' ? checkStates : observation.checkStates,
+      updatedAt: now,
+    });
 
     for (const { trigger, context } of registrations) {
       if (snapshot.status !== 'open' && trigger.id !== PULL_REQUEST_STATUS_TRIGGER_ID) continue;
-      trigger.reconcileSnapshot(context, pullRequest, snapshot, observation, created);
+      trigger.reconcileSnapshot(context, pullRequest, snapshot, currentObservation, baselineCreated);
     }
 
     if (snapshot.status === 'open') {
-      const checkStates = Object.fromEntries(snapshot.checks.map((check) => [check.key, gitHubCheckState(check)]));
       this.#store.updatePullRequestCheckStates(pullRequest.id, checkStates, now);
     }
 

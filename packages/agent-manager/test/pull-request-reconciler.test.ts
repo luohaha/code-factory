@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import type { AgentTriggerContext } from '../src/agent-trigger.ts';
@@ -24,8 +27,8 @@ class MemoryWriter implements LogWriter {
 
 const context: AgentTriggerContext = { deliver: () => null };
 
-function createStore(): SqliteAgentManagerStore {
-  const store = new SqliteAgentManagerStore(':memory:');
+function createStore(databasePath = ':memory:'): SqliteAgentManagerStore {
+  const store = new SqliteAgentManagerStore(databasePath);
   store.createRequirement({
     requirementId: 'req-reconciliation',
     sessionId: 'ses-reconciliation',
@@ -225,6 +228,71 @@ for (const status of ['closed', 'merged'] as const) {
       assert.equal(inspections, 1);
     } finally {
       store.close();
+    }
+  });
+}
+
+for (const failureStage of ['synchronization', 'trigger'] as const) {
+  test(`opening baseline survives a ${failureStage} failure and a fresh reconciler without discarding new open activity`, async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-21T01:00:00.000Z') });
+    const directory = mkdtempSync(join(tmpdir(), 'code-factory-opening-retry-'));
+    const databasePath = join(directory, 'factory.sqlite');
+    let store = createStore(databasePath);
+    try {
+      const pullRequest = trackPullRequest(store, 1, 'draft');
+      store.ensurePullRequestObservation(pullRequest.id, '2026-09-21T00:00:00.000Z');
+      let current = snapshot(pullRequest, 'open');
+      const githubClient: GitHubClient = { inspectPullRequest: async () => current };
+      const delivered: string[] = [];
+      const receipts = new Set<string>();
+      const registrations = (reconciler: PullRequestReconciler): PullRequestTriggerRegistration[] => [
+        new PullRequestStatusTrigger(reconciler), new PullRequestCommentTrigger(reconciler),
+        new PullRequestCiFailureTrigger(reconciler),
+      ].map((trigger) => ({
+        trigger,
+        context: { deliver: (message) => {
+          const key = `${trigger.id}:${message.idempotencyKey}`;
+          if (!receipts.has(key)) delivered.push(trigger.id);
+          receipts.add(key);
+          return null;
+        } } satisfies AgentTriggerContext,
+      }));
+      if (failureStage === 'synchronization') {
+        t.mock.method(store, 'upsertPullRequest', () => { throw new Error('PR write failed'); }, { times: 1 });
+      }
+      let reconciler = createReconciler(store, githubClient, new MemoryWriter());
+      const initialRegistrations = registrations(reconciler);
+      if (failureStage === 'trigger') {
+        initialRegistrations.push({
+          trigger: { ...noOpTrigger, reconcileSnapshot: () => { throw new Error('Trigger failed'); } }, context,
+        });
+      }
+      await assert.rejects(reconciler.reconcile(initialRegistrations), AggregateError);
+      assert.equal(store.getPullRequest(pullRequest.id)?.status, 'draft');
+      const firstBaseline = store.ensurePullRequestObservation(pullRequest.id, '').observation.initializedAt;
+      assert.equal(store.ensurePullRequestObservation(pullRequest.id, '').observation.observedStatus, 'open');
+
+      t.mock.timers.tick(30_000);
+      current = {
+        ...current,
+        reviewActivity: [...current.reviewActivity, {
+          ...current.reviewActivity[0]!, id: 'open-comment', createdAt: '2026-09-21T01:00:15.000Z',
+        }],
+        checks: [{ key: 'new-check', name: 'new-check', workflow: 'CI', status: 'COMPLETED',
+          conclusion: 'FAILURE', completedAt: '2026-09-21T01:00:15.000Z', url: null }],
+      };
+      store.close();
+      store = new SqliteAgentManagerStore(databasePath);
+      reconciler = createReconciler(store, githubClient, new MemoryWriter());
+      await reconciler.reconcile(registrations(reconciler));
+      assert.equal(store.getPullRequest(pullRequest.id)?.status, 'open');
+      assert.equal(store.ensurePullRequestObservation(pullRequest.id, '').observation.initializedAt, firstBaseline);
+      assert.deepEqual(delivered, [PULL_REQUEST_STATUS_TRIGGER_ID, PULL_REQUEST_COMMENT_TRIGGER_ID, PULL_REQUEST_CI_FAILURE_TRIGGER_ID]);
+      await reconciler.reconcile(registrations(reconciler));
+      assert.equal(delivered.length, 3);
+    } finally {
+      store.close();
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 }

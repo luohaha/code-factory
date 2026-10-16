@@ -242,6 +242,7 @@ function pullRequestObservationFrom(row: Row): PullRequestObservation {
     : {};
   return {
     pullRequestId: String(row.pull_request_id),
+    observedStatus: row.observed_status === null ? null : String(row.observed_status) as PullRequest['status'],
     initializedAt: String(row.initialized_at),
     checkStates,
     updatedAt: String(row.updated_at),
@@ -897,12 +898,15 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     return { observation: pullRequestObservationFrom(row), created: result.changes > 0 };
   }
 
-  resetPullRequestObservation(pullRequestId: string, now: string): PullRequestObservation {
-    this.#db.prepare(`INSERT INTO pull_request_observations
-      (pull_request_id, initialized_at, check_states_json, updated_at) VALUES (?, ?, '{}', ?)
-      ON CONFLICT(pull_request_id) DO UPDATE SET initialized_at = excluded.initialized_at,
-      check_states_json = '{}', updated_at = excluded.updated_at`).run(pullRequestId, now, now);
-    return this.ensurePullRequestObservation(pullRequestId, now).observation;
+  updatePullRequestObservation(observation: PullRequestObservation): PullRequestObservation {
+    const result = this.#db.prepare(`UPDATE pull_request_observations
+      SET observed_status = ?, initialized_at = ?, check_states_json = ?, updated_at = ? WHERE pull_request_id = ?`)
+      .run(observation.observedStatus, observation.initializedAt, JSON.stringify(observation.checkStates),
+        observation.updatedAt, observation.pullRequestId);
+    if (result.changes === 0) throw new StoreNotFoundError(`Pull request observation ${observation.pullRequestId} not found`);
+    const row = this.#db.prepare('SELECT * FROM pull_request_observations WHERE pull_request_id = ?')
+      .get(observation.pullRequestId) as Row;
+    return pullRequestObservationFrom(row);
   }
 
   updatePullRequestCheckStates(
@@ -1269,6 +1273,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       this.#db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
       return true;
     };
+    ensureColumn('pull_request_observations', 'observed_status', "TEXT CHECK (observed_status IN ('draft', 'open', 'closed', 'merged'))");
     ensureColumn('requirements', 'created_by', "TEXT NOT NULL DEFAULT 'human' CHECK (created_by IN ('human', 'rd_agent'))");
     ensureColumn('requirements', 'parent_requirement_id', 'TEXT REFERENCES requirements(id) ON DELETE SET NULL');
     ensureColumn('requirements', 'source_session_id', 'TEXT');
