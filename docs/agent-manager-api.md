@@ -33,6 +33,8 @@ Unrecognized `/api` paths and unsupported non-`OPTIONS` methods return a JSON 40
 
 The service listens only on the loopback interface by default and currently has no authentication. Assess the risk before exposing it. Changes to `host`, `port`, and `allowedOrigin` are persisted through the configuration API and require a restart.
 
+[Tailscale Serve](tailscale.md) can expose the bundled dashboard and this API through one private HTTPS origin while the Manager stays on loopback. Browser API and SSE requests use that origin; no `--allow-origin` override is needed for this setup. CORS configuration is not authentication. Tailscale access policy controls who can reach the service, and every allowed caller has full Manager access. Agent Manager does not interpret Tailscale identity headers as application authorization.
+
 ## 2. Endpoint summary
 
 | Method | Path | Purpose |

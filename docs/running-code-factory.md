@@ -25,6 +25,8 @@ On first start, Agent Manager creates a workspace-scoped configuration file at `
 
 ## Network and port
 
+For access from a laptop or phone, follow the [Tailscale remote access guide](tailscale.md). Tailscale Serve forwards a private HTTPS URL to the loopback listener, so the Manager can keep its default `127.0.0.1` binding.
+
 Use `--port` followed by an integer from `1` to `65535`:
 
 ~~~bash
@@ -39,7 +41,7 @@ npx --yes --package @luoyixin/code-factory code-factory-agent-manager start \
   --port 8080
 ~~~
 
-Listening on `0.0.0.0` makes the dashboard reachable from other machines. Only do this on a trusted network: headless agents run with the permissions of the user who started Agent Manager.
+Listening on `0.0.0.0` makes the dashboard and API reachable on every interface. Agent Manager has no application login, and headless agents run with the permissions of the user who started it. Keep this listener behind an appropriate access boundary; for remote personal use, prefer the Tailscale setup above.
 
 ## Supervised daemon
 

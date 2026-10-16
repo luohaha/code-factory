@@ -92,6 +92,7 @@ import {
   AgentManagerApiError,
   AgentManagerClient,
   DEFAULT_AGENT_MANAGER_URL,
+  defaultManagerUrlForLocation,
   normalizeManagerUrl,
   type AgentConfiguration,
   type AgentManagerConfiguration,
@@ -3142,16 +3143,14 @@ function Dashboard() {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       const saved = window.localStorage.getItem('code-factory.agent-manager-url');
-      const location = window.location;
-      const isEmbeddedDashboard = ['localhost', '127.0.0.1', '0.0.0.0'].includes(location.hostname)
-        && location.port !== '3000';
+      const defaultUrl = defaultManagerUrlForLocation(window.location);
       try {
-        setApiUrl(normalizeManagerUrl(saved || (isEmbeddedDashboard ? location.origin : DEFAULT_AGENT_MANAGER_URL)));
+        setApiUrl(normalizeManagerUrl(saved || defaultUrl));
       } catch {
         if (saved) {
           window.localStorage.removeItem('code-factory.agent-manager-url');
         }
-        setApiUrl(normalizeManagerUrl(isEmbeddedDashboard ? location.origin : DEFAULT_AGENT_MANAGER_URL));
+        setApiUrl(normalizeManagerUrl(defaultUrl));
       }
       setApiUrlReady(true);
     }, 0);
