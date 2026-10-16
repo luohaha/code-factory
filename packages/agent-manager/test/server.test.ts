@@ -1230,10 +1230,10 @@ test('RD Agent endpoints list related Requirements and deliver cross-Requirement
   }
 });
 
-test('agent message HTTP rejections notify the sender without storing or waking the target', async () => {
+test('agent message HTTP only reports explicit Jev rejections and silently delivers when checks are unavailable', async () => {
   let fail = false;
   let checks = 0;
-  const runner = new WaitingRunner();
+  const runner = new InterruptibleWaitingRunner();
   const manager = new AgentManager({
     workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(':memory:'), runner,
     logger: createLogger({ level: 'silent' }),
@@ -1258,23 +1258,29 @@ test('agent message HTTP rejections notify the sender without storing or waking 
     assert.equal(rejection.accepted, false);
     assert.equal(rejection.code, 'jev_message_unnecessary');
     assert.match(rejection.error, /Jev rejected.*unnecessary.*not delivered/);
+    assert.deepEqual(manager.listMessages(target.id), []);
+    assert.equal(runner.requests.length, 0);
     fail = true;
     const unavailable = await send();
-    assert.equal(unavailable.status, 503);
-    const failure = await unavailable.json() as { accepted: boolean; code: string; error: string };
-    assert.equal(failure.accepted, false);
-    assert.equal(failure.code, 'jev_message_check_unavailable');
-    assert.match(failure.error, /not delivered/);
-    assert.doesNotMatch(failure.error, /unnecessary|upstream failure/);
+    assert.equal(unavailable.status, 202);
+    const delivered = await unavailable.json() as { accepted: boolean; queued: boolean; code?: string; error?: string };
+    assert.equal(delivered.accepted, true);
+    assert.equal(delivered.queued, false);
+    assert.equal(delivered.code, undefined);
+    assert.equal(delivered.error, undefined);
     manager.updateConfiguration({ jevApiKey: null });
     const unconfigured = await send();
-    assert.equal(unconfigured.status, 503);
-    assert.match((await unconfigured.json() as { error: string }).error, /Jev API key/);
+    assert.equal(unconfigured.status, 202);
+    const queued = await unconfigured.json() as { accepted: boolean; queued: boolean; code?: string; error?: string };
+    assert.equal(queued.accepted, true);
+    assert.equal(queued.queued, true);
+    assert.equal(queued.code, undefined);
+    assert.equal(queued.error, undefined);
     assert.equal(checks, 2);
     assert.deepEqual(manager.listMessages(source.id), []);
-    assert.deepEqual(manager.listMessages(target.id), []);
-    assert.equal(manager.getRequirement(target.id)?.session.pendingMessageCount, 0);
-    assert.equal(runner.request, null);
+    assert.deepEqual(manager.listMessages(target.id).map(({ body }) => body), ['Thanks!', 'Thanks!']);
+    assert.equal(manager.getRequirement(target.id)?.session.pendingMessageCount, 2);
+    assert.equal(runner.requests.length, 1);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();

@@ -107,7 +107,7 @@ export const zhCN = {
   'Key configured; leave blank to keep it': '已配置密钥；留空以保留',
   'Leave blank to disable Jev': '留空以禁用 Jev',
   'Remove key': '移除密钥',
-  'Jev checks every direct agent message and may continue an RD Agent after a Run. Without a key, direct agent messages cannot be sent. The key is stored in workspace configuration and hidden from API responses.': 'Jev 会检查每条 Agent 直接消息，也可在运行结束后决定是否继续。未配置密钥时，无法发送 Agent 直接消息。密钥保存在工作区配置中，不会在 API 响应中显示。',
+  'Jev may check direct agent messages and continue an RD Agent after a Run. Without a key or if a message check fails, messages are delivered normally. The key is stored in workspace configuration and hidden from API responses.': 'Jev 可检查 Agent 直接消息，也可在运行结束后决定是否继续。未配置密钥或消息检查失败时，消息正常投递。密钥保存在工作区配置中，不会在 API 响应中显示。',
   'Native Agent credentials, reconciliation, requirement retention, commit attribution, Jev, and log level changes apply immediately. Other settings take effect after restart.': 'Native Agent 凭据、PR 同步、需求保留期、提交署名、Jev 和日志级别的更改立即生效。其他设置重启后生效。',
   'AWAITING CONFIRMATION': '待确认',
   'Reply to continue or confirm completion': '可以回复继续，或确认完成',

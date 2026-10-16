@@ -73,34 +73,38 @@ test('each direct message is checked; rejected messages never persist or wake ei
   }
 });
 
-test('missing keys and failed checks prevent delivery and never leak decision input in errors or logs', async () => {
+test('missing keys and failed checks silently allow normal delivery without leaking decision input in logs', async () => {
   let calls = 0;
+  let failure: Error = new Error('private-message private-key');
   const lines: string[] = [];
   const writer = { write: (value: string) => { lines.push(value); } };
-  const { manager, target, requests, send } = fixture(async () => {
+  const { manager, source, target, requests, send } = fixture(async () => {
     calls += 1;
-    throw new Error('private-message private-key');
+    throw failure;
   }, {
     configuration: { ...DEFAULT_AGENT_MANAGER_CONFIGURATION, jevApiKey: null },
     logger: createLogger({ level: 'info', stdout: writer, stderr: writer }),
   });
   try {
-    await assert.rejects(send('private-message'), /Jev API key.*not delivered/);
+    const unchecked = await send('private-message without a key');
+    assert.equal(unchecked.queued, false);
+    assert.deepEqual(Object.keys(unchecked).sort(), ['message', 'queued', 'requirement']);
     assert.equal(calls, 0);
     manager.updateConfiguration({ jevApiKey: 'private-key' });
-    await assert.rejects(send('private-message'), (error: unknown) => {
-      assert.ok(error instanceof JevMessageDeliveryError);
-      assert.equal(error.code, 'jev_message_check_unavailable');
-      assert.doesNotMatch(error.message, /private-message|private-key|unnecessary/);
-      return true;
-    });
-    assert.equal(calls, 1);
-    assert.deepEqual(manager.listMessages(target.id), []);
-    assert.equal(requests.length, 0);
+    for (const error of [failure, new SyntaxError('private-message'), new DOMException('private-key', 'TimeoutError')]) {
+      failure = error;
+      const delivered = await send('private-message after a failed check');
+      assert.equal(delivered.queued, true);
+      assert.deepEqual(Object.keys(delivered).sort(), ['message', 'queued', 'requirement']);
+    }
+    assert.equal(calls, 3);
+    assert.equal(manager.listMessages(target.id).length, 4);
+    assert.deepEqual(manager.listMessages(source.id), []);
+    assert.equal(requests.length, 1);
     assert.doesNotMatch(lines.join(''), /private-message|private-key/);
     manager.updateConfiguration({ jevApiKey: null });
     manager.postHumanMessage(target.id, 'Human input still works without a message check.');
-    assert.equal(calls, 1);
+    assert.equal(calls, 3);
     assert.equal(requests.length, 1);
   } finally {
     await manager.close();
@@ -146,7 +150,7 @@ test('delivery uses the current running state after the Jev check', async () => 
   }
 });
 
-test('configuration changes invalidate in-flight checks and shutdown cancels them', async () => {
+test('configuration changes discard stale rejections and shutdown still cancels delivery', async () => {
   let finish!: (decision: JevMessageDecision) => void;
   let signal: AbortSignal | undefined;
   const { manager, target, requests, send } = fixture(async (_key, _context, currentSignal) => {
@@ -156,15 +160,15 @@ test('configuration changes invalidate in-flight checks and shutdown cancels the
   try {
     const first = send('Use version 2.');
     manager.updateConfiguration({ jevApiKey: 'replacement-key' });
-    finish('deliver');
-    await assert.rejects(first, /configuration changed.*not delivered/);
-    assert.deepEqual(manager.listMessages(target.id), []);
+    finish('reject');
+    assert.equal((await first).message.body, 'Use version 2.');
+    assert.equal(manager.listMessages(target.id).length, 1);
     const second = send('Use version 3.');
     await manager.close();
     assert.equal(signal?.aborted, true);
     finish('deliver');
     await assert.rejects(second, /not delivered/);
-    assert.equal(requests.length, 0);
+    assert.equal(requests.length, 1);
   } finally {
     await manager.close();
   }
