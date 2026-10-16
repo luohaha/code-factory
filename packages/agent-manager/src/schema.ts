@@ -119,6 +119,7 @@ export const schemaStatements = [
   ) STRICT`,
   `CREATE TABLE IF NOT EXISTS pull_request_observations (
     pull_request_id TEXT PRIMARY KEY REFERENCES pull_requests(id) ON DELETE CASCADE,
+    observed_status TEXT CHECK (observed_status IN ('draft', 'open', 'closed', 'merged')),
     initialized_at TEXT NOT NULL,
     check_states_json TEXT NOT NULL DEFAULT '{}',
     updated_at TEXT NOT NULL

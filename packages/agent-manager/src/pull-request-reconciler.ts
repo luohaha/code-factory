@@ -4,6 +4,7 @@ import type { GitHubClient } from './github-client.js';
 import type { Logger } from './logger.js';
 import {
   gitHubCheckState,
+  PULL_REQUEST_STATUS_TRIGGER_ID,
   type PullRequestSnapshotTrigger,
   type PullRequestTriggerRegistration,
 } from './pull-request-triggers.js';
@@ -26,8 +27,10 @@ class LoggedPullRequestFailures extends AggregateError {}
 
 /**
  * Polls PRs whose last persisted status is Draft or Open and shares each
- * snapshot with independent PR triggers. A snapshot may move an eligible PR
- * to Closed or Merged; after that terminal transition it is no longer polled.
+ * snapshot with independent PR triggers. Only Open snapshots reach activity
+ * triggers; other snapshots reach the lifecycle trigger only. A snapshot may
+ * move an eligible PR to Closed or Merged; after that terminal transition it
+ * is no longer polled.
  */
 export class PullRequestReconciler {
   readonly #store: AgentManagerStore;
@@ -158,13 +161,28 @@ export class PullRequestReconciler {
   ): void {
     const now = new Date().toISOString();
     const { observation, created } = this.#store.ensurePullRequestObservation(pullRequest.id, now);
+    const opening = (observation.observedStatus ?? pullRequest.status) === 'draft' && snapshot.status === 'open';
+    const baselineCreated = created || opening;
+    const checkStates = Object.fromEntries(snapshot.checks.map((check) => [check.key, gitHubCheckState(check)]));
+    // Save the first opening baseline and its observed status together, before
+    // fallible trigger delivery or lifecycle synchronization. Retries (including
+    // after restart) must retain activity that arrived after this observation.
+    const currentObservation = this.#store.updatePullRequestObservation({
+      ...observation,
+      observedStatus: snapshot.status,
+      initializedAt: opening ? now : observation.initializedAt,
+      checkStates: baselineCreated && snapshot.status === 'open' ? checkStates : observation.checkStates,
+      updatedAt: now,
+    });
 
     for (const { trigger, context } of registrations) {
-      trigger.reconcileSnapshot(context, pullRequest, snapshot, observation, created);
+      if (snapshot.status !== 'open' && trigger.id !== PULL_REQUEST_STATUS_TRIGGER_ID) continue;
+      trigger.reconcileSnapshot(context, pullRequest, snapshot, currentObservation, baselineCreated);
     }
 
-    const checkStates = Object.fromEntries(snapshot.checks.map((check) => [check.key, gitHubCheckState(check)]));
-    this.#store.updatePullRequestCheckStates(pullRequest.id, checkStates, now);
+    if (snapshot.status === 'open') {
+      this.#store.updatePullRequestCheckStates(pullRequest.id, checkStates, now);
+    }
 
     if (pullRequestChanged(pullRequest, snapshot)) {
       this.#synchronizePullRequest({

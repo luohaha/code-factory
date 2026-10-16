@@ -1555,6 +1555,43 @@ test('Agent Trigger messages are source-neutral and idempotent within each trigg
   }
 });
 
+test('legacy PR observations retain their baselines and migrate to nullable observed lifecycle status', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-observation-migration-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  let store = new SqliteAgentManagerStore(databasePath);
+  try {
+    store.createRequirement({ requirementId: 'req-1', sessionId: 'ses-1', title: 'PR observations',
+      description: 'Keep baselines on upgrade', provider: 'codex', createdBy: 'human', now });
+    store.upsertPullRequest({ id: 'pr-1', requirementId: 'req-1', repository: 'acme/repo', number: 42,
+      url: 'https://github.com/acme/repo/pull/42', title: 'Feature', baseBranch: 'main',
+      headBranch: 'feature', headSha: 'head', status: 'draft', now });
+    store.ensurePullRequestObservation('pr-1', now);
+    store.updatePullRequestCheckStates('pr-1', { existing: 'baseline' }, now);
+    store.close();
+    const legacy = new DatabaseSync(databasePath);
+    try {
+      legacy.exec('ALTER TABLE pull_request_observations DROP COLUMN observed_status');
+    } finally {
+      legacy.close();
+    }
+    store = new SqliteAgentManagerStore(databasePath);
+    const { observation, created } = store.ensurePullRequestObservation('pr-1', '2099-01-01T00:00:00.000Z');
+    assert.equal(created, false);
+    assert.equal(observation.observedStatus, null);
+    assert.equal(observation.initializedAt, now);
+    assert.deepEqual(observation.checkStates, { existing: 'baseline' });
+    const opening = { ...observation, observedStatus: 'open' as const,
+      initializedAt: '2099-01-01T00:00:00.000Z', checkStates: { current: 'new baseline' } };
+    store.updatePullRequestObservation(opening);
+    store.close();
+    store = new SqliteAgentManagerStore(databasePath);
+    assert.deepEqual(store.ensurePullRequestObservation('pr-1', now).observation, opening);
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('legacy GitHub event receipts migrate to split triggers without replaying delivered messages', () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-trigger-receipts-'));
   const databasePath = join(directory, 'factory.sqlite');
