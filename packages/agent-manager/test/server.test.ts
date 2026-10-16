@@ -1098,6 +1098,38 @@ test('RD Agent endpoints list related Requirements and deliver cross-Requirement
     assert.equal(done.requirement.status, 'done');
     assert.equal(done.requirement.session.state, 'completed');
 
+    const completedAt = manager.getRequirement(doneChild.id)?.completedAt;
+    const runCount = runner.requests.length;
+    const completedMessageResponse = await fetch(
+      `${baseUrl}/api/agent/requirements/${child.id}/related/${doneChild.id}/messages`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sourceSessionId: child.session.id, message: 'Keep this follow-up queued.' }),
+      },
+    );
+    assert.equal(completedMessageResponse.status, 202);
+    const queuedMessage = await completedMessageResponse.json() as {
+      accepted: boolean;
+      queued: boolean;
+      message: { deliverToRd: boolean; sourceRequirementId: string };
+      requirement: {
+        status: string;
+        completedAt: string | null;
+        session: { state: string; pendingMessageCount: number };
+      };
+    };
+    assert.equal(queuedMessage.accepted, true);
+    assert.equal(queuedMessage.queued, true);
+    assert.equal(queuedMessage.message.deliverToRd, true);
+    assert.equal(queuedMessage.message.sourceRequirementId, child.id);
+    assert.equal(queuedMessage.requirement.status, 'done');
+    assert.equal(queuedMessage.requirement.completedAt, completedAt);
+    assert.equal(queuedMessage.requirement.session.state, 'completed');
+    assert.equal(queuedMessage.requirement.session.pendingMessageCount, 1);
+    assert.equal(runner.requests.length, runCount);
+    assert.equal(manager.listRuns(doneChild.id).length, 0);
+
     const relatedResponse = await fetch(
       `${baseUrl}/api/agent/requirements/${child.id}/related?sourceSessionId=${child.session.id}`,
     );

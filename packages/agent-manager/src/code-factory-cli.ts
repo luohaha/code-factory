@@ -109,7 +109,8 @@ const REQUIREMENT_MESSAGE_HELP = `Usage: code-factory-cli requirement message [o
 
 Send a message to any other Requirement's RD Agent when its ID is known. The
 message is persisted in the target Requirement conversation and starts or queues
-its RD Agent. A completed target is reactivated; a cancelled target is rejected.
+its RD Agent. Messages to a completed target stay queued until a human replies.
+A cancelled target is rejected.
 
 Required options:
   --requirement-id ID     Target Requirement ID
