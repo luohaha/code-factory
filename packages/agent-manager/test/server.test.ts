@@ -906,6 +906,9 @@ test('RD Agent endpoints list related Requirements and deliver cross-Requirement
     store,
     runner,
     logger: createLogger({ level: 'silent' }),
+    configuration: { ...DEFAULT_AGENT_MANAGER_CONFIGURATION, jevApiKey: 'test-key' },
+    jevMessageDecision: async () => 'deliver',
+    jevWakeDecision: async () => ({ kind: 'wait' }),
   });
   const parent = manager.createRequirement({
     title: 'Parent API contract',
@@ -1221,6 +1224,57 @@ test('RD Agent endpoints list related Requirements and deliver cross-Requirement
     );
     assert.equal(selfResponse.status, 409);
     assert.equal(manager.listMessages(child.id).length, 0);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
+
+test('agent message HTTP rejections notify the sender without storing or waking the target', async () => {
+  let fail = false;
+  let checks = 0;
+  const runner = new WaitingRunner();
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(), store: new SqliteAgentManagerStore(':memory:'), runner,
+    logger: createLogger({ level: 'silent' }),
+    configuration: { ...DEFAULT_AGENT_MANAGER_CONFIGURATION, jevApiKey: 'key' },
+    jevMessageDecision: async () => {
+      checks += 1;
+      if (fail) throw new Error('upstream failure');
+      return 'reject';
+    },
+  });
+  const source = manager.createRequirement({ title: 'Source', description: 'Send results', provider: 'codex' });
+  const target = manager.createRequirement({ title: 'Target', description: 'Consume results', provider: 'codex' });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/agent/requirements/${source.id}/related/${target.id}/messages`;
+  const send = () => fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sourceSessionId: source.session.id, message: 'Thanks!' }) });
+  try {
+    const rejected = await send();
+    assert.equal(rejected.status, 422);
+    const rejection = await rejected.json() as { accepted: boolean; code: string; error: string };
+    assert.equal(rejection.accepted, false);
+    assert.equal(rejection.code, 'jev_message_unnecessary');
+    assert.match(rejection.error, /Jev rejected.*unnecessary.*not delivered/);
+    fail = true;
+    const unavailable = await send();
+    assert.equal(unavailable.status, 503);
+    const failure = await unavailable.json() as { accepted: boolean; code: string; error: string };
+    assert.equal(failure.accepted, false);
+    assert.equal(failure.code, 'jev_message_check_unavailable');
+    assert.match(failure.error, /not delivered/);
+    assert.doesNotMatch(failure.error, /unnecessary|upstream failure/);
+    manager.updateConfiguration({ jevApiKey: null });
+    const unconfigured = await send();
+    assert.equal(unconfigured.status, 503);
+    assert.match((await unconfigured.json() as { error: string }).error, /Jev API key/);
+    assert.equal(checks, 2);
+    assert.deepEqual(manager.listMessages(source.id), []);
+    assert.deepEqual(manager.listMessages(target.id), []);
+    assert.equal(manager.getRequirement(target.id)?.session.pendingMessageCount, 0);
+    assert.equal(runner.request, null);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();

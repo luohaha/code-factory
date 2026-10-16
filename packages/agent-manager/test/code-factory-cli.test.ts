@@ -91,6 +91,27 @@ test('code-factory-cli help discovers the supported RD commands', async () => {
   }
 });
 
+test('message CLI reports Jev refusals and check failures to the sender without retrying', async () => {
+  for (const [status, message] of [
+    [422, 'Jev rejected this message as unnecessary; it was not delivered.'],
+    [503, 'Jev could not check this message; it was not delivered.'],
+  ] as const) {
+    const output: string[] = [];
+    const errors: string[] = [];
+    let calls = 0;
+    const runtime = testRuntime([], output, errors);
+    runtime.fetch = async () => {
+      calls += 1;
+      return Response.json({ accepted: false, error: message }, { status });
+    };
+    const result = await runCodeFactoryCli(['requirement', 'message', '--requirement-id', 'req_target', '--message', 'Thanks!'], runtime);
+    assert.equal(result, 1);
+    assert.equal(calls, 1);
+    assert.equal(output.join(''), '');
+    assert.ok(errors.join('').includes(message));
+  }
+});
+
 test('code-factory-cli reports the package version without requiring Agent context', async () => {
   const output: string[] = [];
   const exitCode = await runCodeFactoryCli(['--version'], {

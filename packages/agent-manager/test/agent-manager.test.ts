@@ -1107,7 +1107,10 @@ test('Agent configuration remains locked until a stopped RD Run reaches waiting 
 test('Stop keeps reviewer, trigger, and other Agent messages queued until a human resumes', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new InterruptibleRunner();
-  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger,
+    configuration: { ...DEFAULT_AGENT_MANAGER_CONFIGURATION, jevApiKey: 'test-key' },
+    jevMessageDecision: async () => 'deliver', jevWakeDecision: async () => ({ kind: 'wait' }),
+  });
   const trigger = new TestAgentTrigger();
   try {
     const requirement = manager.createRequirement({ title: 'Switch safely', description: 'Pause before editing', provider: 'codex' });
@@ -1129,7 +1132,7 @@ test('Stop keeps reviewer, trigger, and other Agent messages queued until a huma
     manager.startAgentTrigger(trigger);
     assert.ok(trigger.deliver({ requirementId: requirement.id, idempotencyKey: 'later-wake',
       author: 'system', body: 'Timer follow-up' }));
-    const related = manager.postRequirementAgentMessage(source.id, source.session.id, requirement.id, 'Related Agent follow-up');
+    const related = await manager.postRequirementAgentMessage(source.id, source.session.id, requirement.id, 'Related Agent follow-up');
     assert.equal(related.queued, true);
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(runner.requests.length, 2);
@@ -1343,6 +1346,9 @@ test('RD Agents can inspect relations and message any other Requirement by ID', 
     store: new SqliteAgentManagerStore(':memory:'),
     runner,
     logger: silentLogger,
+    configuration: { ...DEFAULT_AGENT_MANAGER_CONFIGURATION, jevApiKey: 'test-key' },
+    jevMessageDecision: async () => 'deliver',
+    jevWakeDecision: async () => ({ kind: 'wait' }),
   });
   try {
     const parent = manager.createRequirement({
@@ -1394,7 +1400,7 @@ test('RD Agents can inspect relations and message any other Requirement by ID', 
       () => manager.listRelatedRequirements(child.id, parent.session.id),
       /sourceSessionId must belong to source Requirement/,
     );
-    assert.throws(
+    await assert.rejects(
       () => manager.postRequirementAgentMessage(
         child.id,
         parent.session.id,
@@ -1403,12 +1409,12 @@ test('RD Agents can inspect relations and message any other Requirement by ID', 
       ),
       /sourceSessionId must belong to source Requirement/,
     );
-    assert.throws(
+    await assert.rejects(
       () => manager.postRequirementAgentMessage(child.id, child.session.id, child.id, 'No self-message.'),
       /cannot message its own Requirement/,
     );
 
-    const delivered = manager.postRequirementAgentMessage(
+    const delivered = await manager.postRequirementAgentMessage(
       child.id,
       child.session.id,
       parent.id,
@@ -1426,7 +1432,7 @@ test('RD Agents can inspect relations and message any other Requirement by ID', 
     assert.match(runner.requests[0]?.invocation.input ?? '', /The shared contract now uses field version 2\./);
 
     for (const target of [sibling, unrelated]) {
-      const result = manager.postRequirementAgentMessage(
+      const result = await manager.postRequirementAgentMessage(
         child.id, child.session.id, target.id, `Coordinate with ${target.title}.`,
       );
       assert.equal(result.queued, false);
@@ -1444,7 +1450,10 @@ test('RD Agents can inspect relations and message any other Requirement by ID', 
 test('RD Agent messages queue on done work until a human replies and reject a cancelled target', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new DeferredRunner();
-  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger,
+    configuration: { ...DEFAULT_AGENT_MANAGER_CONFIGURATION, jevApiKey: 'test-key' },
+    jevMessageDecision: async () => 'deliver', jevWakeDecision: async () => ({ kind: 'wait' }),
+  });
   try {
     const completedParent = manager.createRequirement({
       title: 'Completed parent',
@@ -1476,7 +1485,7 @@ test('RD Agent messages queue on done work until a human replies and reject a ca
     }, '2026-09-18T00:01:00.000Z');
     const completed = manager.confirmRequirement(completedParent.id);
 
-    const queued = manager.postRequirementAgentMessage(
+    const queued = await manager.postRequirementAgentMessage(
       completedChild.id,
       completedChild.session.id,
       completedParent.id,
@@ -1492,7 +1501,7 @@ test('RD Agent messages queue on done work until a human replies and reject a ca
     assert.equal(queued.requirement.session.pendingMessageCount, 1);
     assert.equal(queued.requirement.session.lastConsumedMessageSequence, 0);
 
-    const followUp = manager.postRequirementAgentMessage(
+    const followUp = await manager.postRequirementAgentMessage(
       completedChild.id, completedChild.session.id, completedParent.id, 'Additional contract details.',
     );
     assert.equal(followUp.queued, true);
@@ -1544,7 +1553,7 @@ test('RD Agent messages queue on done work until a human replies and reject a ca
       sourceSessionId: cancelledParent.session.id,
     });
     manager.deleteRequirement(cancelledParent.id);
-    assert.throws(
+    await assert.rejects(
       () => manager.postRequirementAgentMessage(
         cancelledChild.id,
         cancelledChild.session.id,

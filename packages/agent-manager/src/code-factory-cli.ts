@@ -110,7 +110,11 @@ const REQUIREMENT_MESSAGE_HELP = `Usage: code-factory-cli requirement message [o
 Send a message to any other Requirement's RD Agent when its ID is known. The
 message is persisted in the target Requirement conversation and starts or queues
 its RD Agent. Messages to a completed target stay queued until a human replies.
-A cancelled target is rejected.
+A cancelled target is rejected. Every message requires a configured Jev API key
+and passes a Jev necessity check before delivery. Unnecessary messages are not
+delivered; the command reports Jev's rejection to the sender and exits 1. An
+unavailable check also prevents delivery and exits 1. Do not resend a rejected
+message without new information or action the recipient needs.
 
 Required options:
   --requirement-id ID     Target Requirement ID
