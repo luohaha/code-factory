@@ -157,7 +157,9 @@ test('daemon start reports an occupied port without entering a restart loop', { 
   let blockerClosed = false;
 
   try {
-    const startedAt = Date.now();
+    // Bound the whole command, including cold TypeScript CLI, supervisor, and
+    // Manager startup. The durable state and log assertions below detect retries
+    // without imposing a tighter wall-clock budget on shared CI runners.
     const result = runCli(
       ['start', '--daemon', '--port', String(port), '--pr-reconcile-interval', '0', '--log-level', 'silent'],
       workspace,
@@ -165,9 +167,9 @@ test('daemon start reports an occupied port without entering a restart loop', { 
       10_000,
     );
 
+    assert.equal(result.error, undefined);
     assert.equal(result.status, 1);
     assert.match(result.stderr, /EADDRINUSE: address already in use/);
-    assert.ok(Date.now() - startedAt < 5_000, `port conflict took ${Date.now() - startedAt}ms to report`);
 
     const state = readDaemonState(paths.stateFile);
     assert.equal(state?.status, 'failed');
