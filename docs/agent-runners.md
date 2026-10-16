@@ -84,6 +84,8 @@ The RD behavioral prompt is supplied on both initial and resumed invocations. It
 
 All RD providers (Codex, Claude Code, and Native Agent) receive shared guidance to keep inter-agent communication concise: send only information or requests the recipient needs to advance the work, with the context needed to act. Courtesy acknowledgments, repeated status updates, and redundant back-and-forth should be skipped to conserve tokens. This guidance applies to both initial and resumed Runs.
 
+When a Jev API key is configured, the server also checks every direct Agent message with Jev before saving or delivering it. An explicitly unnecessary message is not delivered: `requirement message` exits 1 with a Jev rejection, and the Native Agent `requirement_message` tool returns the same error. A missing key or failed check allows normal delivery without an extra sender notice. No refusal message is appended as new input to either Requirement. Agents should not resend or rephrase a rejected message without new information or action the recipient needs.
+
 Agent Manager injects `CODE_FACTORY_API_URL`, `CODE_FACTORY_REQUIREMENT_ID`, and `CODE_FACTORY_SESSION_ID` for each RD Run. The CLI supplies those context fields to the HTTP API, so the model does not copy IDs or endpoint paths from its prompt. A workspace-private launcher is created next to the workspace database and prepended to `PATH`, which also supports the documented `node .../dist/cli.js start` development workflow.
 
 ## 2. Codex
