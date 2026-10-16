@@ -315,6 +315,48 @@ test('native Steering during setup delivers attachment-only input in the same Ru
   }
 });
 
+test('native message tool returns Jev rejection feedback to the sending agent', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-message-rejection-'));
+  let calls = 0;
+  const server = createServer((request, response) => {
+    calls += 1;
+    assert.equal(request.url, '/api/agent/requirements/req_tools/related/req_target/messages');
+    response.writeHead(422, { 'content-type': 'application/json' }).end(JSON.stringify({
+      accepted: false, code: 'jev_message_unnecessary',
+      error: 'Jev rejected this message as unnecessary; it was not delivered.',
+    }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  faux.setResponses([
+    fauxAssistantMessage(fauxToolCall('requirement_message', { requirementId: 'req_target', message: 'Thanks!' }), { stopReason: 'toolUse' }),
+    (context) => {
+      const result = JSON.stringify(context.messages);
+      assert.match(result, /Jev rejected this message as unnecessary; it was not delivered/);
+      return fauxAssistantMessage('Jev rejection received');
+    },
+  ]);
+  const service = new NativeAgentService(join(directory, 'native.sqlite'), models);
+  try {
+    const outcome = await service.run({ requirementId: 'req_tools', sessionId: 'ses_tools', nativeSessionId: null,
+      prompt: 'Send an acknowledgment', model: 'faux/faux-1', reasoningEffort: null, cwd: directory,
+      environment: { CODE_FACTORY_API_URL: `http://127.0.0.1:${address.port}/api`, CODE_FACTORY_REQUIREMENT_ID: 'req_tools', CODE_FACTORY_SESSION_ID: 'ses_tools' },
+      instructions: 'Test agent', signal: new AbortController().signal, timeoutMs: 30_000,
+      onNativeSession: () => undefined, onEvent: () => undefined });
+    assert.equal(outcome.status, 'succeeded');
+    assert.equal(outcome.finalMessage, 'Jev rejection received');
+    assert.equal(calls, 1);
+  } finally {
+    await service.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('native control-plane tool calls the requirement CLI with session context', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'code-factory-tools-'));
   const server = createServer((request, response) => {

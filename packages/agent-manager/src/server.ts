@@ -5,6 +5,7 @@ import { AgentManager, MAX_MESSAGE_ATTACHMENT_BYTES } from './agent-manager.js';
 import { validateAgentManagerConfigurationPatch } from './configuration.js';
 import { DashboardServer } from './dashboard-server.js';
 import { E2BProviderError } from './e2b-execution-env.js';
+import { JevMessageDeliveryError } from './jev-message-decision.js';
 import type { Logger } from './logger.js';
 import { StoreConflictError, StoreNotFoundError } from './store.js';
 import type { AgentProvider, AgentReasoningEffort, ManagerEvent, PullRequestStatus } from './types.js';
@@ -569,7 +570,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         const sourceRequirementId = decodeURIComponent(agentRelatedMessages[1]!);
         const targetRequirementId = decodeURIComponent(agentRelatedMessages[2]!);
         const body = await readJson(request);
-        const result = manager.postRequirementAgentMessage(
+        const result = await manager.postRequirementAgentMessage(
           sourceRequirementId,
           stringField(body, 'sourceSessionId', true)!,
           targetRequirementId,
@@ -701,6 +702,10 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
     } catch (error) {
       if (error instanceof StoreNotFoundError || (error instanceof Error && error.message.endsWith('not found'))) {
         sendJson(response, 404, { error: error.message });
+      } else if (error instanceof JevMessageDeliveryError) {
+        sendJson(response, error.code === 'jev_message_unnecessary' ? 422 : 503, {
+          accepted: false, code: error.code, error: error.message,
+        });
       } else if (error instanceof StoreConflictError) {
         sendJson(response, 409, { error: error.message });
       } else if (error instanceof E2BProviderError) {

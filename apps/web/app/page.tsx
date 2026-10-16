@@ -1556,7 +1556,7 @@ function ManagerConfigurationDialog({
                       <Input id="configuration-jev-key" type="password" autoComplete="off" value={jevApiKey} onChange={(event) => { setJevApiKey(event.target.value); setClearJevApiKey(false); }} placeholder={configuration?.jevApiKeyConfigured && !clearJevApiKey ? t('Key configured; leave blank to keep it') : t('Leave blank to disable Jev')} />
                       {configuration?.jevApiKeyConfigured && !clearJevApiKey ? <Button type="button" variant="outline" onClick={() => { setJevApiKey(''); setClearJevApiKey(true); }}>{t('Remove key')}</Button> : null}
                     </div>
-                    <p className="text-[10px] text-muted-foreground">{t('Jev may continue an RD Agent after a successful Run. The key is stored in the workspace configuration file and hidden from API responses.')}</p>
+                    <p className="text-[10px] text-muted-foreground">{t('Jev checks every direct agent message and may continue an RD Agent after a Run. Without a key, direct agent messages cannot be sent. The key is stored in workspace configuration and hidden from API responses.')}</p>
                   </Field>
                   <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-3 sm:col-span-2">
                     <div>

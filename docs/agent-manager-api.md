@@ -940,6 +940,8 @@ Persists an RD Agent message in any other known Requirement and starts or queues
 
 Success: 202 Accepted with `accepted`, source and target IDs, `queued`, the persisted `message`, and the current target `requirement`. The message has `author=rd_agent`, `sourceRequirementId` equal to the source, and `deliverToRd=true`. A DONE target reports `queued=true` and retains its completed Requirement and Session state. Its Agent messages remain pending until a human reply reactivates the original Session, which consumes the queued messages and reply in order. Returns 400 for invalid input or mismatched source Session, 404 for an unknown source or target, and 409 for a self-message or CANCELLED target.
 
+Every valid direct message is checked by Jev before persistence or target wake-up, using the configured `jevApiKey`. The check sends the source and target Requirement IDs, titles and descriptions, candidate message, and three latest target conversation messages to `jev-latest`. An unnecessary message returns 422 with `{accepted: false, code: "jev_message_unnecessary", error: "Jev rejected this message as unnecessary; it was not delivered. ..."}`. A missing key, failed or malformed response, timeout (10 seconds), interrupted check, or key change during the check returns 503 with `code: "jev_message_check_unavailable"` and an explanation that the message was not delivered. Neither outcome saves the message or wakes either agent. The CLI exits 1 and Native Agent receives the same feedback as a tool error. Rejections are returned directly to the sender rather than appended as new conversation input.
+
 ## 8. SSE event stream
 
 ### GET /api/events
