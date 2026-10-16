@@ -1424,17 +1424,8 @@ export class AgentManager extends EventEmitter {
       body,
       deliverToRd: true,
     });
-    const current = target.status === 'done'
-      ? this.#store.transitionRequirement(target.id, ['done'], 'doing', new Date().toISOString())
-      : target;
-    if (target.status === 'done') {
-      this.logger.info('Requirement reactivated by RD Agent message', {
-        requirementId: target.id,
-        sessionId: target.session.id,
-        sourceRequirementId: source.id,
-      });
-    }
-    const queued = current.session.state === 'running' || current.session.autoResumePaused;
+    const queued = target.status === 'done'
+      || target.session.state === 'running' || target.session.autoResumePaused;
     if (!queued) {
       void this.startRdRun(target.id).catch((error: unknown) => {
         this.logger.error('RD run failed unexpectedly', { requirementId: target.id, error });

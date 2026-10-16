@@ -1441,14 +1441,14 @@ test('RD Agents can inspect relations and message any other Requirement by ID', 
   }
 });
 
-test('an RD Agent message reactivates done work and rejects a cancelled target', async () => {
+test('RD Agent messages queue on done work until a human replies and reject a cancelled target', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new DeferredRunner();
   const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
   try {
     const completedParent = manager.createRequirement({
       title: 'Completed parent',
-      description: 'Resume when the child needs coordination',
+      description: 'Wait for a human before resuming coordination',
       provider: 'codex',
     });
     const completedChild = manager.createRequirement({
@@ -1474,19 +1474,61 @@ test('an RD Agent message reactivates done work and rejects a cancelled target',
       finalMessage: 'ready',
       error: null,
     }, '2026-09-18T00:01:00.000Z');
-    manager.confirmRequirement(completedParent.id);
+    const completed = manager.confirmRequirement(completedParent.id);
 
-    const reactivated = manager.postRequirementAgentMessage(
+    const queued = manager.postRequirementAgentMessage(
       completedChild.id,
       completedChild.session.id,
       completedParent.id,
       'Please extend the completed contract.',
     );
-    assert.equal(reactivated.queued, false);
-    assert.equal(reactivated.requirement.status, 'doing');
-    assert.equal(reactivated.requirement.session.state, 'running');
-    assert.equal(reactivated.requirement.completedAt, null);
+    assert.equal(queued.queued, true);
+    assert.equal(queued.message.author, 'rd_agent');
+    assert.equal(queued.message.sourceRequirementId, completedChild.id);
+    assert.equal(queued.message.deliverToRd, true);
+    assert.equal(queued.requirement.status, 'done');
+    assert.equal(queued.requirement.session.state, 'completed');
+    assert.equal(queued.requirement.completedAt, completed.completedAt);
+    assert.equal(queued.requirement.session.pendingMessageCount, 1);
+    assert.equal(queued.requirement.session.lastConsumedMessageSequence, 0);
+
+    const followUp = manager.postRequirementAgentMessage(
+      completedChild.id, completedChild.session.id, completedParent.id, 'Additional contract details.',
+    );
+    assert.equal(followUp.queued, true);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(runner.requests.length, 0);
+    assert.equal(manager.listRuns(completedParent.id).length, 1);
+    const stillCompleted = manager.getRequirement(completedParent.id);
+    assert.equal(stillCompleted?.status, 'done');
+    assert.equal(stillCompleted?.session.state, 'completed');
+    assert.equal(stillCompleted?.completedAt, completed.completedAt);
+    assert.equal(stillCompleted?.session.pendingMessageCount, 2);
+    assert.deepEqual(manager.listMessages(completedParent.id).map((message) => message.body), [
+      'Please extend the completed contract.', 'Additional contract details.',
+    ]);
+
+    const reply = manager.postHumanMessage(completedParent.id, 'Please process the queued Agent messages.');
+    assert.equal(reply.queued, false);
+    assert.equal(reply.requirement.status, 'doing');
+    assert.equal(reply.requirement.completedAt, null);
+    assert.equal(reply.requirement.session.id, completedParent.session.id);
+    assert.equal(reply.requirement.session.state, 'running');
+    assert.equal(runner.requests.length, 1);
     assert.ok(runner.requests[0]?.invocation.args.includes('native-related-parent'));
+    const prompt = runner.requests[0]?.invocation.input ?? '';
+    assert.match(prompt, /Please extend the completed contract\./);
+    assert.match(prompt, /Additional contract details\./);
+    assert.match(prompt, /Please process the queued Agent messages\./);
+    assert.ok(prompt.indexOf('Please extend') < prompt.indexOf('Additional contract'));
+    assert.ok(prompt.indexOf('Additional contract') < prompt.indexOf('Please process'));
+    runner.resolvers[0]?.({
+      status: 'succeeded', exitCode: 0, nativeSessionId: 'native-related-parent',
+      finalMessage: 'updated', error: null,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(manager.getRequirement(completedParent.id)?.session.pendingMessageCount, 0);
+    assert.equal(manager.getRequirement(completedParent.id)?.session.lastConsumedMessageSequence, reply.message.sequence);
 
     const cancelledParent = manager.createRequirement({
       title: 'Cancelled parent',

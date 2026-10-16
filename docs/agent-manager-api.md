@@ -938,7 +938,7 @@ Persists an RD Agent message in any other known Requirement and starts or queues
 }
 ~~~
 
-Success: 202 Accepted with `accepted`, source and target IDs, `queued`, the persisted `message`, and the current target `requirement`. The message has `author=rd_agent`, `sourceRequirementId` equal to the source, and `deliverToRd=true`. A DONE target is reactivated in its original Session. Returns 400 for invalid input or mismatched source Session, 404 for an unknown source or target, and 409 for a self-message or CANCELLED target.
+Success: 202 Accepted with `accepted`, source and target IDs, `queued`, the persisted `message`, and the current target `requirement`. The message has `author=rd_agent`, `sourceRequirementId` equal to the source, and `deliverToRd=true`. A DONE target reports `queued=true` and retains its completed Requirement and Session state. Its Agent messages remain pending until a human reply reactivates the original Session, which consumes the queued messages and reply in order. Returns 400 for invalid input or mismatched source Session, 404 for an unknown source or target, and 409 for a self-message or CANCELLED target.
 
 ## 8. SSE event stream
 
