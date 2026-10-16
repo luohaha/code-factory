@@ -6,6 +6,20 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-10-16
+
+### Changed
+
+- Load Requirement conversations in pages and preserve the scroll position when loading older messages.
+- Simplified dashboard headers, show the installed release version beside the logo, and display the workspace name without a redundant label.
+- Guide RD Agents to keep inter-agent messages concise. When Jev is enabled, check messages before delivery and return a reason to the sender when blocked; unavailable checks allow normal delivery.
+
+### Fixed
+
+- Preserve conversation updates that arrive during the initial load.
+- Observe only lifecycle changes for draft pull requests, and preserve observation baselines across reconciliation retries to avoid replaying old activity when a PR opens.
+- Keep messages to completed Requirements in the conversation without reopening them or starting a new Run.
+
 ## [0.2.6] - 2026-10-12
 
 ### Added
