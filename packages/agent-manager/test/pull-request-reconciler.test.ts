@@ -5,7 +5,12 @@ import type { AgentTriggerContext } from '../src/agent-trigger.ts';
 import type { GitHubClient, GitHubPullRequestSnapshot } from '../src/github-client.ts';
 import { createLogger, type LogWriter } from '../src/logger.ts';
 import { PullRequestReconciler } from '../src/pull-request-reconciler.ts';
-import type { PullRequestSnapshotTrigger, PullRequestTriggerRegistration } from '../src/pull-request-triggers.ts';
+import {
+  PullRequestStatusTrigger, PullRequestCommentTrigger, PullRequestCiFailureTrigger, PullRequestConflictTrigger,
+  PULL_REQUEST_STATUS_TRIGGER_ID, PULL_REQUEST_COMMENT_TRIGGER_ID,
+  PULL_REQUEST_CI_FAILURE_TRIGGER_ID, PULL_REQUEST_CONFLICT_TRIGGER_ID,
+  type PullRequestSnapshotTrigger, type PullRequestTriggerRegistration,
+} from '../src/pull-request-triggers.ts';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
 import type { PullRequest, TrackPullRequestInput } from '../src/types.ts';
 
@@ -33,7 +38,7 @@ function createStore(): SqliteAgentManagerStore {
   return store;
 }
 
-function trackPullRequest(store: SqliteAgentManagerStore, number: number): PullRequest {
+function trackPullRequest(store: SqliteAgentManagerStore, number: number, status: PullRequest['status'] = 'open'): PullRequest {
   return store.upsertPullRequest({
     id: `pr-${number}`,
     requirementId: 'req-reconciliation',
@@ -44,7 +49,7 @@ function trackPullRequest(store: SqliteAgentManagerStore, number: number): PullR
     baseBranch: 'main',
     headBranch: `feature-${number}`,
     headSha: `head-${number}`,
-    status: 'open',
+    status,
     // The store returns most recently updated PRs first. Keep #1 first so the
     // isolation tests prove that reconciliation continues after its failure.
     now: number === 1 ? '2026-09-21T00:00:02.000Z' : '2026-09-21T00:00:01.000Z',
@@ -107,6 +112,122 @@ const noOpTrigger: PullRequestSnapshotTrigger = {
   stop: () => undefined,
   reconcileSnapshot: () => undefined,
 };
+
+test('draft PRs only deliver lifecycle changes and resume activity with a fresh durable baseline when open', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-21T01:00:00.000Z') });
+  const store = createStore();
+  try {
+    const pullRequest = trackPullRequest(store, 1, 'draft');
+    store.ensurePullRequestObservation(pullRequest.id, '2026-09-21T00:00:00.000Z');
+    let current: GitHubPullRequestSnapshot = {
+      ...snapshot(pullRequest, 'draft'),
+      mergeable: 'CONFLICTING',
+      reviewActivity: (['comment', 'review', 'review_comment'] as const).map((kind) => ({
+        ...snapshot(pullRequest, 'draft').reviewActivity[0]!,
+        kind,
+        id: `draft-${kind}`,
+        createdAt: '2026-09-21T00:59:00.000Z',
+      })),
+      checks: [{
+        key: 'test', name: 'test', workflow: 'CI', status: 'COMPLETED', conclusion: 'FAILURE',
+        completedAt: '2026-09-21T00:59:00.000Z', url: null,
+      }],
+    };
+    const githubClient: GitHubClient = { inspectPullRequest: async () => current };
+    let reconciler = createReconciler(store, githubClient, new MemoryWriter());
+    const delivered: string[] = [];
+    const receipts = new Set<string>();
+    const registrations = () => [
+      new PullRequestStatusTrigger(reconciler), new PullRequestCommentTrigger(reconciler),
+      new PullRequestCiFailureTrigger(reconciler), new PullRequestConflictTrigger(reconciler),
+    ].map((trigger) => ({
+      trigger,
+      context: { deliver: (message) => {
+        const key = `${trigger.id}:${message.idempotencyKey}`;
+        if (!receipts.has(key)) delivered.push(trigger.id);
+        receipts.add(key);
+        return null;
+      } } satisfies AgentTriggerContext,
+    }));
+
+    await reconciler.reconcile(registrations());
+    assert.deepEqual(delivered, [], 'draft comments, reviews, failures and conflicts do not deliver');
+    assert.deepEqual(store.ensurePullRequestObservation(pullRequest.id, '').observation.checkStates, {});
+
+    t.mock.timers.tick(60_000);
+    current = { ...current, status: 'open', updatedAt: new Date().toISOString() };
+    await reconciler.reconcile(registrations());
+    assert.equal(store.getPullRequest(pullRequest.id)?.status, 'open');
+    assert.deepEqual(delivered, [PULL_REQUEST_STATUS_TRIGGER_ID, PULL_REQUEST_CONFLICT_TRIGGER_ID]);
+    const baseline = store.ensurePullRequestObservation(pullRequest.id, '').observation;
+    assert.equal(baseline.initializedAt, new Date().toISOString());
+    assert.ok(baseline.checkStates.test, 'existing draft CI failures become the new baseline');
+
+    // A fresh reconciler still uses the persisted baseline, including old draft activity.
+    reconciler = createReconciler(store, githubClient, new MemoryWriter());
+    await reconciler.reconcile(registrations());
+    assert.equal(delivered.length, 2);
+
+    t.mock.timers.tick(60_000);
+    current = {
+      ...current,
+      reviewActivity: [...current.reviewActivity, {
+        ...current.reviewActivity[0]!, id: 'open-comment', createdAt: '2026-09-21T01:01:30.000Z',
+      }],
+      checks: [{ ...current.checks[0]!, completedAt: '2026-09-21T01:01:40.000Z' }],
+    };
+    await reconciler.reconcile(registrations());
+    assert.deepEqual(delivered.slice(2), [PULL_REQUEST_COMMENT_TRIGGER_ID, PULL_REQUEST_CI_FAILURE_TRIGGER_ID]);
+
+    t.mock.timers.tick(60_000);
+    current = {
+      ...current, status: 'draft', headSha: 'another-conflicting-head', updatedAt: new Date().toISOString(),
+      reviewActivity: [...current.reviewActivity, {
+        ...current.reviewActivity[0]!, id: 'second-draft-comment', createdAt: new Date().toISOString(),
+      }],
+      checks: [{ ...current.checks[0]!, completedAt: new Date().toISOString() }],
+    };
+    await reconciler.reconcile(registrations());
+    assert.deepEqual(delivered.slice(4), [PULL_REQUEST_STATUS_TRIGGER_ID], 'open to draft disables all activity');
+    await reconciler.reconcile(registrations());
+    assert.equal(delivered.length, 5);
+
+    t.mock.timers.tick(60_000);
+    current = { ...current, status: 'open', updatedAt: new Date().toISOString() };
+    await reconciler.reconcile(registrations());
+    assert.deepEqual(delivered.slice(5), [PULL_REQUEST_STATUS_TRIGGER_ID, PULL_REQUEST_CONFLICT_TRIGGER_ID]);
+    assert.equal(store.ensurePullRequestObservation(pullRequest.id, '').observation.initializedAt, new Date().toISOString());
+  } finally {
+    store.close();
+  }
+});
+
+for (const status of ['closed', 'merged'] as const) {
+  test(`draft to ${status} delivers only lifecycle and stops polling`, async () => {
+    const store = createStore();
+    try {
+      const pullRequest = trackPullRequest(store, 1, 'draft');
+      let inspections = 0;
+      const reconciler = createReconciler(store, {
+        inspectPullRequest: async () => { inspections += 1; return snapshot(pullRequest, status); },
+      }, new MemoryWriter());
+      const delivered: string[] = [];
+      const statusTrigger = new PullRequestStatusTrigger(reconciler);
+      const registrations: PullRequestTriggerRegistration[] = [
+        { trigger: statusTrigger, context: { deliver: (message) => { delivered.push(message.body); return null; } } },
+        { trigger: { ...noOpTrigger, reconcileSnapshot: () => assert.fail('terminal activity must be ignored') }, context },
+      ];
+      await reconciler.reconcile(registrations);
+      assert.equal(store.getPullRequest(pullRequest.id)?.status, status);
+      assert.equal(delivered.length, 1);
+      assert.match(delivered[0]!, new RegExp(`draft -> ${status}`));
+      await reconciler.reconcile(registrations);
+      assert.equal(inspections, 1);
+    } finally {
+      store.close();
+    }
+  });
+}
 
 test('PR reconciliation isolates transient inspection failures and retries terminal synchronization', async () => {
   const store = createStore();

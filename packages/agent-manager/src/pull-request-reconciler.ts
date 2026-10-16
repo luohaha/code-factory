@@ -4,6 +4,7 @@ import type { GitHubClient } from './github-client.js';
 import type { Logger } from './logger.js';
 import {
   gitHubCheckState,
+  PULL_REQUEST_STATUS_TRIGGER_ID,
   type PullRequestSnapshotTrigger,
   type PullRequestTriggerRegistration,
 } from './pull-request-triggers.js';
@@ -26,8 +27,10 @@ class LoggedPullRequestFailures extends AggregateError {}
 
 /**
  * Polls PRs whose last persisted status is Draft or Open and shares each
- * snapshot with independent PR triggers. A snapshot may move an eligible PR
- * to Closed or Merged; after that terminal transition it is no longer polled.
+ * snapshot with independent PR triggers. Only Open snapshots reach activity
+ * triggers; other snapshots reach the lifecycle trigger only. A snapshot may
+ * move an eligible PR to Closed or Merged; after that terminal transition it
+ * is no longer polled.
  */
 export class PullRequestReconciler {
   readonly #store: AgentManagerStore;
@@ -157,14 +160,20 @@ export class PullRequestReconciler {
     snapshot: Awaited<ReturnType<GitHubClient['inspectPullRequest']>>,
   ): void {
     const now = new Date().toISOString();
-    const { observation, created } = this.#store.ensurePullRequestObservation(pullRequest.id, now);
+    const opening = pullRequest.status === 'draft' && snapshot.status === 'open';
+    const { observation, created } = opening
+      ? { observation: this.#store.resetPullRequestObservation(pullRequest.id, now), created: true }
+      : this.#store.ensurePullRequestObservation(pullRequest.id, now);
 
     for (const { trigger, context } of registrations) {
+      if (snapshot.status !== 'open' && trigger.id !== PULL_REQUEST_STATUS_TRIGGER_ID) continue;
       trigger.reconcileSnapshot(context, pullRequest, snapshot, observation, created);
     }
 
-    const checkStates = Object.fromEntries(snapshot.checks.map((check) => [check.key, gitHubCheckState(check)]));
-    this.#store.updatePullRequestCheckStates(pullRequest.id, checkStates, now);
+    if (snapshot.status === 'open') {
+      const checkStates = Object.fromEntries(snapshot.checks.map((check) => [check.key, gitHubCheckState(check)]));
+      this.#store.updatePullRequestCheckStates(pullRequest.id, checkStates, now);
+    }
 
     if (pullRequestChanged(pullRequest, snapshot)) {
       this.#synchronizePullRequest({

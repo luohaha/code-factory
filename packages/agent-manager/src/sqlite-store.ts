@@ -897,6 +897,14 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     return { observation: pullRequestObservationFrom(row), created: result.changes > 0 };
   }
 
+  resetPullRequestObservation(pullRequestId: string, now: string): PullRequestObservation {
+    this.#db.prepare(`INSERT INTO pull_request_observations
+      (pull_request_id, initialized_at, check_states_json, updated_at) VALUES (?, ?, '{}', ?)
+      ON CONFLICT(pull_request_id) DO UPDATE SET initialized_at = excluded.initialized_at,
+      check_states_json = '{}', updated_at = excluded.updated_at`).run(pullRequestId, now, now);
+    return this.ensurePullRequestObservation(pullRequestId, now).observation;
+  }
+
   updatePullRequestCheckStates(
     pullRequestId: string,
     checkStates: Record<string, string>,

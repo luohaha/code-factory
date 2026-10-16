@@ -218,6 +218,7 @@ export interface AgentManagerStore {
   getPullRequest(id: string): PullRequest | null;
   listPullRequests(requirementId?: string): PullRequest[];
   ensurePullRequestObservation(pullRequestId: string, now: string): { observation: PullRequestObservation; created: boolean };
+  resetPullRequestObservation(pullRequestId: string, now: string): PullRequestObservation;
   updatePullRequestCheckStates(pullRequestId: string, checkStates: Record<string, string>, now: string): PullRequestObservation;
   beginReviewRequest(input: BeginReviewRequestRecord): { pullRequest: PullRequest; reviewRequest: ReviewRequest; run: AgentRun };
   finishReviewRequest(id: string, outcome: RunOutcome, now: string): ReviewRequest;

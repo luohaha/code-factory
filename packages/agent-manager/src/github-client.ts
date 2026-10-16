@@ -162,9 +162,30 @@ export class GhCliGitHubClient implements GitHubClient {
   }
 
   async inspectPullRequest(pullRequest: PullRequest): Promise<GitHubPullRequestSnapshot> {
+    const detailsValue = await this.runJson([
+      'pr', 'view', String(pullRequest.number), '--repo', pullRequest.repository,
+      '--json', 'state,isDraft,title,url,baseRefName,headRefName,headRefOid,updatedAt',
+    ]);
+    const details = objectValue(detailsValue);
+    if (!details) throw new TypeError('GitHub pull request response must be an object');
+    const snapshot: GitHubPullRequestSnapshot = {
+      status: pullRequestStatus(details.state, details.isDraft),
+      title: requiredString(details.title, 'title'),
+      url: requiredString(details.url, 'url'),
+      baseBranch: requiredString(details.baseRefName, 'baseRefName'),
+      headBranch: requiredString(details.headRefName, 'headRefName'),
+      headSha: requiredString(details.headRefOid, 'headRefOid'),
+      mergeable: 'UNKNOWN',
+      updatedAt: requiredString(details.updatedAt, 'updatedAt'),
+      reviewActivity: [],
+      checks: [],
+    };
+    // Check GitHub's current lifecycle before querying any review or CI data.
+    if (snapshot.status !== 'open') return snapshot;
+
     const target = repositoryApiTarget(pullRequest.repository);
     const apiArgs = target.hostname ? ['--hostname', target.hostname] : [];
-    const [detailsValue, reviewCommentsValue] = await Promise.all([
+    const [activityValue, reviewCommentsValue] = await Promise.all([
       this.runJson([
         'pr',
         'view',
@@ -172,7 +193,7 @@ export class GhCliGitHubClient implements GitHubClient {
         '--repo',
         pullRequest.repository,
         '--json',
-        'state,isDraft,title,url,baseRefName,headRefName,headRefOid,mergeable,updatedAt,comments,reviews,statusCheckRollup',
+        'mergeable,comments,reviews,statusCheckRollup',
       ]),
       this.runJson([
         'api',
@@ -182,25 +203,19 @@ export class GhCliGitHubClient implements GitHubClient {
         `${target.path}/pulls/${pullRequest.number}/comments?per_page=100`,
       ]),
     ]);
-    const details = objectValue(detailsValue);
-    if (!details) throw new TypeError('GitHub pull request response must be an object');
+    const activityDetails = objectValue(activityValue);
+    if (!activityDetails) throw new TypeError('GitHub pull request activity response must be an object');
     const activities = [
-      ...objectArray(details.comments).map((value) => reviewActivity(value, 'comment')),
-      ...objectArray(details.reviews).map((value) => reviewActivity(value, 'review')),
+      ...objectArray(activityDetails.comments).map((value) => reviewActivity(value, 'comment')),
+      ...objectArray(activityDetails.reviews).map((value) => reviewActivity(value, 'review')),
       ...objectArray(reviewCommentsValue).map((value) => reviewActivity(value, 'review_comment')),
     ].filter((value): value is GitHubReviewActivity => value !== null)
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
     return {
-      status: pullRequestStatus(details.state, details.isDraft),
-      title: requiredString(details.title, 'title'),
-      url: requiredString(details.url, 'url'),
-      baseBranch: requiredString(details.baseRefName, 'baseRefName'),
-      headBranch: requiredString(details.headRefName, 'headRefName'),
-      headSha: requiredString(details.headRefOid, 'headRefOid'),
-      mergeable: pullRequestMergeability(details.mergeable),
-      updatedAt: requiredString(details.updatedAt, 'updatedAt'),
+      ...snapshot,
+      mergeable: pullRequestMergeability(activityDetails.mergeable),
       reviewActivity: activities,
-      checks: objectArray(details.statusCheckRollup)
+      checks: objectArray(activityDetails.statusCheckRollup)
         .map(checkFrom)
         .filter((value): value is GitHubCheck => value !== null),
     };
