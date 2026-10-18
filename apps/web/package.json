@@ -10,8 +10,9 @@
     "build": "vinext build",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "test": "node --test --experimental-strip-types lib/*.test.ts",
-    "lint": "oxlint app lib",
-    "format": "oxfmt"
+    "lint": "oxlint app lib test",
+    "format": "oxfmt",
+    "test:browser": "node --test test/browser/*.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "1.7.0",
@@ -47,6 +48,7 @@
     "oxfmt": "0.72.0",
     "oxlint": "1.76.0",
     "oxlint-tsgolint": "7.0.2001",
+    "playwright": "1.58.2",
     "shadcn": "4.21.4",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
