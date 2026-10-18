@@ -41,6 +41,10 @@ jobs:
         run: npm run lint && npx tsc --noEmit
         working-directory: apps/web
 
+      - name: Verify dashboard browser behavior
+        run: npx playwright install --with-deps chromium && npm run test:browser
+        working-directory: apps/web
+
       - name: Verify release build and package
         run: npm run release:check
         working-directory: packages/agent-manager

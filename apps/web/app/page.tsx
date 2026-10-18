@@ -1444,6 +1444,7 @@ function ManagerConfigurationDialog({
   workspace: WorkspaceDto | null;
 }) {
   const { t } = useI18n();
+  const formId = useId();
   const [open, setOpen] = useState(false);
   const [values, setValues] = useState<AgentManagerConfiguration | null>(configuration?.values ?? null);
   const [jevApiKey, setJevApiKey] = useState('');
@@ -1495,7 +1496,9 @@ function ManagerConfigurationDialog({
         <SlidersHorizontal />
       </DialogTrigger>
       <DialogContent className="sm:max-w-2xl">
-        <form onSubmit={submit}>
+        <div>
+          {/* Keep the Manager and Native API profile forms independent. */}
+          <form id={formId} onSubmit={submit} />
           <DialogHeader>
             <DialogTitle>{t('Agent Manager configuration')}</DialogTitle>
             <DialogDescription>{t('Native Agent credentials, reconciliation, requirement retention, commit attribution, Jev, and log level changes apply immediately. Other settings take effect after restart.')}</DialogDescription>
@@ -1553,7 +1556,7 @@ function ManagerConfigurationDialog({
                   <Field className="sm:col-span-2">
                     <FieldLabel htmlFor="configuration-jev-key">{t('Jev API key')}</FieldLabel>
                     <div className="flex gap-2">
-                      <Input id="configuration-jev-key" type="password" autoComplete="off" value={jevApiKey} onChange={(event) => { setJevApiKey(event.target.value); setClearJevApiKey(false); }} placeholder={configuration?.jevApiKeyConfigured && !clearJevApiKey ? t('Key configured; leave blank to keep it') : t('Leave blank to disable Jev')} />
+                      <Input form={formId} id="configuration-jev-key" type="password" autoComplete="off" value={jevApiKey} onChange={(event) => { setJevApiKey(event.target.value); setClearJevApiKey(false); }} placeholder={configuration?.jevApiKeyConfigured && !clearJevApiKey ? t('Key configured; leave blank to keep it') : t('Leave blank to disable Jev')} />
                       {configuration?.jevApiKeyConfigured && !clearJevApiKey ? <Button type="button" variant="outline" onClick={() => { setJevApiKey(''); setClearJevApiKey(true); }}>{t('Remove key')}</Button> : null}
                     </div>
                     <p className="text-[10px] text-muted-foreground">{t('Jev may check direct agent messages and continue an RD Agent after a Run. Without a key or if a message check fails, messages are delivered normally. The key is stored in workspace configuration and hidden from API responses.')}</p>
@@ -1571,12 +1574,12 @@ function ManagerConfigurationDialog({
                   </div>
                   <Field>
                     <FieldLabel htmlFor="configuration-reconcile-interval">{t('PR reconcile interval (seconds)')}</FieldLabel>
-                    <Input id="configuration-reconcile-interval" type="number" min="0" max="2147483" step="1" value={values.pullRequestReconcileIntervalSeconds} onChange={(event) => update('pullRequestReconcileIntervalSeconds', Number(event.target.value))} required />
+                    <Input form={formId} id="configuration-reconcile-interval" type="number" min="0" max="2147483" step="1" value={values.pullRequestReconcileIntervalSeconds} onChange={(event) => update('pullRequestReconcileIntervalSeconds', Number(event.target.value))} required />
                     <p className="text-[10px] text-muted-foreground">{t('Use 0 to disable GitHub polling.')}</p>
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="configuration-log-level">{t('Log level')}</FieldLabel>
-                    <NativeSelect id="configuration-log-level" value={values.logLevel} onChange={(event) => update('logLevel', event.target.value as AgentManagerConfiguration['logLevel'])}>
+                    <NativeSelect form={formId} id="configuration-log-level" value={values.logLevel} onChange={(event) => update('logLevel', event.target.value as AgentManagerConfiguration['logLevel'])}>
                       <NativeSelectOption value="debug">debug</NativeSelectOption>
                       <NativeSelectOption value="info">info</NativeSelectOption>
                       <NativeSelectOption value="warn">warn</NativeSelectOption>
@@ -1586,12 +1589,12 @@ function ManagerConfigurationDialog({
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="configuration-cancelled-retention">{t('Cancelled requirement retention (days)')}</FieldLabel>
-                    <Input id="configuration-cancelled-retention" type="number" min="0" max="36500" step="1" value={values.cancelledRequirementRetentionDays} onChange={(event) => update('cancelledRequirementRetentionDays', Number(event.target.value))} required />
+                    <Input form={formId} id="configuration-cancelled-retention" type="number" min="0" max="36500" step="1" value={values.cancelledRequirementRetentionDays} onChange={(event) => update('cancelledRequirementRetentionDays', Number(event.target.value))} required />
                     <p className="text-[10px] text-muted-foreground">{t('Use 0 to purge cancelled requirements immediately.')}</p>
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="configuration-done-retention">{t('Done requirement retention (days)')}</FieldLabel>
-                    <Input id="configuration-done-retention" type="number" min="0" max="36500" step="1" value={values.doneRequirementRetentionDays} onChange={(event) => update('doneRequirementRetentionDays', Number(event.target.value))} required />
+                    <Input form={formId} id="configuration-done-retention" type="number" min="0" max="36500" step="1" value={values.doneRequirementRetentionDays} onChange={(event) => update('doneRequirementRetentionDays', Number(event.target.value))} required />
                     <p className="text-[10px] text-muted-foreground">{t('Use 0 to purge done requirements immediately.')}</p>
                   </Field>
                 </div>
@@ -1601,34 +1604,34 @@ function ManagerConfigurationDialog({
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field>
                     <FieldLabel htmlFor="configuration-host">{t('Listen host')}</FieldLabel>
-                    <Input id="configuration-host" value={values.host} onChange={(event) => update('host', event.target.value)} required />
+                    <Input form={formId} id="configuration-host" value={values.host} onChange={(event) => update('host', event.target.value)} required />
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="configuration-port">{t('Listen port')}</FieldLabel>
-                    <Input id="configuration-port" type="number" min="1" max="65535" step="1" value={values.port} onChange={(event) => update('port', Number(event.target.value))} required />
+                    <Input form={formId} id="configuration-port" type="number" min="1" max="65535" step="1" value={values.port} onChange={(event) => update('port', Number(event.target.value))} required />
                   </Field>
                   <Field className="sm:col-span-2">
                     <FieldLabel htmlFor="configuration-origin">{t('Allowed CORS origin')}</FieldLabel>
-                    <Input id="configuration-origin" value={values.allowedOrigin ?? ''} onChange={(event) => update('allowedOrigin', event.target.value.trim() ? event.target.value : null)} placeholder={t('Leave empty to disable CORS')} />
+                    <Input form={formId} id="configuration-origin" value={values.allowedOrigin ?? ''} onChange={(event) => update('allowedOrigin', event.target.value.trim() ? event.target.value : null)} placeholder={t('Leave empty to disable CORS')} />
                   </Field>
                   <Field className="sm:col-span-2">
                     <FieldLabel htmlFor="configuration-database">{t('Database path')}</FieldLabel>
-                    <Input id="configuration-database" value={values.databasePath ?? ''} onChange={(event) => update('databasePath', event.target.value.trim() ? event.target.value : null)} placeholder={workspace?.databasePath ?? t('Use workspace default')} />
+                    <Input form={formId} id="configuration-database" value={values.databasePath ?? ''} onChange={(event) => update('databasePath', event.target.value.trim() ? event.target.value : null)} placeholder={workspace?.databasePath ?? t('Use workspace default')} />
                   </Field>
                   <Field className="sm:col-span-2">
                     <FieldLabel htmlFor="configuration-log-file">{t('Log file path')}</FieldLabel>
-                    <Input id="configuration-log-file" value={values.logFilePath ?? ''} onChange={(event) => update('logFilePath', event.target.value.trim() ? event.target.value : null)} placeholder={workspace?.logFilePath ?? t('Use workspace default')} />
+                    <Input form={formId} id="configuration-log-file" value={values.logFilePath ?? ''} onChange={(event) => update('logFilePath', event.target.value.trim() ? event.target.value : null)} placeholder={workspace?.logFilePath ?? t('Use workspace default')} />
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="configuration-log-size">{t('Log rotation size')}</FieldLabel>
-                    <Input id="configuration-log-size" value={values.logMaxSize} onChange={(event) => update('logMaxSize', event.target.value)} required />
+                    <Input form={formId} id="configuration-log-size" value={values.logMaxSize} onChange={(event) => update('logMaxSize', event.target.value)} required />
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="configuration-log-files">{t('Log retention')}</FieldLabel>
-                    <Input id="configuration-log-files" value={values.logMaxFiles} onChange={(event) => update('logMaxFiles', event.target.value)} required />
+                    <Input form={formId} id="configuration-log-files" value={values.logMaxFiles} onChange={(event) => update('logMaxFiles', event.target.value)} required />
                   </Field>
                   <label className="flex items-center gap-2 text-xs sm:col-span-2">
-                    <input type="checkbox" checked={values.openDashboard} onChange={(event) => update('openDashboard', event.target.checked)} />
+                    <input form={formId} type="checkbox" checked={values.openDashboard} onChange={(event) => update('openDashboard', event.target.checked)} />
                     {t('Open dashboard when Agent Manager starts')}
                   </label>
                 </div>
@@ -1639,9 +1642,9 @@ function ManagerConfigurationDialog({
           ) : <p className="my-6 text-xs text-muted-foreground">{t('Configuration unavailable')}</p>}
           <DialogFooter>
             <DialogClose render={<Button type="button" variant="outline" />}>{t('Cancel')}</DialogClose>
-            <Button type="submit" disabled={!values || submitting}>{submitting ? <LoaderCircle className="animate-spin" /> : null}{t('Save')}</Button>
+            <Button form={formId} type="submit" disabled={!values || submitting}>{submitting ? <LoaderCircle className="animate-spin" /> : null}{t('Save')}</Button>
           </DialogFooter>
-        </form>
+        </div>
       </DialogContent>
     </Dialog>
   );
