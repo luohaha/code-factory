@@ -6,6 +6,20 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-10-19
+
+### Added
+
+- Support private remote dashboard access through Tailscale Serve. The bundled dashboard defaults its API, attachment, and SSE connections to the browser's current origin, the loopback Manager default remains for local port-3000 development, and a new Tailscale remote access guide documents setup and access-control expectations.
+
+### Changed
+
+- Added dashboard browser regression tests that run in CI with Chromium and cover Manager settings and Native Agent authentication form interactions.
+
+### Fixed
+
+- Save Native Agent API profiles and Agent Manager settings as independent forms, so saving or validating one no longer blocks the other.
+
 ## [0.2.7] - 2026-10-16
 
 ### Changed
