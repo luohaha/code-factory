@@ -15,121 +15,42 @@
 
 https://github.com/user-attachments/assets/80896c78-c804-4c3d-98df-75ccc68031f3
 
-Code Factory is a **tree-based collaboration platform where requirements, a team of coding agents, and humans work together**. Every requirement is a node with its own long-lived RD agent (**Codex**, **Claude Code**, or **Native Agent**). An RD agent can split its work into child requirements, and each child gets its own agent and can split further. The result is an agent team shaped like the work itself. Humans steer the whole team by talking to the root requirement, and can step into any node at any time.
+Code Factory brings requirements, coding agents, and GitHub pull requests into one local dashboard. Organize work as a requirement tree and collaborate with **Codex**, **Claude Code**, or **Native Agent** through conversation.
 
-Around that tree, Code Factory connects the local workspace, GitHub pull requests, on-demand AI reviewers, and external events routed through Agent Triggers in one local Web dashboard. It is designed for developers and engineering teams who already use Codex or Claude Code but need more than isolated terminal sessions: a way to decompose large work, run many agents in parallel without losing track of them, and keep humans in charge of scope and completion.
+Each requirement has its own persistent agent context. Agents can split work into child requirements and work in parallel, while humans steer the work, request reviews, and confirm completion.
 
-```mermaid
-flowchart TD
-    H([Human]) <-->|chat, steer, confirm| R[Root Requirement<br/>RD agent]
-    R <-->|delegate, manage, message| C1[Child Requirement<br/>RD agent]
-    R <--> C2[Child Requirement<br/>RD agent]
-    C1 <-.->|message by Requirement ID| C2
-    C2 <--> G[Grandchild Requirement<br/>RD agent]
-    H -.->|can join any node| C1
-    C1 --> PR1[Pull request]
-    G --> PR2[Pull request]
-```
+## How It Works
 
-## Product Positioning
-
-Code Factory combines a requirement tree, an agent team, and a human-in-the-loop delivery workflow:
-
-- **Tree-structured work:** a large requirement breaks down into a tree of linked child requirements, and the Relationships view shows the whole tree. Agent-proposed children stay in TODO until someone starts them, which prevents uncontrolled recursive work.
-- **An agent team, one agent per node:** every requirement owns exactly one long-lived RD session. Sessions for different requirements run in parallel, while each agent keeps its own native context.
-- **Managed through conversation:** a parent RD agent manages its direct children with `code-factory-cli`: it starts or retries them, stops a running child, deletes TODO children, and confirms finished children. RD agents can exchange durable messages with any other Requirement when they know its ID. Humans manage the whole tree by chatting with the root requirement.
-- **Human-controlled:** people can join any node to add context, queue corrections, interrupt a run, or reply to a finished requirement, and they decide when the work they own is done.
-- **Delivery-connected:** agents open and register pull requests, a short-lived AI Reviewer checks them on request, and Agent Triggers feed GitHub PR status, reviews/comments, CI failures, merge conflicts, and scheduled wake-ups back into the right node. The source-neutral trigger boundary is designed to support systems such as Slack and Jira.
-- **Local-first:** agents run in your existing repository with your installed CLI tools, project instructions, and credentials.
-
-Code Factory is not a hosted IDE or a flat agent pool. Agents are organized by the requirement tree instead of being scheduled from a shared queue. Code execution, Git, and GitHub access use the selected local workspace or E2B sandbox.
-
-The current implementation supports headless **Codex** and **Claude Code**, plus a **Native Agent** built on pi-durable. Native Agent conversations persist in a workspace SQLite file. The built-in **Default workspace** is the Agent Manager startup directory and cannot be deleted. Named **local workspaces** point to existing absolute directories on the same host and can be selected by any RD provider. Native Agents can also use **E2B sandboxes**. The Workspaces page creates, edits, and deletes named local workspaces and E2B sandboxes. Its Running column contains workspaces with at least one `DOING` Requirement; workspaces with no Requirements or no `DOING` Requirements appear in Idle. E2B creation needs a name, `E2B_DOMAIN`, and `E2B_API_KEY`; repository URL, template, remote directory, and an existing sandbox ID are advanced options. Agent Manager stores the key in an owner-only credential database and keeps only its reference in the workspace record. For a new sandbox, Code Factory uses the managed repository's Git origin by default and clones it into the remote working directory; an explicit credential-free HTTPS URL is available when needed. An attached sandbox must already contain a Git checkout. The remote template needs Git and `gh`. Agent Manager forwards `GH_TOKEN` or `GITHUB_TOKEN` only when the configured repository host is exactly `github.com`; attached and other-host sandboxes need remote `gh` authentication. Multiple Native Agent Requirements can select the same E2B sandbox; selecting different sandboxes gives them separate remote files. A PR Reviewer runs in the same workspace as its Requirement. Native Agent PRs require a Native Agent Reviewer, whose model runs on the Manager host while its file and command tools use the selected workspace. E2B therefore needs no Codex or Claude Code CLI. See the [Native Agent implementation guide](docs/native-agent.md) for its runtime, tools, steering, and sandbox boundary.
-
-Configure Native Agent in **Agent Manager configuration → Runtime settings → Native Agent API profiles**. Add an item with an OpenAI-compatible or Anthropic API format, base URL, API key, and model name, then select that saved item when creating a Native Agent Requirement. Multiple items can use the same format. Keys live in a separate owner-only workspace SQLite file and are never returned by the API. Changes apply to later Runs without restarting Agent Manager. Existing saved OpenAI and Anthropic API keys appear as profiles after upgrade; existing direct-model Requirements can still use those keys or process environment API keys.
+<p align="center">
+  <img src="docs/assets/brand/code-factory-overview.png" alt="Code Factory connects a requirement tree, coding agents, humans, and GitHub pull requests." />
+</p>
 
 ## Quick Start
+
+Requires **Node.js 22.19+**. See [Running Code Factory](docs/running-code-factory.md) for agent CLI and GitHub setup, or the [Native Agent guide](docs/native-agent.md) for API profile configuration.
 
 ~~~bash
 cd /path/to/the/repository/to-manage
 npx --package @luoyixin/code-factory code-factory-agent-manager start --daemon
 ~~~
 
-The startup directory becomes the managed workspace. Only one Agent Manager may run for a canonical workspace at a time, even when another port or database path is supplied. The dashboard is available at [http://127.0.0.1:4310](http://127.0.0.1:4310) by default. Daemon startup failures, including an occupied port, are reported directly to the starting command.
+Open [http://127.0.0.1:4310](http://127.0.0.1:4310), create a requirement, and select an agent to begin. The startup directory becomes the default workspace; the dashboard is bundled with Agent Manager.
 
-Prerequisites, daemon operation, configuration, CLI options, and log locations are documented in [Running Code Factory](docs/running-code-factory.md). To install dependencies or run a source checkout manually, see the [Development guide](docs/development.md).
+Unsent conversation text and attachments return when you reopen a requirement or reload the dashboard in the same browser.
 
-To use a Manager running on a development machine from a laptop or phone, use [Tailscale remote access](docs/tailscale.md). Keep the Manager on loopback and let Tailscale Serve provide a private HTTPS URL for your tailnet; the bundled dashboard connects to that same origin.
+Headless agents inherit your filesystem, network, and command permissions. Run Code Factory in trusted repositories and limit dashboard access to trusted users.
 
-## How It Works
+## Documentation
 
-<p align="center">
-  <img src="docs/assets/brand/code-factory-overview.png" alt="Code Factory coordinates multiple related Requirements, each with its own persistent RD session. RD agents can create and manage child Requirements, exchange durable messages, work in the local workspace, and deliver GitHub pull requests. Timer and GitHub triggers are available today; Slack and Jira triggers are planned." />
-</p>
-
-Each Requirement owns one long-lived RD session. Sessions for different Requirements can run in parallel, but a session has at most one active RD run. An RD agent can send an explicit, durable message to any other Requirement's RD agent when it knows the target ID, including a sibling child; native agent contexts stay isolated. Relationship lookup still lists only direct parents and children.
-
-1. **Create.** A human creates a Requirement in the dashboard and selects Codex, Claude Code, or Native Agent. Headless agents accept an optional model; Native Agent selects a saved API profile. Reasoning settings are optional. All RD providers accept Default or a named local workspace; only Native Agent accepts E2B. Agent Manager creates the Requirement and its RD session atomically.
-2. **Build and delegate.** Agent Manager starts or resumes that session in the managed workspace. The RD edits and tests the repository, then uses `code-factory-cli` to register pull requests, create directly related child Requirements, manage their permitted lifecycle transitions, message any other RD agent by Requirement ID, or schedule a later wake-up.
-3. **Continue.** The durable Requirement conversation is also the RD delivery stream: Human and Reviewer messages, selected System events, Jev continuations, and explicit messages from other RD agents are delivered to RD; the RD's own output is displayed but not fed back as new input. New input stays queued in order, and a running session processes it after the current run unless a human explicitly interrupts. An optional Jev decision considers the Run result and three latest conversation messages after a successful, failed, or timed-out Run ends without newer queued input, an active Reviewer, or an active timer. It can send `continue.` as Jev immediately or after a short delay, including to retry a recoverable failure. A failed Run retains its attempted input for that retry. An interrupted run with no newer input, a failed run, or a timed-out run leaves the Requirement waiting for confirmation; the Session retains its distinct waiting or failed state until another Run starts.
-4. **React.** Today's Timer and GitHub triggers add deduplicated messages for due wake-ups and PR state changes. Draft PRs observe lifecycle changes only; Open PRs also observe reviews and comments, CI failures, and merge conflicts. Moving from Draft to Open establishes a new observation baseline instead of replaying draft comments and CI results. The source-neutral trigger boundary is designed for future Slack and Jira sources, which are not implemented yet. GitHub and the reconciler—not the RD—own PR lifecycle state.
-5. **Review.** On request, a separate short-lived Reviewer reads the open PR, can publish inline comments, and appends a summary to the Requirement conversation, waking the RD to continue the loop.
-
-SQLite persists Requirements, relationships, conversations, runs, sessions, PR metadata, timers, and trigger receipts across restarts. An RD Agent message becomes new input in the target Requirement; it does not merge the agents' native session contexts. When configured, Jev checks direct Agent messages before delivery. Only an explicit unnecessary-message decision blocks delivery and tells the sender the message was rejected. Without a key or if the check fails, messages are delivered normally without an extra notice to the sender.
-
-For the complete domain model, state machines, concurrency rules, and delivery semantics, see [Final architecture and domain model](docs/architecture.en.md).
-
-## Web Dashboard
-
-The bundled dashboard provides a relationship tree and four boards:
-
-- Relationship tree: each root Requirement with its parent/child hierarchy; search matches are shown with their ancestors for context
-- Requirement board: `TODO / DOING / Waiting for confirmation / DONE`
-- Pull Request board: `DRAFT / OPEN / CLOSED / MERGED`
-- RD Session board: `Idle / Running / Waiting for human / Failed / Completed`
-- Timer board: `Active / Completed / Cancelled`, with each timer linked to its Requirement
-
-Opening a Requirement shows its description, linked PRs, run information, per-Run Agent trace, and unified Human/RD/Reviewer conversation. The conversation opens at the latest messages and loads older history on demand. Requirement descriptions and conversation messages render GitHub Flavored Markdown, including tables, lists, links, and code blocks. The Session board cards open this work surface directly; the latest Run trace is selected by default and shows Provider-emitted reasoning summaries, tool calls, command/tool results, messages, and errors in real time. Starting a TODO card opens that conversation first, so optional instructions and attachments can be included in the initial Run; it also offers an explicit start-without-instructions action. Before execution starts, a human can edit a TODO Requirement's title and description or restore the CLI defaults for Agent configuration. A human can change the Agent provider, model, and reasoning effort while a Requirement is TODO or waiting for confirmation. After execution starts, changes take effect on the next Run: changing only the model or reasoning effort resumes the same provider conversation, while changing providers starts a new native conversation with a bounded handoff of recent messages, earlier decisions, attachments, worktree status, and PR state. Pending messages remain queued until delivered in order. A running RD Run must finish or be stopped before editing. TODO cards can be deleted before execution; the action requires confirmation and removes the Requirement from active lists. Messages support images and file attachments. The chat composer can create and cancel one-time or recurring scheduled wake-ups in minutes, hours, or days, while the Timer board shows timers across the workspace and opens their associated Requirements. New input can be queued while RD is running; Steering requires newer input and delivers it within a Native Agent Run or through a resumed headless Run. Stop Run persists a pause on automatic resumption; later Reviewer, Timer, and other Agent messages remain queued until an explicit start or human reply. Only a human reply reactivates a completed Requirement and resumes its original RD Session in a new Run. Messages from other RD agents stay queued until that reply, then are delivered in order. Headless Requirement and Reviewer forms provide model dropdowns populated by an Agent Manager catalog that refreshes every 24 hours. Native Agent Requirements select a saved API profile; their Reviewers inherit that profile unless another is selected for the review.
-
-Unsent conversation text and attachments are saved in the current browser for each Requirement and Manager address. They return when you reopen the conversation or reload the dashboard, and clear after a successful send. Failed sends keep the draft for retry. If multiple tabs edit the same draft, the latest save is restored. Drafts do not sync between browsers; attachments upload only when you send. If browser storage is unavailable, the dashboard warns that the draft survives only in the current tab until it closes or reloads.
-
-The dashboard supports light and dark modes from the top-right theme control, remembers the selected theme, and follows the operating-system preference until one is selected. It also supports English and Simplified Chinese, remembers the selected locale, and initially follows the browser language. Its settings dialog persists workspace configuration, applies Requirement retention periods and the optional Jev API key at runtime, identifies changes that require a restart, and updates browser-local notification preferences immediately.
-
-Browser notifications default to enabled and can be changed immediately in the settings dialog or from the header bell. A browser still requires an explicit permission grant before it can display notifications. In a Windows browser reached through port forwarding, open the dashboard at `http://localhost:<forwarded-port>`, use either notification control, and allow notifications for that site. Successful, failed, timed-out, and cancelled RD Runs show their Requirement title and outcome; clicking a notification opens the Requirement. The browser stores the preference locally. Keep the dashboard tab open to receive notifications; browsers require a secure context such as localhost or HTTPS, and the site's notification permission must remain granted.
-
-All four boards share a time-range filter with options for the last 24 hours, 7 days, 30 days, 90 days, or all time. Requirement, PR, and Session boards filter by creation time. The Timer board always retains active timers by their upcoming wake-up and filters completed or cancelled history by its latest update. The default range is 7 days.
-
-The shared search box looks up Requirement ID prefixes case-insensitively (such as `req_8d66`, the displayed `REQ-8D66E422`, or the bare eight-character prefix `8d66e422`) and registered GitHub Pull Request URLs directly through SQLite indexes. If no direct match exists, it falls back to hybrid search. Other queries use a local hybrid index over Requirement titles and descriptions, complete conversation messages, and Pull Request titles and metadata. Persisted word and character n-gram vectors add similarity ranking to full-text matching, including useful partial and fuzzy matches; Agent Manager also uses SQLite FTS5 ranking when the installed Node.js SQLite build provides it. Search indexing and ranking stay inside the workspace's Agent Manager process and do not call an external embedding service.
-
-The Web dashboard, HTTP API, and SSE event stream run in the same process and use the same port. No separate Web deployment is required.
-
-## Security Model
-
-Every headless RD and Reviewer invocation skips interactive CLI approval and sandbox checks. Agents therefore inherit the launching user's filesystem, network, and command-execution permissions. Start Agent Manager only inside a trusted workspace and expose its HTTP port only to trusted users and networks.
-
-## Versioning and releases
-
-Code Factory uses Semantic Versioning and is published as [`@luoyixin/code-factory`](https://www.npmjs.com/package/@luoyixin/code-factory). The installed version is available through `code-factory-agent-manager --version`, `code-factory-cli --version`, the startup banner, and `GET /api/health`. See the [release guide](docs/releasing.md) for version preparation, the tag workflow, verification, and recovery rules.
+- [Running Code Factory](docs/running-code-factory.md) — prerequisites, configuration, CLI options, and daemon operation.
+- [Tailscale remote access](docs/tailscale.md) — access the dashboard from another device.
+- [Architecture and domain model](docs/architecture.en.md) — requirement lifecycle, sessions, messaging, and review workflow.
+- [Headless Agent Runner](docs/agent-runners.md) — Codex and Claude Code integration.
+- [Native Agent guide](docs/native-agent.md) — API profiles, tools, and E2B sandboxes.
+- [HTTP API reference](docs/agent-manager-api.md) and [event protocol](docs/protocol.md).
+- [Development guide](docs/development.md) — source installation, builds, and checks.
+- [Release guide](docs/releasing.md) and [roadmap](docs/roadmap.md).
 
 ## License
 
-Code Factory is licensed under the [Apache License 2.0](LICENSE).
-
-## Design Documentation
-
-- [Running Code Factory](docs/running-code-factory.md)
-- [Development guide](docs/development.md)
-- [Final architecture and domain model](docs/architecture.en.md)
-- [Headless Agent Runner](docs/agent-runners.md)
-- [Native Agent implementation guide](docs/native-agent.md)
-- [Agent Manager HTTP API Reference](docs/agent-manager-api.md)
-- [HTTP and event protocol](docs/protocol.md)
-- [Dashboard perceived-latency audit](docs/dashboard-latency-audit.md)
-- [Development roadmap](docs/roadmap.md)
-- [Release guide](docs/releasing.md)
-
-## Current Boundaries
-
-The current implementation includes the Agent Manager core, a supervised daemon mode with automatic process restart, SQLite Store, HTTP/SSE API, Codex and Claude Code adapters, a pi-durable Native Agent, conversation-driven RD continuation, persistent scheduled wake-ups, PR tracking, manually triggered Reviewer runs, and the bundled Web dashboard.
-
-The `AgentTrigger` lifecycle and extension API are currently code-level, and every delivered trigger message must target an existing Requirement. The native Timer Agent Trigger has HTTP, dashboard, and RD CLI configuration, but dynamic third-party trigger discovery/configuration, Slack and Jira sources, and trigger-created Requirements remain future work. GitHub synchronization currently uses local `gh` polling rather than webhooks. Stale-review indicators after a head-SHA change, local access tokens, detailed tool-execution logs, and Manager-enforced worktree isolation also remain future work. RD Agents are instructed to create or reuse a Requirement-specific Git worktree before changing code, but Agent Manager does not provision or enforce that isolation; every child process still starts in the shared Manager workspace.
+[Apache License 2.0](LICENSE).
