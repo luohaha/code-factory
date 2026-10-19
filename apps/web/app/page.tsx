@@ -757,7 +757,7 @@ function EditRequirementAgentConfigurationDialog({
                   value={sandboxId} disabled={submitting} onChange={(event) => setSandboxId(event.target.value)}>
                   {sandboxes.filter((sandbox) => sandbox.id === 'local' || sandbox.kind === 'local' || provider === 'native-agent')
                     .map((sandbox) => <NativeSelectOption key={sandbox.id} value={sandbox.id === 'local' ? '' : sandbox.id}>
-                      {sandbox.id === 'local' ? t('Default workspace') : sandbox.name} · {sandbox.cwd}
+                      {sandbox.id === 'local' ? t('Default workspace') : sandbox.name} · {sandbox.cwd ?? t('Sandbox default directory')}
                     </NativeSelectOption>)}
                 </NativeSelect>
               </Field>
@@ -1357,7 +1357,7 @@ function NewRequirementDialog({ client, disabled, modelCatalog, sandboxes, onCre
                 <NativeSelect key={provider} id="requirement-sandbox" name="sandboxId" className="w-full" defaultValue="">
                   {sandboxes.filter((sandbox) => sandbox.id === 'local' || sandbox.kind === 'local' || provider === 'native-agent')
                     .map((sandbox) => <NativeSelectOption key={sandbox.id} value={sandbox.id === 'local' ? '' : sandbox.id}>
-                      {sandbox.id === 'local' ? t('Default workspace') : sandbox.name} · {sandbox.cwd}
+                      {sandbox.id === 'local' ? t('Default workspace') : sandbox.name} · {sandbox.cwd ?? t('Sandbox default directory')}
                     </NativeSelectOption>)}
                 </NativeSelect>
               </Field>
@@ -2409,7 +2409,7 @@ function RequirementDetail({
             <span aria-hidden="true">·</span>
             <span className="font-mono">ses-{shortId(requirement.session.id)}</span>
             <span aria-hidden="true">·</span>
-            <span className="max-w-full truncate" title={assignedWorkspace?.cwd}>
+            <span className="max-w-full truncate" title={assignedWorkspace?.cwd ?? undefined}>
               {workspaceName}
             </span>
           </SheetDescription>
@@ -3345,7 +3345,7 @@ function Dashboard() {
   );
   const filteredSandboxes = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return sandboxes.filter((sandbox) => `${sandbox.name} ${sandbox.cwd} ${sandbox.providerSandboxId ?? ''}`.toLowerCase().includes(needle));
+    return sandboxes.filter((sandbox) => `${sandbox.name} ${sandbox.cwd ?? ''} ${sandbox.providerSandboxId ?? ''}`.toLowerCase().includes(needle));
   }, [query, sandboxes]);
   const relationshipSummary = useMemo(
     () => summarizeRequirementRelations(requirements),
@@ -4012,8 +4012,9 @@ function Dashboard() {
                             <Input name="repositoryUrl" aria-label={t('Repository HTTPS URL')} placeholder={t('Repository HTTPS URL (optional override)')} />
                             <Input name="providerSandboxId" aria-label={t('Existing E2B sandbox ID')} placeholder={t('Existing E2B sandbox ID (optional)')} />
                             <Input name="template" aria-label={t('E2B template')} placeholder={t('E2B template (default: base)')} />
-                            <Input name="cwd" aria-label={t('Remote working directory')} placeholder={t('Remote working directory (default: /home/user/repo)')} />
-                            <p className="text-xs text-muted-foreground">{t('Attaching an existing E2B sandbox requires a Git checkout in its working directory.')}</p>
+                            <Input name="cwd" aria-label={t('Remote working directory')} placeholder={t('Remote working directory (optional; sandbox default)')} />
+                            <p className="text-xs text-muted-foreground">{t('Leave blank to use the sandbox user’s home directory for commands and relative file paths. New sandboxes clone into a subdirectory named after the repository.')}</p>
+                            <p className="text-xs text-muted-foreground">{t('Attaching an existing E2B sandbox requires a Git checkout in the specified directory, or the sandbox user’s home directory when left blank.')}</p>
                           </div>
                         </details>
                       </>
@@ -4050,7 +4051,9 @@ function Dashboard() {
                     </Field>
                     <Field>
                       <FieldLabel htmlFor="edit-workspace-cwd">{t(selectedWorkspace.kind === 'local' ? 'Local directory' : 'Remote working directory')}</FieldLabel>
-                      <Input id="edit-workspace-cwd" name="cwd" required defaultValue={selectedWorkspace.cwd} />
+                      <Input id="edit-workspace-cwd" name="cwd" required={selectedWorkspace.kind === 'local'} defaultValue={selectedWorkspace.cwd ?? ''}
+                        placeholder={selectedWorkspace.kind === 'e2b' ? t('Remote working directory (optional; sandbox default)') : undefined} />
+                      {selectedWorkspace.kind === 'e2b' ? <p className="text-xs text-muted-foreground">{t('Leave blank to use the sandbox user’s home directory for commands and relative file paths. Changing this setting does not move the repository.')}</p> : null}
                     </Field>
                     {selectedWorkspace.kind === 'e2b' ? <>
                       <Field>
@@ -4098,7 +4101,7 @@ function Dashboard() {
                   <dl className="grid gap-3 rounded-lg border border-border p-3 text-xs sm:grid-cols-2">
                     <div className="min-w-0 sm:col-span-2">
                       <dt className="text-muted-foreground">{t(selectedWorkspace.kind === 'e2b' ? 'Remote working directory' : 'Local directory')}</dt>
-                      <dd className="mt-1 break-all font-mono">{selectedWorkspace.cwd}</dd>
+                      <dd className="mt-1 break-all font-mono">{selectedWorkspace.cwd ?? t('Sandbox default directory')}</dd>
                     </div>
                     <div>
                       <dt className="text-muted-foreground">{t('Requirements')}</dt>
@@ -4170,7 +4173,7 @@ function Dashboard() {
                               {t(sandbox.kind === 'e2b' ? 'E2B sandbox' : 'Local workspace')}
                               {sandbox.kind === 'e2b' ? ` · ${t(sandboxStatus)}` : null}
                             </span> : null}
-                            <span className="mt-2 block truncate font-mono text-[10px] text-muted-foreground" title={sandbox.cwd}>{sandbox.cwd}</span>
+                            <span className="mt-2 block truncate font-mono text-[10px] text-muted-foreground" title={sandbox.cwd ?? t('Sandbox default directory')}>{sandbox.cwd ?? t('Sandbox default directory')}</span>
                             <span className="mt-2 block text-[10px] text-muted-foreground">{summary?.total ?? 0} {t('Requirements')}</span>
                           </button>
                         );

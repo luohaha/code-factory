@@ -45,7 +45,7 @@ import { HeadlessProcessRunner, type AgentProcessRunner, type ProcessRunRequest 
 import { NativeAgentService } from './native-agent.js';
 import { NativeAuthService } from './native-auth-service.js';
 import { profileIdFromModel, profileModel, type NativeApiFormat, type NativeApiProfile } from './native-auth.js';
-import { E2BProviderError, E2BSandboxService, type E2BCredentials, type E2BHandle } from './e2b-execution-env.js';
+import { E2BProviderError, E2BSandboxService, getE2BDefaultCwd, type E2BCredentials, type E2BHandle } from './e2b-execution-env.js';
 import { E2BCredentialStore, e2bCredentialsPath } from './e2b-credentials.js';
 import { PullRequestReconciler } from './pull-request-reconciler.js';
 import {
@@ -804,6 +804,12 @@ export class AgentManager extends EventEmitter {
     return cwd;
   }
 
+  private e2bRepositoryName(repositoryUrl: string): string {
+    const name = posix.basename(new URL(repositoryUrl).pathname.replace(/\/+$/, '')).replace(/\.git$/, '');
+    if (!name || name === '.' || name === '..') throw new TypeError('repositoryUrl must include a repository name');
+    return name;
+  }
+
   private defaultE2BRepositoryUrl(): string {
     let remote: string;
     try {
@@ -832,7 +838,7 @@ export class AgentManager extends EventEmitter {
     return { domain: sandbox.domain ?? process.env.E2B_DOMAIN ?? 'e2b.app', apiKey };
   }
 
-  private async prepareE2BWorkspace(handle: E2BHandle, cwd: string, repositoryUrl: string | null,
+  private async prepareE2BWorkspace(handle: E2BHandle, cwd: string | null, repositoryUrl: string | null,
     clone: boolean): Promise<void> {
     const trustedGitHub = repositoryUrl !== null && new URL(repositoryUrl).hostname.toLowerCase() === 'github.com';
     const envs = Object.fromEntries((trustedGitHub ? ['GH_TOKEN', 'GITHUB_TOKEN'] : []).flatMap((name) =>
@@ -845,19 +851,21 @@ export class AgentManager extends EventEmitter {
     if (clone && repositoryUrl) {
       try {
         const token = trustedGitHub ? process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN : undefined;
-        const cloned = await handle.git.clone(repositoryUrl, { path: cwd, timeoutMs: 120_000,
+        const cloned = await handle.git.clone(repositoryUrl, { ...(cwd === null ? {} : { path: cwd }), timeoutMs: 120_000,
           ...(token ? { username: 'x-access-token', password: token } : {}) });
         if (cloned.exitCode !== 0) throw new Error();
       } catch { throw new TypeError('E2B repository clone failed; check the URL and GitHub authentication'); }
     }
-    const quoted = `'${cwd.replaceAll("'", "'\\''")}'`;
+    if (cwd !== null) {
+      const quoted = `'${cwd.replaceAll("'", "'\\''")}'`;
+      try {
+        const checkout = await handle.commands.run(`git -C ${quoted} rev-parse --is-inside-work-tree`,
+          { timeoutMs: 30_000 });
+        if (checkout.exitCode !== 0) throw new Error();
+      } catch { throw new TypeError('E2B working directory must contain a Git checkout'); }
+    }
     try {
-      const checkout = await handle.commands.run(`git -C ${quoted} rev-parse --is-inside-work-tree`,
-        { timeoutMs: 30_000 });
-      if (checkout.exitCode !== 0) throw new Error();
-    } catch { throw new TypeError('E2B working directory must contain a Git checkout'); }
-    try {
-      const auth = await handle.commands.run('gh auth status', { cwd, envs, timeoutMs: 30_000 });
+      const auth = await handle.commands.run('gh auth status', { ...(cwd === null ? {} : { cwd }), envs, timeoutMs: 30_000 });
       if (auth.exitCode !== 0) throw new Error();
     } catch { throw new TypeError('Authenticate gh in the E2B sandbox or set GH_TOKEN on Agent Manager'); }
   }
@@ -882,8 +890,8 @@ export class AgentManager extends EventEmitter {
     const apiKey = input.apiKey.trim();
     if (!apiKey) throw new TypeError('E2B_API_KEY is required');
     const credentials = { domain, apiKey };
-    const cwd = input.cwd?.trim() || '/home/user/repo';
-    if (!posix.isAbsolute(cwd) || cwd.includes('\0')) throw new TypeError('cwd must be an absolute remote path');
+    const cwd = input.cwd?.trim() || null;
+    if (cwd !== null && (!posix.isAbsolute(cwd) || cwd.includes('\0'))) throw new TypeError('cwd must be an absolute remote path');
     const template = input.template?.trim() || 'base';
     if (template.length > 100) throw new TypeError('template must contain at most 100 characters');
     const providerId = input.providerSandboxId?.trim();
@@ -902,16 +910,18 @@ export class AgentManager extends EventEmitter {
       sandbox.providerSandboxId === providerId && (sandbox.domain ?? 'e2b.app') === domain)) {
       throw new StoreConflictError('E2B sandbox is already attached');
     }
+    const repositoryName = !attached && cwd === null && repositoryUrl ? this.e2bRepositoryName(repositoryUrl) : null;
     const handle = attached ? await this.#e2b.connect(providerId!, credentials) : await this.#e2b.create(template, credentials);
     const credentialRef = `e2b_${randomUUID()}`;
     try {
+      const checkoutCwd = cwd ?? posix.join(await getE2BDefaultCwd(handle), repositoryName ?? '.');
       if (attached) {
         let exists: boolean;
-        try { exists = await handle.files.exists(cwd); }
+        try { exists = await handle.files.exists(checkoutCwd); }
         catch { throw new TypeError('Could not inspect the attached E2B working directory'); }
-        if (!exists) throw new TypeError(`Remote directory ${cwd} does not exist`);
+        if (!exists) throw new TypeError(`Remote directory ${checkoutCwd} does not exist`);
       }
-      await this.prepareE2BWorkspace(handle, cwd, attached ? null : repositoryUrl, !attached);
+      await this.prepareE2BWorkspace(handle, checkoutCwd, attached ? null : repositoryUrl, !attached);
       const info = await this.#e2b.getInfo(handle.sandboxId, credentials);
       const now = new Date().toISOString();
       this.e2bCredentialStore().save(credentialRef, apiKey);
@@ -928,7 +938,7 @@ export class AgentManager extends EventEmitter {
     }
   }
 
-  async updateSandbox(id: string, input: { name?: string; cwd?: string; domain?: string;
+  async updateSandbox(id: string, input: { name?: string; cwd?: string | null; domain?: string;
     apiKey?: string }): Promise<Sandbox> {
     if (id === 'local') throw new TypeError('Default workspace cannot be edited');
     if (Object.keys(input).length === 0) throw new TypeError('at least one workspace field is required');
@@ -940,6 +950,7 @@ export class AgentManager extends EventEmitter {
       if (input.domain !== undefined || input.apiKey !== undefined) {
         throw new TypeError('E2B fields cannot be used for a local workspace');
       }
+      if (input.cwd === null) throw new TypeError('local workspace cwd must be an absolute path');
       const cwd = input.cwd === undefined ? current.cwd : this.resolveLocalWorkspace(input.cwd);
       if (cwd === this.workspaceRoot) throw new TypeError('use Default workspace for the Agent Manager directory');
       if (cwd !== current.cwd) this.ensureSandboxIdle(id);
@@ -950,8 +961,8 @@ export class AgentManager extends EventEmitter {
     if (!/^[a-zA-Z0-9.-]+(?::[0-9]+)?$/.test(domain)) throw new TypeError('E2B_DOMAIN must be a domain name');
     const apiKey = input.apiKey?.trim();
     if (input.apiKey !== undefined && !apiKey) throw new TypeError('E2B_API_KEY must be non-empty');
-    const cwd = input.cwd === undefined ? current.cwd : input.cwd.trim();
-    if (!posix.isAbsolute(cwd) || cwd.includes('\0')) throw new TypeError('cwd must be an absolute remote path');
+    const cwd = input.cwd === undefined ? current.cwd : input.cwd?.trim() || null;
+    if (cwd !== null && (!posix.isAbsolute(cwd) || cwd.includes('\0'))) throw new TypeError('cwd must be an absolute remote path');
     const needsConnection = domain !== current.domain || apiKey !== undefined || cwd !== current.cwd;
     if (needsConnection) this.ensureSandboxIdle(id);
     let status = current.status;
@@ -1624,11 +1635,12 @@ export class AgentManager extends EventEmitter {
         nativeSessionId: null, prompt, model: model ?? null, reasoningEffort: reasoningEffort ?? null,
         cwd: selectedWorkspace?.cwd ?? this.workspaceRoot,
         ...(selectedWorkspace?.kind === 'e2b' && selectedWorkspace.providerSandboxId && remoteCredentials
-          ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedWorkspace.providerSandboxId,
+          ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedWorkspace.providerSandboxId, cwd: selectedWorkspace.cwd,
               credentials: remoteCredentials,
               forwardGitHubToken: selectedWorkspace.repositoryUrl !== null
                 && new URL(selectedWorkspace.repositoryUrl).hostname.toLowerCase() === 'github.com' } } : {}),
-        environment: {}, instructions: `${developerInstructions}\nUse the bash tool for GitHub CLI commands in the selected workspace.`,
+        environment: {}, instructions: `${developerInstructions}\nUse the bash tool for GitHub CLI commands in the selected workspace.${selectedWorkspace?.kind === 'e2b' && selectedWorkspace.cwd === null
+          ? ' Commands and relative file paths start in the sandbox user home directory. Locate the Git checkout before repository commands; new sandboxes clone into a child directory named after the repository.' : ''}`,
         signal: new AbortController().signal, timeoutMs: Math.min(this.#timeoutMs, 30 * 60 * 1_000),
         timeoutMode: 'elapsed', onNativeSession: () => undefined, onEvent })
       : this.runHeadlessReview(options.provider, {
@@ -1825,7 +1837,7 @@ export class AgentManager extends EventEmitter {
           prompt, model: requirement.model, reasoningEffort: requirement.reasoningEffort,
           cwd: selectedSandbox?.cwd ?? this.workspaceRoot,
           ...(selectedSandbox?.kind === 'e2b' && selectedSandbox.providerSandboxId && cloudCredentials
-            ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedSandbox.providerSandboxId,
+            ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedSandbox.providerSandboxId, cwd: selectedSandbox.cwd,
                 credentials: cloudCredentials,
                 forwardGitHubToken: selectedSandbox.repositoryUrl !== null
                   && new URL(selectedSandbox.repositoryUrl).hostname.toLowerCase() === 'github.com' } } : {}),
@@ -2214,10 +2226,10 @@ export class AgentManager extends EventEmitter {
     selectedSandbox: Sandbox | null,
     pullRequests: PullRequest[],
   ): string {
-    const cwd = selectedSandbox?.cwd ?? this.workspaceRoot;
     if (selectedSandbox?.kind === 'e2b') {
-      return `Selected E2B workspace: ${cwd}. Inspect its remote Git worktrees, branch, and status before acting.`;
+      return `Selected E2B workspace: ${selectedSandbox.cwd ?? 'SDK default user home directory'}. Inspect its remote Git worktrees, branch, and status before acting.`;
     }
+    const cwd = selectedSandbox?.cwd ?? this.workspaceRoot;
     try {
       const output = execFileSync('git', ['worktree', 'list', '--porcelain'], {
         cwd, encoding: 'utf8', timeout: 2_000, maxBuffer: 256_000,
@@ -2272,7 +2284,11 @@ export class AgentManager extends EventEmitter {
     return [
       "You are this Requirement's long-lived RD Agent. Follow repository instructions and human scope; humans confirm completion.",
       native && sandbox?.kind === 'e2b'
-        ? `Work in the selected E2B cloud sandbox at ${sandbox.cwd}. Inspect its files and Git state before changes. ${sandbox.repositoryUrl
+        ? `Work in the selected E2B cloud sandbox. ${sandbox.cwd === null
+          ? `Commands and relative file paths start in the sandbox user home directory. ${sandbox.repositoryUrl
+            ? `New sandboxes clone this repository into the ${this.e2bRepositoryName(sandbox.repositoryUrl)} subdirectory of that home directory; verify its current location.`
+            : 'Locate the existing repository checkout.'} Use explicit paths or cd to enter the checkout when needed.`
+          : `The working directory is ${sandbox.cwd}.`} Inspect its files and Git state before changes. ${sandbox.repositoryUrl
           ? `Its repository URL is ${sandbox.repositoryUrl}; use it to restore the checkout if needed.`
           : 'This attached sandbox must already contain a Git checkout; ask the human to restore it if absent.'} The remote gh CLI must remain authenticated for PR commands. Other RD Agents may share this sandbox; preserve their changes. On resume, check sandbox and PR state before repeating actions.`
         : native

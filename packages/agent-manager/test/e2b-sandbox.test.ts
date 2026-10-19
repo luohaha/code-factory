@@ -17,9 +17,10 @@ import { E2BSandboxService, type E2BClient, type E2BHandle } from '../src/e2b-ex
 import { createLogger } from '../src/logger.js';
 import { NativeAgentService } from '../src/native-agent.js';
 import { createAgentManagerServer } from '../src/server.js';
+import { schemaStatements } from '../src/schema.js';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.js';
 
-function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; review?: boolean } = {}) {
+function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; review?: boolean; home?: string } = {}) {
   let state: 'running' | 'paused' = 'running';
   let killed = false;
   const calls: string[] = [];
@@ -29,6 +30,7 @@ function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; revie
   const remoteCommands: Array<{ command: string; cwd: string | undefined }> = [];
   const remoteFiles = new Map<string, string>();
   const remoteWrites: Array<{ path: string; content: string }> = [];
+  const home = settings.home ?? '/home/user';
   const check = (credentials: { apiKey?: string; domain?: string }) => {
     if (settings.acceptRotated && credentials.apiKey === 'new-key' &&
       credentials.domain === 'new.e2b.example') return;
@@ -37,7 +39,7 @@ function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; revie
   };
   const handle = (id: string) => ({ sandboxId: id,
     files: {
-      exists: async (path: string) => path === '/home/user/repo' || remoteFiles.has(path),
+      exists: async (path: string) => path === home || remoteFiles.has(path),
       write: async (path: string, content: string) => {
         remoteFiles.set(path, content);
         remoteWrites.push({ path, content });
@@ -47,6 +49,7 @@ function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; revie
     commands: { run: async (command: string, runOptions?: { envs?: Record<string, string>; cwd?: string;
       background?: boolean; onStdout?: (chunk: string) => void }) => { calls.push(`command:${command}`);
       remoteCommands.push({ command, cwd: runOptions?.cwd });
+      if (command === 'pwd') return { exitCode: 0, stdout: `${home}\n` };
       if (settings.review && runOptions?.background) {
         const review = { command, cwd: runOptions.cwd, input: '' };
         reviews.push(review);
@@ -107,7 +110,7 @@ test('E2B sandbox API provisions, allows reuse, checks health and controls lifec
     assert.equal((await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Missing URL',
       ...credentials })).status, 400);
     for (const repositoryUrl of ['https://user:secret@github.com/example/repo.git',
-      'https://github.com/example/repo.git?token=secret']) {
+      'https://github.com/example/repo.git?token=secret', 'https://github.com/example/.git', 'https://github.com/']) {
       const rejected = await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Unsafe URL',
         ...credentials, repositoryUrl });
       assert.equal(rejected.status, 400);
@@ -168,6 +171,7 @@ test('E2B sandbox API provisions, allows reuse, checks health and controls lifec
         provider: 'native-agent', sandboxId: attachedId })).status, 201);
     }
     assert(sdk.calls.includes('connect:external-e2b-id'));
+    assert(sdk.calls.includes("command:git -C '/home/user' rev-parse --is-inside-work-tree"));
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();
@@ -211,11 +215,87 @@ test('E2B creation uses the managed workspace Git origin when only name, domain,
       body: JSON.stringify({ kind: 'e2b', name: 'Simple', domain: 'e2b.example', apiKey: 'test-key' }),
     });
     assert.equal(response.status, 201);
-    const sandbox = await response.json() as { id: string; repositoryUrl: string; cwd: string };
+    const sandbox = await response.json() as { id: string; repositoryUrl: string; cwd: string | null };
     assert.equal(sandbox.repositoryUrl, 'https://github.com/example/repo.git');
-    assert.equal(sandbox.cwd, '/home/user/repo');
+    assert.equal(sandbox.cwd, null);
+    const reopened = new SqliteAgentManagerStore(databasePath);
+    try { assert.equal(reopened.getSandbox(sandbox.id)?.cwd, null); }
+    finally { reopened.close(); }
     assert.equal('sharing' in sandbox, false);
     assert.deepEqual(sdk.cloneAuth, [{ url: sandbox.repositoryUrl, hasToken: Boolean(process.env.GH_TOKEN || process.env.GITHUB_TOKEN) }]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+for (const [home, repositoryUrl, repositoryName] of [
+  ['/root', 'https://github.com/org/code-factory.git', 'code-factory'],
+  ['/srv/custom-home', 'https://github.com/org/web-app/', 'web-app'],
+] as const) {
+  test(`E2B provisioning clones ${repositoryName} under the sandbox home ${home}`, async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-home-'));
+    const sdk = fakeE2B({ home });
+    const manager = new AgentManager({ workspaceRoot: directory, databasePath: ':memory:',
+      store: new SqliteAgentManagerStore(':memory:'), e2bService: sdk.service,
+      logger: createLogger({ level: 'silent' }) });
+    try {
+      const sandbox = await manager.createE2BSandbox({ name: 'SDK default', domain: 'e2b.example',
+        apiKey: 'test-key', repositoryUrl, cwd: '  ' });
+      assert.equal(sandbox.cwd, null);
+      assert(sdk.calls.includes(`clone:${repositoryUrl}:${home}/${repositoryName}`));
+      assert(sdk.calls.includes(`command:git -C '${home}/${repositoryName}' rev-parse --is-inside-work-tree`));
+      assert.equal(sdk.remoteCommands.find((entry) => entry.command === 'pwd')?.cwd, undefined);
+    } finally {
+      await manager.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+test('E2B directory overrides can be set, cleared, and reopened without changing the checkout', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-cwd-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const sdk = fakeE2B();
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    logger: createLogger({ level: 'silent' }) });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sandboxes`;
+  const write = (url: string, method: string, body: unknown) => fetch(url, {
+    method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+  try {
+    const created = await write(base, 'POST', { kind: 'e2b', name: 'Custom directory', domain: 'e2b.example',
+      apiKey: 'test-key', repositoryUrl: 'https://github.com/example/repo.git', cwd: '/srv/project' });
+    assert.equal(created.status, 201);
+    const workspace = await created.json() as { id: string; cwd: string | null };
+    assert.equal(workspace.cwd, '/srv/project');
+    assert.equal(sdk.calls.includes('command:pwd'), false);
+    assert(sdk.calls.includes('clone:https://github.com/example/repo.git:/srv/project'));
+    const url = `${base}/${workspace.id}`;
+    const invalid = await write(url, 'PATCH', { cwd: 'relative-path' });
+    assert.equal(invalid.status, 400);
+    assert.equal(manager.listSandboxes().find((item) => item.id === workspace.id)?.cwd, '/srv/project');
+    const cleared = await write(url, 'PATCH', { cwd: null });
+    assert.equal(cleared.status, 200);
+    assert.equal((await cleared.json() as { cwd: string | null }).cwd, null);
+    assert.equal(sdk.remoteCommands.at(-1)?.cwd, undefined);
+    const renamed = await write(url, 'PATCH', { name: 'SDK default' });
+    assert.equal(renamed.status, 200);
+    assert.equal((await renamed.json() as { cwd: string | null }).cwd, null);
+    const explicit = await write(url, 'PATCH', { cwd: '/srv/another-project' });
+    assert.equal(explicit.status, 200);
+    assert.equal((await explicit.json() as { cwd: string }).cwd, '/srv/another-project');
+    const blank = await write(url, 'PATCH', { cwd: '  ' });
+    assert.equal(blank.status, 200);
+    assert.equal((await blank.json() as { cwd: string | null }).cwd, null);
+    assert.equal(sdk.cloneAuth.length, 1);
+    const reopened = new SqliteAgentManagerStore(databasePath);
+    try { assert.equal(reopened.getSandbox(workspace.id)?.cwd, null); }
+    finally { reopened.close(); }
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();
@@ -291,7 +371,7 @@ test('a Native Reviewer for an E2B Requirement uses the same remote execution en
     const outcome = await manager.requestReview(pullRequest.id, { provider: 'native-agent' });
     assert.equal(outcome.status, 'succeeded');
     assert.equal(sdk.reviews.length, 0);
-    assert(sdk.remoteCommands.some((entry) => entry.command.includes('gh pr view') && entry.cwd === '/home/user/repo'));
+    assert(sdk.remoteCommands.some((entry) => entry.command.includes('gh pr view') && entry.cwd === undefined));
     assert.equal(manager.listMessages(requirement.id).find((message) => message.author === 'reviewer')?.body, 'Remote review completed');
   } finally {
     await manager.close();
@@ -306,9 +386,14 @@ test('large Native Agent input is available in E2B during the Run and removed af
   const faux = fauxProvider();
   const models = createModels();
   models.setProvider(faux.provider);
-  faux.setResponses([fauxAssistantMessage('Remote input handled')]);
+  let handoff = '';
+  faux.setResponses([fauxAssistantMessage('Remote input handled'), (context) => {
+    handoff = JSON.stringify(context.messages);
+    return fauxAssistantMessage('Remote context restored');
+  }]);
+  const store = new SqliteAgentManagerStore(databasePath);
   const manager = new AgentManager({ workspaceRoot: directory, databasePath,
-    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    store, e2bService: sdk.service,
     nativeService: new NativeAgentService(join(directory, 'native.sqlite'), models, sdk.service),
     logger: createLogger({ level: 'silent' }) });
   const description = `${'Long description. '.repeat(300)}Final acceptance criterion.`;
@@ -324,6 +409,11 @@ test('large Native Agent input is available in E2B during the Run and removed af
     assert.deepEqual(sdk.remoteWrites.map((write) => write.content), [description, pendingBody]);
     assert.ok(sdk.remoteWrites.every((write) => write.path.startsWith('/tmp/code-factory-')));
     assert.equal(sdk.remoteFiles.size, 0);
+    store.setNativeSessionId(requirement.session.id, null, new Date().toISOString());
+    const restored = await manager.runRequirement(requirement.id, 'Continue in the remote workspace');
+    assert.equal(restored.status, 'waiting_confirmation');
+    assert.match(handoff, /Selected E2B workspace: SDK default user home directory/);
+    assert.equal(handoff.includes(directory), false);
   } finally {
     await manager.close();
     rmSync(directory, { recursive: true, force: true });
@@ -416,17 +506,30 @@ test('E2B records created before per-sandbox credentials gain nullable settings'
   legacy.prepare('INSERT INTO sandboxes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
     'old-e2b', 'Existing E2B', 'e2b', '/home/user/repo', 'provider-id', 'E2B_API_KEY',
     'base', 'running', null, '2026-01-01T00:00:00Z');
+  for (const statement of schemaStatements) legacy.exec(statement);
+  legacy.prepare(`INSERT INTO requirements (id, title, description, status, provider, sandbox_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run('bound', 'Existing requirement', 'Keep workspace', 'todo', 'native-agent',
+    'old-e2b', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
   legacy.close();
   try {
     const store = new SqliteAgentManagerStore(databasePath);
     try {
       const sandbox = store.getSandbox('old-e2b');
       assert.equal(sandbox?.providerSandboxId, 'provider-id');
+      assert.equal(sandbox?.cwd, '/home/user/repo');
       assert.equal(sandbox?.credentialEnvVar, 'E2B_API_KEY');
       assert.equal(sandbox?.domain, null);
       assert.equal(sandbox?.credentialRef, null);
       assert.equal(sandbox?.repositoryUrl, null);
       assert.equal('sharing' in sandbox!, false);
     } finally { store.close(); }
+    const inspected = new DatabaseSync(databasePath);
+    try {
+      assert.equal(inspected.prepare('SELECT sandbox_id FROM requirements WHERE id = ?').get('bound')?.sandbox_id, 'old-e2b');
+      assert.deepEqual(inspected.prepare('PRAGMA foreign_key_check').all(), []);
+      const reopened = new SqliteAgentManagerStore(databasePath);
+      try { assert.equal(reopened.getSandbox('old-e2b')?.cwd, '/home/user/repo'); }
+      finally { reopened.close(); }
+    } finally { inspected.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

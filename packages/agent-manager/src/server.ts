@@ -397,7 +397,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           name: stringField(body, 'name', true)!,
           domain: stringField(body, 'domain', true)!, apiKey: stringField(body, 'apiKey', true)!,
           ...(body.template === undefined ? {} : { template: stringField(body, 'template', true)! }),
-          ...(body.cwd === undefined ? {} : { cwd: stringField(body, 'cwd', true)! }),
+          ...(body.cwd === undefined ? {} : { cwd: stringField(body, 'cwd')! }),
           ...(body.providerSandboxId === undefined ? {} : { providerSandboxId: stringField(body, 'providerSandboxId', true)! }),
           ...(body.repositoryUrl === undefined ? {} : { repositoryUrl: stringField(body, 'repositoryUrl', true)! }),
         }));
@@ -426,7 +426,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         const body = await readJson(request);
         sendJson(response, 200, await manager.updateSandbox(decodeURIComponent(sandbox[1]!), {
           ...(body.name === undefined ? {} : { name: stringField(body, 'name', true)! }),
-          ...(body.cwd === undefined ? {} : { cwd: stringField(body, 'cwd', true)! }),
+          ...(body.cwd === undefined ? {} : { cwd: body.cwd === null ? null : stringField(body, 'cwd')! }),
           ...(body.domain === undefined ? {} : { domain: stringField(body, 'domain', true)! }),
           ...(body.apiKey === undefined ? {} : { apiKey: stringField(body, 'apiKey', true)! }),
         }));

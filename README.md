@@ -38,6 +38,8 @@ Open [http://127.0.0.1:4310](http://127.0.0.1:4310), create a requirement, and s
 
 Unsent conversation text and attachments return when you reopen a requirement or reload the dashboard in the same browser.
 
+For E2B workspaces, leaving the advanced remote directory blank uses the sandbox user’s home directory for commands and relative file paths. New sandboxes clone into a subdirectory of that home directory named after the repository (for example, `code-factory.git` becomes `~/code-factory`); set an explicit remote directory to use the checkout as the default working directory.
+
 Headless agents inherit your filesystem, network, and command permissions. Run Code Factory in trusted repositories and limit dashboard access to trusted users.
 
 ## Documentation
