@@ -12,7 +12,7 @@
     "test": "node --test --experimental-strip-types lib/*.test.ts",
     "lint": "oxlint app lib test",
     "format": "oxfmt",
-    "test:browser": "node --test test/browser/*.test.mjs"
+    "test:browser": "node --test --test-concurrency=1 test/browser/*.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "1.7.0",

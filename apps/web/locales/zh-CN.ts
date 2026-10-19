@@ -1,4 +1,5 @@
 export const zhCN = {
+  'Browser storage is unavailable. This draft is kept only until this tab closes or reloads.': '浏览器存储不可用。此草稿仅保留到当前标签页关闭或刷新前。',
   'Workspace': '工作区',
   'Workspaces': '工作区',
   'Workspace board': '工作区列表',
