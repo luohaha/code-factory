@@ -97,7 +97,7 @@ npx playwright install chromium
 npm run test:browser
 ~~~
 
-The browser tests start and stop an isolated Vite server and mock Agent Manager responses, so they do not read or change a running workspace. To use an installed Google Chrome instead of downloading Chromium, run `PLAYWRIGHT_CHANNEL=chrome npm run test:browser`.
+The browser tests start and stop an isolated Vite server and mock Agent Manager responses, so they do not read or change a running workspace. Test files run sequentially because their servers share the project's local Wrangler state. To use an installed Google Chrome instead of downloading Chromium, run `PLAYWRIGHT_CHANNEL=chrome npm run test:browser`.
 
 Before a release, follow the additional audit, version, changelog, and package-content checks in the [release guide](releasing.md).
 

@@ -154,6 +154,7 @@ import {
 import { formatDuration } from '@/lib/format-duration';
 import { summarizeRequirementRelations } from '@/lib/requirement-tree';
 import { summarizeWorkspaceRequirements } from '@/lib/workspace-board';
+import { useRequirementDraft, type DraftAttachment } from '@/lib/use-requirement-draft';
 import {
   useDesktopNotifications,
   type DesktopNotificationAvailability,
@@ -483,12 +484,6 @@ function MessageAttachments({ attachments, apiUrl }: { attachments: MessageAttac
       ) : null}
     </div>
   );
-}
-
-interface DraftAttachment {
-  id: string;
-  file: File;
-  previewUrl: string | null;
 }
 
 const previewableImageTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -1836,8 +1831,47 @@ const AgentTimerDialog = memo(function AgentTimerDialog({
   );
 });
 
-// Keep draft state below RequirementDetail so each keystroke does not re-render the conversation history.
+function ComposerAttachment({ attachment, onRemove }: { attachment: DraftAttachment; onRemove: () => void }) {
+  const { t } = useI18n();
+  const imageRef = useRef<HTMLImageElement>(null);
+  const hasPreview = previewableImageTypes.has(attachment.file.type);
+  useEffect(() => {
+    const image = imageRef.current;
+    if (!image) return;
+    const url = URL.createObjectURL(attachment.file);
+    image.src = url;
+    return () => URL.revokeObjectURL(url);
+  }, [attachment.file]);
+
+  return (
+    <div className={`group relative h-16 shrink-0 overflow-hidden rounded-xl border border-border bg-muted ${hasPreview ? 'w-16' : 'w-48'}`}>
+      {hasPreview ? (
+        // oxlint-disable-next-line next/no-img-element -- Blob previews cannot use the framework image optimizer.
+        <img ref={imageRef} alt={attachment.file.name} className="size-full object-cover" />
+      ) : (
+        <div className="flex size-full items-center gap-2.5 px-3 pr-8">
+          <FileText className="size-5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0">
+            <span className="block truncate text-[10px] font-medium">{attachment.file.name}</span>
+            <span className="mt-0.5 block text-[9px] text-muted-foreground">{formatBytes(attachment.file.size)}</span>
+          </span>
+        </div>
+      )}
+      <button
+        type="button"
+        className="absolute top-1 right-1 grid size-5 place-items-center rounded-full bg-black/65 text-white opacity-80 transition hover:opacity-100"
+        aria-label={t('Remove {name}', { name: attachment.file.name })}
+        onClick={onRemove}
+      >
+        <X className="size-3" />
+      </button>
+    </div>
+  );
+}
+
+// Keep draft subscriptions below RequirementDetail so typing does not re-render the conversation history.
 function RequirementComposer({
+  apiUrl,
   requirement,
   agentTimers,
   busy,
@@ -1850,6 +1884,7 @@ function RequirementComposer({
   onCancelAgentTimer,
   onSent,
 }: {
+  apiUrl: string;
   requirement: RequirementDto;
   agentTimers: AgentTimerDto[];
   busy: boolean;
@@ -1865,44 +1900,35 @@ function RequirementComposer({
   onSent: () => void;
 }) {
   const { t } = useI18n();
-  const [message, setMessage] = useState('');
-  const [draftAttachments, setDraftAttachments] = useState<DraftAttachment[]>([]);
+  const { draft, ready, storageUnavailable, updateDraft, flushDraft, clearSentDraft } = useRequirementDraft(apiUrl, requirement.id);
+  const { message, attachments: draftAttachments } = draft;
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
-  const draftAttachmentsRef = useRef<DraftAttachment[]>([]);
-  const canWrite = requirement.status !== 'cancelled';
-
-  useEffect(() => {
-    draftAttachmentsRef.current = draftAttachments;
-  }, [draftAttachments]);
-
-  useEffect(() => () => {
-    for (const attachment of draftAttachmentsRef.current) {
-      if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
-    }
-  }, []);
+  const submittingRef = useRef(false);
+  const canWrite = ready && requirement.status !== 'cancelled';
 
   async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
     event.preventDefault();
     const body = message.trim();
-    if ((!body && draftAttachments.length === 0) || !canWrite) return;
+    if ((!body && draftAttachments.length === 0) || !canWrite || busy || submittingRef.current) return;
+    submittingRef.current = true;
     const attachmentFiles = draftAttachments.map((attachment) => attachment.file);
     try {
+      await flushDraft();
       if (requirement.status === 'todo') await onStart(body || undefined, attachmentFiles);
       else await onReply(body, attachmentFiles);
+      await clearSentDraft(draft);
       onSent();
-      setMessage('');
-      for (const attachment of draftAttachments) {
-        if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
-      }
-      setDraftAttachments([]);
       setAttachmentError(null);
     } catch {
       // Keep the reply in the editor so it can be retried.
+    } finally {
+      submittingRef.current = false;
     }
   }
 
   function addAttachments(files: File[]) {
+    if (!canWrite || busy) return;
     const remaining = maxAttachmentsPerMessage - draftAttachments.length;
     if (files.some((file) => file.size > maxAttachmentBytes)) {
       setAttachmentError(t('Each attachment must be 20 MB or smaller.'));
@@ -1912,23 +1938,18 @@ function RequirementComposer({
       setAttachmentError(t('Each message supports up to {count} attachments.', { count: maxAttachmentsPerMessage }));
       return;
     }
-    setDraftAttachments((current) => [
-      ...current,
-      ...files.map((file) => ({
+    updateDraft({
+      ...draft,
+      attachments: [...draftAttachments, ...files.map((file) => ({
         id: crypto.randomUUID(),
         file,
-        previewUrl: previewableImageTypes.has(file.type) ? URL.createObjectURL(file) : null,
-      })),
-    ]);
+      }))],
+    });
     setAttachmentError(null);
   }
 
   function removeAttachment(id: string) {
-    setDraftAttachments((current) => {
-      const removed = current.find((attachment) => attachment.id === id);
-      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
-      return current.filter((attachment) => attachment.id !== id);
-    });
+    updateDraft({ ...draft, attachments: draftAttachments.filter((attachment) => attachment.id !== id) });
     setAttachmentError(null);
   }
 
@@ -1949,30 +1970,7 @@ function RequirementComposer({
         {draftAttachments.length > 0 ? (
           <div className="mb-1.5 flex gap-2 overflow-x-auto px-1 pt-1">
             {draftAttachments.map((attachment) => (
-              <div key={attachment.id} className={`group relative h-16 shrink-0 overflow-hidden rounded-xl border border-border bg-muted ${attachment.previewUrl ? 'w-16' : 'w-48'}`}>
-                {attachment.previewUrl ? (
-                  <>
-                    {/* oxlint-disable-next-line next/no-img-element -- Blob previews cannot use the framework image optimizer. */}
-                    <img src={attachment.previewUrl} alt={attachment.file.name} className="size-full object-cover" />
-                  </>
-                ) : (
-                  <div className="flex size-full items-center gap-2.5 px-3 pr-8">
-                    <FileText className="size-5 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0">
-                      <span className="block truncate text-[10px] font-medium">{attachment.file.name}</span>
-                      <span className="mt-0.5 block text-[9px] text-muted-foreground">{formatBytes(attachment.file.size)}</span>
-                    </span>
-                  </div>
-                )}
-                <button
-                  type="button"
-                  className="absolute top-1 right-1 grid size-5 place-items-center rounded-full bg-black/65 text-white opacity-80 transition hover:opacity-100"
-                  aria-label={t('Remove {name}', { name: attachment.file.name })}
-                  onClick={() => removeAttachment(attachment.id)}
-                >
-                  <X className="size-3" />
-                </button>
-              </div>
+              <ComposerAttachment key={attachment.id} attachment={attachment} onRemove={() => removeAttachment(attachment.id)} />
             ))}
           </div>
         ) : null}
@@ -1980,7 +1978,7 @@ function RequirementComposer({
           ref={inputRef}
           aria-label={t('Reply to RD Agent')}
           value={message}
-          onChange={(event) => setMessage(event.target.value)}
+          onChange={(event) => updateDraft({ ...draft, message: event.target.value })}
           onPaste={(event) => {
             const attachments = Array.from(event.clipboardData.files);
             if (attachments.length === 0) return;
@@ -2049,6 +2047,7 @@ function RequirementComposer({
           </Button>
         </div>
       </form>
+      {storageUnavailable ? <p className="mt-1.5 px-1 text-[10px] text-amber-700 dark:text-amber-300">{t('Browser storage is unavailable. This draft is kept only until this tab closes or reloads.')}</p> : null}
       {attachmentError ? <p className="mt-1.5 px-1 text-[10px] text-destructive">{attachmentError}</p> : null}
       {requirement.status === 'todo' ? (
         <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -2643,6 +2642,7 @@ function RequirementDetail({
 
         {detailMode === 'conversation' ? (
           <RequirementComposer
+            apiUrl={apiUrl}
             requirement={requirement}
             agentTimers={agentTimers}
             busy={busy}

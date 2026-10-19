@@ -36,6 +36,8 @@ npx --package @luoyixin/code-factory code-factory-agent-manager start --daemon
 
 Open [http://127.0.0.1:4310](http://127.0.0.1:4310), create a requirement, and select an agent to begin. The startup directory becomes the default workspace; the dashboard is bundled with Agent Manager.
 
+Unsent conversation text and attachments return when you reopen a requirement or reload the dashboard in the same browser.
+
 Headless agents inherit your filesystem, network, and command permissions. Run Code Factory in trusted repositories and limit dashboard access to trusted users.
 
 ## Documentation
