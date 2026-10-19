@@ -67,6 +67,7 @@ async function fixture(t, { locale = 'en', status = 'waiting_confirmation', stor
   const sends = [];
   let failUpload = false;
   let failSend = false;
+  let sendGate = null;
   await context.route('**/api/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -94,6 +95,7 @@ async function fixture(t, { locale = 'en', status = 'waiting_confirmation', stor
         },
       };
       if (failSend) { responseStatus = 500; body = { error: 'Send failed' }; }
+      if (sendGate) await sendGate;
     }
     await route.fulfill({ status: responseStatus, json: body });
   });
@@ -107,6 +109,11 @@ async function fixture(t, { locale = 'en', status = 'waiting_confirmation', stor
     },
     failUpload: (value) => { failUpload = value; },
     failSend: (value) => { failSend = value; },
+    delaySend: () => {
+      let release;
+      sendGate = new Promise((resolve) => { release = resolve; });
+      return () => { sendGate = null; release(); };
+    },
   };
 }
 
@@ -341,3 +348,106 @@ for (const action of ['remove', 'send']) {
     ]);
   });
 }
+
+for (const status of ['todo', 'waiting_confirmation']) {
+  void test(`A delayed ${status === 'todo' ? 'start' : 'reply'} cannot clear another tab's newer unsent text and files`, async (t) => {
+    const first = await fixture(t, { status });
+    await first.open();
+    await first.editor.fill('Submitted draft');
+    await first.files.setInputFiles(textFile);
+    await saved(first.page, 'Submitted draft', 1);
+    const second = await first.newTab();
+    await second.open();
+    const release = first.delaySend();
+    try {
+      const request = first.page.waitForRequest((request) => /\/(start|reply)$/.test(new URL(request.url()).pathname));
+      await first.send();
+      await request;
+      await second.editor.fill('Newer unsent draft');
+      await second.remove('notes.txt').click();
+      await second.files.setInputFiles(imageFile);
+      await saved(second.page, 'Newer unsent draft', 1);
+      release();
+      await first.page.waitForFunction(() => document.querySelector('textarea[aria-label="Reply to RD Agent"]')?.value === '');
+      await second.page.reload();
+      await second.open();
+      assert.equal(await second.editor.inputValue(), 'Newer unsent draft');
+      await second.remove('draft.png').waitFor();
+      assert.equal(await second.remove('notes.txt').count(), 0);
+      assert.equal(await storedAttachmentCount(second.page), 1);
+      await second.send();
+      await second.page.waitForFunction(() => document.querySelector('textarea[aria-label="Reply to RD Agent"]')?.value === '');
+      await saved(second.page, null);
+      assert.deepEqual(first.uploads.at(-1), { name: 'draft.png', type: 'image/png', bytes: imageBytes });
+    } finally {
+      release();
+    }
+  });
+}
+
+void test('Successful send preserves a newer revision even when its text and file list match the submitted draft', async (t) => {
+  const first = await fixture(t);
+  await first.open();
+  await first.editor.fill('Same contents');
+  await first.files.setInputFiles(textFile);
+  await saved(first.page, 'Same contents', 1);
+  const second = await first.newTab();
+  await second.open();
+  const release = first.delaySend();
+  try {
+    const request = first.page.waitForRequest((request) => new URL(request.url()).pathname.endsWith('/reply'));
+    await first.send();
+    await request;
+    await second.editor.fill('Temporary edit');
+    await saved(second.page, 'Temporary edit', 1);
+    await second.editor.fill('Same contents');
+    await saved(second.page, 'Same contents', 1);
+    release();
+    await first.page.waitForFunction(() => document.querySelector('textarea[aria-label="Reply to RD Agent"]')?.value === '');
+    await second.page.reload();
+    await second.open();
+    assert.equal(await second.editor.inputValue(), 'Same contents');
+    await second.remove('notes.txt').waitFor();
+    assert.equal(await storedAttachmentCount(second.page), 1);
+  } finally {
+    release();
+  }
+});
+
+void test('Drafts saved without a revision can still be restored and cleared after sending', async (t) => {
+  const f = await fixture(t);
+  await f.open();
+  await f.editor.fill('Legacy draft');
+  await f.files.setInputFiles(textFile);
+  await saved(f.page, 'Legacy draft', 1);
+  await f.page.evaluate(async () => {
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('code-factory.requirement-drafts', 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction('drafts', 'readwrite');
+      const drafts = transaction.objectStore('drafts');
+      const request = drafts.openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        const { revision: _revision, ...legacy } = cursor.value;
+        cursor.update(legacy);
+        cursor.continue();
+      };
+      transaction.oncomplete = resolve;
+      transaction.onabort = () => reject(transaction.error);
+    });
+    db.close();
+  });
+  await f.page.reload();
+  await f.open();
+  assert.equal(await f.editor.inputValue(), 'Legacy draft');
+  await f.remove('notes.txt').waitFor();
+  await f.send();
+  await f.page.waitForFunction(() => document.querySelector('textarea[aria-label="Reply to RD Agent"]')?.value === '');
+  await saved(f.page, null);
+  assert.equal(await storedAttachmentCount(f.page), 0);
+});

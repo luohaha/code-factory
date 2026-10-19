@@ -10,6 +10,7 @@ export interface DraftAttachment {
 }
 
 interface RequirementDraft {
+  revision: string | null;
   message: string;
   attachments: DraftAttachment[];
 }
@@ -24,16 +25,17 @@ interface DraftEntry {
   snapshot: DraftSnapshot;
   listeners: Set<() => void>;
   loading: Promise<void> | null;
-  saving: boolean;
+  saving: Promise<void> | null;
   persisted: RequirementDraft;
 }
 
 interface StoredDraft {
+  revision?: string | null;
   message: string;
   attachmentIds: string[];
 }
 
-const emptyDraft: RequirementDraft = { message: '', attachments: [] };
+const emptyDraft: RequirementDraft = { revision: null, message: '', attachments: [] };
 const initialSnapshot: DraftSnapshot = { draft: emptyDraft, ready: false, storageUnavailable: false };
 const entries = new Map<string, DraftEntry>();
 let databasePromise: Promise<IDBDatabase> | null = null;
@@ -63,7 +65,7 @@ async function readDraft(key: string): Promise<RequirementDraft> {
     request.onsuccess = () => {
       const stored = request.result as StoredDraft | undefined;
       if (!stored) return;
-      draft = { message: stored.message, attachments: [] };
+      draft = { revision: stored.revision ?? null, message: stored.message, attachments: [] };
       for (const id of stored.attachmentIds) {
         const attachment = transaction.objectStore('attachments').get([key, id]);
         attachment.onsuccess = () => {
@@ -76,7 +78,7 @@ async function readDraft(key: string): Promise<RequirementDraft> {
   });
 }
 
-async function writeDraft(key: string, draft: RequirementDraft): Promise<void> {
+async function writeDraft(key: string, draft: RequirementDraft, expected?: RequirementDraft): Promise<void> {
   const db = await database();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(['drafts', 'attachments'], 'readwrite');
@@ -92,8 +94,14 @@ async function writeDraft(key: string, draft: RequirementDraft): Promise<void> {
     current.onsuccess = () => {
       try {
         const previous = current.result as StoredDraft | undefined;
+        // Compare and delete in the same transaction, including legacy drafts without a revision.
+        if (expected && (!previous
+          || (previous.revision ?? null) !== expected.revision
+          || previous.message !== expected.message
+          || previous.attachmentIds.length !== expected.attachments.length
+          || previous.attachmentIds.some((id, index) => id !== expected.attachments[index]?.id))) return;
         if (draft.message || draft.attachments.length > 0) {
-          drafts.put({ message: draft.message, attachmentIds: draft.attachments.map(({ id }) => id) } satisfies StoredDraft, key);
+          drafts.put({ revision: draft.revision, message: draft.message, attachmentIds: draft.attachments.map(({ id }) => id) } satisfies StoredDraft, key);
         } else {
           drafts.delete(key);
         }
@@ -124,7 +132,7 @@ async function writeDraft(key: string, draft: RequirementDraft): Promise<void> {
 function entryFor(key: string): DraftEntry {
   let entry = entries.get(key);
   if (!entry) {
-    entry = { snapshot: initialSnapshot, listeners: new Set(), loading: null, saving: false, persisted: emptyDraft };
+    entry = { snapshot: initialSnapshot, listeners: new Set(), loading: null, saving: null, persisted: emptyDraft };
     entries.set(key, entry);
   }
   return entry;
@@ -145,9 +153,12 @@ function loadDraft(key: string, entry: DraftEntry) {
   });
 }
 
-async function saveDraft(key: string, entry: DraftEntry) {
-  if (entry.saving) return;
-  entry.saving = true;
+function saveDraft(key: string, entry: DraftEntry): Promise<void> {
+  entry.saving ??= persistDraft(key, entry).finally(() => { entry.saving = null; });
+  return entry.saving;
+}
+
+async function persistDraft(key: string, entry: DraftEntry) {
   try {
     // Serialize writes and coalesce edits arriving during an in-flight transaction.
     while (entry.persisted !== entry.snapshot.draft) {
@@ -159,8 +170,21 @@ async function saveDraft(key: string, entry: DraftEntry) {
   } catch {
     // The in-memory entry still survives closing and reopening the conversation.
     publish(entry, { ...entry.snapshot, storageUnavailable: true });
-  } finally {
-    entry.saving = false;
+  }
+}
+
+async function clearSentDraft(key: string, entry: DraftEntry, sent: RequirementDraft) {
+  await entry.saving;
+  if (entry.snapshot.draft !== sent) return;
+  try {
+    await writeDraft(key, emptyDraft, sent);
+  } catch {
+    publish(entry, { ...entry.snapshot, storageUnavailable: true });
+  }
+  // Clear this tab's submitted text without scheduling an unconditional write over another tab.
+  if (entry.snapshot.draft === sent) {
+    entry.persisted = emptyDraft;
+    publish(entry, { ...entry.snapshot, draft: emptyDraft });
   }
 }
 
@@ -174,15 +198,10 @@ export function useRequirementDraft(managerUrl: string, requirementId: string) {
   const snapshot = useSyncExternalStore(subscribe, () => entry.snapshot, () => initialSnapshot);
   useEffect(() => { loadDraft(key, entry); }, [entry, key]);
 
-  function updateDraft(draft: RequirementDraft) {
-    publish(entry, { ...entry.snapshot, draft });
+  function updateDraft(draft: Omit<RequirementDraft, 'revision'>) {
+    publish(entry, { ...entry.snapshot, draft: { ...draft, revision: crypto.randomUUID() } });
     void saveDraft(key, entry);
   }
 
-  function clearSentDraft(sent: RequirementDraft) {
-    // A send can finish after closing/reopening the editor and writing a newer draft.
-    if (entry.snapshot.draft === sent) updateDraft(emptyDraft);
-  }
-
-  return { ...snapshot, updateDraft, clearSentDraft };
+  return { ...snapshot, updateDraft, flushDraft: () => saveDraft(key, entry), clearSentDraft: (sent: RequirementDraft) => clearSentDraft(key, entry, sent) };
 }

@@ -1900,25 +1900,30 @@ function RequirementComposer({
   onSent: () => void;
 }) {
   const { t } = useI18n();
-  const { draft, ready, storageUnavailable, updateDraft, clearSentDraft } = useRequirementDraft(apiUrl, requirement.id);
+  const { draft, ready, storageUnavailable, updateDraft, flushDraft, clearSentDraft } = useRequirementDraft(apiUrl, requirement.id);
   const { message, attachments: draftAttachments } = draft;
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const submittingRef = useRef(false);
   const canWrite = ready && requirement.status !== 'cancelled';
 
   async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
     event.preventDefault();
     const body = message.trim();
-    if ((!body && draftAttachments.length === 0) || !canWrite || busy) return;
+    if ((!body && draftAttachments.length === 0) || !canWrite || busy || submittingRef.current) return;
+    submittingRef.current = true;
     const attachmentFiles = draftAttachments.map((attachment) => attachment.file);
     try {
+      await flushDraft();
       if (requirement.status === 'todo') await onStart(body || undefined, attachmentFiles);
       else await onReply(body, attachmentFiles);
-      clearSentDraft(draft);
+      await clearSentDraft(draft);
       onSent();
       setAttachmentError(null);
     } catch {
       // Keep the reply in the editor so it can be retried.
+    } finally {
+      submittingRef.current = false;
     }
   }
 
