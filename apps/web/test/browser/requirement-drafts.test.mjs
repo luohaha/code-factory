@@ -451,3 +451,20 @@ void test('Drafts saved without a revision can still be restored and cleared aft
   await saved(f.page, null);
   assert.equal(await storedAttachmentCount(f.page), 0);
 });
+
+void test('Text drafts still work when randomUUID is unavailable', async (t) => {
+  const f = await fixture(t);
+  await f.page.addInitScript(() => {
+    Object.defineProperty(crypto, 'randomUUID', { value: undefined });
+  });
+  await f.page.reload();
+  await f.open();
+  await f.editor.fill('Text without randomUUID');
+  await saved(f.page, 'Text without randomUUID', 0);
+  await f.page.reload();
+  await f.open();
+  assert.equal(await f.editor.inputValue(), 'Text without randomUUID');
+  await f.send();
+  await f.page.waitForFunction(() => document.querySelector('textarea[aria-label="Reply to RD Agent"]')?.value === '');
+  await saved(f.page, null);
+});

@@ -199,7 +199,8 @@ export function useRequirementDraft(managerUrl: string, requirementId: string) {
   useEffect(() => { loadDraft(key, entry); }, [entry, key]);
 
   function updateDraft(draft: Omit<RequirementDraft, 'revision'>) {
-    publish(entry, { ...entry.snapshot, draft: { ...draft, revision: crypto.randomUUID() } });
+    // Text drafts must also work in browsers without randomUUID.
+    publish(entry, { ...entry.snapshot, draft: { ...draft, revision: crypto.getRandomValues(new Uint32Array(4)).join('-') } });
     void saveDraft(key, entry);
   }
 
