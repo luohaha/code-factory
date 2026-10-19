@@ -837,6 +837,7 @@ export class AgentManager extends EventEmitter {
     const trustedGitHub = repositoryUrl !== null && new URL(repositoryUrl).hostname.toLowerCase() === 'github.com';
     const envs = Object.fromEntries((trustedGitHub ? ['GH_TOKEN', 'GITHUB_TOKEN'] : []).flatMap((name) =>
       process.env[name] ? [[name, process.env[name]!]] : []));
+    const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
     try {
       const tools = await handle.commands.run('command -v git >/dev/null && command -v gh >/dev/null',
         { timeoutMs: 30_000 });
@@ -844,15 +845,16 @@ export class AgentManager extends EventEmitter {
     } catch { throw new TypeError('E2B template must have git and gh installed'); }
     if (clone && repositoryUrl) {
       try {
-        const token = trustedGitHub ? process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN : undefined;
-        const cloned = await handle.git.clone(repositoryUrl, { path: cwd, timeoutMs: 120_000,
-          ...(token ? { username: 'x-access-token', password: token } : {}) });
+        // Scope the helper to this invocation; keep tokens out of command text and Git config.
+        const auth = Object.keys(envs).length > 0
+          ? ` -c credential.helper= -c ${quote('credential.https://github.com.helper=!gh auth git-credential')}` : '';
+        const cloned = await handle.commands.run(`git${auth} clone -- ${quote(repositoryUrl)} ${quote(cwd)}`,
+          { envs: { ...envs, GIT_TERMINAL_PROMPT: '0' }, timeoutMs: 120_000 });
         if (cloned.exitCode !== 0) throw new Error();
       } catch { throw new TypeError('E2B repository clone failed; check the URL and GitHub authentication'); }
     }
-    const quoted = `'${cwd.replaceAll("'", "'\\''")}'`;
     try {
-      const checkout = await handle.commands.run(`git -C ${quoted} rev-parse --is-inside-work-tree`,
+      const checkout = await handle.commands.run(`git -C ${quote(cwd)} rev-parse --is-inside-work-tree`,
         { timeoutMs: 30_000 });
       if (checkout.exitCode !== 0) throw new Error();
     } catch { throw new TypeError('E2B working directory must contain a Git checkout'); }

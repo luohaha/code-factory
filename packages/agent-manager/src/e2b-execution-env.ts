@@ -10,7 +10,7 @@ import {
 import { CommandExitError, FileNotFoundError, FileType, Sandbox, SandboxNotFoundError, TimeoutError } from 'e2b';
 import type { CommandHandle, SandboxApiOpts, SandboxInfo, SandboxOpts } from 'e2b';
 
-export type E2BHandle = Pick<Sandbox, 'sandboxId' | 'files' | 'commands' | 'git'>;
+export type E2BHandle = Pick<Sandbox, 'sandboxId' | 'files' | 'commands'>;
 export interface E2BCredentials { domain: string; apiKey: string }
 export class E2BProviderError extends Error {}
 

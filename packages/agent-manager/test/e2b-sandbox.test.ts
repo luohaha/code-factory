@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,11 +19,12 @@ import { NativeAgentService } from '../src/native-agent.js';
 import { createAgentManagerServer } from '../src/server.js';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.js';
 
-function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; review?: boolean } = {}) {
+function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; review?: boolean;
+  cloneFailure?: 'exit' | 'throw'; onClone?: (command: string, envs: Record<string, string>) => void } = {}) {
   let state: 'running' | 'paused' = 'running';
   let killed = false;
   const calls: string[] = [];
-  const cloneAuth: Array<{ url: string; hasToken: boolean }> = [];
+  const clones: Array<{ command: string; envs: Record<string, string>; timeoutMs: number | undefined }> = [];
   const authTokenForwarded: boolean[] = [];
   const reviews: Array<{ command: string; cwd: string | undefined; input: string }> = [];
   const remoteCommands: Array<{ command: string; cwd: string | undefined }> = [];
@@ -45,8 +46,14 @@ function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; revie
       remove: async (path: string) => { remoteFiles.delete(path); },
     },
     commands: { run: async (command: string, runOptions?: { envs?: Record<string, string>; cwd?: string;
-      background?: boolean; onStdout?: (chunk: string) => void }) => { calls.push(`command:${command}`);
+      background?: boolean; onStdout?: (chunk: string) => void; timeoutMs?: number }) => { calls.push(`command:${command}`);
       remoteCommands.push({ command, cwd: runOptions?.cwd });
+      if (command.includes(' clone -- ')) {
+        clones.push({ command, envs: runOptions?.envs ?? {}, timeoutMs: runOptions?.timeoutMs });
+        settings.onClone?.(command, runOptions?.envs ?? {});
+        if (settings.cloneFailure === 'throw') throw new Error('provider output with sensitive-token');
+        return { exitCode: settings.cloneFailure === 'exit' ? 1 : 0 };
+      }
       if (settings.review && runOptions?.background) {
         const review = { command, cwd: runOptions.cwd, input: '' };
         reviews.push(review);
@@ -57,10 +64,6 @@ function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; revie
       }
       if (command === 'gh auth status') authTokenForwarded.push(runOptions?.envs?.GH_TOKEN !== undefined);
       return { exitCode: settings.missingGh && command.startsWith('command -v') ? 1 : 0 }; } },
-    git: { clone: async (url: string, options: { path: string; password?: string }) => {
-      cloneAuth.push({ url, hasToken: options.password !== undefined });
-      calls.push(`clone:${url}:${options.path}`); return { exitCode: 0 };
-    } },
   }) as unknown as E2BHandle;
   const client: E2BClient = {
     async create(options) {
@@ -82,7 +85,7 @@ function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; revie
     async pause(id, options) { check(options); calls.push(`pause:${id}`); state = 'paused'; return true; },
     async kill(id, options) { check(options); calls.push(`kill:${id}`); killed = true; return true; },
   };
-  return { service: new E2BSandboxService(client), calls, cloneAuth, authTokenForwarded, reviews, remoteCommands,
+  return { service: new E2BSandboxService(client), calls, clones, authTokenForwarded, reviews, remoteCommands,
     remoteFiles, remoteWrites,
     get killed() { return killed; } };
 }
@@ -126,7 +129,8 @@ test('E2B sandbox API provisions, allows reuse, checks health and controls lifec
     assert.equal(JSON.stringify(sandbox).includes('test-key'), false);
     assert.equal(sandbox.status, 'running');
     assert.equal('sharing' in sandbox, false);
-    assert(sdk.calls.includes('clone:https://github.com/example/repo.git:/home/user/repo'));
+    assert.match(sdk.clones[0]!.command, / clone -- 'https:\/\/github.com\/example\/repo.git' '\/home\/user\/repo'$/);
+    assert.equal(sdk.clones[0]!.timeoutMs, 120_000);
     assert(sdk.calls.includes('command:gh auth status'));
     assert.equal((await request('/sandboxes', 'POST', { kind: 'e2b', name: 'Duplicate',
       ...credentials, providerSandboxId: 'created-e2b-id' })).status, 409);
@@ -163,6 +167,7 @@ test('E2B sandbox API provisions, allows reuse, checks health and controls lifec
     const attachedRecord = await attached.json() as { id: string; credentialRef: string };
     attachedId = attachedRecord.id;
     attachedRef = attachedRecord.credentialRef;
+    assert.equal(sdk.clones.length, 1);
     for (const number of [1, 2]) {
       assert.equal((await request('/requirements', 'POST', { title: `Shared ${number}`, description: 'Same E2B',
         provider: 'native-agent', sandboxId: attachedId })).status, 201);
@@ -215,7 +220,8 @@ test('E2B creation uses the managed workspace Git origin when only name, domain,
     assert.equal(sandbox.repositoryUrl, 'https://github.com/example/repo.git');
     assert.equal(sandbox.cwd, '/home/user/repo');
     assert.equal('sharing' in sandbox, false);
-    assert.deepEqual(sdk.cloneAuth, [{ url: sandbox.repositoryUrl, hasToken: Boolean(process.env.GH_TOKEN || process.env.GITHUB_TOKEN) }]);
+    assert.equal(sdk.clones.length, 1);
+    assert(sdk.clones[0]!.command.includes(` clone -- '${sandbox.repositoryUrl}' '${sandbox.cwd}'`));
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();
@@ -367,21 +373,108 @@ test('GitHub token is sent to clone and remote gh only for github.com repositori
     store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
     logger: createLogger({ level: 'silent' }) });
   try {
-    for (const repositoryUrl of ['https://git.example/org/repo.git', 'https://github.com/org/repo.git']) {
+    for (const repositoryUrl of ['https://git.example/org/repo.git', 'https://github.com/org/repo.git',
+      'https://github.com.example/org/repo.git']) {
       const sandbox = await manager.createE2BSandbox({ name: 'Scoped token',
         domain: 'e2b.example', apiKey: 'test-key', repositoryUrl });
       await manager.deleteSandbox(sandbox.id);
     }
-    assert.deepEqual(sdk.cloneAuth, [
-      { url: 'https://git.example/org/repo.git', hasToken: false },
-      { url: 'https://github.com/org/repo.git', hasToken: true },
-    ]);
-    assert.deepEqual(sdk.authTokenForwarded, [false, true]);
+    assert.equal(sdk.clones[0]!.envs.GH_TOKEN, undefined);
+    assert.equal(sdk.clones[0]!.envs.GITHUB_TOKEN, undefined);
+    assert.equal(sdk.clones[1]!.envs.GH_TOKEN, 'test-github-token');
+    assert.equal(sdk.clones[2]!.envs.GH_TOKEN, undefined);
+    assert.equal(sdk.clones[2]!.envs.GITHUB_TOKEN, undefined);
+    assert.equal(sdk.clones.every((clone) => clone.envs.GIT_TERMINAL_PROMPT === '0'), true);
+    assert.equal(sdk.clones.some((clone) => clone.command.includes('test-github-token')), false);
+    assert.deepEqual(sdk.authTokenForwarded, [false, true, false]);
   } finally {
     await manager.close();
     if (savedToken === undefined) delete process.env.GH_TOKEN;
     else process.env.GH_TOKEN = savedToken;
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('E2B clone shell quotes arguments and authenticates with either token without persisting credentials', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-clone-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const gitBin = join(directory, 'git-bin');
+  const ghBin = join(directory, 'gh-bin');
+  const argsPath = join(directory, 'clone-args');
+  mkdirSync(gitBin);
+  mkdirSync(ghBin);
+  writeFileSync(join(gitBin, 'git'), '#!/bin/sh\nprintf \'%s\\0\' "$@" > "$CLONE_ARGS_PATH"\n', { mode: 0o700 });
+  writeFileSync(join(ghBin, 'gh'), `#!/bin/sh
+[ "$1 $2 $3" = "auth git-credential get" ] || exit 1
+printf 'username=x-access-token\\npassword=%s\\n' "\${GH_TOKEN:-$GITHUB_TOKEN}"
+`, { mode: 0o700 });
+  const savedTokens = { GH_TOKEN: process.env.GH_TOKEN, GITHUB_TOKEN: process.env.GITHUB_TOKEN };
+  delete process.env.GH_TOKEN;
+  delete process.env.GITHUB_TOKEN;
+  const repositoryUrl = "https://github.com/org/re'po.git";
+  const cwd = "/home/user/it's a repo; $(printf injected) `printf injected`";
+  const sdk = fakeE2B({ onClone: (command, envs) => {
+    execFileSync('sh', ['-c', command], { env: { ...process.env, ...envs,
+      PATH: `${gitBin}:${ghBin}:${process.env.PATH}`, CLONE_ARGS_PATH: argsPath } });
+  } });
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    logger: createLogger({ level: 'silent' }) });
+  try {
+    for (const tokenName of ['GH_TOKEN', 'GITHUB_TOKEN'] as const) {
+      process.env[tokenName] = 'temporary-clone-token';
+      const sandbox = await manager.createE2BSandbox({ name: 'Quoted clone', domain: 'e2b.example',
+        apiKey: 'test-key', repositoryUrl, cwd });
+      const args = readFileSync(argsPath, 'utf8').split('\0').slice(0, -1);
+      assert.deepEqual(args, ['-c', 'credential.helper=', '-c',
+        'credential.https://github.com.helper=!gh auth git-credential', 'clone', '--', repositoryUrl, cwd]);
+      const credentials = execFileSync('git', [...args.slice(0, 4), 'credential', 'fill'], {
+        input: 'protocol=https\nhost=github.com\n\n', encoding: 'utf8',
+        env: { ...process.env, PATH: `${ghBin}:${process.env.PATH}`,
+          GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' },
+      });
+      assert.match(credentials, /password=temporary-clone-token/);
+      assert.equal(sdk.clones.at(-1)!.envs[tokenName], 'temporary-clone-token');
+      assert.equal(JSON.stringify(sandbox).includes('temporary-clone-token'), false);
+      assert.equal(sdk.calls.join('\n').includes('temporary-clone-token'), false);
+      assert.equal(sdk.remoteWrites.length, 0);
+      await manager.deleteSandbox(sandbox.id);
+      delete process.env[tokenName];
+    }
+    const sandbox = await manager.createE2BSandbox({ name: 'Remote credentials', domain: 'e2b.example',
+      apiKey: 'test-key', repositoryUrl, cwd });
+    assert.deepEqual(readFileSync(argsPath, 'utf8').split('\0').slice(0, -1), ['clone', '--', repositoryUrl, cwd]);
+    await manager.deleteSandbox(sandbox.id);
+  } finally {
+    await manager.close();
+    for (const name of ['GH_TOKEN', 'GITHUB_TOKEN'] as const) {
+      if (savedTokens[name] === undefined) delete process.env[name];
+      else process.env[name] = savedTokens[name];
+    }
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('E2B clone command failures return a safe error and remove the newly created sandbox', async () => {
+  for (const cloneFailure of ['exit', 'throw'] as const) {
+    const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-clone-failure-'));
+    const databasePath = join(directory, 'factory.sqlite');
+    const sdk = fakeE2B({ cloneFailure });
+    const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+      store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+      logger: createLogger({ level: 'silent' }) });
+    try {
+      await assert.rejects(manager.createE2BSandbox({ name: 'Failed clone', domain: 'e2b.example',
+        apiKey: 'test-key', repositoryUrl: 'https://github.com/example/repo.git' }), {
+        name: 'TypeError', message: 'E2B repository clone failed; check the URL and GitHub authentication',
+      });
+      assert.equal(sdk.killed, true);
+      assert.equal(manager.listSandboxes().length, 1);
+      assert.equal(sdk.calls.includes('command:gh auth status'), false);
+    } finally {
+      await manager.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
   }
 });
 
