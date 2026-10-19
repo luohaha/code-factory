@@ -76,7 +76,7 @@ async function readDraft(key: string): Promise<RequirementDraft> {
   });
 }
 
-async function writeDraft(key: string, draft: RequirementDraft, previous: RequirementDraft): Promise<void> {
+async function writeDraft(key: string, draft: RequirementDraft): Promise<void> {
   const db = await database();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(['drafts', 'attachments'], 'readwrite');
@@ -84,27 +84,40 @@ async function writeDraft(key: string, draft: RequirementDraft, previous: Requir
     const attachments = transaction.objectStore('attachments');
     transaction.oncomplete = () => resolve();
     transaction.onabort = () => reject(transaction.error);
-    try {
-      if (draft.message || draft.attachments.length > 0) {
-        drafts.put({ message: draft.message, attachmentIds: draft.attachments.map(({ id }) => id) } satisfies StoredDraft, key);
-      } else {
-        drafts.delete(key);
-      }
-      // Store File objects separately so typing never clones unchanged attachment bytes.
-      for (const attachment of draft.attachments) {
-        if (!previous.attachments.some(({ id }) => id === attachment.id)) {
-          attachments.put(attachment, [key, attachment.id]);
-        }
-      }
-      for (const attachment of previous.attachments) {
-        if (!draft.attachments.some(({ id }) => id === attachment.id)) {
-          attachments.delete([key, attachment.id]);
-        }
-      }
-    } catch (error) {
+    function abort(error: unknown) {
       transaction.abort();
       reject(error);
     }
+    const current = drafts.get(key);
+    current.onsuccess = () => {
+      try {
+        const previous = current.result as StoredDraft | undefined;
+        if (draft.message || draft.attachments.length > 0) {
+          drafts.put({ message: draft.message, attachmentIds: draft.attachments.map(({ id }) => id) } satisfies StoredDraft, key);
+        } else {
+          drafts.delete(key);
+        }
+        // Other tabs can delete cached files. Check keys without cloning stored File bytes.
+        for (const attachment of draft.attachments) {
+          const exists = attachments.count([key, attachment.id]);
+          exists.onsuccess = () => {
+            if (exists.result > 0) return;
+            try {
+              attachments.put(attachment, [key, attachment.id]);
+            } catch (error) {
+              abort(error);
+            }
+          };
+        }
+        for (const id of previous?.attachmentIds ?? []) {
+          if (!draft.attachments.some((attachment) => attachment.id === id)) {
+            attachments.delete([key, id]);
+          }
+        }
+      } catch (error) {
+        abort(error);
+      }
+    };
   });
 }
 
@@ -139,7 +152,7 @@ async function saveDraft(key: string, entry: DraftEntry) {
     // Serialize writes and coalesce edits arriving during an in-flight transaction.
     while (entry.persisted !== entry.snapshot.draft) {
       const draft = entry.snapshot.draft;
-      await writeDraft(key, draft, entry.persisted);
+      await writeDraft(key, draft);
       entry.persisted = draft;
     }
     if (entry.snapshot.storageUnavailable) publish(entry, { ...entry.snapshot, storageUnavailable: false });

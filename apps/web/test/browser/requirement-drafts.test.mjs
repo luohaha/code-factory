@@ -46,9 +46,9 @@ function requirement(id, status) {
 async function fixture(t, { locale = 'en', status = 'waiting_confirmation', storageFailure = null } = {}) {
   const context = await browser.newContext({ locale });
   t.after(() => context.close());
+  context.setDefaultTimeout(10_000);
   const page = await context.newPage();
-  page.setDefaultTimeout(10_000);
-  await page.addInitScript((failure) => {
+  await context.addInitScript((failure) => {
     window.EventSource = class extends EventTarget {
       constructor() {
         super();
@@ -67,7 +67,7 @@ async function fixture(t, { locale = 'en', status = 'waiting_confirmation', stor
   const sends = [];
   let failUpload = false;
   let failSend = false;
-  await page.route('**/api/**', async (route) => {
+  await context.route('**/api/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     let body = { items: [] };
@@ -98,11 +98,24 @@ async function fixture(t, { locale = 'en', status = 'waiting_confirmation', stor
     await route.fulfill({ status: responseStatus, json: body });
   });
   await page.goto(baseUrl);
+  return {
+    ...composerControls(page, locale), context, uploads, sends,
+    newTab: async () => {
+      const tab = await context.newPage();
+      await tab.goto(baseUrl);
+      return composerControls(tab, locale);
+    },
+    failUpload: (value) => { failUpload = value; },
+    failSend: (value) => { failSend = value; },
+  };
+}
+
+function composerControls(page, locale) {
   const inputName = locale === 'zh-CN' ? '回复 RD Agent' : 'Reply to RD Agent';
   const dialog = page.getByRole('dialog');
   const editor = dialog.getByRole('textbox', { name: inputName, exact: true });
   return {
-    page, context, dialog, editor, uploads, sends,
+    page, dialog, editor,
     files: dialog.locator('input[type=file]'),
     send: () => dialog.getByRole('button', { name: locale === 'zh-CN' ? '发送回复' : 'Send reply', exact: true }).click(),
     open: async (id = 'req_first') => {
@@ -115,8 +128,6 @@ async function fixture(t, { locale = 'en', status = 'waiting_confirmation', stor
       await dialog.waitFor({ state: 'hidden' });
     },
     remove: (name) => dialog.getByRole('button', { name: locale === 'zh-CN' ? `移除 ${name}` : `Remove ${name}`, exact: true }),
-    failUpload: (value) => { failUpload = value; },
-    failSend: (value) => { failSend = value; },
   };
 }
 
@@ -135,6 +146,23 @@ async function saved(page, message, count) {
     db.close();
     return message === null ? records.length === 0 : records.some((draft) => draft.message === message && draft.attachmentIds.length === count);
   }, { message, count });
+}
+
+async function storedAttachmentCount(page) {
+  return page.evaluate(async () => {
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('code-factory.requirement-drafts', 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const count = await new Promise((resolve, reject) => {
+      const request = db.transaction('attachments').objectStore('attachments').count();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    db.close();
+    return count;
+  });
 }
 
 for (const locale of ['en', 'zh-CN']) {
@@ -262,5 +290,54 @@ for (const storageFailure of ['open', 'write']) {
     await f.open();
     assert.equal(await f.editor.inputValue(), '');
     assert.equal(await f.remove('notes.txt').count(), 0);
+  });
+}
+
+for (const action of ['remove', 'send']) {
+  void test(`Across tabs, editing after another tab's ${action} preserves every attachment on reload`, async (t) => {
+    const first = await fixture(t);
+    await first.open();
+    await first.editor.fill('Shared draft');
+    await first.files.setInputFiles([textFile, imageFile]);
+    await saved(first.page, 'Shared draft', 2);
+    const second = await first.newTab();
+    await second.open();
+    await second.remove('notes.txt').waitFor();
+    await second.remove('draft.png').waitFor();
+
+    if (action === 'remove') {
+      await first.remove('notes.txt').click();
+      await saved(first.page, 'Shared draft', 1);
+    } else {
+      await first.send();
+      await first.page.waitForFunction(() => document.querySelector('textarea[aria-label="Reply to RD Agent"]')?.value === '');
+      await saved(first.page, null);
+    }
+    await second.editor.fill('Keep this tab\'s attachments');
+    await saved(second.page, 'Keep this tab\'s attachments', 2);
+    await second.page.reload();
+    await second.open();
+    assert.equal(await second.editor.inputValue(), 'Keep this tab\'s attachments');
+    await second.remove('notes.txt').waitFor();
+    await second.page.waitForFunction(() => document.querySelector('img[alt="draft.png"]')?.naturalWidth === 1);
+
+    // The first tab's next edit must clean up the current stored draft, not its stale cache.
+    await first.editor.fill('First tab saves again');
+    await saved(first.page, 'First tab saves again', action === 'remove' ? 1 : 0);
+    assert.equal(await storedAttachmentCount(first.page), action === 'remove' ? 1 : 0);
+    await second.editor.fill('Second tab still keeps both files');
+    await saved(second.page, 'Second tab still keeps both files', 2);
+    await second.page.reload();
+    await second.open();
+    await second.remove('notes.txt').waitFor();
+    await second.remove('draft.png').waitFor();
+    await second.send();
+    await second.page.waitForFunction(() => document.querySelector('textarea[aria-label="Reply to RD Agent"]')?.value === '');
+    await saved(second.page, null);
+    assert.equal(await storedAttachmentCount(second.page), 0);
+    assert.deepEqual(first.uploads.slice(-2).sort((left, right) => left.name.localeCompare(right.name)), [
+      { name: 'draft.png', type: 'image/png', bytes: imageBytes },
+      { name: 'notes.txt', type: 'text/plain', bytes: textFile.buffer },
+    ]);
   });
 }
