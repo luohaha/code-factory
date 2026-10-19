@@ -393,13 +393,15 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           return;
         }
         if (body.kind !== 'e2b') throw new TypeError('kind must be local or e2b');
+        if (body.repositoryUrl !== undefined) {
+          throw new TypeError('repositoryUrl is no longer supported; ask the Agent to clone the repository after sandbox creation');
+        }
         sendJson(response, 201, await manager.createE2BSandbox({
           name: stringField(body, 'name', true)!,
           domain: stringField(body, 'domain', true)!, apiKey: stringField(body, 'apiKey', true)!,
           ...(body.template === undefined ? {} : { template: stringField(body, 'template', true)! }),
           ...(body.cwd === undefined ? {} : { cwd: stringField(body, 'cwd', true)! }),
           ...(body.providerSandboxId === undefined ? {} : { providerSandboxId: stringField(body, 'providerSandboxId', true)! }),
-          ...(body.repositoryUrl === undefined ? {} : { repositoryUrl: stringField(body, 'repositoryUrl', true)! }),
         }));
         return;
       }

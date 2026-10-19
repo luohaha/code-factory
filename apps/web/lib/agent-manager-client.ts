@@ -87,6 +87,7 @@ export interface SandboxDto {
   credentialEnvVar: string | null;
   domain: string | null;
   credentialRef: string | null;
+  /** Legacy repository metadata; newly created sandboxes are not bound to a repository. */
   repositoryUrl: string | null;
   template: string | null;
   status: 'running' | 'paused' | 'terminated' | 'unreachable' | 'unknown';
@@ -440,7 +441,7 @@ export class AgentManagerClient {
   }
 
   createSandbox(input: { name: string; domain: string; apiKey: string;
-    providerSandboxId?: string; repositoryUrl?: string; template?: string; cwd?: string }): Promise<SandboxDto> {
+    providerSandboxId?: string; template?: string; cwd?: string }): Promise<SandboxDto> {
     return this.request('/api/sandboxes', { method: 'POST', body: JSON.stringify({ kind: 'e2b', ...input }) });
   }
 

@@ -3594,7 +3594,6 @@ function Dashboard() {
         : await client.createSandbox({ name: name.trim(),
           domain: value('domain'), apiKey: value('apiKey'),
           ...(value('providerSandboxId') ? { providerSandboxId: value('providerSandboxId') } : {}),
-          ...(value('repositoryUrl') ? { repositoryUrl: value('repositoryUrl') } : {}),
           ...(value('template') ? { template: value('template') } : {}),
           ...(value('cwd') ? { cwd: value('cwd') } : {}),
         });
@@ -4005,15 +4004,13 @@ function Dashboard() {
                           <FieldLabel htmlFor="execution-path-key">{t('E2B API key')}</FieldLabel>
                           <Input id="execution-path-key" name="apiKey" type="password" required autoComplete="off" placeholder={t('E2B API key (E2B_API_KEY)')} />
                         </Field>
-                        <p className="text-xs text-muted-foreground">{t('The Git origin of the managed workspace is cloned into the E2B sandbox by default.')}</p>
+                        <p className="text-xs text-muted-foreground">{t('The Agent can clone a repository and prepare tools when the task needs them.')}</p>
                         <details className="rounded-lg border border-border p-3 text-sm">
                           <summary className="cursor-pointer font-medium">{t('Advanced E2B options')}</summary>
                           <div className="mt-3 grid gap-3">
-                            <Input name="repositoryUrl" aria-label={t('Repository HTTPS URL')} placeholder={t('Repository HTTPS URL (optional override)')} />
                             <Input name="providerSandboxId" aria-label={t('Existing E2B sandbox ID')} placeholder={t('Existing E2B sandbox ID (optional)')} />
                             <Input name="template" aria-label={t('E2B template')} placeholder={t('E2B template (default: base)')} />
                             <Input name="cwd" aria-label={t('Remote working directory')} placeholder={t('Remote working directory (default: /home/user/repo)')} />
-                            <p className="text-xs text-muted-foreground">{t('Attaching an existing E2B sandbox requires a Git checkout in its working directory.')}</p>
                           </div>
                         </details>
                       </>

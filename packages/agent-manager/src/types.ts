@@ -10,6 +10,7 @@ export interface Sandbox {
   credentialEnvVar: string | null;
   domain: string | null;
   credentialRef: string | null;
+  /** Legacy repository metadata; newly created sandboxes are not bound to a repository. */
   repositoryUrl: string | null;
   template: string | null;
   status: SandboxStatus;
