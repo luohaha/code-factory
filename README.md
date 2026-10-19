@@ -36,7 +36,7 @@ npx --package @luoyixin/code-factory code-factory-agent-manager start --daemon
 
 Open [http://127.0.0.1:4310](http://127.0.0.1:4310), create a requirement, and select an agent to begin. The startup directory becomes the default workspace; the dashboard is bundled with Agent Manager.
 
-Native Agent E2B sandboxes provisioned from `github.com` can reuse the Manager host's GitHub CLI login. See the [Native Agent guide](docs/native-agent.md) for sandbox setup.
+Creating or attaching Native Agent E2B sandboxes does not require GitHub login. Sandboxes provisioned from `github.com` can reuse the Manager host's GitHub CLI credentials when needed. See the [Native Agent guide](docs/native-agent.md) for sandbox setup.
 
 Unsent conversation text and attachments return when you reopen a requirement or reload the dashboard in the same browser.
 

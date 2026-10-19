@@ -836,19 +836,23 @@ export class AgentManager extends EventEmitter {
   private async prepareE2BWorkspace(handle: E2BHandle, cwd: string, repositoryUrl: string | null,
     clone: boolean): Promise<void> {
     const trustedGitHub = repositoryUrl !== null && new URL(repositoryUrl).hostname.toLowerCase() === 'github.com';
-    const envs = await e2bGitHubEnvironment(trustedGitHub);
     try {
-      const tools = await handle.commands.run('command -v git >/dev/null && command -v gh >/dev/null',
+      const tools = await handle.commands.run('command -v git >/dev/null',
         { timeoutMs: 30_000 });
       if (tools.exitCode !== 0) throw new Error();
-    } catch { throw new TypeError('E2B template must have git and gh installed'); }
+    } catch { throw new TypeError('E2B template must have git installed'); }
     if (clone && repositoryUrl) {
+      const envs = await e2bGitHubEnvironment(trustedGitHub);
       try {
         const token = envs.GH_TOKEN;
         const cloned = await handle.git.clone(repositoryUrl, { path: cwd, timeoutMs: 120_000,
           ...(token ? { username: 'x-access-token', password: token } : {}) });
         if (cloned.exitCode !== 0) throw new Error();
-      } catch { throw new TypeError('E2B repository clone failed; check the URL and GitHub authentication'); }
+      } catch {
+        throw new TypeError(trustedGitHub
+          ? 'E2B repository clone failed; check the URL and repository access. For private GitHub repositories, authenticate gh on the Agent Manager host with gh auth login --hostname github.com or set GH_TOKEN or GITHUB_TOKEN'
+          : 'E2B repository clone failed; check the URL and repository authentication');
+      }
     }
     const quoted = `'${cwd.replaceAll("'", "'\\''")}'`;
     try {
@@ -856,14 +860,6 @@ export class AgentManager extends EventEmitter {
         { timeoutMs: 30_000 });
       if (checkout.exitCode !== 0) throw new Error();
     } catch { throw new TypeError('E2B working directory must contain a Git checkout'); }
-    try {
-      const auth = await handle.commands.run('gh auth status', { cwd, envs, timeoutMs: 30_000 });
-      if (auth.exitCode !== 0) throw new Error();
-    } catch {
-      throw new TypeError(trustedGitHub
-        ? 'Authenticate gh on the Agent Manager host with gh auth login --hostname github.com, set GH_TOKEN or GITHUB_TOKEN on Agent Manager, or authenticate gh in the E2B sandbox'
-        : 'Authenticate gh in the E2B sandbox; host GitHub credentials are forwarded only for sandboxes provisioned from github.com');
-    }
   }
 
   private requireAvailableSandbox(id: string, provider?: AgentProvider): Sandbox {
