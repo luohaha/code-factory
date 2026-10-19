@@ -47,6 +47,7 @@ import { NativeAuthService } from './native-auth-service.js';
 import { profileIdFromModel, profileModel, type NativeApiFormat, type NativeApiProfile } from './native-auth.js';
 import { E2BProviderError, E2BSandboxService, type E2BCredentials, type E2BHandle } from './e2b-execution-env.js';
 import { E2BCredentialStore, e2bCredentialsPath } from './e2b-credentials.js';
+import { e2bGitHubEnvironment } from './e2b-github-auth.js';
 import { PullRequestReconciler } from './pull-request-reconciler.js';
 import {
   PullRequestCiFailureTrigger,
@@ -835,8 +836,7 @@ export class AgentManager extends EventEmitter {
   private async prepareE2BWorkspace(handle: E2BHandle, cwd: string, repositoryUrl: string | null,
     clone: boolean): Promise<void> {
     const trustedGitHub = repositoryUrl !== null && new URL(repositoryUrl).hostname.toLowerCase() === 'github.com';
-    const envs = Object.fromEntries((trustedGitHub ? ['GH_TOKEN', 'GITHUB_TOKEN'] : []).flatMap((name) =>
-      process.env[name] ? [[name, process.env[name]!]] : []));
+    const envs = await e2bGitHubEnvironment(trustedGitHub);
     try {
       const tools = await handle.commands.run('command -v git >/dev/null && command -v gh >/dev/null',
         { timeoutMs: 30_000 });
@@ -844,7 +844,7 @@ export class AgentManager extends EventEmitter {
     } catch { throw new TypeError('E2B template must have git and gh installed'); }
     if (clone && repositoryUrl) {
       try {
-        const token = trustedGitHub ? process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN : undefined;
+        const token = envs.GH_TOKEN;
         const cloned = await handle.git.clone(repositoryUrl, { path: cwd, timeoutMs: 120_000,
           ...(token ? { username: 'x-access-token', password: token } : {}) });
         if (cloned.exitCode !== 0) throw new Error();
@@ -859,7 +859,11 @@ export class AgentManager extends EventEmitter {
     try {
       const auth = await handle.commands.run('gh auth status', { cwd, envs, timeoutMs: 30_000 });
       if (auth.exitCode !== 0) throw new Error();
-    } catch { throw new TypeError('Authenticate gh in the E2B sandbox or set GH_TOKEN on Agent Manager'); }
+    } catch {
+      throw new TypeError(trustedGitHub
+        ? 'Authenticate gh on the Agent Manager host with gh auth login --hostname github.com, set GH_TOKEN or GITHUB_TOKEN on Agent Manager, or authenticate gh in the E2B sandbox'
+        : 'Authenticate gh in the E2B sandbox; host GitHub credentials are forwarded only for sandboxes provisioned from github.com');
+    }
   }
 
   private requireAvailableSandbox(id: string, provider?: AgentProvider): Sandbox {

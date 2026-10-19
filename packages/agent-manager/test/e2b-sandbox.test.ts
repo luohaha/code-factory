@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import test from 'node:test';
+import test, { after, before } from 'node:test';
 
 import type { SandboxInfo } from 'e2b';
 import { createModels } from '@earendil-works/pi-ai/models';
@@ -18,8 +18,17 @@ import { createLogger } from '../src/logger.js';
 import { NativeAgentService } from '../src/native-agent.js';
 import { createAgentManagerServer } from '../src/server.js';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.js';
+import { fakeGitHubAuth } from './helpers/github-auth.js';
 
-function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; review?: boolean } = {}) {
+const savedGitHubToken = process.env.GH_TOKEN;
+before(() => { process.env.GH_TOKEN = 'test-github-token'; });
+after(() => {
+  if (savedGitHubToken === undefined) delete process.env.GH_TOKEN;
+  else process.env.GH_TOKEN = savedGitHubToken;
+});
+
+function fakeE2B(settings: { missingGh?: boolean; missingAuth?: boolean; requireToken?: boolean;
+  acceptRotated?: boolean; review?: boolean } = {}) {
   let state: 'running' | 'paused' = 'running';
   let killed = false;
   const calls: string[] = [];
@@ -55,9 +64,14 @@ function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; revie
           wait: async () => { runOptions.onStdout?.('{"type":"item.completed","item":{"type":"agent_message","text":"Remote review"}}\n');
             return { exitCode: 0 }; } };
       }
-      if (command === 'gh auth status') authTokenForwarded.push(runOptions?.envs?.GH_TOKEN !== undefined);
+      if (command === 'gh auth status') {
+        authTokenForwarded.push(runOptions?.envs?.GH_TOKEN !== undefined);
+        if (settings.missingAuth) return { exitCode: 1 };
+        if (settings.requireToken && runOptions?.envs?.GH_TOKEN !== 'host-gh-token') return { exitCode: 1 };
+      }
       return { exitCode: settings.missingGh && command.startsWith('command -v') ? 1 : 0 }; } },
     git: { clone: async (url: string, options: { path: string; password?: string }) => {
+      if (settings.requireToken) assert.equal(options.password, 'host-gh-token');
       cloneAuth.push({ url, hasToken: options.password !== undefined });
       calls.push(`clone:${url}:${options.path}`); return { exitCode: 0 };
     } },
@@ -357,30 +371,90 @@ test('E2B provisioning rejects missing remote gh and removes the new sandbox', a
   }
 });
 
-test('GitHub token is sent to clone and remote gh only for github.com repositories', async () => {
+test('GitHub token is sent to clone and remote gh only for github.com repositories', async (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-token-host-'));
   const databasePath = join(directory, 'factory.sqlite');
-  const savedToken = process.env.GH_TOKEN;
-  process.env.GH_TOKEN = 'test-github-token';
+  const gh = fakeGitHubAuth(t, 'host-gh-token');
   const sdk = fakeE2B();
   const manager = new AgentManager({ workspaceRoot: directory, databasePath,
     store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
     logger: createLogger({ level: 'silent' }) });
   try {
-    for (const repositoryUrl of ['https://git.example/org/repo.git', 'https://github.com/org/repo.git']) {
+    for (const repositoryUrl of ['https://git.example/org/repo.git', 'https://github.com.evil.example/org/repo.git',
+      'https://github.com/org/repo.git']) {
       const sandbox = await manager.createE2BSandbox({ name: 'Scoped token',
         domain: 'e2b.example', apiKey: 'test-key', repositoryUrl });
       await manager.deleteSandbox(sandbox.id);
     }
+    const attached = await manager.createE2BSandbox({ name: 'Attached', domain: 'e2b.example',
+      apiKey: 'test-key', providerSandboxId: 'attached-id', repositoryUrl: 'https://github.com/org/repo.git' });
+    await manager.deleteSandbox(attached.id);
     assert.deepEqual(sdk.cloneAuth, [
       { url: 'https://git.example/org/repo.git', hasToken: false },
+      { url: 'https://github.com.evil.example/org/repo.git', hasToken: false },
       { url: 'https://github.com/org/repo.git', hasToken: true },
     ]);
-    assert.deepEqual(sdk.authTokenForwarded, [false, true]);
+    assert.deepEqual(sdk.authTokenForwarded, [false, false, true, false]);
+    assert.equal(gh.calls(), '["auth","token","--hostname","github.com"]\n');
   } finally {
     await manager.close();
-    if (savedToken === undefined) delete process.env.GH_TOKEN;
-    else process.env.GH_TOKEN = savedToken;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('E2B creation uses host gh login for private cloning and remote authentication without persisting the token', async (t) => {
+  fakeGitHubAuth(t, 'host-gh-token\n');
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-host-auth-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const sdk = fakeE2B({ requireToken: true });
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    logger: createLogger({ level: 'silent' }) });
+  try {
+    const sandbox = await manager.createE2BSandbox({ name: 'Host login', domain: 'e2b.example',
+      apiKey: 'test-key', repositoryUrl: 'https://github.com/org/private.git' });
+    assert.equal(sandbox.status, 'running');
+    assert.deepEqual(sdk.cloneAuth, [{ url: 'https://github.com/org/private.git', hasToken: true }]);
+    assert.deepEqual(sdk.authTokenForwarded, [true]);
+    assert.equal(JSON.stringify(manager.listSandboxes()).includes('host-gh-token'), false);
+    const secrets = new E2BCredentialStore(e2bCredentialsPath(databasePath));
+    try { assert.equal(secrets.read(sandbox.credentialRef!), 'test-key'); }
+    finally { secrets.close(); }
+  } finally {
+    await manager.close();
+    assert.equal(readFileSync(databasePath).includes('host-gh-token'), false);
+    assert.equal(readFileSync(e2bCredentialsPath(databasePath)).includes('host-gh-token'), false);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('E2B authentication failure explains host login and cleans up, while an existing remote login still works', async (t) => {
+  fakeGitHubAuth(t, null);
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-auth-failed-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const settings = { missingAuth: true };
+  const sdk = fakeE2B(settings);
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    logger: createLogger({ level: 'silent' }) });
+  try {
+    await assert.rejects(manager.createE2BSandbox({ name: 'No login', domain: 'e2b.example',
+      apiKey: 'test-key', repositoryUrl: 'https://github.com/org/public.git' }), (error: unknown) => {
+      assert(error instanceof TypeError);
+      assert.match(error.message, /gh auth login --hostname github.com/);
+      assert.match(error.message, /GH_TOKEN or GITHUB_TOKEN/);
+      assert.equal(error.message.includes('secret-diagnostic'), false);
+      return true;
+    });
+    assert.equal(sdk.killed, true);
+    assert.equal(manager.listSandboxes().length, 1);
+    settings.missingAuth = false;
+    const sandbox = await manager.createE2BSandbox({ name: 'Remote login', domain: 'e2b.example',
+      apiKey: 'test-key', repositoryUrl: 'https://github.com/org/public.git' });
+    assert.equal(sandbox.status, 'running');
+    assert.deepEqual(sdk.authTokenForwarded, [false, false]);
+  } finally {
+    await manager.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });

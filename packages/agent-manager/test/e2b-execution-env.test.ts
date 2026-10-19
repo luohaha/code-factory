@@ -14,6 +14,7 @@ import type { SandboxInfo, SandboxOpts } from 'e2b';
 
 import { E2BExecutionEnv, E2BSandboxService, type E2BClient, type E2BHandle } from '../src/e2b-execution-env.js';
 import { NativeAgentService } from '../src/native-agent.js';
+import { fakeGitHubAuth } from './helpers/github-auth.js';
 
 function fakeSdk() {
   const data = new Map<string, Uint8Array>();
@@ -280,6 +281,39 @@ test('pi-durable read, write, edit and bash use the selected E2B sandbox', async
     assert(sdk.commands.some((entry) => entry.command.includes('echo hello') && entry.cwd === '/home/user/repo'));
     assert.equal(sdk.commands.some((entry) => entry.envs?.GH_TOKEN !== undefined), false);
     assert.equal(existsSync(join(directory, 'note.txt')), false);
+  } finally {
+    await service.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('E2B Native RD and Reviewer commands use the host gh login on each run', async (t) => {
+  const gh = fakeGitHubAuth(t, 'host-gh-token\n');
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-e2b-native-auth-'));
+  const sdk = fakeSdk();
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const service = new NativeAgentService(join(directory, 'native.sqlite'), models,
+    new E2BSandboxService(sdk.client));
+  try {
+    for (const role of ['rd', 'reviewer'] as const) {
+      faux.setResponses([
+        fauxAssistantMessage(fauxToolCall('bash', { command: 'gh pr view' }), { stopReason: 'toolUse' }),
+        fauxAssistantMessage('Authenticated command completed'),
+      ]);
+      const outcome = await service.run({ role, requirementId: 'req_auth', sessionId: 'ses_auth',
+        nativeSessionId: null, prompt: 'Read the PR', model: 'faux/faux-1', reasoningEffort: null,
+        cwd: '/home/user/repo', sandbox: { kind: 'e2b', providerSandboxId: 'e2b-test-123',
+          credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: true },
+        environment: {}, instructions: 'Test', signal: new AbortController().signal, timeoutMs: 30_000,
+        onNativeSession: () => undefined, onEvent: () => undefined });
+      assert.equal(outcome.status, 'succeeded');
+    }
+    const commands = sdk.commands.filter((entry) => entry.command.includes('gh pr view'));
+    assert.equal(commands.length, 2);
+    assert(commands.every((entry) => entry.envs?.GH_TOKEN === 'host-gh-token'));
+    assert.equal(gh.calls().trim().split('\n').length, 2);
   } finally {
     await service.close();
     await rm(directory, { recursive: true, force: true });

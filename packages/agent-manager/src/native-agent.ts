@@ -16,6 +16,7 @@ import { runCodeFactoryCli } from './code-factory-cli.js';
 import { configureNativeProfile, createNativeModels, NativeCredentialStore, NativeProfileStore,
   nativeAuthDatabasePath, profileIdFromModel } from './native-auth.js';
 import { E2BExecutionEnv, E2BSandboxService, type E2BCredentials } from './e2b-execution-env.js';
+import { e2bGitHubEnvironment } from './e2b-github-auth.js';
 import type { NormalizedAgentEvent } from './adapters/types.js';
 import type { AgentReasoningEffort, RunOutcome } from './types.js';
 
@@ -54,7 +55,9 @@ export class NativeAgentService {
   #profiles: NativeProfileStore | null = null;
   readonly #e2b: E2BSandboxService;
   readonly #environments = new Map<ConversationId, Readonly<Record<string, string>>>();
-  readonly #sandboxes = new Map<ConversationId, NativeRunInput['sandbox']>();
+  readonly #sandboxes = new Map<ConversationId, NonNullable<NativeRunInput['sandbox']> & {
+    commandEnv: Record<string, string>;
+  }>();
   readonly #active = new Map<string, { submit: (message: string) => Promise<boolean> }>();
 
   constructor(databasePath: string, models?: MutableModels, e2b?: E2BSandboxService) {
@@ -148,10 +151,7 @@ export class NativeAgentService {
         const sandbox = this.#sandboxes.get(conversationId);
         if (sandbox) {
           const handle = await this.#e2b.connect(sandbox.providerSandboxId, sandbox.credentials);
-          const commandEnv = Object.fromEntries((sandbox.forwardGitHubToken ? ['GH_TOKEN', 'GITHUB_TOKEN'] : [])
-            .flatMap((name) =>
-            process.env[name] ? [[name, process.env[name]!]] : []));
-          return new E2BExecutionEnv(handle, cwd ?? process.cwd(), commandEnv, sandbox.credentials.domain);
+          return new E2BExecutionEnv(handle, cwd ?? process.cwd(), sandbox.commandEnv, sandbox.credentials.domain);
         }
         return new NodeExecutionEnv({ cwd: cwd ?? process.cwd(), shellEnv: { ...process.env, ...this.#environments.get(conversationId) } });
       },
@@ -211,7 +211,8 @@ export class NativeAgentService {
       if (!conversation) throw new Error('Native conversation is missing');
       activeConversationId = conversation.id;
       this.#environments.set(conversation.id, input.environment);
-      this.#sandboxes.set(conversation.id, input.sandbox);
+      if (input.sandbox) this.#sandboxes.set(conversation.id, { ...input.sandbox,
+        commandEnv: await e2bGitHubEnvironment(input.sandbox.forwardGitHubToken) });
       if (input.nativeSessionId) await conversation.configure(agent, CONTEXT);
       else input.onNativeSession(String(conversation.id));
       let timedOut = false;
