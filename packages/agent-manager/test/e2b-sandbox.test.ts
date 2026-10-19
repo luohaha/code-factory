@@ -17,7 +17,7 @@ import { E2BSandboxService, type E2BClient, type E2BHandle } from '../src/e2b-ex
 import { createLogger } from '../src/logger.js';
 import { NativeAgentService } from '../src/native-agent.js';
 import { createAgentManagerServer } from '../src/server.js';
-import { schemaStatements } from '../src/schema.js';
+import { sandboxesTableSql, schemaStatements } from '../src/schema.js';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.js';
 
 function fakeE2B(settings: { missingGh?: boolean; acceptRotated?: boolean; review?: boolean; home?: string } = {}) {
@@ -493,6 +493,31 @@ test('legacy sandbox records survive E2B schema migration', () => {
         status: 'unknown', checkedAt: null, createdAt: '2026-01-01T00:00:00Z' });
     } finally { store.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('sandbox cwd accepts null in new and migrated schemas', () => {
+  for (const definition of ['TEXT', 'TEXT NOT NULL', "TEXT CHECK (cwd IS NOT NULL OR kind = 'e2b')"]) {
+    const directory = mkdtempSync(join(tmpdir(), 'code-factory-nullable-cwd-'));
+    const databasePath = join(directory, 'factory.sqlite');
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(sandboxesTableSql.replace('cwd TEXT,', `cwd ${definition},`));
+    legacy.prepare('INSERT INTO sandboxes (id, name, kind, cwd, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run('existing', 'Existing workspace', 'local', '/existing', '2026-01-01T00:00:00Z');
+    legacy.close();
+    try {
+      const store = new SqliteAgentManagerStore(databasePath);
+      try {
+        const workspace = store.getSandbox('existing');
+        assert(workspace);
+        assert.equal(workspace.cwd, '/existing');
+        store.updateSandbox({ ...workspace, cwd: null });
+        assert.equal(store.getSandbox('existing')?.cwd, null);
+      } finally { store.close(); }
+      const reopened = new SqliteAgentManagerStore(databasePath);
+      try { assert.equal(reopened.getSandbox('existing')?.cwd, null); }
+      finally { reopened.close(); }
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  }
 });
 
 test('E2B records created before per-sandbox credentials gain nullable settings', () => {

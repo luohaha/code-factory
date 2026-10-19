@@ -389,7 +389,9 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
 
   private migrateE2BDefaultCwd(): void {
     const columns = this.#db.prepare('PRAGMA table_info(sandboxes)').all() as Row[];
-    if (!columns.some((column) => column.name === 'cwd' && Number(column.notnull) === 1)) return;
+    const table = this.#db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sandboxes'").get() as Row;
+    if (!columns.some((column) => column.name === 'cwd' && Number(column.notnull) === 1)
+      && !String(table.sql).includes('cwd IS NOT NULL')) return;
     this.#db.exec('PRAGMA foreign_keys = OFF');
     try {
       this.#db.exec('BEGIN IMMEDIATE');
