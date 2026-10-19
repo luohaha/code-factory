@@ -19,6 +19,8 @@ Code Factory brings requirements, coding agents, and GitHub pull requests into o
 
 Each requirement has its own persistent agent context. Agents can split work into child requirements and work in parallel, while humans steer the work, request reviews, and confirm completion.
 
+## How It Works
+
 <p align="center">
   <img src="docs/assets/brand/code-factory-overview.png" alt="Code Factory connects a requirement tree, coding agents, humans, and GitHub pull requests." />
 </p>
