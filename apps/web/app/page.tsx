@@ -88,6 +88,8 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { NativeAuthSettings } from '@/components/native-auth-settings';
+import { AgentTraceTimeline } from '@/components/agent-trace-timeline';
+import { ThinkingLoader } from '@/components/ui/thinking-loader';
 import {
   AgentManagerApiError,
   AgentManagerClient,
@@ -267,15 +269,6 @@ const runStatusLabel: Record<AgentRunDto['status'], TranslationKey> = {
   failed: 'Failed',
   timed_out: 'Timed out',
   cancelled: 'Cancelled',
-};
-
-const traceKindLabel: Record<AgentTraceEventDto['kind'], TranslationKey> = {
-  lifecycle: 'Lifecycle',
-  reasoning: 'Reasoning',
-  assistant_message: 'Agent message',
-  tool_call: 'Tool call',
-  tool_result: 'Tool result',
-  error: 'Error',
 };
 
 const authorLabel: Record<RequirementMessageDto['author'], TranslationKey> = {
@@ -2068,7 +2061,7 @@ function AgentTracePanel({ requirementId, runs, tracesByRun, loadedRequirementId
   loadedRequirementIds: ReadonlySet<string>;
   onLoadTrace: (requirementId: string) => Promise<void>;
 }) {
-  const { locale, t } = useI18n();
+  const { t } = useI18n();
   const [loadError, setLoadError] = useState<string | null>(null);
   const requestedRequirementIdsRef = useRef(new Set<string>());
   const sessionRuns = useMemo(
@@ -2080,7 +2073,11 @@ function AgentTracePanel({ requirementId, runs, tracesByRun, loadedRequirementId
     () => collectRequirementAgentTrace(runIds, tracesByRun),
     [runIds, tracesByRun],
   );
-  const running = sessionRuns.some((run) => run.status === 'running');
+  const runningRunIds = useMemo(
+    () => new Set(sessionRuns.filter((run) => run.status === 'running').map((run) => run.id)),
+    [sessionRuns],
+  );
+  const running = runningRunIds.size > 0;
 
   const requestTrace = useCallback(() => {
     if (requestedRequirementIdsRef.current.has(requirementId)) return;
@@ -2135,30 +2132,11 @@ function AgentTracePanel({ requirementId, runs, tracesByRun, loadedRequirementId
                 : 'No trace was captured for this Session.')}
           </div>
         ) : (
-          <div aria-live="polite">
-            <ol className="space-y-4">
-              {trace.map((item) => (
-                <li key={item.id} className="relative pl-5 before:absolute before:top-5 before:bottom-[-1rem] before:left-[5px] before:w-px before:bg-border last:before:hidden">
-                  <span className={`absolute top-1 left-0 size-2.5 rounded-full border-2 border-card ${item.kind === 'error' || item.status === 'failed' ? 'bg-rose-500' : item.kind === 'tool_call' || item.kind === 'tool_result' ? 'bg-amber-500' : item.kind === 'reasoning' ? 'bg-violet-500' : 'bg-emerald-500'}`} />
-                  <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                    <Badge variant="outline" className="h-5 text-[9px]">{t(traceKindLabel[item.kind])}</Badge>
-                    <span className="min-w-0 flex-1 truncate text-[10px] font-semibold" title={item.title}>{item.title}</span>
-                    <span className="shrink-0 font-mono text-[8px] text-muted-foreground">run-{shortId(item.runId)}</span>
-                    <span className="shrink-0 text-[9px] text-muted-foreground">{formatTime(item.createdAt, locale)}</span>
-                  </div>
-                  {item.detail ? (
-                    <pre className="mt-1.5 max-h-64 overflow-auto rounded-lg bg-muted/55 px-3 py-2 font-mono text-[10px] leading-4 whitespace-pre-wrap break-words text-foreground/80">{item.detail}</pre>
-                  ) : null}
-                  {item.toolName || item.nativeType ? (
-                    <p className="mt-1 truncate font-mono text-[8px] text-muted-foreground" title={[item.toolName, item.toolCallId, item.nativeType].filter(Boolean).join(' · ')}>
-                      {[item.toolName, item.toolCallId, item.nativeType].filter(Boolean).join(' · ')}
-                    </p>
-                  ) : null}
-                </li>
-              ))}
-            </ol>
-          </div>
+          <AgentTraceTimeline trace={trace} runningRunIds={runningRunIds} />
         )}
+        {running && !loading && !loadError ? (
+          <ThinkingLoader label={t('RD Agent is working')} className="mt-4" />
+        ) : null}
       </div>
     </section>
   );
@@ -2609,9 +2587,11 @@ function RequirementDetail({
             </div>
 
             {requirement.session.state === 'running' ? (
-              <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
-                <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-emerald-500/12 text-emerald-600"><Bot className="size-3.5" /></span>
-                <span className="flex min-w-0 flex-1 items-center gap-2"><LoaderCircle className="size-3.5 shrink-0 animate-spin" />{t('RD Agent is working; new messages are queued by default.')}</span>
+              <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                <div className="min-w-0 flex-1 basis-48">
+                  <ThinkingLoader label={t('RD Agent is working')} />
+                  <p className="mt-1 text-[10px]">{t('New messages are queued by default.')}</p>
+                </div>
                 {activeRdRun && messagesReady ? (
                   <div className="flex shrink-0 flex-wrap justify-end gap-1">
                     {hasNewerInput ? (
