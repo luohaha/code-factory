@@ -117,13 +117,15 @@ void test('live results update one card, and stopped Runs clear working indicato
   await page.locator('.cf-thinking-loader').waitFor({ state: 'hidden' });
 });
 
-void test('the conversation keeps Stop Run alongside the working indicator without the queue hint', async (t) => {
+void test('the conversation shows the original RD working status alongside Stop Run', async (t) => {
   const { page, data, open, emit } = await fixture(t);
   await open(false);
-  await page.locator('.cf-thinking-loader').waitFor();
+  const workingStatus = page.getByText('RD Agent is working; new messages are queued by default.', { exact: true });
+  await workingStatus.waitFor();
   assert.equal(await page.getByRole('button', { name: 'Stop Run', exact: true }).isVisible(), true);
+  assert.equal(await page.locator('.cf-thinking-loader').count(), 0);
   assert.equal(await page.getByText('New messages are queued by default.', { exact: true }).count(), 0);
   await emit(data.stop());
-  await page.locator('.cf-thinking-loader').waitFor({ state: 'hidden' });
+  await workingStatus.waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: 'Complete', exact: true }).waitFor();
 });
