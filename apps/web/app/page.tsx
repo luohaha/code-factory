@@ -2590,7 +2590,6 @@ function RequirementDetail({
               <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                 <div className="min-w-0 flex-1 basis-48">
                   <ThinkingLoader label={t('RD Agent is working')} />
-                  <p className="mt-1 text-[10px]">{t('New messages are queued by default.')}</p>
                 </div>
                 {activeRdRun && messagesReady ? (
                   <div className="flex shrink-0 flex-wrap justify-end gap-1">

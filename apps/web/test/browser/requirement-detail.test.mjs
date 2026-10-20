@@ -117,12 +117,12 @@ void test('live results update one card, and stopped Runs clear working indicato
   await page.locator('.cf-thinking-loader').waitFor({ state: 'hidden' });
 });
 
-void test('the conversation keeps Stop Run and queued-input behavior alongside the working indicator', async (t) => {
+void test('the conversation keeps Stop Run alongside the working indicator without the queue hint', async (t) => {
   const { page, data, open, emit } = await fixture(t);
   await open(false);
   await page.locator('.cf-thinking-loader').waitFor();
   assert.equal(await page.getByRole('button', { name: 'Stop Run', exact: true }).isVisible(), true);
-  await page.getByText('New messages are queued by default.', { exact: true }).waitFor();
+  assert.equal(await page.getByText('New messages are queued by default.', { exact: true }).count(), 0);
   await emit(data.stop());
   await page.locator('.cf-thinking-loader').waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: 'Complete', exact: true }).waitFor();
