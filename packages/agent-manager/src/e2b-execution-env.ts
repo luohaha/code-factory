@@ -14,9 +14,9 @@ export type E2BHandle = Pick<Sandbox, 'sandboxId' | 'files' | 'commands'>;
 export interface E2BCredentials { domain: string; apiKey: string }
 export class E2BProviderError extends Error {}
 
-export async function getE2BDefaultCwd(sandbox: E2BHandle): Promise<string> {
+export async function getE2BDefaultCwd(sandbox: E2BHandle, signal?: AbortSignal): Promise<string> {
   try {
-    const result = await sandbox.commands.run('pwd', { timeoutMs: 30_000 });
+    const result = await sandbox.commands.run('pwd', { timeoutMs: 30_000, ...(signal ? { signal } : {}) });
     const directory = result.stdout.trim();
     if (result.exitCode !== 0 || !posix.isAbsolute(directory) || directory.includes('\0') || directory.includes('\n')) {
       throw new Error();
@@ -51,8 +51,8 @@ export class E2BSandboxService {
     catch { throw new E2BProviderError('E2B sandbox creation failed; check the domain, API key, and template'); }
   }
 
-  async connect(id: string, credentials: E2BCredentials): Promise<E2BHandle> {
-    try { return await this.client.connect(id, credentials); }
+  async connect(id: string, credentials: E2BCredentials, signal?: AbortSignal): Promise<E2BHandle> {
+    try { return await this.client.connect(id, { ...credentials, ...(signal ? { signal } : {}) }); }
     catch { throw new E2BProviderError('E2B sandbox connection failed; check the domain, API key, and sandbox ID'); }
   }
 
@@ -114,9 +114,9 @@ export class E2BExecutionEnv implements ExecutionEnv {
   }
 
   static async create(sandbox: E2BHandle, cwd: string | null,
-    commandEnv: Readonly<Record<string, string>> = {}, domain = 'e2b.app'): Promise<E2BExecutionEnv> {
+    commandEnv: Readonly<Record<string, string>> = {}, domain = 'e2b.app', signal?: AbortSignal): Promise<E2BExecutionEnv> {
     if (cwd !== null) return new E2BExecutionEnv(sandbox, cwd, commandEnv, domain);
-    return new E2BExecutionEnv(sandbox, await getE2BDefaultCwd(sandbox), commandEnv, domain, true);
+    return new E2BExecutionEnv(sandbox, await getE2BDefaultCwd(sandbox, signal), commandEnv, domain, true);
   }
 
   private commandDirectory(cwd?: string): { cwd?: string } {

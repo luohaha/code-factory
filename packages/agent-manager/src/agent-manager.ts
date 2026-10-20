@@ -42,7 +42,7 @@ import {
   type AgentModelCatalogService,
 } from './model-catalog.js';
 import { HeadlessProcessRunner, type AgentProcessRunner, type ProcessRunRequest } from './process-runner.js';
-import { NativeAgentService } from './native-agent.js';
+import { NativeAgentService, type NativeSandboxAction, type NativeSandboxState } from './native-agent.js';
 import { NativeAuthService } from './native-auth-service.js';
 import { profileIdFromModel, profileModel, type NativeApiFormat, type NativeApiProfile } from './native-auth.js';
 import { E2BProviderError, E2BSandboxService, type E2BCredentials, type E2BHandle } from './e2b-execution-env.js';
@@ -929,8 +929,9 @@ export class AgentManager extends EventEmitter {
     return sandbox as Sandbox & { providerSandboxId: string };
   }
 
-  private ensureSandboxIdle(id: string): void {
-    if ([...this.#activeRdRuns.keys()].some((requirementId) => this.#store.getRequirement(requirementId)?.sandboxId === id)) {
+  private ensureSandboxIdle(id: string, exceptRequirementId?: string): void {
+    if ([...this.#activeRdRuns.keys()].some((requirementId) => requirementId !== exceptRequirementId &&
+      this.#store.getRequirement(requirementId)?.sandboxId === id)) {
       throw new StoreConflictError(`Sandbox ${id} has an active RD Run`);
     }
     if (this.#store.listReviewRequests().some((review) => review.status === 'running' &&
@@ -950,6 +951,23 @@ export class AgentManager extends EventEmitter {
     const sandbox = this.requireE2BSandbox(id);
     await this.#e2b.connect(sandbox.providerSandboxId, this.e2bCredentials(sandbox));
     return this.checkSandboxHealth(id);
+  }
+
+  private async controlNativeSandbox(requirementId: string, sessionId: string,
+    action: NativeSandboxAction): Promise<NativeSandboxState> {
+    const requirement = this.requireAgentSource(requirementId, sessionId);
+    if (requirement.provider !== 'native-agent' || !requirement.sandboxId || !this.#activeRdRuns.has(requirementId)) {
+      throw new StoreConflictError('Sandbox tools require an active Native Agent RD Run on E2B');
+    }
+    const sandbox = this.requireE2BSandbox(requirement.sandboxId);
+    if (action === 'pause') {
+      this.ensureSandboxIdle(sandbox.id, requirementId);
+      await this.#e2b.pause(sandbox.providerSandboxId, this.e2bCredentials(sandbox));
+    } else if (action === 'resume') {
+      await this.#e2b.connect(sandbox.providerSandboxId, this.e2bCredentials(sandbox));
+    }
+    const { id, name, kind, providerSandboxId, status, checkedAt } = await this.checkSandboxHealth(sandbox.id);
+    return { id, name, kind, providerSandboxId, status, checkedAt };
   }
 
   async deleteSandbox(id: string): Promise<void> {
@@ -1765,6 +1783,7 @@ export class AgentManager extends EventEmitter {
           ...(selectedSandbox?.kind === 'e2b' && selectedSandbox.providerSandboxId && cloudCredentials
             ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedSandbox.providerSandboxId, cwd: selectedSandbox.cwd,
                 credentials: cloudCredentials,
+                control: (action) => this.controlNativeSandbox(requirementId, started.session.id, action),
                 forwardGitHubToken: selectedSandbox.repositoryUrl !== null
                   && new URL(selectedSandbox.repositoryUrl).hostname.toLowerCase() === 'github.com' } } : {}),
           environment: this.buildRdEnvironment(requirement), instructions: this.buildRdDeveloperInstructions(true, requirement.sandboxId),
@@ -1849,7 +1868,10 @@ export class AgentManager extends EventEmitter {
     } finally {
       if (handle) {
         const uploadedHandle = handle;
-        await Promise.all(uploaded.map(async (path) => {
+        // A remote cleanup request can auto-resume a sandbox the RD Agent deliberately paused.
+        const running = await this.#e2b.getInfo(sandbox.providerSandboxId!, credentials)
+          .then((info) => info.state === 'running', () => false);
+        if (running) await Promise.all(uploaded.map(async (path) => {
           try { await uploadedHandle.files.remove(path); } catch { /* Preserve the Run outcome. */ }
         }));
       }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -26,9 +26,14 @@ function fakeSdk(defaultDirectory = '/home/user') {
       async read(path: string, options?: { format?: string }) {
         const content = data.get(path);
         if (!content) throw new Error(`Missing ${path}`);
+        if (options?.format === 'stream') return new ReadableStream({ start(controller) { controller.enqueue(content); controller.close(); } });
         return options?.format === 'bytes' ? content : decoder.decode(content);
       },
-      async write(path: string, value: string | ArrayBuffer) {
+      async write(path: string, value: string | ArrayBuffer | ReadableStream<Uint8Array>) {
+        if (value instanceof ReadableStream) {
+          data.set(path, new Uint8Array(await new Response(value).arrayBuffer()));
+          return;
+        }
         data.set(path, typeof value === 'string' ? encoder.encode(value) : new Uint8Array(value));
       },
       async exists(path: string) { return data.has(path); },
@@ -89,6 +94,73 @@ function fakeSdk(defaultDirectory = '/home/user') {
   };
   return { handle, client, data, commands, get createOptions() { return createOptions; } };
 }
+
+test('native sandbox transfer tools move binary attachments between host and remote paths', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-e2b-transfer-'));
+  const sdk = fakeSdk('/home/custom');
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const localPath = join(directory, 'attachment.bin');
+  const downloaded = join(directory, 'output', 'result.bin');
+  const binary = Buffer.from([0, 255, 128, 10, 13, 0, 1]);
+  await writeFile(localPath, binary);
+  let transcript = '';
+  faux.setResponses([
+    fauxAssistantMessage(fauxToolCall('sandbox_upload', { localPath, remotePath: 'input/data.bin' }), { stopReason: 'toolUse' }),
+    fauxAssistantMessage(fauxToolCall('sandbox_download', { localPath: downloaded, remotePath: 'input/data.bin' }), { stopReason: 'toolUse' }),
+    (context) => { transcript = JSON.stringify(context.messages); return fauxAssistantMessage('File ready'); },
+  ]);
+  const service = new NativeAgentService(join(directory, 'native.sqlite'), models, new E2BSandboxService(sdk.client));
+  try {
+    const outcome = await service.run({ requirementId: 'req_transfer', sessionId: 'ses_transfer', nativeSessionId: null,
+      prompt: `Process host attachment ${localPath}`, model: 'faux/faux-1', reasoningEffort: null, cwd: directory,
+      sandbox: { kind: 'e2b', providerSandboxId: 'e2b-test-123', cwd: null,
+        credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: false },
+      environment: {}, instructions: 'Test', signal: new AbortController().signal, timeoutMs: 30_000,
+      onNativeSession: () => undefined, onEvent: () => undefined });
+    assert.equal(outcome.status, 'succeeded');
+    assert.deepEqual(await readFile(downloaded), binary);
+    assert.deepEqual(sdk.data.get('/home/custom/input/data.bin'), new Uint8Array(binary));
+    assert.match(transcript, /byteSize/);
+    assert.equal(transcript.includes('test-key'), false);
+    assert.equal(transcript.includes('"isError":true'), false);
+    assert.equal(existsSync(join(directory, 'input')), false);
+  } finally { await service.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('native transfer errors hide provider details and sandbox tools reject local workspaces', async () => {
+  for (const remote of [false, true]) {
+    const directory = await mkdtemp(join(tmpdir(), 'code-factory-e2b-tool-errors-'));
+    const sdk = fakeSdk();
+    sdk.handle.files.write = async () => { throw new Error('provider leaked test-key or file contents'); };
+    const faux = fauxProvider();
+    const models = createModels();
+    models.setProvider(faux.provider);
+    const localPath = join(directory, 'input');
+    await writeFile(localPath, 'private contents');
+    let transcript = '';
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall('sandbox_upload', { localPath, remotePath: '/input' }), { stopReason: 'toolUse' }),
+      ...(remote ? [] : [fauxAssistantMessage(fauxToolCall('sandbox_pause', {}), { stopReason: 'toolUse' })]),
+      (context) => { transcript = JSON.stringify(context.messages); return fauxAssistantMessage('Tool failed'); },
+    ]);
+    const service = new NativeAgentService(join(directory, 'native.sqlite'), models, new E2BSandboxService(sdk.client));
+    try {
+      const outcome = await service.run({ requirementId: 'req_errors', sessionId: 'ses_errors', nativeSessionId: null,
+        prompt: 'Try sandbox tools', model: 'faux/faux-1', reasoningEffort: null, cwd: directory,
+        ...(remote ? { sandbox: { kind: 'e2b' as const, providerSandboxId: 'e2b-test-123', cwd: null,
+          credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: false } } : {}),
+        environment: {}, instructions: 'Test', signal: new AbortController().signal, timeoutMs: 30_000,
+        onNativeSession: () => undefined, onEvent: () => undefined });
+      assert.equal(outcome.status, 'succeeded');
+      assert(transcript.includes('"isError":true'));
+      assert(transcript.includes(remote ? 'file upload failed' : 'selected E2B'));
+      assert.equal(transcript.includes('test-key'), false);
+      assert.equal(transcript.includes('private contents'), false);
+    } finally { await service.close(); await rm(directory, { recursive: true, force: true }); }
+  }
+});
 
 test('E2B service passes explicit credentials and durable lifecycle to SDK', async () => {
   const sdk = fakeSdk();
