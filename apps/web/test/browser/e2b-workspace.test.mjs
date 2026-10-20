@@ -40,6 +40,9 @@ for (const locale of ['en', 'zh-CN']) {
       };
     });
     const writes = [];
+    const patches = [];
+    let workspace = null;
+    let variables = {};
     await page.route('**/api/**', async (route) => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
@@ -47,16 +50,31 @@ for (const locale of ['en', 'zh-CN']) {
       let status = 200;
       if (path === '/api/workspace') body = { root: '/fixture', databasePath: '/fixture/data.sqlite', logFilePath: null };
       if (path === '/api/agent-models') body = { providers: [], refreshIntervalSeconds: 86_400 };
+      if (path === '/api/sandboxes') body = { items: workspace ? [workspace] : [] };
       if (path === '/api/sandboxes' && request.method() === 'POST') {
         const input = request.postDataJSON();
         writes.push(input);
-        body = {
+        variables = input.environmentVariables ?? {};
+        workspace = {
           id: 'sbx_created', name: input.name, kind: 'e2b', cwd: input.cwd ?? '/home/user/repo',
           providerSandboxId: input.providerSandboxId ?? 'new-remote-id', domain: input.domain,
           credentialRef: 'e2b_credential', credentialEnvVar: null, repositoryUrl: null,
           template: input.template ?? 'base', status: 'running', checkedAt: null, createdAt: new Date().toISOString(),
+          environmentVariableNames: Object.keys(variables).sort(),
         };
+        body = workspace;
         status = 201;
+      }
+      if (path === '/api/sandboxes/sbx_created' && request.method() === 'PATCH') {
+        const input = request.postDataJSON();
+        patches.push(input);
+        for (const [name, value] of Object.entries(input.environmentVariables ?? {})) {
+          if (value === null) delete variables[name];
+          else variables[name] = value;
+        }
+        workspace = { ...workspace, name: input.name, cwd: input.cwd, domain: input.domain,
+          environmentVariableNames: Object.keys(variables).sort() };
+        body = workspace;
       }
       await route.fulfill({ status, json: body });
     });
@@ -73,6 +91,16 @@ for (const locale of ['en', 'zh-CN']) {
     await dialog.getByText(chinese ? 'Agent 可以根据任务需要克隆仓库并准备工具。' : 'The Agent can clone a repository and prepare tools when the task needs them.', { exact: true }).waitFor();
     await dialog.locator('summary').click();
     assert.equal(await dialog.locator('input[name="repositoryUrl"]').count(), 0);
+    const addVariable = () => dialog.getByRole('button', { name: chinese ? '添加变量' : 'Add variable', exact: true }).click();
+    const variableName = (index) => dialog.getByRole('textbox', { name: `${chinese ? '变量名' : 'Variable name'} ${index}`, exact: true });
+    const variableValue = (index) => dialog.getByLabel(`${chinese ? '变量值' : 'Variable value'} ${index}`, { exact: true });
+    await addVariable();
+    await variableName(1).fill('GH_TOKEN');
+    await variableValue(1).fill('browser-token');
+    assert.equal(await variableValue(1).getAttribute('type'), 'password');
+    await addVariable();
+    await variableName(2).fill('CUSTOM');
+    await variableValue(2).fill('original-value');
     if (chinese) {
       await dialog.locator('input[name="providerSandboxId"]').fill('existing-remote-id');
       await dialog.locator('input[name="cwd"]').fill('/work/empty');
@@ -80,6 +108,41 @@ for (const locale of ['en', 'zh-CN']) {
     await dialog.getByRole('button', { name: chinese ? '创建' : 'Create', exact: true }).click();
     await dialog.waitFor({ state: 'hidden' });
     assert.deepEqual(writes, [{ kind: 'e2b', name: 'Task sandbox', domain: 'e2b.example', apiKey: 'test-key',
+      environmentVariables: { GH_TOKEN: 'browser-token', CUSTOM: 'original-value' },
       ...(chinese ? { providerSandboxId: 'existing-remote-id', cwd: '/work/empty' } : {}) }]);
+    await page.getByRole('button', { name: /Task sandbox/ }).click();
+    assert.equal((await dialog.innerText()).includes('browser-token'), false);
+    const edit = () => dialog.getByRole('button', { name: chinese ? '编辑工作区' : 'Edit workspace', exact: true }).click();
+    const save = () => dialog.getByRole('button', { name: chinese ? '保存修改' : 'Save changes', exact: true }).click();
+    await edit();
+    assert.equal(await variableName(1).getAttribute('readonly'), '');
+    assert.equal(await variableValue(1).inputValue(), '');
+    assert.equal(await variableValue(2).inputValue(), '');
+    await save();
+    await dialog.getByRole('button', { name: chinese ? '编辑工作区' : 'Edit workspace', exact: true }).waitFor();
+    assert.equal(patches[0].environmentVariables, undefined);
+    assert.deepEqual(variables, { GH_TOKEN: 'browser-token', CUSTOM: 'original-value' });
+    await edit();
+    await dialog.getByRole('button', { name: `${chinese ? '移除变量' : 'Remove variable'} CUSTOM`, exact: true }).click();
+    await variableValue(1).fill('rotated-browser-token');
+    await addVariable();
+    await variableName(2).fill('GH_TOKEN');
+    await variableValue(2).fill('extra-value');
+    await save();
+    assert.equal(await variableName(2).evaluate((input) => input.checkValidity()), false);
+    assert.equal(patches.length, 1);
+    await variableName(2).fill('EXTRA');
+    await save();
+    await dialog.getByRole('button', { name: chinese ? '编辑工作区' : 'Edit workspace', exact: true }).waitFor();
+    assert.deepEqual(patches[1].environmentVariables, { CUSTOM: null, GH_TOKEN: 'rotated-browser-token', EXTRA: 'extra-value' });
+    assert.equal((await dialog.innerText()).includes('rotated-browser-token'), false);
+    await edit();
+    for (const name of ['GH_TOKEN', 'EXTRA']) {
+      await dialog.getByRole('button', { name: `${chinese ? '移除变量' : 'Remove variable'} ${name}`, exact: true }).click();
+    }
+    await save();
+    await dialog.getByRole('button', { name: chinese ? '编辑工作区' : 'Edit workspace', exact: true }).waitFor();
+    assert.deepEqual(patches[2].environmentVariables, { EXTRA: null, GH_TOKEN: null });
+    assert.deepEqual(variables, {});
   });
 }

@@ -5,6 +5,7 @@ import { AgentManager, MAX_MESSAGE_ATTACHMENT_BYTES } from './agent-manager.js';
 import { validateAgentManagerConfigurationPatch } from './configuration.js';
 import { DashboardServer } from './dashboard-server.js';
 import { E2BProviderError } from './e2b-execution-env.js';
+import { environmentVariablePatch } from './sandbox-environment.js';
 import { JevMessageDeliveryError } from './jev-message-decision.js';
 import type { Logger } from './logger.js';
 import { StoreConflictError, StoreNotFoundError } from './store.js';
@@ -387,6 +388,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
       if (request.method === 'POST' && url.pathname === '/api/sandboxes') {
         const body = await readJson(request);
         if (body.kind === 'local') {
+          if (body.environmentVariables !== undefined) throw new TypeError('Environment variables are only supported for E2B workspaces');
           sendJson(response, 201, manager.createLocalExecution({
             name: stringField(body, 'name', true)!, cwd: stringField(body, 'cwd', true)!,
           }));
@@ -399,6 +401,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         sendJson(response, 201, await manager.createE2BSandbox({
           name: stringField(body, 'name', true)!,
           domain: stringField(body, 'domain', true)!, apiKey: stringField(body, 'apiKey', true)!,
+          ...(body.environmentVariables === undefined ? {} : { environmentVariables: environmentVariablePatch(body.environmentVariables) }),
           ...(body.template === undefined ? {} : { template: stringField(body, 'template', true)! }),
           ...(body.cwd === undefined ? {} : { cwd: stringField(body, 'cwd', true)! }),
           ...(body.providerSandboxId === undefined ? {} : { providerSandboxId: stringField(body, 'providerSandboxId', true)! }),
@@ -431,6 +434,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           ...(body.cwd === undefined ? {} : { cwd: stringField(body, 'cwd', true)! }),
           ...(body.domain === undefined ? {} : { domain: stringField(body, 'domain', true)! }),
           ...(body.apiKey === undefined ? {} : { apiKey: stringField(body, 'apiKey', true)! }),
+          ...(body.environmentVariables === undefined ? {} : { environmentVariables: environmentVariablePatch(body.environmentVariables) }),
         }));
         return;
       }

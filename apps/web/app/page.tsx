@@ -88,6 +88,7 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { NativeAuthSettings } from '@/components/native-auth-settings';
+import { WorkspaceEnvironmentVariables, workspaceEnvironmentVariables } from '@/components/workspace-environment-variables';
 import {
   AgentManagerApiError,
   AgentManagerClient,
@@ -3589,10 +3590,12 @@ function Dashboard() {
         const entry = fields.get(field);
         return typeof entry === 'string' ? entry.trim() : '';
       };
+      const environmentVariables = workspaceEnvironmentVariables(fields);
       const sandbox = createPathKind === 'local'
         ? await client.createLocalExecution({ name: name.trim(), cwd: value('cwd') })
         : await client.createSandbox({ name: name.trim(),
           domain: value('domain'), apiKey: value('apiKey'),
+          ...(Object.keys(environmentVariables).length ? { environmentVariables } : {}),
           ...(value('providerSandboxId') ? { providerSandboxId: value('providerSandboxId') } : {}),
           ...(value('template') ? { template: value('template') } : {}),
           ...(value('cwd') ? { cwd: value('cwd') } : {}),
@@ -3619,10 +3622,12 @@ function Dashboard() {
     setSavingWorkspace(true);
     setWorkspaceDialogError(null);
     try {
+      const environmentVariables = workspaceEnvironmentVariables(fields);
       const updated = await client.updateWorkspace(selectedWorkspace.id, {
         name: value('name'), cwd: value('cwd'),
         ...(selectedWorkspace.kind === 'e2b' ? {
           domain: value('domain'),
+          ...(Object.keys(environmentVariables).length ? { environmentVariables } : {}),
           ...(value('apiKey') ? { apiKey: value('apiKey') } : {}),
         } : {}),
       });
@@ -4011,6 +4016,7 @@ function Dashboard() {
                             <Input name="providerSandboxId" aria-label={t('Existing E2B sandbox ID')} placeholder={t('Existing E2B sandbox ID (optional)')} />
                             <Input name="template" aria-label={t('E2B template')} placeholder={t('E2B template (default: base)')} />
                             <Input name="cwd" aria-label={t('Remote working directory')} placeholder={t('Remote working directory (default: /home/user/repo)')} />
+                            <WorkspaceEnvironmentVariables key={createPathOpen ? 'open' : 'closed'} />
                           </div>
                         </details>
                       </>
@@ -4059,6 +4065,7 @@ function Dashboard() {
                         <Input id="edit-workspace-key" name="apiKey" type="password" autoComplete="off"
                           placeholder={t('Leave blank to keep current key')} />
                       </Field>
+                      <WorkspaceEnvironmentVariables names={selectedWorkspace.environmentVariableNames ?? []} />
                     </> : null}
                   </FieldGroup>
                   <DialogFooter>
@@ -4106,6 +4113,7 @@ function Dashboard() {
                       {selectedWorkspace.providerSandboxId ? <div className="min-w-0 sm:col-span-2"><dt className="text-muted-foreground">{t('Existing E2B sandbox ID')}</dt><dd className="mt-1 break-all font-mono">{selectedWorkspace.providerSandboxId}</dd></div> : null}
                       <div><dt className="text-muted-foreground">{t('E2B template')}</dt><dd className="mt-1 break-all">{selectedWorkspace.template}</dd></div>
                       <div><dt className="text-muted-foreground">{t('E2B domain')}</dt><dd className="mt-1 break-all">{selectedWorkspace.domain}</dd></div>
+                      {selectedWorkspace.environmentVariableNames?.length ? <div className="min-w-0 sm:col-span-2"><dt className="text-muted-foreground">{t('Environment variables')}</dt><dd className="mt-1 break-all font-mono">{selectedWorkspace.environmentVariableNames.join(', ')}</dd></div> : null}
                       <div className="min-w-0 sm:col-span-2"><dt className="text-muted-foreground">{t('Credential reference')}</dt><dd className="mt-1 break-all font-mono">{selectedWorkspace.credentialRef ?? selectedWorkspace.credentialEnvVar}</dd></div>
                       {selectedWorkspace.repositoryUrl ? <div className="min-w-0 sm:col-span-2"><dt className="text-muted-foreground">{t('Repository HTTPS URL')}</dt><dd className="mt-1 break-all">{selectedWorkspace.repositoryUrl}</dd></div> : null}
                       {selectedWorkspace.checkedAt ? <div className="sm:col-span-2"><dt className="text-muted-foreground">{t('Last checked')}</dt><dd className="mt-1">{new Date(selectedWorkspace.checkedAt).toLocaleString(locale)}</dd></div> : null}

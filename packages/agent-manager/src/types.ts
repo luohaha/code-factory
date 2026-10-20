@@ -17,6 +17,10 @@ export interface Sandbox {
   checkedAt: string | null;
   createdAt: string;
 }
+/** Public workspace metadata; environment values remain in the credential store. */
+export interface SandboxSummary extends Sandbox {
+  environmentVariableNames?: string[];
+}
 export type AgentReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export type RequirementStatus =

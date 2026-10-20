@@ -38,7 +38,7 @@ Open [http://127.0.0.1:4310](http://127.0.0.1:4310), create a requirement, and s
 
 Unsent conversation text and attachments return when you reopen a requirement or reload the dashboard in the same browser.
 
-E2B sandbox creation prepares a remote directory; the Native Agent chooses and clones the task repository when needed. See the [Native Agent guide](docs/native-agent.md).
+E2B sandbox creation prepares a remote directory; the Native Agent chooses and clones the task repository when needed. Optional sandbox environment variables supply tokens and build settings to Native Agent commands. See the [Native Agent guide](docs/native-agent.md).
 
 Headless agents inherit your filesystem, network, and command permissions. Run Code Factory in trusted repositories and limit dashboard access to trusted users.
 

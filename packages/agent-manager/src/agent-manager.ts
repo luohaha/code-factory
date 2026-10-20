@@ -47,6 +47,7 @@ import { NativeAuthService } from './native-auth-service.js';
 import { profileIdFromModel, profileModel, type NativeApiFormat, type NativeApiProfile } from './native-auth.js';
 import { E2BProviderError, E2BSandboxService, type E2BCredentials, type E2BHandle } from './e2b-execution-env.js';
 import { E2BCredentialStore, e2bCredentialsPath } from './e2b-credentials.js';
+import { applyEnvironmentVariablePatch, type EnvironmentVariablePatch } from './sandbox-environment.js';
 import { PullRequestReconciler } from './pull-request-reconciler.js';
 import {
   PullRequestCiFailureTrigger,
@@ -76,6 +77,7 @@ import type {
   AgentTimer,
   AgentTimerSchedule,
   Sandbox,
+  SandboxSummary,
   TrackPullRequestInput,
   UpdateRequirementAgentConfigurationInput,
   UpdateRequirementInput,
@@ -771,13 +773,14 @@ export class AgentManager extends EventEmitter {
     return requirement;
   }
 
-  listSandboxes(): Sandbox[] {
-    return [{ id: 'local', name: 'Default workspace', kind: 'local', cwd: this.workspaceRoot,
+  listSandboxes(): SandboxSummary[] {
+    const sandboxes: Sandbox[] = [{ id: 'local', name: 'Default workspace', kind: 'local', cwd: this.workspaceRoot,
       providerSandboxId: null, credentialEnvVar: null, domain: null, credentialRef: null,
       repositoryUrl: null, template: null,
       status: 'running', checkedAt: null,
       createdAt: '1970-01-01T00:00:00.000Z' },
       ...this.#store.listSandboxes().filter((sandbox) => sandbox.kind !== 'local-sandbox')];
+    return sandboxes.map((sandbox) => this.sandboxSummary(sandbox));
   }
 
   createLocalExecution(input: { name: string; cwd: string }): Sandbox {
@@ -810,6 +813,15 @@ export class AgentManager extends EventEmitter {
     return this.#e2bCredentials;
   }
 
+  private e2bEnvironment(sandbox: Sandbox): Record<string, string> {
+    return sandbox.credentialRef ? this.e2bCredentialStore().readEnvironment(sandbox.credentialRef) : {};
+  }
+
+  private sandboxSummary(sandbox: Sandbox): SandboxSummary {
+    return sandbox.kind === 'e2b'
+      ? { ...sandbox, environmentVariableNames: Object.keys(this.e2bEnvironment(sandbox)).sort() } : sandbox;
+  }
+
   private e2bCredentials(sandbox: Sandbox): E2BCredentials {
     const apiKey = sandbox.credentialRef
       ? this.e2bCredentialStore().read(sandbox.credentialRef)
@@ -838,7 +850,8 @@ export class AgentManager extends EventEmitter {
   }
 
   async createE2BSandbox(input: { name: string; template?: string; cwd?: string;
-    providerSandboxId?: string; domain: string; apiKey: string }): Promise<Sandbox> {
+    providerSandboxId?: string; domain: string; apiKey: string;
+    environmentVariables?: EnvironmentVariablePatch }): Promise<SandboxSummary> {
     const name = input.name.trim();
     if (!name || name.length > 80) throw new TypeError('sandbox name must contain 1 to 80 characters');
     const domain = input.domain.trim().toLowerCase();
@@ -846,6 +859,7 @@ export class AgentManager extends EventEmitter {
     const apiKey = input.apiKey.trim();
     if (!apiKey) throw new TypeError('E2B_API_KEY is required');
     const credentials = { domain, apiKey };
+    const environment = applyEnvironmentVariablePatch({}, input.environmentVariables ?? {});
     const cwd = input.cwd?.trim() || '/home/user/repo';
     if (!posix.isAbsolute(cwd) || cwd.includes('\0')) throw new TypeError('cwd must be an absolute remote path');
     const template = input.template?.trim() || 'base';
@@ -862,12 +876,12 @@ export class AgentManager extends EventEmitter {
       await this.prepareE2BWorkspace(handle, cwd);
       const info = await this.#e2b.getInfo(handle.sandboxId, credentials);
       const now = new Date().toISOString();
-      this.e2bCredentialStore().save(credentialRef, apiKey);
-      return this.#store.createSandbox({ id: `sbx_${randomUUID()}`, name, kind: 'e2b', cwd,
+      this.e2bCredentialStore().save(credentialRef, apiKey, environment);
+      return this.sandboxSummary(this.#store.createSandbox({ id: `sbx_${randomUUID()}`, name, kind: 'e2b', cwd,
         providerSandboxId: handle.sandboxId, credentialEnvVar: null, domain, credentialRef,
         repositoryUrl: null,
         template: attached ? info.templateId : template,
-        status: info.state, checkedAt: now, createdAt: now });
+        status: info.state, checkedAt: now, createdAt: now }));
     } catch (error) {
       this.#e2bCredentials?.delete(credentialRef);
       if (!attached) await this.#e2b.kill(handle.sandboxId, credentials).catch(() => undefined);
@@ -877,7 +891,7 @@ export class AgentManager extends EventEmitter {
   }
 
   async updateSandbox(id: string, input: { name?: string; cwd?: string; domain?: string;
-    apiKey?: string }): Promise<Sandbox> {
+    apiKey?: string; environmentVariables?: EnvironmentVariablePatch }): Promise<SandboxSummary> {
     if (id === 'local') throw new TypeError('Default workspace cannot be edited');
     if (Object.keys(input).length === 0) throw new TypeError('at least one workspace field is required');
     const current = this.#store.getSandbox(id);
@@ -885,7 +899,7 @@ export class AgentManager extends EventEmitter {
     const name = input.name === undefined ? current.name : input.name.trim();
     if (!name || name.length > 80) throw new TypeError('workspace name must contain 1 to 80 characters');
     if (current.kind === 'local') {
-      if (input.domain !== undefined || input.apiKey !== undefined) {
+      if (input.domain !== undefined || input.apiKey !== undefined || input.environmentVariables !== undefined) {
         throw new TypeError('E2B fields cannot be used for a local workspace');
       }
       const cwd = input.cwd === undefined ? current.cwd : this.resolveLocalWorkspace(input.cwd);
@@ -900,8 +914,10 @@ export class AgentManager extends EventEmitter {
     if (input.apiKey !== undefined && !apiKey) throw new TypeError('E2B_API_KEY must be non-empty');
     const cwd = input.cwd === undefined ? current.cwd : input.cwd.trim();
     if (!posix.isAbsolute(cwd) || cwd.includes('\0')) throw new TypeError('cwd must be an absolute remote path');
+    const environment = applyEnvironmentVariablePatch(this.e2bEnvironment(current), input.environmentVariables ?? {});
+    const secretsChanged = apiKey !== undefined || input.environmentVariables !== undefined;
     const needsConnection = domain !== current.domain || apiKey !== undefined || cwd !== current.cwd;
-    if (needsConnection) this.ensureSandboxIdle(id);
+    if (needsConnection || secretsChanged) this.ensureSandboxIdle(id);
     let status = current.status;
     let checkedAt = current.checkedAt;
     if (needsConnection) {
@@ -911,27 +927,30 @@ export class AgentManager extends EventEmitter {
       status = (await this.#e2b.getInfo(current.providerSandboxId, credentials)).state;
       checkedAt = new Date().toISOString();
     }
-    const credentialRef = apiKey === undefined ? current.credentialRef : `e2b_${randomUUID()}`;
-    if (apiKey && credentialRef) this.e2bCredentialStore().save(credentialRef, apiKey);
+    const credentialRef = secretsChanged ? `e2b_${randomUUID()}` : current.credentialRef;
+    if (secretsChanged && credentialRef) {
+      this.e2bCredentialStore().save(credentialRef, apiKey ?? this.e2bCredentials(current).apiKey, environment);
+    }
+    let updated: Sandbox;
     try {
-      const updated = this.#store.updateSandbox({ ...current, name, cwd, domain,
-        credentialRef, credentialEnvVar: apiKey ? null : current.credentialEnvVar, status, checkedAt });
-      if (apiKey && current.credentialRef) this.e2bCredentialStore().delete(current.credentialRef);
-      return updated;
+      updated = this.#store.updateSandbox({ ...current, name, cwd, domain,
+        credentialRef, credentialEnvVar: secretsChanged ? null : current.credentialEnvVar, status, checkedAt });
     } catch (error) {
-      if (apiKey && credentialRef) this.e2bCredentialStore().delete(credentialRef);
+      if (secretsChanged && credentialRef) this.e2bCredentialStore().delete(credentialRef);
       throw error;
     }
+    if (secretsChanged && current.credentialRef) this.e2bCredentialStore().delete(current.credentialRef);
+    return this.sandboxSummary(updated);
   }
 
-  async checkSandboxHealth(id: string): Promise<Sandbox> {
+  async checkSandboxHealth(id: string): Promise<SandboxSummary> {
     const sandbox = this.#store.getSandbox(id);
     if (!sandbox) throw new StoreNotFoundError(`Sandbox ${id} not found`);
     if (sandbox.kind !== 'e2b' || !sandbox.providerSandboxId) return sandbox;
     let status: Sandbox['status'];
     try { status = (await this.#e2b.getInfo(sandbox.providerSandboxId, this.e2bCredentials(sandbox))).state; }
     catch (error) { status = error instanceof Error && error.name === 'SandboxNotFoundError' ? 'terminated' : 'unreachable'; }
-    return this.#store.updateSandbox({ ...sandbox, status, checkedAt: new Date().toISOString() });
+    return this.sandboxSummary(this.#store.updateSandbox({ ...sandbox, status, checkedAt: new Date().toISOString() }));
   }
 
   private requireE2BSandbox(id: string): Sandbox & { providerSandboxId: string } {
@@ -951,14 +970,14 @@ export class AgentManager extends EventEmitter {
     }
   }
 
-  async pauseSandbox(id: string): Promise<Sandbox> {
+  async pauseSandbox(id: string): Promise<SandboxSummary> {
     const sandbox = this.requireE2BSandbox(id);
     this.ensureSandboxIdle(id);
     await this.#e2b.pause(sandbox.providerSandboxId, this.e2bCredentials(sandbox));
     return this.checkSandboxHealth(id);
   }
 
-  async resumeSandbox(id: string): Promise<Sandbox> {
+  async resumeSandbox(id: string): Promise<SandboxSummary> {
     const sandbox = this.requireE2BSandbox(id);
     await this.#e2b.connect(sandbox.providerSandboxId, this.e2bCredentials(sandbox));
     return this.checkSandboxHealth(id);
@@ -1576,6 +1595,7 @@ export class AgentManager extends EventEmitter {
         ...(selectedWorkspace?.kind === 'e2b' && selectedWorkspace.providerSandboxId && remoteCredentials
           ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedWorkspace.providerSandboxId,
               credentials: remoteCredentials,
+              environmentVariables: this.e2bEnvironment(selectedWorkspace),
               forwardGitHubToken: selectedWorkspace.repositoryUrl !== null
                 && new URL(selectedWorkspace.repositoryUrl).hostname.toLowerCase() === 'github.com' } } : {}),
         environment: {}, instructions: `${developerInstructions}\nUse the bash tool for GitHub CLI commands in the selected workspace.`,
@@ -1777,6 +1797,7 @@ export class AgentManager extends EventEmitter {
           ...(selectedSandbox?.kind === 'e2b' && selectedSandbox.providerSandboxId && cloudCredentials
             ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedSandbox.providerSandboxId,
                 credentials: cloudCredentials,
+                environmentVariables: this.e2bEnvironment(selectedSandbox),
                 forwardGitHubToken: selectedSandbox.repositoryUrl !== null
                   && new URL(selectedSandbox.repositoryUrl).hostname.toLowerCase() === 'github.com' } } : {}),
           environment: this.buildRdEnvironment(requirement), instructions: this.buildRdDeveloperInstructions(true, requirement.sandboxId),
@@ -2219,11 +2240,14 @@ export class AgentManager extends EventEmitter {
 
   private buildRdDeveloperInstructions(native = false, sandboxId: string | null = null): string {
     const sandbox = sandboxId ? this.#store.getSandbox(sandboxId) : null;
+    const environmentVariableNames = native && sandbox?.kind === 'e2b'
+      ? Object.keys(this.e2bEnvironment(sandbox)).sort() : [];
     return [
       "You are this Requirement's long-lived RD Agent. Follow repository instructions and human scope; humans confirm completion.",
       native && sandbox?.kind === 'e2b'
         ? `Work in the selected E2B cloud sandbox at ${sandbox.cwd}. Inspect its files and Git state before changes. This sandbox may be empty. Select and clone the repository required by the task when needed; if the repository is unspecified, ask the human. ${sandbox.repositoryUrl
-          ? `Previous workspace repository URL: ${sandbox.repositoryUrl}. ` : ''}Prepare Git, other tools, and authentication when the task needs them. Other RD Agents may share this sandbox; preserve their changes and use a Requirement-specific worktree and branch for code changes. On resume, check sandbox and PR state before repeating actions.`
+          ? `Previous workspace repository URL: ${sandbox.repositoryUrl}. ` : ''}${environmentVariableNames.length > 0
+          ? `Configured environment variable names: ${environmentVariableNames.join(', ')}. Their values are available to remote commands; do not print or expose secrets. For GitHub HTTPS operations, configure a Git credential helper when needed; GH_TOKEN alone is used by gh, not by plain Git. ` : ''}Prepare Git, other tools, and authentication when the task needs them. Other RD Agents may share this sandbox; preserve their changes and use a Requirement-specific worktree and branch for code changes. On resume, check sandbox and PR state before repeating actions.`
         : native
         ? `Work in ${sandbox?.kind === 'local' ? `the selected local directory at ${sandbox.cwd}` : 'the managed workspace'}. Inspect Git status and preserve existing changes. On resume, check workspace and PR state before repeating actions.`
         : 'Before code changes, inspect Git worktrees; reuse or create a Requirement-specific worktree and branch for all work. Preserve pre-existing changes. On resume, check worktree and PR state before repeating actions.',
