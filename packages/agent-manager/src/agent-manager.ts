@@ -822,10 +822,14 @@ export class AgentManager extends EventEmitter {
       ? { ...sandbox, environmentVariableNames: Object.keys(this.e2bEnvironment(sandbox)).sort() } : sandbox;
   }
 
-  private e2bCredentials(sandbox: Sandbox): E2BCredentials {
-    const apiKey = sandbox.credentialRef
+  private e2bApiKey(sandbox: Sandbox): string | null {
+    return sandbox.credentialRef
       ? this.e2bCredentialStore().read(sandbox.credentialRef)
-      : sandbox.credentialEnvVar ? process.env[sandbox.credentialEnvVar] : null;
+      : sandbox.credentialEnvVar ? process.env[sandbox.credentialEnvVar] ?? null : null;
+  }
+
+  private e2bCredentials(sandbox: Sandbox): E2BCredentials {
+    const apiKey = this.e2bApiKey(sandbox);
     if (!apiKey) throw new TypeError(`E2B credential is unavailable for sandbox ${sandbox.id}`);
     return { domain: sandbox.domain ?? process.env.E2B_DOMAIN ?? 'e2b.app', apiKey };
   }
@@ -903,10 +907,11 @@ export class AgentManager extends EventEmitter {
     const apiKey = input.apiKey?.trim();
     if (input.apiKey !== undefined && !apiKey) throw new TypeError('E2B_API_KEY must be non-empty');
     if (input.cwd !== undefined) throw new TypeError('E2B working directories are managed by the Agent');
-    const environment = applyEnvironmentVariablePatch(this.e2bEnvironment(current), input.environmentVariables ?? {});
+    applyEnvironmentVariablePatch(this.e2bEnvironment(current), input.environmentVariables ?? {});
     const secretsChanged = apiKey !== undefined || input.environmentVariables !== undefined;
     const needsConnection = domain !== current.domain || apiKey !== undefined;
     if (needsConnection || secretsChanged) this.ensureSandboxIdle(id);
+    const previousApiKey = needsConnection ? this.e2bApiKey(current) : null;
     let status = current.status;
     let checkedAt = current.checkedAt;
     if (needsConnection) {
@@ -915,19 +920,29 @@ export class AgentManager extends EventEmitter {
       status = (await this.#e2b.getInfo(current.providerSandboxId, credentials)).state;
       checkedAt = new Date().toISOString();
     }
-    const credentialRef = secretsChanged ? `e2b_${randomUUID()}` : current.credentialRef;
+    const latest = this.#store.getSandbox(id);
+    if (!latest) throw new StoreNotFoundError(`Workspace ${id} not found`);
+    if (needsConnection) {
+      if (latest.domain !== current.domain || latest.providerSandboxId !== current.providerSandboxId
+        || this.e2bApiKey(latest) !== previousApiKey) {
+        throw new StoreConflictError('Workspace connection settings changed during verification; retry the update');
+      }
+      this.ensureSandboxIdle(id);
+    }
+    const environment = applyEnvironmentVariablePatch(this.e2bEnvironment(latest), input.environmentVariables ?? {});
+    const credentialRef = secretsChanged ? `e2b_${randomUUID()}` : latest.credentialRef;
     if (secretsChanged && credentialRef) {
-      this.e2bCredentialStore().save(credentialRef, apiKey ?? this.e2bCredentials(current).apiKey, environment);
+      this.e2bCredentialStore().save(credentialRef, apiKey ?? this.e2bCredentials(latest).apiKey, environment);
     }
     let updated: Sandbox;
     try {
-      updated = this.#store.updateSandbox({ ...current, name, domain,
-        credentialRef, credentialEnvVar: secretsChanged ? null : current.credentialEnvVar, status, checkedAt });
+      updated = this.#store.updateSandbox({ ...latest, name: input.name === undefined ? latest.name : name, domain,
+        credentialRef, credentialEnvVar: secretsChanged ? null : latest.credentialEnvVar, status, checkedAt });
     } catch (error) {
       if (secretsChanged && credentialRef) this.e2bCredentialStore().delete(credentialRef);
       throw error;
     }
-    if (secretsChanged && current.credentialRef) this.e2bCredentialStore().delete(current.credentialRef);
+    if (secretsChanged && latest.credentialRef) this.e2bCredentialStore().delete(latest.credentialRef);
     return this.sandboxSummary(updated);
   }
 
