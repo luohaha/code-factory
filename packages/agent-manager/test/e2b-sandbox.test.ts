@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -12,14 +13,16 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-work
 
 import { AgentManager } from '../src/agent-manager.js';
 import { E2BCredentialStore, e2bCredentialsPath } from '../src/e2b-credentials.js';
-import { E2BSandboxService, type E2BClient, type E2BHandle } from '../src/e2b-execution-env.js';
+import { E2BSandboxService, type E2BClient, type E2BCredentials, type E2BHandle } from '../src/e2b-execution-env.js';
 import { createLogger } from '../src/logger.js';
-import { NativeAgentService } from '../src/native-agent.js';
+import { NativeAgentService, type NativeRunInput } from '../src/native-agent.js';
 import { createAgentManagerServer } from '../src/server.js';
 import { sandboxesTableSql, schemaStatements } from '../src/schema.js';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.js';
+import type { RunOutcome, Sandbox } from '../src/types.js';
 
-function fakeE2B(settings: { acceptRotated?: boolean; home?: string } = {}) {
+function fakeE2B(settings: { additionalCredentials?: E2BCredentials[]; home?: string;
+  beforeConnect?: () => Promise<void>; beforeGetInfo?: () => Promise<void> } = {}) {
   let state: 'running' | 'paused' = 'running';
   let killed = false;
   const calls: string[] = [];
@@ -28,8 +31,8 @@ function fakeE2B(settings: { acceptRotated?: boolean; home?: string } = {}) {
   const remoteWrites: Array<{ path: string; content: string }> = [];
   const home = settings.home ?? '/home/user';
   const check = (credentials: { apiKey?: string; domain?: string }) => {
-    if (settings.acceptRotated && credentials.apiKey === 'new-key' &&
-      credentials.domain === 'new.e2b.example') return;
+    if (settings.additionalCredentials?.some((accepted) =>
+      accepted.apiKey === credentials.apiKey && accepted.domain === credentials.domain)) return;
     assert.equal(credentials.apiKey, 'test-key');
     assert.equal(credentials.domain, 'e2b.example');
   };
@@ -70,12 +73,14 @@ function fakeE2B(settings: { acceptRotated?: boolean; home?: string } = {}) {
     async connect(id, options) {
       calls.push(`connect:${id}`);
       check(options);
+      await settings.beforeConnect?.();
       state = 'running';
       return handle(id);
     },
     async getInfo(id, options) {
       check(options);
       calls.push(`info:${id}`);
+      await settings.beforeGetInfo?.();
       return { sandboxId: id, templateId: 'base', state } as SandboxInfo;
     },
     async pause(id, options) { check(options); calls.push(`pause:${id}`); state = 'paused'; return true; },
@@ -191,6 +196,35 @@ test('E2B sandbox API provisions, allows reuse, checks health and controls lifec
   }
 });
 
+test('E2B creation ignores the managed workspace Git origin without preparing remote contents', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-origin-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  execFileSync('git', ['init', directory]);
+  execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:example/repo.git'], { cwd: directory });
+  const sdk = fakeE2B();
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    logger: createLogger({ level: 'silent' }) });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sandboxes`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'e2b', name: 'Simple', domain: 'e2b.example', apiKey: 'test-key' }),
+    });
+    assert.equal(response.status, 201);
+    const sandbox = await response.json() as { id: string; repositoryUrl: string | null; cwd: string | null };
+    assert.equal(sandbox.repositoryUrl, null);
+    assert.equal(sandbox.cwd, null);
+    assert.equal('sharing' in sandbox, false);
+    assert.equal(sdk.remoteCommands.length, 0);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('E2B workspace settings reject repository and directory configuration', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-options-'));
   const sdk = fakeE2B();
@@ -218,7 +252,7 @@ test('E2B workspace settings reject repository and directory configuration', asy
 test('E2B workspace settings can be edited and credentials rotate without exposing keys', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-edit-'));
   const databasePath = join(directory, 'factory.sqlite');
-  const sdk = fakeE2B({ acceptRotated: true });
+  const sdk = fakeE2B({ additionalCredentials: [{ domain: 'new.e2b.example', apiKey: 'new-key' }] });
   const manager = new AgentManager({ workspaceRoot: directory, databasePath,
     store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
     logger: createLogger({ level: 'silent' }) });
@@ -272,7 +306,7 @@ test('a Native Reviewer for an E2B Requirement uses the same remote execution en
     logger: createLogger({ level: 'silent' }) });
   try {
     const workspace = await manager.createE2BSandbox({ name: 'Review remote', domain: 'e2b.example',
-      apiKey: 'test-key' });
+      apiKey: 'test-key', environmentVariables: { GH_TOKEN: 'review-runtime-token', REVIEW_MODE: 'configured' } });
     const requirement = manager.createRequirement({ title: 'Remote work', description: 'Review PR',
       provider: 'native-agent', model: 'faux/faux-1', sandboxId: workspace.id });
     const pullRequest = manager.trackPullRequest({ requirementId: requirement.id, repository: 'example/repo',
@@ -281,7 +315,8 @@ test('a Native Reviewer for an E2B Requirement uses the same remote execution en
     assert.throws(() => manager.requestReview(pullRequest.id, { provider: 'codex' }), /Native Agent Reviewer/);
     const outcome = await manager.requestReview(pullRequest.id, { provider: 'native-agent' });
     assert.equal(outcome.status, 'succeeded');
-    assert(sdk.remoteCommands.some((entry) => entry.command.includes('gh pr view') && entry.cwd === undefined));
+    assert(sdk.remoteCommands.some((entry) => entry.command.includes('gh pr view') && entry.cwd === undefined
+      && entry.envs?.GH_TOKEN === 'review-runtime-token' && entry.envs?.REVIEW_MODE === 'configured'));
     assert.equal(manager.listMessages(requirement.id).find((message) => message.author === 'reviewer')?.body, 'Remote review completed');
   } finally {
     await manager.close();
@@ -456,4 +491,381 @@ test('E2B records created before per-sandbox credentials gain nullable settings'
       finally { reopened.close(); }
     } finally { inspected.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('Native RD instructions let the Agent select and clone its own repository in an empty E2B sandbox', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-agent-setup-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const sdk = fakeE2B();
+  const requests: NativeRunInput[] = [];
+  class RecordingNativeService extends NativeAgentService {
+    override async run(input: NativeRunInput): Promise<RunOutcome> {
+      requests.push(input);
+      return { status: 'succeeded', exitCode: 0, nativeSessionId: null, finalMessage: null, error: null };
+    }
+  }
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    nativeService: new RecordingNativeService(join(directory, 'native.sqlite')),
+    logger: createLogger({ level: 'silent' }) });
+  try {
+    const sandbox = await manager.createE2BSandbox({ name: 'Empty sandbox', domain: 'e2b.example', apiKey: 'test-key',
+      environmentVariables: { GH_TOKEN: 'runtime-only-token', CUSTOM: 'runtime-only-custom' } });
+    const requirement = manager.createRequirement({ title: 'Clone task repository', description: 'Choose code later',
+      provider: 'native-agent', sandboxId: sandbox.id });
+    await manager.runRequirement(requirement.id);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]!.sandbox?.cwd, null);
+    assert.equal(requests[0]!.sandbox?.forwardGitHubToken, false);
+    assert.deepEqual(requests[0]!.sandbox?.environmentVariables, { GH_TOKEN: 'runtime-only-token', CUSTOM: 'runtime-only-custom' });
+    assert.match(requests[0]!.instructions, /Configured environment variable names: CUSTOM, GH_TOKEN/);
+    assert.equal(JSON.stringify({ prompt: requests[0]!.prompt, instructions: requests[0]!.instructions }).includes('runtime-only'), false);
+    assert.match(requests[0]!.instructions, /This sandbox may be empty/);
+    assert.match(requests[0]!.instructions, /Select and clone the repository required by the task/);
+    assert.match(requests[0]!.instructions, /if the repository is unspecified, ask the human/);
+    assert.doesNotMatch(requests[0]!.instructions, /must already contain a Git checkout|must remain authenticated/);
+    await manager.updateSandbox(sandbox.id, { environmentVariables: { GH_TOKEN: 'rotated-token', CUSTOM: null } });
+    await manager.runRequirement(requirement.id, 'Use the updated environment');
+    assert.deepEqual(requests[1]!.sandbox?.environmentVariables, { GH_TOKEN: 'rotated-token' });
+    assert.deepEqual(requests[0]!.sandbox?.environmentVariables, { GH_TOKEN: 'runtime-only-token', CUSTOM: 'runtime-only-custom' });
+  } finally {
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('E2B environment API validates, hides values, preserves omitted keys, rotates, removes, and survives restart', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-environment-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const sdk = fakeE2B();
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    logger: createLogger({ level: 'silent' }) });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sandboxes`;
+  const send = (path: string, method: string, body: unknown) => fetch(path, {
+    method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+  let savedId = '';
+  try {
+    const common = { kind: 'e2b', name: 'Configured', domain: 'e2b.example', apiKey: 'test-key' };
+    for (const environmentVariables of [[], 'not-an-object', { 'BAD=secret': 'secret' }, { GH_TOKEN: 42 }]) {
+      const rejected = await send(base, 'POST', { ...common, environmentVariables });
+      assert.equal(rejected.status, 400);
+      assert.equal((await rejected.text()).includes('secret'), false);
+    }
+    assert.equal(sdk.calls.length, 0);
+    const local = await send(base, 'POST', { kind: 'local', name: 'Local', cwd: directory,
+      environmentVariables: { GH_TOKEN: 'not-for-local' } });
+    assert.equal(local.status, 400);
+    assert.match(await local.text(), /only supported for E2B/);
+    const created = await send(base, 'POST', { ...common,
+      environmentVariables: { GH_TOKEN: 'original-github-secret', CUSTOM: '  exact value\n' } });
+    assert.equal(created.status, 201);
+    const sandbox = await created.json() as { id: string; credentialRef: string; environmentVariableNames: string[] };
+    savedId = sandbox.id;
+    assert.deepEqual(sandbox.environmentVariableNames, ['CUSTOM', 'GH_TOKEN']);
+    assert.equal(JSON.stringify(sandbox).includes('original-github-secret'), false);
+    assert.equal((await (await fetch(base)).text()).includes('original-github-secret'), false);
+    const secrets = new E2BCredentialStore(e2bCredentialsPath(databasePath));
+    try {
+      assert.deepEqual(secrets.readEnvironment(sandbox.credentialRef), { GH_TOKEN: 'original-github-secret', CUSTOM: '  exact value\n' });
+      const renamed = await send(`${base}/${sandbox.id}`, 'PATCH', { name: 'Renamed', apiKey: 'test-key' });
+      assert.equal(renamed.status, 200);
+      const rotated = await renamed.json() as { credentialRef: string };
+      assert.deepEqual(secrets.readEnvironment(rotated.credentialRef), { GH_TOKEN: 'original-github-secret', CUSTOM: '  exact value\n' });
+      assert.equal(secrets.read(sandbox.credentialRef), null);
+      const updated = await send(`${base}/${sandbox.id}`, 'PATCH', {
+        environmentVariables: { GH_TOKEN: 'replacement-github-secret', CUSTOM: null, EMPTY: '' },
+      });
+      assert.equal(updated.status, 200);
+      const result = await updated.json() as { credentialRef: string; environmentVariableNames: string[] };
+      assert.deepEqual(result.environmentVariableNames, ['EMPTY', 'GH_TOKEN']);
+      assert.deepEqual(secrets.readEnvironment(result.credentialRef), { GH_TOKEN: 'replacement-github-secret', EMPTY: '' });
+      assert.equal(secrets.read(rotated.credentialRef), null);
+      assert.equal((await (await fetch(`${base}/${sandbox.id}/health`)).text()).includes('replacement-github-secret'), false);
+    } finally { secrets.close(); }
+    assert.equal(readFileSync(databasePath).includes('original-github-secret'), false);
+    assert.equal(readFileSync(databasePath).includes('replacement-github-secret'), false);
+    assert.equal(sdk.remoteCommands.length, 0);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+  const restarted = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    logger: createLogger({ level: 'silent' }) });
+  try {
+    assert.deepEqual(restarted.listSandboxes().find((sandbox) => sandbox.id === savedId)?.environmentVariableNames, ['EMPTY', 'GH_TOKEN']);
+    const cleared = await restarted.updateSandbox(savedId, { environmentVariables: { GH_TOKEN: null, EMPTY: null } });
+    assert.deepEqual(cleared.environmentVariableNames, []);
+    await restarted.deleteSandbox(savedId);
+  } finally {
+    await restarted.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+for (const lookupFails of [false, true]) {
+  test(`an in-flight ${lookupFails ? 'failed' : 'successful'} health check preserves an environment edit`, async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-health-edit-'));
+    const databasePath = join(directory, 'factory.sqlite');
+    let holdLookup = false;
+    let finishLookup!: () => void;
+    let lookupStarted!: () => void;
+    const pendingLookup = new Promise<void>((resolve) => { finishLookup = resolve; });
+    const started = new Promise<void>((resolve) => { lookupStarted = resolve; });
+    const sdk = fakeE2B({ beforeGetInfo: async () => {
+      if (!holdLookup) return;
+      holdLookup = false;
+      lookupStarted();
+      await pendingLookup;
+      if (lookupFails) throw new Error('Provider lookup failed');
+    } });
+    const requests: NativeRunInput[] = [];
+    class RecordingNativeService extends NativeAgentService {
+      override async run(input: NativeRunInput): Promise<RunOutcome> {
+        requests.push(input);
+        return { status: 'succeeded', exitCode: 0, nativeSessionId: null, finalMessage: null, error: null };
+      }
+    }
+    const store = new SqliteAgentManagerStore(databasePath);
+    const manager = new AgentManager({ workspaceRoot: directory, databasePath, store, e2bService: sdk.service,
+      nativeService: new RecordingNativeService(join(directory, 'native.sqlite')),
+      logger: createLogger({ level: 'silent' }) });
+    const secrets = new E2BCredentialStore(e2bCredentialsPath(databasePath));
+    let health: ReturnType<AgentManager['checkSandboxHealth']> | undefined;
+    try {
+      const sandbox = await manager.createE2BSandbox({ name: 'Original', domain: 'e2b.example', apiKey: 'test-key',
+        environmentVariables: { GH_TOKEN: 'original-token' } });
+      holdLookup = true;
+      health = manager.checkSandboxHealth(sandbox.id);
+      await started;
+      const updated = await manager.updateSandbox(sandbox.id, { name: 'Edited during lookup',
+        environmentVariables: { GH_TOKEN: 'replacement-token', CUSTOM: 'configured' } });
+      assert.notEqual(updated.credentialRef, sandbox.credentialRef);
+      assert.equal(secrets.read(sandbox.credentialRef!), null);
+      finishLookup();
+      const checked = await health;
+      assert.equal(checked.credentialRef, updated.credentialRef);
+      assert.equal(checked.name, updated.name);
+      assert.deepEqual(checked.environmentVariableNames, ['CUSTOM', 'GH_TOKEN']);
+      assert.equal(checked.status, lookupFails ? 'unreachable' : 'running');
+      assert(checked.checkedAt);
+      assert.equal(store.getSandbox(sandbox.id)?.credentialRef, updated.credentialRef);
+      assert.deepEqual(manager.listSandboxes().find((item) => item.id === sandbox.id), checked);
+      assert.deepEqual(secrets.readEnvironment(checked.credentialRef!), { GH_TOKEN: 'replacement-token', CUSTOM: 'configured' });
+      const requirement = manager.createRequirement({ title: 'Use edited environment', description: 'Continue after health check',
+        provider: 'native-agent', sandboxId: sandbox.id });
+      const outcome = await manager.runRequirement(requirement.id);
+      assert.equal(outcome.status, 'waiting_confirmation');
+      assert.equal(requests[0]?.sandbox?.credentials.apiKey, 'test-key');
+      assert.deepEqual(requests[0]?.sandbox?.environmentVariables, { GH_TOKEN: 'replacement-token', CUSTOM: 'configured' });
+    } finally {
+      finishLookup();
+      await health?.catch(() => undefined);
+      secrets.close();
+      await manager.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const stage of ['connect', 'status']) {
+  for (const rotateKey of [false, true]) {
+    test(`${rotateKey ? 'API key' : 'domain'} verification in ${stage} preserves a concurrent environment patch`, async () => {
+      const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-connection-edit-'));
+      const databasePath = join(directory, 'factory.sqlite');
+      let holdVerification = false;
+      let release!: () => void;
+      let entered!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const started = new Promise<void>((resolve) => { entered = resolve; });
+      const beforeVerification = async () => {
+        if (!holdVerification) return;
+        holdVerification = false;
+        entered();
+        await gate;
+      };
+      const sdk = fakeE2B({ additionalCredentials: [
+        { domain: 'new.e2b.example', apiKey: 'test-key' }, { domain: 'e2b.example', apiKey: 'new-key' },
+      ], ...(stage === 'connect' ? { beforeConnect: beforeVerification } : { beforeGetInfo: beforeVerification }) });
+      const requests: NativeRunInput[] = [];
+      class RecordingNativeService extends NativeAgentService {
+        override async run(input: NativeRunInput): Promise<RunOutcome> {
+          requests.push(input);
+          return { status: 'succeeded', exitCode: 0, nativeSessionId: null, finalMessage: null, error: null };
+        }
+      }
+      const store = new SqliteAgentManagerStore(databasePath);
+      const manager = new AgentManager({ workspaceRoot: directory, databasePath, store, e2bService: sdk.service,
+        nativeService: new RecordingNativeService(join(directory, 'native.sqlite')),
+        logger: createLogger({ level: 'silent' }) });
+      const secrets = new E2BCredentialStore(e2bCredentialsPath(databasePath));
+      let connection: ReturnType<AgentManager['updateSandbox']> | undefined;
+      try {
+        const original = await manager.createE2BSandbox({ name: 'Original', domain: 'e2b.example', apiKey: 'test-key',
+          environmentVariables: { GH_TOKEN: 'original-token', KEEP: 'initial', REMOVE: 'remove-me' } });
+        holdVerification = true;
+        connection = manager.updateSandbox(original.id, rotateKey
+          ? { apiKey: 'new-key', environmentVariables: { FROM_CONNECTION: 'added', SHARED: 'connection-value' } }
+          : { domain: 'new.e2b.example' });
+        await started;
+        const edited = await manager.updateSandbox(original.id, { name: 'Edited during verification',
+          environmentVariables: { GH_TOKEN: 'replacement-token', REMOVE: null, NEW: 'retained', SHARED: 'environment-value' } });
+        assert.equal(secrets.read(original.credentialRef!), null);
+        release();
+        const saved = await connection;
+        const expectedEnvironment = { GH_TOKEN: 'replacement-token', KEEP: 'initial', NEW: 'retained',
+          SHARED: rotateKey ? 'connection-value' : 'environment-value', ...(rotateKey ? { FROM_CONNECTION: 'added' } : {}) };
+        assert.equal(saved.name, edited.name);
+        assert.equal(saved.domain, rotateKey ? 'e2b.example' : 'new.e2b.example');
+        assert.deepEqual(saved.environmentVariableNames, Object.keys(expectedEnvironment).sort());
+        assert.deepEqual(secrets.readEnvironment(saved.credentialRef!), expectedEnvironment);
+        assert.equal(secrets.read(saved.credentialRef!), rotateKey ? 'new-key' : 'test-key');
+        if (rotateKey) {
+          assert.notEqual(saved.credentialRef, edited.credentialRef);
+          assert.equal(secrets.read(edited.credentialRef!), null);
+        } else assert.equal(saved.credentialRef, edited.credentialRef);
+        assert.equal(store.getSandbox(original.id)?.credentialRef, saved.credentialRef);
+        assert.deepEqual(manager.listSandboxes().find((item) => item.id === saved.id), saved);
+        const database = new DatabaseSync(e2bCredentialsPath(databasePath));
+        try { assert.equal(database.prepare('SELECT COUNT(*) AS count FROM e2b_credentials').get()?.count, 1); }
+        finally { database.close(); }
+        const requirement = manager.createRequirement({ title: 'Use merged settings', description: 'Run after connection update',
+          provider: 'native-agent', sandboxId: saved.id });
+        assert.equal((await manager.runRequirement(requirement.id)).status, 'waiting_confirmation');
+        assert.deepEqual(requests[0]?.sandbox?.credentials, { domain: saved.domain, apiKey: rotateKey ? 'new-key' : 'test-key' });
+        assert.deepEqual(requests[0]?.sandbox?.environmentVariables, expectedEnvironment);
+      } finally {
+        release();
+        await connection?.catch(() => undefined);
+        secrets.close();
+        await manager.close();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
+test('a connection update rejects verification invalidated by a concurrent API key edit', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-connection-conflict-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  let holdConnect = true;
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const sdk = fakeE2B({ additionalCredentials: [
+    { domain: 'new.e2b.example', apiKey: 'test-key' }, { domain: 'e2b.example', apiKey: 'new-key' },
+  ], beforeConnect: async () => {
+    if (!holdConnect) return;
+    holdConnect = false;
+    entered();
+    await gate;
+  } });
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    logger: createLogger({ level: 'silent' }) });
+  const secrets = new E2BCredentialStore(e2bCredentialsPath(databasePath));
+  let connection: ReturnType<AgentManager['updateSandbox']> | undefined;
+  try {
+    const sandbox = await manager.createE2BSandbox({ name: 'Original', domain: 'e2b.example', apiKey: 'test-key' });
+    connection = manager.updateSandbox(sandbox.id, { domain: 'new.e2b.example' });
+    await started;
+    const edited = await manager.updateSandbox(sandbox.id, { apiKey: 'new-key',
+      environmentVariables: { GH_TOKEN: 'concurrent-token' } });
+    const rejected = assert.rejects(connection, /connection settings changed during verification/);
+    release();
+    await rejected;
+    assert.deepEqual(manager.listSandboxes().find((item) => item.id === sandbox.id), edited);
+    assert.equal(secrets.read(edited.credentialRef!), 'new-key');
+    assert.deepEqual(secrets.readEnvironment(edited.credentialRef!), { GH_TOKEN: 'concurrent-token' });
+    assert.equal(secrets.read(sandbox.credentialRef!), null);
+  } finally {
+    release();
+    await connection?.catch(() => undefined);
+    secrets.close();
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('failed sandbox persistence preserves the old environment and removes the uncommitted secret record', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-env-rollback-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  class FailingStore extends SqliteAgentManagerStore {
+    override updateSandbox(_sandbox: Sandbox): Sandbox { throw new Error('Save failed'); }
+  }
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new FailingStore(databasePath), e2bService: fakeE2B().service,
+    logger: createLogger({ level: 'silent' }) });
+  try {
+    const sandbox = await manager.createE2BSandbox({ name: 'Original', domain: 'e2b.example', apiKey: 'test-key',
+      environmentVariables: { GH_TOKEN: 'original-token' } });
+    await assert.rejects(manager.updateSandbox(sandbox.id, { environmentVariables: { GH_TOKEN: 'replacement-token' } }), /Save failed/);
+    assert.deepEqual(manager.listSandboxes().find((item) => item.id === sandbox.id), sandbox);
+    const secrets = new E2BCredentialStore(e2bCredentialsPath(databasePath));
+    try { assert.deepEqual(secrets.readEnvironment(sandbox.credentialRef!), { GH_TOKEN: 'original-token' }); }
+    finally { secrets.close(); }
+    const database = new DatabaseSync(e2bCredentialsPath(databasePath));
+    try { assert.equal(database.prepare('SELECT COUNT(*) AS count FROM e2b_credentials').get()?.count, 1); }
+    finally { database.close(); }
+  } finally {
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('environment and in-flight connection updates are rejected while an RD Run is active', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-env-active-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  let finish!: (outcome: RunOutcome) => void;
+  let ready!: () => void;
+  const started = new Promise<void>((resolve) => { ready = resolve; });
+  class PendingNativeService extends NativeAgentService {
+    override run(input: NativeRunInput): Promise<RunOutcome> {
+      return new Promise((resolve) => {
+        finish = resolve;
+        input.signal.addEventListener('abort', () => resolve({ status: 'cancelled', exitCode: null,
+          nativeSessionId: null, finalMessage: null, error: 'Stopped' }), { once: true });
+        ready();
+      });
+    }
+  }
+  let releaseConnection!: () => void;
+  let enteredConnection!: () => void;
+  const connectionGate = new Promise<void>((resolve) => { releaseConnection = resolve; });
+  const connectionStarted = new Promise<void>((resolve) => { enteredConnection = resolve; });
+  const sdk = fakeE2B({ additionalCredentials: [{ domain: 'new.e2b.example', apiKey: 'test-key' }],
+    beforeConnect: async () => { enteredConnection(); await connectionGate; } });
+  let connection: ReturnType<AgentManager['updateSandbox']> | undefined;
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    nativeService: new PendingNativeService(join(directory, 'native.sqlite')),
+    logger: createLogger({ level: 'silent' }) });
+  try {
+    const sandbox = await manager.createE2BSandbox({ name: 'Busy', domain: 'e2b.example', apiKey: 'test-key',
+      environmentVariables: { GH_TOKEN: 'original' } });
+    connection = manager.updateSandbox(sandbox.id, { domain: 'new.e2b.example' });
+    await connectionStarted;
+    const requirement = manager.createRequirement({ title: 'Running', description: 'Use environment',
+      provider: 'native-agent', sandboxId: sandbox.id });
+    const run = manager.runRequirement(requirement.id);
+    await started;
+    await assert.rejects(manager.updateSandbox(sandbox.id, { environmentVariables: { GH_TOKEN: 'new' } }), /active RD Run/);
+    const rejected = assert.rejects(connection, /active RD Run/);
+    releaseConnection();
+    await rejected;
+    assert.deepEqual(manager.listSandboxes().find((item) => item.id === sandbox.id), sandbox);
+    finish({ status: 'succeeded', exitCode: 0, nativeSessionId: null, finalMessage: null, error: null });
+    await run;
+    assert.deepEqual((await manager.updateSandbox(sandbox.id, { environmentVariables: { GH_TOKEN: null } })).environmentVariableNames, []);
+  } finally {
+    releaseConnection();
+    await connection?.catch(() => undefined);
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

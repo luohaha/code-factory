@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -318,3 +318,55 @@ for (const cwd of ['/home/user/repo', null]) {
     }
   });
 }
+
+test('Native commands receive configured variables and refresh them on resume without persisting values', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-e2b-env-run-'));
+  const sdk = fakeSdk();
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const service = new NativeAgentService(join(directory, 'native.sqlite'), models, new E2BSandboxService(sdk.client));
+  const savedToken = process.env.GH_TOKEN;
+  const savedGithubToken = process.env.GITHUB_TOKEN;
+  process.env.GH_TOKEN = 'host-token-must-not-win';
+  delete process.env.GITHUB_TOKEN;
+  let nativeSessionId: string | null = null;
+  try {
+    for (const environmentVariables of [{ GITHUB_TOKEN: 'configured-runtime-token', CUSTOM: 'configured-runtime-value' }, {}]) {
+      faux.setResponses([
+        fauxAssistantMessage(fauxToolCall('bash', { command: 'use configured environment' }), { stopReason: 'toolUse' }),
+        fauxAssistantMessage('Done'),
+      ]);
+      const outcome = await service.run({ requirementId: 'req_env', sessionId: 'ses_env', nativeSessionId,
+        prompt: 'Use the remote environment', model: 'faux/faux-1', reasoningEffort: null, cwd: '/home/user/repo',
+        sandbox: { kind: 'e2b', providerSandboxId: 'e2b-test-123', cwd: null,
+          credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: true, environmentVariables },
+        environment: {}, instructions: 'Test', signal: new AbortController().signal, timeoutMs: 30_000,
+        onNativeSession: (id) => { nativeSessionId = id; }, onEvent: () => undefined });
+      assert.equal(outcome.status, 'succeeded');
+      const command = sdk.commands.findLast((entry) => entry.command.includes('use configured environment'));
+      assert(command);
+      assert.equal(command.cwd, undefined);
+      if (environmentVariables.GITHUB_TOKEN) {
+        assert.equal(command.envs?.GITHUB_TOKEN, 'configured-runtime-token');
+        assert.equal(command.envs?.CUSTOM, 'configured-runtime-value');
+        assert.equal(command.envs?.GH_TOKEN, undefined);
+      } else {
+        assert.equal(command.envs?.GITHUB_TOKEN, undefined);
+        assert.equal(command.envs?.CUSTOM, undefined);
+        assert.equal(command.envs?.GH_TOKEN, 'host-token-must-not-win');
+      }
+    }
+  } finally {
+    await service.close();
+    if (savedToken === undefined) delete process.env.GH_TOKEN;
+    else process.env.GH_TOKEN = savedToken;
+    if (savedGithubToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = savedGithubToken;
+    try {
+      const database = await readFile(join(directory, 'native.sqlite'));
+      assert.equal(database.includes('configured-runtime-token'), false);
+      assert.equal(database.includes('configured-runtime-value'), false);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  }
+});

@@ -33,7 +33,7 @@ export interface NativeRunInput {
   reasoningEffort: AgentReasoningEffort | null;
   cwd: string;
   sandbox?: { kind: 'e2b'; providerSandboxId: string; credentials: E2BCredentials;
-    cwd?: string | null; forwardGitHubToken: boolean };
+    cwd?: string | null; forwardGitHubToken: boolean; environmentVariables?: Readonly<Record<string, string>> };
   environment: Readonly<Record<string, string>>;
   instructions: string;
   signal: AbortSignal;
@@ -148,11 +148,13 @@ export class NativeAgentService {
         const sandbox = this.#sandboxes.get(conversationId);
         if (sandbox) {
           const handle = await this.#e2b.connect(sandbox.providerSandboxId, sandbox.credentials);
-          const commandEnv = Object.fromEntries((sandbox.forwardGitHubToken ? ['GH_TOKEN', 'GITHUB_TOKEN'] : [])
+          const configured = sandbox.environmentVariables ?? {};
+          const hasConfiguredToken = Object.hasOwn(configured, 'GH_TOKEN') || Object.hasOwn(configured, 'GITHUB_TOKEN');
+          const commandEnv = Object.fromEntries((sandbox.forwardGitHubToken && !hasConfiguredToken ? ['GH_TOKEN', 'GITHUB_TOKEN'] : [])
             .flatMap((name) =>
             process.env[name] ? [[name, process.env[name]!]] : []));
           return E2BExecutionEnv.create(handle, sandbox.cwd === undefined ? cwd ?? process.cwd() : sandbox.cwd,
-            commandEnv, sandbox.credentials.domain);
+            { ...commandEnv, ...configured }, sandbox.credentials.domain);
         }
         return new NodeExecutionEnv({ cwd: cwd ?? process.cwd(), shellEnv: { ...process.env, ...this.#environments.get(conversationId) } });
       },
