@@ -3594,9 +3594,7 @@ function Dashboard() {
         : await client.createSandbox({ name: name.trim(),
           domain: value('domain'), apiKey: value('apiKey'),
           ...(value('providerSandboxId') ? { providerSandboxId: value('providerSandboxId') } : {}),
-          ...(value('repositoryUrl') ? { repositoryUrl: value('repositoryUrl') } : {}),
           ...(value('template') ? { template: value('template') } : {}),
-          ...(value('cwd') ? { cwd: value('cwd') } : {}),
         });
       setSandboxes((current) => [...current, sandbox]);
       form.reset();
@@ -3621,7 +3619,8 @@ function Dashboard() {
     setWorkspaceDialogError(null);
     try {
       const updated = await client.updateWorkspace(selectedWorkspace.id, {
-        name: value('name'), cwd: value('cwd'),
+        name: value('name'),
+        ...(selectedWorkspace.kind === 'local' ? { cwd: value('cwd') } : {}),
         ...(selectedWorkspace.kind === 'e2b' ? {
           domain: value('domain'),
           ...(value('apiKey') ? { apiKey: value('apiKey') } : {}),
@@ -4005,16 +4004,12 @@ function Dashboard() {
                           <FieldLabel htmlFor="execution-path-key">{t('E2B API key')}</FieldLabel>
                           <Input id="execution-path-key" name="apiKey" type="password" required autoComplete="off" placeholder={t('E2B API key (E2B_API_KEY)')} />
                         </Field>
-                        <p className="text-xs text-muted-foreground">{t('The Git origin of the managed workspace is cloned into the E2B sandbox by default.')}</p>
+                        <p className="text-xs text-muted-foreground">{t('The Agent prepares repositories in the sandbox when needed for the task.')}</p>
                         <details className="rounded-lg border border-border p-3 text-sm">
                           <summary className="cursor-pointer font-medium">{t('Advanced E2B options')}</summary>
                           <div className="mt-3 grid gap-3">
-                            <Input name="repositoryUrl" aria-label={t('Repository HTTPS URL')} placeholder={t('Repository HTTPS URL (optional override)')} />
                             <Input name="providerSandboxId" aria-label={t('Existing E2B sandbox ID')} placeholder={t('Existing E2B sandbox ID (optional)')} />
                             <Input name="template" aria-label={t('E2B template')} placeholder={t('E2B template (default: base)')} />
-                            <Input name="cwd" aria-label={t('Remote working directory')} placeholder={t('Remote working directory (optional; sandbox default)')} />
-                            <p className="text-xs text-muted-foreground">{t('Leave blank to use the sandbox user’s home directory for commands and relative file paths. New sandboxes clone into a subdirectory named after the repository.')}</p>
-                            <p className="text-xs text-muted-foreground">{t('Attaching an existing E2B sandbox requires a Git checkout in the specified directory, or the sandbox user’s home directory when left blank.')}</p>
                           </div>
                         </details>
                       </>
@@ -4049,12 +4044,10 @@ function Dashboard() {
                       <FieldLabel htmlFor="edit-workspace-name">{t('Workspace name')}</FieldLabel>
                       <Input id="edit-workspace-name" name="name" required maxLength={80} defaultValue={selectedWorkspace.name} />
                     </Field>
-                    <Field>
-                      <FieldLabel htmlFor="edit-workspace-cwd">{t(selectedWorkspace.kind === 'local' ? 'Local directory' : 'Remote working directory')}</FieldLabel>
-                      <Input id="edit-workspace-cwd" name="cwd" required={selectedWorkspace.kind === 'local'} defaultValue={selectedWorkspace.cwd ?? ''}
-                        placeholder={selectedWorkspace.kind === 'e2b' ? t('Remote working directory (optional; sandbox default)') : undefined} />
-                      {selectedWorkspace.kind === 'e2b' ? <p className="text-xs text-muted-foreground">{t('Leave blank to use the sandbox user’s home directory for commands and relative file paths. Changing this setting does not move the repository.')}</p> : null}
-                    </Field>
+                    {selectedWorkspace.kind === 'local' ? <Field>
+                      <FieldLabel htmlFor="edit-workspace-cwd">{t('Local directory')}</FieldLabel>
+                      <Input id="edit-workspace-cwd" name="cwd" required defaultValue={selectedWorkspace.cwd ?? ''} />
+                    </Field> : null}
                     {selectedWorkspace.kind === 'e2b' ? <>
                       <Field>
                         <FieldLabel htmlFor="edit-workspace-domain">{t('E2B domain')}</FieldLabel>
@@ -4113,7 +4106,6 @@ function Dashboard() {
                       <div><dt className="text-muted-foreground">{t('E2B template')}</dt><dd className="mt-1 break-all">{selectedWorkspace.template}</dd></div>
                       <div><dt className="text-muted-foreground">{t('E2B domain')}</dt><dd className="mt-1 break-all">{selectedWorkspace.domain}</dd></div>
                       <div className="min-w-0 sm:col-span-2"><dt className="text-muted-foreground">{t('Credential reference')}</dt><dd className="mt-1 break-all font-mono">{selectedWorkspace.credentialRef ?? selectedWorkspace.credentialEnvVar}</dd></div>
-                      {selectedWorkspace.repositoryUrl ? <div className="min-w-0 sm:col-span-2"><dt className="text-muted-foreground">{t('Repository HTTPS URL')}</dt><dd className="mt-1 break-all">{selectedWorkspace.repositoryUrl}</dd></div> : null}
                       {selectedWorkspace.checkedAt ? <div className="sm:col-span-2"><dt className="text-muted-foreground">{t('Last checked')}</dt><dd className="mt-1">{new Date(selectedWorkspace.checkedAt).toLocaleString(locale)}</dd></div> : null}
                     </> : null}
                   </dl>
