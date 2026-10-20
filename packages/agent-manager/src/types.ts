@@ -5,11 +5,13 @@ export interface Sandbox {
   id: string;
   name: string;
   kind: SandboxKind;
-  cwd: string;
+  /** Null for E2B when commands and relative file paths use the SDK's default directory. */
+  cwd: string | null;
   providerSandboxId: string | null;
   credentialEnvVar: string | null;
   domain: string | null;
   credentialRef: string | null;
+  /** Legacy repository metadata; new E2B sandboxes are not bound to a repository. */
   repositoryUrl: string | null;
   template: string | null;
   status: SandboxStatus;

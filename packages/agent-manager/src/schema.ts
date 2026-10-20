@@ -15,7 +15,7 @@ export const sandboxesTableSql = `CREATE TABLE IF NOT EXISTS sandboxes (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('local', 'local-sandbox', 'e2b')),
-    cwd TEXT NOT NULL,
+    cwd TEXT,
     provider_sandbox_id TEXT,
     credential_env_var TEXT,
     domain TEXT,

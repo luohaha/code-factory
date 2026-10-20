@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { basename, delimiter, dirname, isAbsolute, join, posix, resolve } from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { normalizeRepositoryKey } from './repository-key.js';
 import { ClaudeCodeAdapter } from './adapters/claude-code.js';
@@ -804,20 +804,6 @@ export class AgentManager extends EventEmitter {
     return cwd;
   }
 
-  private defaultE2BRepositoryUrl(): string {
-    let remote: string;
-    try {
-      remote = execFileSync('git', ['remote', 'get-url', 'origin'], {
-        cwd: this.workspaceRoot, encoding: 'utf8', timeout: 5_000, stdio: ['ignore', 'pipe', 'ignore'],
-      }).trim();
-    } catch {
-      throw new TypeError('repositoryUrl is required: the managed workspace has no Git origin');
-    }
-    const ssh = remote.match(/^git@([^:]+):(.+)$/);
-    if (ssh) return `https://${ssh[1]}/${ssh[2]}`;
-    return remote;
-  }
-
   private e2bCredentialStore(): E2BCredentialStore {
     this.#e2bCredentials ??= new E2BCredentialStore(e2bCredentialsPath(this.databasePath === ':memory:'
       ? join(this.workspaceRoot, 'factory.sqlite') : this.databasePath));
@@ -832,36 +818,6 @@ export class AgentManager extends EventEmitter {
     return { domain: sandbox.domain ?? process.env.E2B_DOMAIN ?? 'e2b.app', apiKey };
   }
 
-  private async prepareE2BWorkspace(handle: E2BHandle, cwd: string, repositoryUrl: string | null,
-    clone: boolean): Promise<void> {
-    const trustedGitHub = repositoryUrl !== null && new URL(repositoryUrl).hostname.toLowerCase() === 'github.com';
-    const envs = Object.fromEntries((trustedGitHub ? ['GH_TOKEN', 'GITHUB_TOKEN'] : []).flatMap((name) =>
-      process.env[name] ? [[name, process.env[name]!]] : []));
-    try {
-      const tools = await handle.commands.run('command -v git >/dev/null && command -v gh >/dev/null',
-        { timeoutMs: 30_000 });
-      if (tools.exitCode !== 0) throw new Error();
-    } catch { throw new TypeError('E2B template must have git and gh installed'); }
-    if (clone && repositoryUrl) {
-      try {
-        const token = trustedGitHub ? process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN : undefined;
-        const cloned = await handle.git.clone(repositoryUrl, { path: cwd, timeoutMs: 120_000,
-          ...(token ? { username: 'x-access-token', password: token } : {}) });
-        if (cloned.exitCode !== 0) throw new Error();
-      } catch { throw new TypeError('E2B repository clone failed; check the URL and GitHub authentication'); }
-    }
-    const quoted = `'${cwd.replaceAll("'", "'\\''")}'`;
-    try {
-      const checkout = await handle.commands.run(`git -C ${quoted} rev-parse --is-inside-work-tree`,
-        { timeoutMs: 30_000 });
-      if (checkout.exitCode !== 0) throw new Error();
-    } catch { throw new TypeError('E2B working directory must contain a Git checkout'); }
-    try {
-      const auth = await handle.commands.run('gh auth status', { cwd, envs, timeoutMs: 30_000 });
-      if (auth.exitCode !== 0) throw new Error();
-    } catch { throw new TypeError('Authenticate gh in the E2B sandbox or set GH_TOKEN on Agent Manager'); }
-  }
-
   private requireAvailableSandbox(id: string, provider?: AgentProvider): Sandbox {
     const sandbox = this.#store.getSandbox(id);
     if (!sandbox) throw new StoreNotFoundError(`Sandbox ${id} not found`);
@@ -873,8 +829,8 @@ export class AgentManager extends EventEmitter {
     return sandbox;
   }
 
-  async createE2BSandbox(input: { name: string; template?: string; cwd?: string;
-    providerSandboxId?: string; domain: string; apiKey: string; repositoryUrl?: string }): Promise<Sandbox> {
+  async createE2BSandbox(input: { name: string; template?: string;
+    providerSandboxId?: string; domain: string; apiKey: string }): Promise<Sandbox> {
     const name = input.name.trim();
     if (!name || name.length > 80) throw new TypeError('sandbox name must contain 1 to 80 characters');
     const domain = input.domain.trim().toLowerCase();
@@ -882,22 +838,10 @@ export class AgentManager extends EventEmitter {
     const apiKey = input.apiKey.trim();
     if (!apiKey) throw new TypeError('E2B_API_KEY is required');
     const credentials = { domain, apiKey };
-    const cwd = input.cwd?.trim() || '/home/user/repo';
-    if (!posix.isAbsolute(cwd) || cwd.includes('\0')) throw new TypeError('cwd must be an absolute remote path');
     const template = input.template?.trim() || 'base';
     if (template.length > 100) throw new TypeError('template must contain at most 100 characters');
     const providerId = input.providerSandboxId?.trim();
     const attached = !!providerId;
-    const repositoryUrl = attached ? input.repositoryUrl?.trim() || null
-      : input.repositoryUrl?.trim() || this.defaultE2BRepositoryUrl();
-    if (repositoryUrl) {
-      let parsed: URL;
-      try { parsed = new URL(repositoryUrl); }
-      catch { throw new TypeError('repositoryUrl must be an HTTPS URL without embedded credentials'); }
-      if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash) {
-        throw new TypeError('repositoryUrl must be an HTTPS URL without embedded credentials');
-      }
-    }
     if (attached && this.#store.listSandboxes().some((sandbox) =>
       sandbox.providerSandboxId === providerId && (sandbox.domain ?? 'e2b.app') === domain)) {
       throw new StoreConflictError('E2B sandbox is already attached');
@@ -905,19 +849,12 @@ export class AgentManager extends EventEmitter {
     const handle = attached ? await this.#e2b.connect(providerId!, credentials) : await this.#e2b.create(template, credentials);
     const credentialRef = `e2b_${randomUUID()}`;
     try {
-      if (attached) {
-        let exists: boolean;
-        try { exists = await handle.files.exists(cwd); }
-        catch { throw new TypeError('Could not inspect the attached E2B working directory'); }
-        if (!exists) throw new TypeError(`Remote directory ${cwd} does not exist`);
-      }
-      await this.prepareE2BWorkspace(handle, cwd, attached ? null : repositoryUrl, !attached);
       const info = await this.#e2b.getInfo(handle.sandboxId, credentials);
       const now = new Date().toISOString();
       this.e2bCredentialStore().save(credentialRef, apiKey);
-      return this.#store.createSandbox({ id: `sbx_${randomUUID()}`, name, kind: 'e2b', cwd,
+      return this.#store.createSandbox({ id: `sbx_${randomUUID()}`, name, kind: 'e2b', cwd: null,
         providerSandboxId: handle.sandboxId, credentialEnvVar: null, domain, credentialRef,
-        repositoryUrl: attached ? null : repositoryUrl,
+        repositoryUrl: null,
         template: attached ? info.templateId : template,
         status: info.state, checkedAt: now, createdAt: now });
     } catch (error) {
@@ -928,7 +865,7 @@ export class AgentManager extends EventEmitter {
     }
   }
 
-  async updateSandbox(id: string, input: { name?: string; cwd?: string; domain?: string;
+  async updateSandbox(id: string, input: { name?: string; cwd?: string | null; domain?: string;
     apiKey?: string }): Promise<Sandbox> {
     if (id === 'local') throw new TypeError('Default workspace cannot be edited');
     if (Object.keys(input).length === 0) throw new TypeError('at least one workspace field is required');
@@ -940,6 +877,7 @@ export class AgentManager extends EventEmitter {
       if (input.domain !== undefined || input.apiKey !== undefined) {
         throw new TypeError('E2B fields cannot be used for a local workspace');
       }
+      if (input.cwd === null) throw new TypeError('local workspace cwd must be an absolute path');
       const cwd = input.cwd === undefined ? current.cwd : this.resolveLocalWorkspace(input.cwd);
       if (cwd === this.workspaceRoot) throw new TypeError('use Default workspace for the Agent Manager directory');
       if (cwd !== current.cwd) this.ensureSandboxIdle(id);
@@ -950,23 +888,21 @@ export class AgentManager extends EventEmitter {
     if (!/^[a-zA-Z0-9.-]+(?::[0-9]+)?$/.test(domain)) throw new TypeError('E2B_DOMAIN must be a domain name');
     const apiKey = input.apiKey?.trim();
     if (input.apiKey !== undefined && !apiKey) throw new TypeError('E2B_API_KEY must be non-empty');
-    const cwd = input.cwd === undefined ? current.cwd : input.cwd.trim();
-    if (!posix.isAbsolute(cwd) || cwd.includes('\0')) throw new TypeError('cwd must be an absolute remote path');
-    const needsConnection = domain !== current.domain || apiKey !== undefined || cwd !== current.cwd;
+    if (input.cwd !== undefined) throw new TypeError('E2B working directories are managed by the Agent');
+    const needsConnection = domain !== current.domain || apiKey !== undefined;
     if (needsConnection) this.ensureSandboxIdle(id);
     let status = current.status;
     let checkedAt = current.checkedAt;
     if (needsConnection) {
       const credentials = { domain, apiKey: apiKey ?? this.e2bCredentials(current).apiKey };
       const handle = await this.#e2b.connect(current.providerSandboxId, credentials);
-      await this.prepareE2BWorkspace(handle, cwd, current.repositoryUrl, false);
       status = (await this.#e2b.getInfo(current.providerSandboxId, credentials)).state;
       checkedAt = new Date().toISOString();
     }
     const credentialRef = apiKey === undefined ? current.credentialRef : `e2b_${randomUUID()}`;
     if (apiKey && credentialRef) this.e2bCredentialStore().save(credentialRef, apiKey);
     try {
-      const updated = this.#store.updateSandbox({ ...current, name, cwd, domain,
+      const updated = this.#store.updateSandbox({ ...current, name, domain,
         credentialRef, credentialEnvVar: apiKey ? null : current.credentialEnvVar, status, checkedAt });
       if (apiKey && current.credentialRef) this.e2bCredentialStore().delete(current.credentialRef);
       return updated;
@@ -1626,7 +1562,7 @@ export class AgentManager extends EventEmitter {
         nativeSessionId: null, prompt, model: model ?? null, reasoningEffort: reasoningEffort ?? null,
         cwd: selectedWorkspace?.cwd ?? this.workspaceRoot,
         ...(selectedWorkspace?.kind === 'e2b' && selectedWorkspace.providerSandboxId && remoteCredentials
-          ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedWorkspace.providerSandboxId,
+          ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedWorkspace.providerSandboxId, cwd: selectedWorkspace.cwd,
               credentials: remoteCredentials,
               forwardGitHubToken: selectedWorkspace.repositoryUrl !== null
                 && new URL(selectedWorkspace.repositoryUrl).hostname.toLowerCase() === 'github.com' } } : {}),
@@ -1827,7 +1763,7 @@ export class AgentManager extends EventEmitter {
           prompt, model: requirement.model, reasoningEffort: requirement.reasoningEffort,
           cwd: selectedSandbox?.cwd ?? this.workspaceRoot,
           ...(selectedSandbox?.kind === 'e2b' && selectedSandbox.providerSandboxId && cloudCredentials
-            ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedSandbox.providerSandboxId,
+            ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedSandbox.providerSandboxId, cwd: selectedSandbox.cwd,
                 credentials: cloudCredentials,
                 forwardGitHubToken: selectedSandbox.repositoryUrl !== null
                   && new URL(selectedSandbox.repositoryUrl).hostname.toLowerCase() === 'github.com' } } : {}),
@@ -2216,10 +2152,10 @@ export class AgentManager extends EventEmitter {
     selectedSandbox: Sandbox | null,
     pullRequests: PullRequest[],
   ): string {
-    const cwd = selectedSandbox?.cwd ?? this.workspaceRoot;
     if (selectedSandbox?.kind === 'e2b') {
-      return `Selected E2B workspace: ${cwd}. Inspect its remote Git worktrees, branch, and status before acting.`;
+      return `Selected E2B workspace: ${selectedSandbox.cwd ?? 'SDK default user home directory'}. Inspect its remote Git worktrees, branch, and status before acting.`;
     }
+    const cwd = selectedSandbox?.cwd ?? this.workspaceRoot;
     try {
       const output = execFileSync('git', ['worktree', 'list', '--porcelain'], {
         cwd, encoding: 'utf8', timeout: 2_000, maxBuffer: 256_000,
@@ -2274,9 +2210,7 @@ export class AgentManager extends EventEmitter {
     return [
       "You are this Requirement's long-lived RD Agent. Follow repository instructions and human scope; humans confirm completion.",
       native && sandbox?.kind === 'e2b'
-        ? `Work in the selected E2B cloud sandbox at ${sandbox.cwd}. Inspect its files and Git state before changes. ${sandbox.repositoryUrl
-          ? `Its repository URL is ${sandbox.repositoryUrl}; use it to restore the checkout if needed.`
-          : 'This attached sandbox must already contain a Git checkout; ask the human to restore it if absent.'} The remote gh CLI must remain authenticated for PR commands. Other RD Agents may share this sandbox; preserve their changes. On resume, check sandbox and PR state before repeating actions.`
+        ? 'Work in the selected E2B cloud sandbox. Inspect existing files and Git state; reuse an existing checkout or clone the repositories needed for this Requirement. Use explicit paths or cd for repository commands. Configure remote GitHub authentication when needed. Other RD Agents may share this sandbox; preserve their changes. On resume, check sandbox and PR state before repeating actions.'
         : native
         ? `Work in ${sandbox?.kind === 'local' ? `the selected local directory at ${sandbox.cwd}` : 'the managed workspace'}. Inspect Git status and preserve existing changes. On resume, check workspace and PR state before repeating actions.`
         : 'Before code changes, inspect Git worktrees; reuse or create a Requirement-specific worktree and branch for all work. Preserve pre-existing changes. On resume, check worktree and PR state before repeating actions.',

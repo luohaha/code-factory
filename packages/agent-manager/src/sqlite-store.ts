@@ -309,6 +309,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     this.migrateNativeReviewerProvider();
     this.migrateE2BSandboxes();
     this.migrateE2BSettings();
+    this.migrateE2BDefaultCwd();
     for (const statement of postMigrationSchemaStatements) this.#db.exec(statement);
     this.#ftsAvailable = this.initializeFullTextSearch();
     this.backfillSearchDocuments();
@@ -347,7 +348,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
   listSandboxes(): Sandbox[] {
     return (this.#db.prepare('SELECT * FROM sandboxes ORDER BY created_at, id').all() as Row[]).map((row) => ({
       id: String(row.id), name: String(row.name), kind: String(row.kind) as Sandbox['kind'],
-      cwd: String(row.cwd), providerSandboxId: row.provider_sandbox_id === null ? null : String(row.provider_sandbox_id),
+      cwd: row.cwd === null ? null : String(row.cwd), providerSandboxId: row.provider_sandbox_id === null ? null : String(row.provider_sandbox_id),
       credentialEnvVar: row.credential_env_var === null ? null : String(row.credential_env_var),
       domain: row.domain === null ? null : String(row.domain),
       credentialRef: row.credential_ref === null ? null : String(row.credential_ref),
@@ -383,6 +384,34 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     }
     if (this.#db.prepare('PRAGMA foreign_key_check').all().length > 0) {
       throw new Error('E2B sandbox migration violated a foreign key');
+    }
+  }
+
+  private migrateE2BDefaultCwd(): void {
+    const columns = this.#db.prepare('PRAGMA table_info(sandboxes)').all() as Row[];
+    const table = this.#db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sandboxes'").get() as Row;
+    if (!columns.some((column) => column.name === 'cwd' && Number(column.notnull) === 1)
+      && !String(table.sql).includes('cwd IS NOT NULL')) return;
+    this.#db.exec('PRAGMA foreign_keys = OFF');
+    try {
+      this.#db.exec('BEGIN IMMEDIATE');
+      this.#db.exec(sandboxesTableSql.replace('sandboxes (', 'sandboxes_default_cwd ('));
+      this.#db.exec(`INSERT INTO sandboxes_default_cwd
+        (id, name, kind, cwd, provider_sandbox_id, credential_env_var, domain, credential_ref,
+          repository_url, template, status, checked_at, created_at)
+        SELECT id, name, kind, cwd, provider_sandbox_id, credential_env_var, domain, credential_ref,
+          repository_url, template, status, checked_at, created_at FROM sandboxes`);
+      this.#db.exec('DROP TABLE sandboxes');
+      this.#db.exec('ALTER TABLE sandboxes_default_cwd RENAME TO sandboxes');
+      if (this.#db.prepare('PRAGMA foreign_key_check').all().length > 0) {
+        throw new Error('E2B default directory migration violated a foreign key');
+      }
+      this.#db.exec('COMMIT');
+    } catch (error) {
+      this.#db.exec('ROLLBACK');
+      throw error;
+    } finally {
+      this.#db.exec('PRAGMA foreign_keys = ON');
     }
   }
 

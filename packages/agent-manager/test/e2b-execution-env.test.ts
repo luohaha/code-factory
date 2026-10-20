@@ -15,9 +15,9 @@ import type { SandboxInfo, SandboxOpts } from 'e2b';
 import { E2BExecutionEnv, E2BSandboxService, type E2BClient, type E2BHandle } from '../src/e2b-execution-env.js';
 import { NativeAgentService } from '../src/native-agent.js';
 
-function fakeSdk() {
+function fakeSdk(defaultDirectory = '/home/user') {
   const data = new Map<string, Uint8Array>();
-  const commands: Array<{ command: string; cwd: string | undefined; envs: Record<string, string> | undefined }> = [];
+  const commands: Array<{ command: string; cwd: string | undefined; hasCwd: boolean; envs: Record<string, string> | undefined }> = [];
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   const handle = {
@@ -53,7 +53,8 @@ function fakeSdk() {
         cwd?: string; envs?: Record<string, string>; onStdout?: (value: string) => void;
         onStderr?: (value: string) => void; background?: boolean;
       }) {
-        commands.push({ command, cwd: options.cwd, envs: options.envs });
+        commands.push({ command, cwd: options.cwd, hasCwd: Object.hasOwn(options, 'cwd'), envs: options.envs });
+        if (command === 'pwd') return { exitCode: 0, stdout: `${defaultDirectory}\n`, stderr: '' };
         if (options.background) {
           const path = command.match(/ > '([^']+)' 2>&1$/)?.[1];
           assert(path);
@@ -139,6 +140,36 @@ test('E2B ExecutionEnv uses the remote SDK for files and shell commands', async 
   assert.deepEqual(output, ['hello ', 'world\n']);
   assert.deepEqual(await env.exec('fail', undefined, context), { ok: true, value: { exitCode: 7 } });
   assert.equal(sdk.data.has('/home/user/repo/note.txt'), true);
+});
+
+test('an unset E2B directory uses the SDK default for commands and relative file paths', async () => {
+  const sdk = fakeSdk('/home/custom-user');
+  const env = await E2BExecutionEnv.create(sdk.handle, null);
+  const context = BACKGROUND_CONTEXT;
+  assert.equal(env.cwd, '/home/custom-user');
+  assert.deepEqual(await env.writeFile('note.txt', 'contents', context), { ok: true, value: undefined });
+  assert(sdk.data.has('/home/custom-user/note.txt'));
+  await env.exec('echo hello', undefined, context);
+  assert.equal(sdk.commands.at(-1)?.hasCwd, false);
+  // pi-durable's bash and gh_pr tools explicitly pass env.cwd.
+  await env.exec('echo hello', { cwd: env.cwd }, context);
+  assert.equal(sdk.commands.at(-1)?.hasCwd, false);
+  const beforeSpill = sdk.commands.length;
+  const result = await env.exec('echo hello', {
+    cwd: env.cwd, spill: { afterBytes: 1024, afterLines: 100 },
+  }, context);
+  assert.deepEqual(result, { ok: true, value: { exitCode: 0 } });
+  assert(sdk.commands.length > beforeSpill);
+  assert(sdk.commands.slice(beforeSpill).every((entry) => !entry.hasCwd));
+  await env.exec('pwd', { cwd: 'repo' }, context);
+  assert.equal(sdk.commands.at(-1)?.cwd, '/home/custom-user/repo');
+  await env.exec('pwd', { cwd: '/tmp' }, context);
+  assert.equal(sdk.commands.at(-1)?.cwd, '/tmp');
+});
+
+test('E2B default directory discovery fails without exposing provider output', async () => {
+  const sdk = fakeSdk('not-an-absolute-path');
+  await assert.rejects(E2BExecutionEnv.create(sdk.handle, null), /Could not determine the E2B default working directory/);
 });
 
 test('E2B spill reads large remote output in bounded slices and preserves full content', async () => {
@@ -250,38 +281,40 @@ test('aborting an idle E2B background command wakes the spill poller', async () 
   assert.equal(removed, true);
 });
 
-test('pi-durable read, write, edit and bash use the selected E2B sandbox', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'code-factory-e2b-native-'));
-  const sdk = fakeSdk();
-  const faux = fauxProvider();
-  const models = createModels();
-  models.setProvider(faux.provider);
-  faux.setResponses([
-    fauxAssistantMessage(fauxToolCall('write', { path: 'note.txt', content: 'before\n' }), { stopReason: 'toolUse' }),
-    fauxAssistantMessage(fauxToolCall('edit', { path: 'note.txt', edits: [{ oldText: 'before', newText: 'after' }] }), { stopReason: 'toolUse' }),
-    fauxAssistantMessage(fauxToolCall('read', { path: 'note.txt' }), { stopReason: 'toolUse' }),
-    fauxAssistantMessage(fauxToolCall('bash', { command: 'echo hello' }), { stopReason: 'toolUse' }),
-    (context) => fauxAssistantMessage(JSON.stringify(context.messages).includes('after') ? 'Remote tools succeeded' : 'Missing remote edit'),
-  ]);
-  const service = new NativeAgentService(join(directory, 'native.sqlite'), models,
-    new E2BSandboxService(sdk.client));
-  try {
-    const outcome = await service.run({ requirementId: 'req_e2b', sessionId: 'ses_e2b',
-      nativeSessionId: null, prompt: 'Use remote tools',
-      model: 'faux/faux-1', reasoningEffort: null, cwd: '/home/user/repo',
-      sandbox: { kind: 'e2b', providerSandboxId: 'e2b-test-123',
-        credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: false },
-      environment: {}, instructions: 'Test',
-      signal: new AbortController().signal, timeoutMs: 30_000,
-      onNativeSession: () => undefined, onEvent: () => undefined });
-    assert.equal(outcome.status, 'succeeded');
-    assert.equal(outcome.finalMessage, 'Remote tools succeeded');
-    assert.equal(new TextDecoder().decode(sdk.data.get('/home/user/repo/note.txt')), 'after\n');
-    assert(sdk.commands.some((entry) => entry.command.includes('echo hello') && entry.cwd === '/home/user/repo'));
-    assert.equal(sdk.commands.some((entry) => entry.envs?.GH_TOKEN !== undefined), false);
-    assert.equal(existsSync(join(directory, 'note.txt')), false);
-  } finally {
-    await service.close();
-    await rm(directory, { recursive: true, force: true });
-  }
-});
+for (const cwd of ['/home/user/repo', null]) {
+  test(`pi-durable tools use the E2B sandbox with ${cwd ?? 'the SDK default directory'}`, async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'code-factory-e2b-native-'));
+    const sdk = fakeSdk();
+    const faux = fauxProvider();
+    const models = createModels();
+    models.setProvider(faux.provider);
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall('write', { path: 'note.txt', content: 'before\n' }), { stopReason: 'toolUse' }),
+      fauxAssistantMessage(fauxToolCall('edit', { path: 'note.txt', edits: [{ oldText: 'before', newText: 'after' }] }), { stopReason: 'toolUse' }),
+      fauxAssistantMessage(fauxToolCall('read', { path: 'note.txt' }), { stopReason: 'toolUse' }),
+      fauxAssistantMessage(fauxToolCall('bash', { command: 'echo hello' }), { stopReason: 'toolUse' }),
+      (context) => fauxAssistantMessage(JSON.stringify(context.messages).includes('after') ? 'Remote tools succeeded' : 'Missing remote edit'),
+    ]);
+    const service = new NativeAgentService(join(directory, 'native.sqlite'), models,
+      new E2BSandboxService(sdk.client));
+    try {
+      const outcome = await service.run({ requirementId: 'req_e2b', sessionId: 'ses_e2b',
+        nativeSessionId: null, prompt: 'Use remote tools',
+        model: 'faux/faux-1', reasoningEffort: null, cwd: '/home/user/repo',
+        sandbox: { kind: 'e2b', providerSandboxId: 'e2b-test-123', cwd,
+          credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: false },
+        environment: {}, instructions: 'Test',
+        signal: new AbortController().signal, timeoutMs: 30_000,
+        onNativeSession: () => undefined, onEvent: () => undefined });
+      assert.equal(outcome.status, 'succeeded');
+      assert.equal(outcome.finalMessage, 'Remote tools succeeded');
+      assert.equal(new TextDecoder().decode(sdk.data.get(`${cwd ?? '/home/user'}/note.txt`)), 'after\n');
+      assert(sdk.commands.some((entry) => entry.command.includes('echo hello') && entry.cwd === (cwd ?? undefined)));
+      assert.equal(sdk.commands.some((entry) => entry.envs?.GH_TOKEN !== undefined), false);
+      assert.equal(existsSync(join(directory, 'note.txt')), false);
+    } finally {
+      await service.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
