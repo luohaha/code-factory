@@ -1464,7 +1464,9 @@ export class AgentManager extends EventEmitter {
         sourceRequirement: { id: source.id, title: source.title, description: source.description },
         targetRequirement: { id: target.id, title: target.title, description: target.description },
         message: body,
-        recentMessages: this.#store.listRecentConversationMessages(target.id, 3)
+        sourceRecentMessages: this.#store.listRecentConversationMessages(source.id, 5)
+          .map(({ author, body }) => ({ author, body })),
+        targetRecentMessages: this.#store.listRecentConversationMessages(target.id, 5)
           .map(({ author, body }) => ({ author, body })),
       }, controller.signal);
     } catch (error) {
