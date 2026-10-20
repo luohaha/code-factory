@@ -62,7 +62,10 @@ test('each direct message is checked; rejected messages never persist or wake ei
     assert.equal(seen[0]?.sourceRequirement.description, source.description);
     assert.equal(seen[0]?.targetRequirement.description, target.description);
     assert.equal(seen[0]?.message, 'Thanks!');
-    assert.deepEqual(seen[2]?.recentMessages, [{
+    assert.deepEqual(seen[0]?.sourceRecentMessages, []);
+    assert.deepEqual(seen[0]?.targetRecentMessages, []);
+    assert.deepEqual(seen[2]?.sourceRecentMessages, []);
+    assert.deepEqual(seen[2]?.targetRecentMessages, [{
       author: 'rd_agent', body: 'Use contract version 2.',
     }]);
     assert.deepEqual(manager.listMessages(target.id).map(({ body }) => body), [
@@ -72,6 +75,46 @@ test('each direct message is checked; rejected messages never persist or wake ei
     await manager.close();
   }
 });
+
+for (const [sourceCount, targetCount] of [[7, 2], [2, 7], [5, 5], [7, 7]] as const) {
+  test(`Jev receives up to five latest messages from each conversation (${sourceCount} source, ${targetCount} target)`, async () => {
+    const store = new SqliteAgentManagerStore(':memory:');
+    const seen: JevMessageContext[] = [];
+    const { manager, source, target, send } = fixture(async (_key, context) => {
+      seen.push(context);
+      return 'reject';
+    }, { store });
+    try {
+      const authors = ['human', 'rd_agent', 'reviewer', 'system', 'jev', 'human', 'rd_agent'] as const;
+      const histories = [[source, sourceCount], [target, targetCount]] as const;
+      for (const [requirement, count] of histories) {
+        for (let index = 0; index < count; index += 1) {
+          store.appendMessage({
+            id: `${requirement.id}-${index}`, requirementId: requirement.id, sessionId: requirement.session.id,
+            author: authors[index]!, body: `${requirement.title} message ${index}`,
+            deliverToRd: false, now: '2026-10-20T00:00:00.000Z',
+          });
+        }
+      }
+
+      await assert.rejects(send('Candidate message'), JevMessageDeliveryError);
+
+      assert.equal(seen.length, 1);
+      assert.equal(seen[0]?.message, 'Candidate message');
+      for (const [requirement, count] of histories) {
+        const expected = Array.from({ length: Math.min(count, 5) }, (_, offset) => {
+          const index = Math.max(count - 5, 0) + offset;
+          return { author: authors[index], body: `${requirement.title} message ${index}` };
+        });
+        const actual = requirement.id === source.id ? seen[0]?.sourceRecentMessages : seen[0]?.targetRecentMessages;
+        assert.deepEqual(actual, expected);
+        assert.equal(manager.listMessages(requirement.id).length, count);
+      }
+    } finally {
+      await manager.close();
+    }
+  });
+}
 
 test('missing keys and failed checks silently allow normal delivery without leaking decision input in logs', async () => {
   let calls = 0;
