@@ -82,7 +82,7 @@ export interface SandboxDto {
   id: string;
   name: string;
   kind: 'local' | 'local-sandbox' | 'e2b';
-  cwd: string;
+  cwd: string | null;
   providerSandboxId: string | null;
   credentialEnvVar: string | null;
   domain: string | null;
@@ -442,7 +442,7 @@ export class AgentManagerClient {
   }
 
   createSandbox(input: { name: string; domain: string; apiKey: string;
-    providerSandboxId?: string; template?: string; cwd?: string; environmentVariables?: Record<string, string | null> }): Promise<SandboxDto> {
+    providerSandboxId?: string; template?: string; environmentVariables?: Record<string, string | null> }): Promise<SandboxDto> {
     return this.request('/api/sandboxes', { method: 'POST', body: JSON.stringify({ kind: 'e2b', ...input }) });
   }
 

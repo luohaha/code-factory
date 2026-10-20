@@ -395,15 +395,14 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           return;
         }
         if (body.kind !== 'e2b') throw new TypeError('kind must be local or e2b');
-        if (body.repositoryUrl !== undefined) {
-          throw new TypeError('repositoryUrl is no longer supported; ask the Agent to clone the repository after sandbox creation');
+        if (body.cwd !== undefined || body.repositoryUrl !== undefined) {
+          throw new TypeError('E2B workspaces do not accept cwd or repositoryUrl; the Agent prepares repositories when needed');
         }
         sendJson(response, 201, await manager.createE2BSandbox({
           name: stringField(body, 'name', true)!,
           domain: stringField(body, 'domain', true)!, apiKey: stringField(body, 'apiKey', true)!,
           ...(body.environmentVariables === undefined ? {} : { environmentVariables: environmentVariablePatch(body.environmentVariables) }),
           ...(body.template === undefined ? {} : { template: stringField(body, 'template', true)! }),
-          ...(body.cwd === undefined ? {} : { cwd: stringField(body, 'cwd', true)! }),
           ...(body.providerSandboxId === undefined ? {} : { providerSandboxId: stringField(body, 'providerSandboxId', true)! }),
         }));
         return;
@@ -429,9 +428,10 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
       const sandbox = url.pathname.match(/^\/api\/sandboxes\/([^/]+)$/);
       if (sandbox && request.method === 'PATCH') {
         const body = await readJson(request);
+        if (body.repositoryUrl !== undefined) throw new TypeError('repositoryUrl is no longer configurable');
         sendJson(response, 200, await manager.updateSandbox(decodeURIComponent(sandbox[1]!), {
           ...(body.name === undefined ? {} : { name: stringField(body, 'name', true)! }),
-          ...(body.cwd === undefined ? {} : { cwd: stringField(body, 'cwd', true)! }),
+          ...(body.cwd === undefined ? {} : { cwd: body.cwd === null ? null : stringField(body, 'cwd')! }),
           ...(body.domain === undefined ? {} : { domain: stringField(body, 'domain', true)! }),
           ...(body.apiKey === undefined ? {} : { apiKey: stringField(body, 'apiKey', true)! }),
           ...(body.environmentVariables === undefined ? {} : { environmentVariables: environmentVariablePatch(body.environmentVariables) }),

@@ -85,6 +85,8 @@ test('named local execution paths set RD cwd for Codex and Claude while Default 
     assert.equal(path.name, 'Feature checkout');
     assert.equal(path.kind, 'local');
     assert.equal(path.cwd, realpathSync(checkout));
+    assert.equal((await fetch(`${base}/sandboxes/${path.id}`, { method: 'PATCH',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cwd: null }) })).status, 400);
     assert.equal(manager.listSandboxes().length, 2);
     const unused = await post('/sandboxes', { kind: 'local', name: 'Unused', cwd: directory });
     const unusedPath = await unused.json() as { id: string };

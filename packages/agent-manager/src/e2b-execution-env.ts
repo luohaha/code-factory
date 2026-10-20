@@ -14,6 +14,17 @@ export type E2BHandle = Pick<Sandbox, 'sandboxId' | 'files' | 'commands'>;
 export interface E2BCredentials { domain: string; apiKey: string }
 export class E2BProviderError extends Error {}
 
+export async function getE2BDefaultCwd(sandbox: E2BHandle): Promise<string> {
+  try {
+    const result = await sandbox.commands.run('pwd', { timeoutMs: 30_000 });
+    const directory = result.stdout.trim();
+    if (result.exitCode !== 0 || !posix.isAbsolute(directory) || directory.includes('\0') || directory.includes('\n')) {
+      throw new Error();
+    }
+    return directory;
+  } catch { throw new E2BProviderError('Could not determine the E2B default working directory'); }
+}
+
 /** Narrow SDK seam so the same adapter is exercised by deterministic provider tests. */
 export interface E2BClient {
   create(options: SandboxOpts): Promise<E2BHandle>;
@@ -92,12 +103,26 @@ const requestOptions = (context: Context): { signal?: AbortSignal } =>
 
 export class E2BExecutionEnv implements ExecutionEnv {
   readonly id: string;
+  readonly #sdkDefaultDirectory: string | null;
   cwd: string;
 
   constructor(readonly sandbox: E2BHandle, cwd: string, readonly commandEnv: Readonly<Record<string, string>> = {},
-    domain = 'e2b.app') {
+    domain = 'e2b.app', useSdkDefaultCwd = false) {
     this.id = `e2b:${domain}:${sandbox.sandboxId}`;
     this.cwd = cwd;
+    this.#sdkDefaultDirectory = useSdkDefaultCwd ? cwd : null;
+  }
+
+  static async create(sandbox: E2BHandle, cwd: string | null,
+    commandEnv: Readonly<Record<string, string>> = {}, domain = 'e2b.app'): Promise<E2BExecutionEnv> {
+    if (cwd !== null) return new E2BExecutionEnv(sandbox, cwd, commandEnv, domain);
+    return new E2BExecutionEnv(sandbox, await getE2BDefaultCwd(sandbox), commandEnv, domain, true);
+  }
+
+  private commandDirectory(cwd?: string): { cwd?: string } {
+    const directory = cwd ? this.path(cwd) : this.cwd;
+    // CodingTools passes env.cwd even when the human left the workspace directory unset.
+    return directory === this.#sdkDefaultDirectory ? {} : { cwd: directory };
   }
 
   private path(path: string): string { return posix.resolve(this.cwd, path); }
@@ -269,7 +294,7 @@ export class E2BExecutionEnv implements ExecutionEnv {
     };
     try {
       const result = await this.sandbox.commands.run(command, {
-        cwd: options?.cwd ? this.path(options.cwd) : this.cwd,
+        ...this.commandDirectory(options?.cwd),
         envs: { ...(options?.inheritEnv === false ? {} : this.commandEnv), ...options?.env },
         ...(options?.timeout === undefined ? { timeoutMs: 0 } : { timeoutMs: Math.ceil(options.timeout * 1000) }),
         ...(context.abortSignal ? { signal: context.abortSignal } : {}),
@@ -294,12 +319,12 @@ export class E2BExecutionEnv implements ExecutionEnv {
     // The E2B command handle retains its entire stdout/stderr. Redirect the command on the remote host,
     // then read bounded slices so neither the SDK nor Agent Manager holds the complete output.
     const path = `/tmp/code-factory-output-${randomUUID()}.log`;
-    const cwd = options.cwd ? this.path(options.cwd) : this.cwd;
+    const directory = this.commandDirectory(options.cwd);
     const envs = { ...(options.inheritEnv === false ? {} : this.commandEnv), ...options.env };
     const wrapped = `bash -lc ${quote(command)} > ${quote(path)} 2>&1`;
     let handle: CommandHandle;
     try {
-      handle = await this.sandbox.commands.run(wrapped, { cwd, envs, background: true,
+      handle = await this.sandbox.commands.run(wrapped, { ...directory, envs, background: true,
         ...(options.timeout === undefined ? { timeoutMs: 0 } : { timeoutMs: Math.ceil(options.timeout * 1000) }),
         ...(context.abortSignal ? { signal: context.abortSignal } : {}) });
     } catch (error) { return err(executionError(error)); }
@@ -333,7 +358,7 @@ export class E2BExecutionEnv implements ExecutionEnv {
     const drain = async (): Promise<boolean> => {
       const read = await this.sandbox.commands.run(
         `if test -f ${quote(path)}; then tail -c +${offset + 1} ${quote(path)} | head -c 65536 | base64 -w0; fi`,
-        { cwd, timeoutMs: 30_000, ...(signal ? { signal } : {}) });
+        { ...directory, timeoutMs: 30_000, ...(signal ? { signal } : {}) });
       const bytes = Buffer.from(read.stdout.trim(), 'base64');
       if (bytes.length === 0) return false;
       offset += bytes.length;

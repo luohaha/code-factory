@@ -89,6 +89,8 @@ import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { NativeAuthSettings } from '@/components/native-auth-settings';
 import { WorkspaceEnvironmentVariables, workspaceEnvironmentVariables } from '@/components/workspace-environment-variables';
+import { AgentTraceTimeline } from '@/components/agent-trace-timeline';
+import { ThinkingLoader } from '@/components/ui/thinking-loader';
 import {
   AgentManagerApiError,
   AgentManagerClient,
@@ -268,15 +270,6 @@ const runStatusLabel: Record<AgentRunDto['status'], TranslationKey> = {
   failed: 'Failed',
   timed_out: 'Timed out',
   cancelled: 'Cancelled',
-};
-
-const traceKindLabel: Record<AgentTraceEventDto['kind'], TranslationKey> = {
-  lifecycle: 'Lifecycle',
-  reasoning: 'Reasoning',
-  assistant_message: 'Agent message',
-  tool_call: 'Tool call',
-  tool_result: 'Tool result',
-  error: 'Error',
 };
 
 const authorLabel: Record<RequirementMessageDto['author'], TranslationKey> = {
@@ -758,7 +751,7 @@ function EditRequirementAgentConfigurationDialog({
                   value={sandboxId} disabled={submitting} onChange={(event) => setSandboxId(event.target.value)}>
                   {sandboxes.filter((sandbox) => sandbox.id === 'local' || sandbox.kind === 'local' || provider === 'native-agent')
                     .map((sandbox) => <NativeSelectOption key={sandbox.id} value={sandbox.id === 'local' ? '' : sandbox.id}>
-                      {sandbox.id === 'local' ? t('Default workspace') : sandbox.name} · {sandbox.cwd}
+                      {sandbox.id === 'local' ? t('Default workspace') : sandbox.name} · {sandbox.cwd ?? t('Sandbox default directory')}
                     </NativeSelectOption>)}
                 </NativeSelect>
               </Field>
@@ -1358,7 +1351,7 @@ function NewRequirementDialog({ client, disabled, modelCatalog, sandboxes, onCre
                 <NativeSelect key={provider} id="requirement-sandbox" name="sandboxId" className="w-full" defaultValue="">
                   {sandboxes.filter((sandbox) => sandbox.id === 'local' || sandbox.kind === 'local' || provider === 'native-agent')
                     .map((sandbox) => <NativeSelectOption key={sandbox.id} value={sandbox.id === 'local' ? '' : sandbox.id}>
-                      {sandbox.id === 'local' ? t('Default workspace') : sandbox.name} · {sandbox.cwd}
+                      {sandbox.id === 'local' ? t('Default workspace') : sandbox.name} · {sandbox.cwd ?? t('Sandbox default directory')}
                     </NativeSelectOption>)}
                 </NativeSelect>
               </Field>
@@ -2069,7 +2062,7 @@ function AgentTracePanel({ requirementId, runs, tracesByRun, loadedRequirementId
   loadedRequirementIds: ReadonlySet<string>;
   onLoadTrace: (requirementId: string) => Promise<void>;
 }) {
-  const { locale, t } = useI18n();
+  const { t } = useI18n();
   const [loadError, setLoadError] = useState<string | null>(null);
   const requestedRequirementIdsRef = useRef(new Set<string>());
   const sessionRuns = useMemo(
@@ -2081,7 +2074,11 @@ function AgentTracePanel({ requirementId, runs, tracesByRun, loadedRequirementId
     () => collectRequirementAgentTrace(runIds, tracesByRun),
     [runIds, tracesByRun],
   );
-  const running = sessionRuns.some((run) => run.status === 'running');
+  const runningRunIds = useMemo(
+    () => new Set(sessionRuns.filter((run) => run.status === 'running').map((run) => run.id)),
+    [sessionRuns],
+  );
+  const running = runningRunIds.size > 0;
 
   const requestTrace = useCallback(() => {
     if (requestedRequirementIdsRef.current.has(requirementId)) return;
@@ -2136,30 +2133,11 @@ function AgentTracePanel({ requirementId, runs, tracesByRun, loadedRequirementId
                 : 'No trace was captured for this Session.')}
           </div>
         ) : (
-          <div aria-live="polite">
-            <ol className="space-y-4">
-              {trace.map((item) => (
-                <li key={item.id} className="relative pl-5 before:absolute before:top-5 before:bottom-[-1rem] before:left-[5px] before:w-px before:bg-border last:before:hidden">
-                  <span className={`absolute top-1 left-0 size-2.5 rounded-full border-2 border-card ${item.kind === 'error' || item.status === 'failed' ? 'bg-rose-500' : item.kind === 'tool_call' || item.kind === 'tool_result' ? 'bg-amber-500' : item.kind === 'reasoning' ? 'bg-violet-500' : 'bg-emerald-500'}`} />
-                  <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                    <Badge variant="outline" className="h-5 text-[9px]">{t(traceKindLabel[item.kind])}</Badge>
-                    <span className="min-w-0 flex-1 truncate text-[10px] font-semibold" title={item.title}>{item.title}</span>
-                    <span className="shrink-0 font-mono text-[8px] text-muted-foreground">run-{shortId(item.runId)}</span>
-                    <span className="shrink-0 text-[9px] text-muted-foreground">{formatTime(item.createdAt, locale)}</span>
-                  </div>
-                  {item.detail ? (
-                    <pre className="mt-1.5 max-h-64 overflow-auto rounded-lg bg-muted/55 px-3 py-2 font-mono text-[10px] leading-4 whitespace-pre-wrap break-words text-foreground/80">{item.detail}</pre>
-                  ) : null}
-                  {item.toolName || item.nativeType ? (
-                    <p className="mt-1 truncate font-mono text-[8px] text-muted-foreground" title={[item.toolName, item.toolCallId, item.nativeType].filter(Boolean).join(' · ')}>
-                      {[item.toolName, item.toolCallId, item.nativeType].filter(Boolean).join(' · ')}
-                    </p>
-                  ) : null}
-                </li>
-              ))}
-            </ol>
-          </div>
+          <AgentTraceTimeline trace={trace} runningRunIds={runningRunIds} />
         )}
+        {running && !loading && !loadError ? (
+          <ThinkingLoader label={t('RD Agent is working')} className="mt-4" />
+        ) : null}
       </div>
     </section>
   );
@@ -2410,7 +2388,7 @@ function RequirementDetail({
             <span aria-hidden="true">·</span>
             <span className="font-mono">ses-{shortId(requirement.session.id)}</span>
             <span aria-hidden="true">·</span>
-            <span className="max-w-full truncate" title={assignedWorkspace?.cwd}>
+            <span className="max-w-full truncate" title={assignedWorkspace?.cwd ?? undefined}>
               {workspaceName}
             </span>
           </SheetDescription>
@@ -2610,9 +2588,11 @@ function RequirementDetail({
             </div>
 
             {requirement.session.state === 'running' ? (
-              <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
-                <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-emerald-500/12 text-emerald-600"><Bot className="size-3.5" /></span>
-                <span className="flex min-w-0 flex-1 items-center gap-2"><LoaderCircle className="size-3.5 shrink-0 animate-spin" />{t('RD Agent is working; new messages are queued by default.')}</span>
+              <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                <div className="min-w-0 flex-1 basis-48">
+                  <ThinkingLoader label={t('RD Agent is working')} />
+                  <p className="mt-1 text-[10px]">{t('New messages are queued by default.')}</p>
+                </div>
                 {activeRdRun && messagesReady ? (
                   <div className="flex shrink-0 flex-wrap justify-end gap-1">
                     {hasNewerInput ? (
@@ -3346,7 +3326,7 @@ function Dashboard() {
   );
   const filteredSandboxes = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return sandboxes.filter((sandbox) => `${sandbox.name} ${sandbox.cwd} ${sandbox.providerSandboxId ?? ''}`.toLowerCase().includes(needle));
+    return sandboxes.filter((sandbox) => `${sandbox.name} ${sandbox.cwd ?? ''} ${sandbox.providerSandboxId ?? ''}`.toLowerCase().includes(needle));
   }, [query, sandboxes]);
   const relationshipSummary = useMemo(
     () => summarizeRequirementRelations(requirements),
@@ -3598,7 +3578,6 @@ function Dashboard() {
           ...(Object.keys(environmentVariables).length ? { environmentVariables } : {}),
           ...(value('providerSandboxId') ? { providerSandboxId: value('providerSandboxId') } : {}),
           ...(value('template') ? { template: value('template') } : {}),
-          ...(value('cwd') ? { cwd: value('cwd') } : {}),
         });
       setSandboxes((current) => [...current, sandbox]);
       form.reset();
@@ -3624,7 +3603,8 @@ function Dashboard() {
     try {
       const environmentVariables = workspaceEnvironmentVariables(fields);
       const updated = await client.updateWorkspace(selectedWorkspace.id, {
-        name: value('name'), cwd: value('cwd'),
+        name: value('name'),
+        ...(selectedWorkspace.kind === 'local' ? { cwd: value('cwd') } : {}),
         ...(selectedWorkspace.kind === 'e2b' ? {
           domain: value('domain'),
           ...(Object.keys(environmentVariables).length ? { environmentVariables } : {}),
@@ -4015,7 +3995,6 @@ function Dashboard() {
                           <div className="mt-3 grid gap-3">
                             <Input name="providerSandboxId" aria-label={t('Existing E2B sandbox ID')} placeholder={t('Existing E2B sandbox ID (optional)')} />
                             <Input name="template" aria-label={t('E2B template')} placeholder={t('E2B template (default: base)')} />
-                            <Input name="cwd" aria-label={t('Remote working directory')} placeholder={t('Remote working directory (default: /home/user/repo)')} />
                             <WorkspaceEnvironmentVariables key={createPathOpen ? 'open' : 'closed'} />
                           </div>
                         </details>
@@ -4051,10 +4030,10 @@ function Dashboard() {
                       <FieldLabel htmlFor="edit-workspace-name">{t('Workspace name')}</FieldLabel>
                       <Input id="edit-workspace-name" name="name" required maxLength={80} defaultValue={selectedWorkspace.name} />
                     </Field>
-                    <Field>
-                      <FieldLabel htmlFor="edit-workspace-cwd">{t(selectedWorkspace.kind === 'local' ? 'Local directory' : 'Remote working directory')}</FieldLabel>
-                      <Input id="edit-workspace-cwd" name="cwd" required defaultValue={selectedWorkspace.cwd} />
-                    </Field>
+                    {selectedWorkspace.kind === 'local' ? <Field>
+                      <FieldLabel htmlFor="edit-workspace-cwd">{t('Local directory')}</FieldLabel>
+                      <Input id="edit-workspace-cwd" name="cwd" required defaultValue={selectedWorkspace.cwd ?? ''} />
+                    </Field> : null}
                     {selectedWorkspace.kind === 'e2b' ? <>
                       <Field>
                         <FieldLabel htmlFor="edit-workspace-domain">{t('E2B domain')}</FieldLabel>
@@ -4102,7 +4081,7 @@ function Dashboard() {
                   <dl className="grid gap-3 rounded-lg border border-border p-3 text-xs sm:grid-cols-2">
                     <div className="min-w-0 sm:col-span-2">
                       <dt className="text-muted-foreground">{t(selectedWorkspace.kind === 'e2b' ? 'Remote working directory' : 'Local directory')}</dt>
-                      <dd className="mt-1 break-all font-mono">{selectedWorkspace.cwd}</dd>
+                      <dd className="mt-1 break-all font-mono">{selectedWorkspace.cwd ?? t('Sandbox default directory')}</dd>
                     </div>
                     <div>
                       <dt className="text-muted-foreground">{t('Requirements')}</dt>
@@ -4115,7 +4094,6 @@ function Dashboard() {
                       <div><dt className="text-muted-foreground">{t('E2B domain')}</dt><dd className="mt-1 break-all">{selectedWorkspace.domain}</dd></div>
                       {selectedWorkspace.environmentVariableNames?.length ? <div className="min-w-0 sm:col-span-2"><dt className="text-muted-foreground">{t('Environment variables')}</dt><dd className="mt-1 break-all font-mono">{selectedWorkspace.environmentVariableNames.join(', ')}</dd></div> : null}
                       <div className="min-w-0 sm:col-span-2"><dt className="text-muted-foreground">{t('Credential reference')}</dt><dd className="mt-1 break-all font-mono">{selectedWorkspace.credentialRef ?? selectedWorkspace.credentialEnvVar}</dd></div>
-                      {selectedWorkspace.repositoryUrl ? <div className="min-w-0 sm:col-span-2"><dt className="text-muted-foreground">{t('Repository HTTPS URL')}</dt><dd className="mt-1 break-all">{selectedWorkspace.repositoryUrl}</dd></div> : null}
                       {selectedWorkspace.checkedAt ? <div className="sm:col-span-2"><dt className="text-muted-foreground">{t('Last checked')}</dt><dd className="mt-1">{new Date(selectedWorkspace.checkedAt).toLocaleString(locale)}</dd></div> : null}
                     </> : null}
                   </dl>
@@ -4175,7 +4153,7 @@ function Dashboard() {
                               {t(sandbox.kind === 'e2b' ? 'E2B sandbox' : 'Local workspace')}
                               {sandbox.kind === 'e2b' ? ` · ${t(sandboxStatus)}` : null}
                             </span> : null}
-                            <span className="mt-2 block truncate font-mono text-[10px] text-muted-foreground" title={sandbox.cwd}>{sandbox.cwd}</span>
+                            <span className="mt-2 block truncate font-mono text-[10px] text-muted-foreground" title={sandbox.cwd ?? t('Sandbox default directory')}>{sandbox.cwd ?? t('Sandbox default directory')}</span>
                             <span className="mt-2 block text-[10px] text-muted-foreground">{summary?.total ?? 0} {t('Requirements')}</span>
                           </button>
                         );
