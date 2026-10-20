@@ -21,7 +21,7 @@ import { sandboxesTableSql, schemaStatements } from '../src/schema.js';
 import { SqliteAgentManagerStore } from '../src/sqlite-store.js';
 import type { RunOutcome, Sandbox } from '../src/types.js';
 
-function fakeE2B(settings: { acceptRotated?: boolean; home?: string } = {}) {
+function fakeE2B(settings: { acceptRotated?: boolean; home?: string; beforeGetInfo?: () => Promise<void> } = {}) {
   let state: 'running' | 'paused' = 'running';
   let killed = false;
   const calls: string[] = [];
@@ -78,6 +78,7 @@ function fakeE2B(settings: { acceptRotated?: boolean; home?: string } = {}) {
     async getInfo(id, options) {
       check(options);
       calls.push(`info:${id}`);
+      await settings.beforeGetInfo?.();
       return { sandboxId: id, templateId: 'base', state } as SandboxInfo;
     },
     async pause(id, options) { check(options); calls.push(`pause:${id}`); state = 'paused'; return true; },
@@ -603,6 +604,71 @@ test('E2B environment API validates, hides values, preserves omitted keys, rotat
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+for (const lookupFails of [false, true]) {
+  test(`an in-flight ${lookupFails ? 'failed' : 'successful'} health check preserves an environment edit`, async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-health-edit-'));
+    const databasePath = join(directory, 'factory.sqlite');
+    let holdLookup = false;
+    let finishLookup!: () => void;
+    let lookupStarted!: () => void;
+    const pendingLookup = new Promise<void>((resolve) => { finishLookup = resolve; });
+    const started = new Promise<void>((resolve) => { lookupStarted = resolve; });
+    const sdk = fakeE2B({ beforeGetInfo: async () => {
+      if (!holdLookup) return;
+      holdLookup = false;
+      lookupStarted();
+      await pendingLookup;
+      if (lookupFails) throw new Error('Provider lookup failed');
+    } });
+    const requests: NativeRunInput[] = [];
+    class RecordingNativeService extends NativeAgentService {
+      override async run(input: NativeRunInput): Promise<RunOutcome> {
+        requests.push(input);
+        return { status: 'succeeded', exitCode: 0, nativeSessionId: null, finalMessage: null, error: null };
+      }
+    }
+    const store = new SqliteAgentManagerStore(databasePath);
+    const manager = new AgentManager({ workspaceRoot: directory, databasePath, store, e2bService: sdk.service,
+      nativeService: new RecordingNativeService(join(directory, 'native.sqlite')),
+      logger: createLogger({ level: 'silent' }) });
+    const secrets = new E2BCredentialStore(e2bCredentialsPath(databasePath));
+    let health: ReturnType<AgentManager['checkSandboxHealth']> | undefined;
+    try {
+      const sandbox = await manager.createE2BSandbox({ name: 'Original', domain: 'e2b.example', apiKey: 'test-key',
+        environmentVariables: { GH_TOKEN: 'original-token' } });
+      holdLookup = true;
+      health = manager.checkSandboxHealth(sandbox.id);
+      await started;
+      const updated = await manager.updateSandbox(sandbox.id, { name: 'Edited during lookup',
+        environmentVariables: { GH_TOKEN: 'replacement-token', CUSTOM: 'configured' } });
+      assert.notEqual(updated.credentialRef, sandbox.credentialRef);
+      assert.equal(secrets.read(sandbox.credentialRef!), null);
+      finishLookup();
+      const checked = await health;
+      assert.equal(checked.credentialRef, updated.credentialRef);
+      assert.equal(checked.name, updated.name);
+      assert.deepEqual(checked.environmentVariableNames, ['CUSTOM', 'GH_TOKEN']);
+      assert.equal(checked.status, lookupFails ? 'unreachable' : 'running');
+      assert(checked.checkedAt);
+      assert.equal(store.getSandbox(sandbox.id)?.credentialRef, updated.credentialRef);
+      assert.deepEqual(manager.listSandboxes().find((item) => item.id === sandbox.id), checked);
+      assert.deepEqual(secrets.readEnvironment(checked.credentialRef!), { GH_TOKEN: 'replacement-token', CUSTOM: 'configured' });
+      const requirement = manager.createRequirement({ title: 'Use edited environment', description: 'Continue after health check',
+        provider: 'native-agent', sandboxId: sandbox.id });
+      const outcome = await manager.runRequirement(requirement.id);
+      assert.equal(outcome.status, 'waiting_confirmation');
+      assert.equal(requests[0]?.sandbox?.credentials.apiKey, 'test-key');
+      assert.deepEqual(requests[0]?.sandbox?.environmentVariables, { GH_TOKEN: 'replacement-token', CUSTOM: 'configured' });
+    } finally {
+      finishLookup();
+      await health?.catch(() => undefined);
+      secrets.close();
+      await manager.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
 
 test('failed sandbox persistence preserves the old environment and removes the uncommitted secret record', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-env-rollback-'));

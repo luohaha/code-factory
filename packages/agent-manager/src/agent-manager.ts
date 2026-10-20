@@ -938,7 +938,10 @@ export class AgentManager extends EventEmitter {
     let status: Sandbox['status'];
     try { status = (await this.#e2b.getInfo(sandbox.providerSandboxId, this.e2bCredentials(sandbox))).state; }
     catch (error) { status = error instanceof Error && error.name === 'SandboxNotFoundError' ? 'terminated' : 'unreachable'; }
-    return this.sandboxSummary(this.#store.updateSandbox({ ...sandbox, status, checkedAt: new Date().toISOString() }));
+    // Settings and credential references may change while the provider lookup is pending.
+    const current = this.#store.getSandbox(id);
+    if (!current) throw new StoreNotFoundError(`Sandbox ${id} not found`);
+    return this.sandboxSummary(this.#store.updateSandbox({ ...current, status, checkedAt: new Date().toISOString() }));
   }
 
   private requireE2BSandbox(id: string): Sandbox & { providerSandboxId: string } {

@@ -533,7 +533,7 @@ Updates a named workspace. Local workspaces accept `name` and/or `cwd`; the dire
 
 ### GET /api/sandboxes/:id/health
 
-Uses the E2B SDK without resuming the sandbox and persists the observed status and `checkedAt`. Returns the updated Sandbox. A missing E2B sandbox reports `terminated`; other provider lookup errors report `unreachable`.
+Uses the E2B SDK without resuming the sandbox and persists only the observed status and `checkedAt` on the latest workspace record, preserving settings and credential edits made while the lookup is pending. Returns the updated Sandbox. A missing E2B sandbox reports `terminated`; other provider lookup errors report `unreachable`.
 
 ### POST /api/sandboxes/:id/pause and /resume
 
