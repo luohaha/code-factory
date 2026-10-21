@@ -13,7 +13,7 @@ import {
   CODE_FACTORY_REQUIREMENT_ID,
   CODE_FACTORY_SESSION_ID,
 } from '../src/cli/code-factory-cli.ts';
-import type { GitHubClient, GitHubPullRequestSnapshot } from '../src/github/github-client.ts';
+import type { GitHubClient, GitHubPullRequestSnapshot } from '../src/triggers/github/github-client.ts';
 import { silentLogger } from '../src/infrastructure/logger.ts';
 import { NativeAgentService, type NativeRunInput } from '../src/runtime/native-agent.ts';
 import type { AgentProcessRunner, ProcessRunRequest } from '../src/runtime/process-runner.ts';
@@ -22,7 +22,7 @@ import {
   PULL_REQUEST_COMMENT_TRIGGER_ID,
   PULL_REQUEST_CONFLICT_TRIGGER_ID,
   PULL_REQUEST_STATUS_TRIGGER_ID,
-} from '../src/github/pull-request-triggers.ts';
+} from '../src/triggers/github/pull-request-triggers.ts';
 import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.ts';
 import { TIMER_AGENT_TRIGGER_ID } from '../src/triggers/timer-agent-trigger.ts';
 import type { PullRequest, RunOutcome } from '../src/core/types.ts';

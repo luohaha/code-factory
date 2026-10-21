@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { decideJevMessage, type JevMessageContext } from '../src/triggers/jev-message-decision.ts';
+import { decideJevMessage, type JevMessageContext } from '../src/jev/jev-message-decision.ts';
 
 const context: JevMessageContext = {
   sourceRequirement: { id: 'req_source', title: 'API implementation', description: 'Implement the shared API.' },

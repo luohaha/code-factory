@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { decideJevWake } from '../src/triggers/jev-wake-decision.ts';
+import { decideJevWake } from '../src/jev/jev-wake-decision.ts';
 
 test('Jev sends a typed Choice and Score and maps delayed scores to minutes', async () => {
   const previous = globalThis.fetch;

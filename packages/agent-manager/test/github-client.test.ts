@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { GhCliGitHubClient } from '../src/github/github-client.ts';
+import { GhCliGitHubClient } from '../src/triggers/github/github-client.ts';
 import type { PullRequest } from '../src/core/types.ts';
 
 const pullRequest: PullRequest = {

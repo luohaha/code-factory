@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, unlinkSync, wri
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 
-import { normalizeRepositoryKey } from '../github/repository-key.js';
+import { normalizeRepositoryKey } from '../triggers/github/repository-key.js';
 import { ClaudeCodeAdapter } from '../runtime/adapters/claude-code.js';
 import { CodexAdapter } from '../runtime/adapters/codex.js';
 import type { AgentAdapter, NormalizedAgentTrace } from '../runtime/adapters/types.js';
@@ -30,9 +30,9 @@ import {
   installCodeFactoryCliLauncher,
   type CodeFactoryCliInvocation,
 } from '../cli/code-factory-cli-launcher.js';
-import { GhCliGitHubClient, type GitHubClient } from '../github/github-client.js';
-import { decideJevWake, type JevWakeContext, type JevWakeDecision } from '../triggers/jev-wake-decision.js';
-import { decideJevMessage, JevMessageDeliveryError, type JevMessageContext, type JevMessageDecision } from '../triggers/jev-message-decision.js';
+import { GhCliGitHubClient, type GitHubClient } from '../triggers/github/github-client.js';
+import { decideJevWake, type JevWakeContext, type JevWakeDecision } from '../jev/jev-wake-decision.js';
+import { decideJevMessage, JevMessageDeliveryError, type JevMessageContext, type JevMessageDecision } from '../jev/jev-message-decision.js';
 import { createFileLogger, type Logger, type LogLevel } from '../infrastructure/logger.js';
 import {
   ClaudeCodeModelDiscoverer,
@@ -47,14 +47,14 @@ import { NativeAuthService } from '../runtime/native-auth-service.js';
 import { profileIdFromModel, profileModel, type NativeApiFormat, type NativeApiProfile } from '../runtime/native-auth.js';
 import { E2BProviderError, E2BSandboxService, type E2BCredentials, type E2BHandle } from '../runtime/e2b-execution-env.js';
 import { E2BCredentialStore, e2bCredentialsPath } from '../runtime/e2b-credentials.js';
-import { PullRequestReconciler } from '../github/pull-request-reconciler.js';
+import { PullRequestReconciler } from '../triggers/github/pull-request-reconciler.js';
 import {
   PullRequestCiFailureTrigger,
   PullRequestCommentTrigger,
   PullRequestConflictTrigger,
   PullRequestStatusTrigger,
   type PullRequestSnapshotTrigger,
-} from '../github/pull-request-triggers.js';
+} from '../triggers/github/pull-request-triggers.js';
 import { TimerAgentTrigger } from '../triggers/timer-agent-trigger.js';
 import { SqliteAgentManagerStore } from '../storage/sqlite-store.js';
 import type { AgentManagerStore } from '../storage/store.js';

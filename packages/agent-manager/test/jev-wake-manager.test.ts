@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { AgentManager } from '../src/core/agent-manager.ts';
-import type { JevWakeDecision } from '../src/triggers/jev-wake-decision.ts';
+import type { JevWakeDecision } from '../src/jev/jev-wake-decision.ts';
 import { createLogger, silentLogger, type LogWriter } from '../src/infrastructure/logger.ts';
 import type { AgentProcessRunner, ProcessRunRequest } from '../src/runtime/process-runner.ts';
 import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.ts';

@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 
-import { normalizeRepositoryKey } from '../github/repository-key.js';
+import { normalizeRepositoryKey } from '../triggers/github/repository-key.js';
 import { postMigrationSchemaStatements, requirementMessagesTableSql, sandboxesTableSql, schemaStatements } from './schema.js';
 import {
   SEARCH_EMBEDDING_VERSION,

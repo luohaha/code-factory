@@ -5,7 +5,7 @@ import { AgentManager, MAX_MESSAGE_ATTACHMENT_BYTES } from '../core/agent-manage
 import { validateAgentManagerConfigurationPatch } from '../infrastructure/configuration.js';
 import { DashboardServer } from './dashboard-server.js';
 import { E2BProviderError } from '../runtime/e2b-execution-env.js';
-import { JevMessageDeliveryError } from '../triggers/jev-message-decision.js';
+import { JevMessageDeliveryError } from '../jev/jev-message-decision.js';
 import type { Logger } from '../infrastructure/logger.js';
 import { StoreConflictError, StoreNotFoundError } from '../storage/store.js';
 import type { AgentProvider, AgentReasoningEffort, ManagerEvent, PullRequestStatus } from '../core/types.js';

@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { parseArgs, promisify } from 'node:util';
 
-import { normalizeRepositoryKey } from '../github/repository-key.js';
+import { normalizeRepositoryKey } from '../triggers/github/repository-key.js';
 import { CODE_FACTORY_VERSION } from '../infrastructure/version.js';
 
 export const CODE_FACTORY_API_URL = 'CODE_FACTORY_API_URL';

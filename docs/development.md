@@ -14,8 +14,9 @@ Code Factory contains two independently installed Node.js packages and has no ro
 | `core/` | Agent Manager orchestration and shared domain types |
 | `runtime/` | Native Agent, E2B execution and file transfer, provider credentials, model discovery, process runner, and `adapters/` for Codex and Claude Code |
 | `storage/` | Store interface, SQLite implementation, schema, and search indexing helpers |
-| `github/` | GitHub client, PR reconciliation and triggers, and repository identity |
-| `triggers/` | Agent trigger contract, timers, and Jev wake/message decisions |
+| `triggers/` | Agent trigger contract and timers |
+| `triggers/github/` | GitHub client, PR reconciliation and triggers, and repository identity |
+| `jev/` | Jev wake and inter-agent message decisions |
 | `http/` | HTTP/SSE API and bundled dashboard serving |
 | `cli/` | CLI command implementations, RD CLI launcher, daemon, and startup banner |
 | `infrastructure/` | Workspace configuration, logging, package version, and workspace lock |
