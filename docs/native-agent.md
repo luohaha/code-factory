@@ -58,7 +58,7 @@ A normal reply is appended to the Requirement message stream first. New messages
 
 NativeAgentService installs CodingTools in the pi-durable registry and registers `pr_register`, `gh_pr`, `requirement_propose`, `requirement_action`, `requirement_related`, `requirement_message`, `timer_register`, `timer_show`, and `timer_cancel`. These tools have typed parameters, so the model does not need to construct CLI commands from appended system-prompt instructions.
 
-For an RD Run using E2B, the following tools operate only on the Requirement's selected sandbox. They do not accept another sandbox ID or expose E2B credentials. Local Requirements receive an actionable tool error if they call them. Native Reviewers retain only `read` and `bash`.
+Only an RD Run with a selected E2B workspace is offered the following tools and their E2B-specific prompt section. They operate on the Requirement's selected sandbox, without accepting another sandbox ID or exposing E2B credentials. Default and named local RD Runs receive CodingTools and the general Code Factory tools, without sandbox tools. NativeAgentService selects extensions for every new or resumed Run, so persisted conversations cannot retain sandbox tools when the current Run uses a local workspace. Native Reviewers retain only `read` and `bash`, including when using E2B.
 
 | Tool | Parameters | Behavior |
 | --- | --- | --- |

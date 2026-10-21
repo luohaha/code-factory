@@ -26,6 +26,8 @@ import type { AgentReasoningEffort, RunOutcome, Sandbox } from '../core/types.js
 const execFileAsync = promisify(execFile);
 const CONTEXT = BACKGROUND_CONTEXT;
 const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
+const CodeFactoryExtension = defineExtension({ name: 'code-factory' });
+const E2BSandboxExtension = defineExtension({ name: 'e2b-sandbox' });
 
 export type NativeSandboxAction = 'status' | 'pause' | 'resume';
 export type NativeSandboxState = Pick<Sandbox, 'id' | 'name' | 'kind' | 'providerSandboxId' | 'status' | 'checkedAt'>;
@@ -207,15 +209,20 @@ export class NativeAgentService {
       parameters: Type.Object({ remotePath: Type.String(), localPath: Type.String(), overwrite: Type.Optional(Type.Boolean()) }),
       execute: async ({ localPath, remotePath, overwrite }, api, context) => transfer('download', localPath, remotePath, overwrite ?? false, api.conversationId, api.env, context) });
     registry.install(defineExtension({
-      name: 'code-factory',
-      tools: [prRegister, ghPr, propose, action, related, message, timerRegister, timerShow, timerCancel,
-        sandboxStatus, sandboxPause, sandboxResume, sandboxUpload, sandboxDownload],
+      ...CodeFactoryExtension,
+      tools: [prRegister, ghPr, propose, action, related, message, timerRegister, timerShow, timerCancel],
       sections: [section('code-factory', () => 'You are this Requirement’s long-lived RD Agent. Use the Code Factory tools to register PRs, propose TODO follow-ups, message other Requirement agents by ID, and manage timers. Humans confirm completion.'),
-        section('workspace', (input) => input.env?.cwd || 'E2B SDK default user directory. Use sandbox_upload for host attachment paths; read/write/bash operate remotely.')],
+        section('workspace', (input) => input.env?.cwd)],
+    }));
+    registry.install(defineExtension({
+      ...E2BSandboxExtension,
+      tools: [sandboxStatus, sandboxPause, sandboxResume, sandboxUpload, sandboxDownload],
+      sections: [section('e2b-sandbox', (input) => `Selected E2B workspace: ${input.env?.cwd || 'SDK default user directory'}. Use sandbox_upload for host attachment paths; read/write/bash operate remotely.`)],
     }));
     this.#harness = await Harness.open(await openNodeSqliteStorage(this.#databasePath), {
       models,
       registry,
+      settings: { extensions: [CodingTools, CodeFactoryExtension] },
       env: async ({ conversationId, cwd }) => {
         const sandbox = this.#sandboxes.get(conversationId);
         if (sandbox) {
@@ -281,7 +288,9 @@ export class NativeAgentService {
       }
       const agent = { model: { provider, modelId }, cwd: input.cwd,
         ...(input.reasoningEffort ? { thinkingLevel: input.reasoningEffort } : {}),
-        ...(reviewer ? { extensions: [CodingTools], tools: [createReadTool(), createBashTool()] } : {}),
+        extensions: reviewer ? [CodingTools]
+          : [CodingTools, CodeFactoryExtension, ...(input.sandbox ? [E2BSandboxExtension] : [])],
+        tools: reviewer ? [createReadTool(), createBashTool()] : null,
         instructions: input.instructions };
       let conversation = input.nativeSessionId
         ? await harness.conversation(Number(input.nativeSessionId) as ConversationId, CONTEXT)

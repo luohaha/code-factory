@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
+import { getCurrentSystemPrompt, getCurrentTools } from '@earendil-works/pi-ai';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import { CommandExitError, FileType } from 'e2b';
@@ -14,6 +15,11 @@ import type { SandboxInfo, SandboxOpts } from 'e2b';
 
 import { E2BExecutionEnv, E2BSandboxService, type E2BClient, type E2BHandle } from '../src/runtime/e2b-execution-env.js';
 import { NativeAgentService } from '../src/runtime/native-agent.js';
+
+const codingToolNames = ['read', 'write', 'edit', 'bash'];
+const controlToolNames = ['pr_register', 'gh_pr', 'requirement_propose', 'requirement_action',
+  'requirement_related', 'requirement_message', 'timer_register', 'timer_show', 'timer_cancel'];
+const sandboxToolNames = ['sandbox_status', 'sandbox_pause', 'sandbox_resume', 'sandbox_upload', 'sandbox_download'];
 
 function fakeSdk(defaultDirectory = '/home/user') {
   const data = new Map<string, Uint8Array>();
@@ -95,6 +101,91 @@ function fakeSdk(defaultDirectory = '/home/user') {
   return { handle, client, data, commands, get createOptions() { return createOptions; } };
 }
 
+test('only E2B RD Runs offer sandbox tools; Default, named local, and Reviewer tools stay scoped', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-native-tool-scope-'));
+  const namedDirectory = join(directory, 'named-local');
+  await mkdir(namedDirectory);
+  const sdk = fakeSdk();
+  let connections = 0;
+  const e2b = new E2BSandboxService({ ...sdk.client, connect: async (id, options) => {
+    connections++;
+    return sdk.client.connect(id, options);
+  } });
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const service = new NativeAgentService(join(directory, 'native.sqlite'), models, e2b);
+  const scenarios: Array<{ role: 'rd' | 'reviewer'; remote: boolean; cwd: string }> = [
+    { role: 'rd', remote: false, cwd: directory },
+    { role: 'rd', remote: true, cwd: directory },
+    { role: 'rd', remote: false, cwd: namedDirectory },
+    { role: 'reviewer', remote: false, cwd: directory },
+    { role: 'reviewer', remote: true, cwd: directory },
+  ];
+  try {
+    for (const [index, scenario] of scenarios.entries()) {
+      let offered: string[] = [];
+      let prompt = '';
+      faux.setResponses([(context) => {
+        offered = getCurrentTools(context.messages).map((tool) => tool.name);
+        prompt = getCurrentSystemPrompt(context.messages);
+        return fauxAssistantMessage('Inspected tool list');
+      }]);
+      const outcome = await service.run({ role: scenario.role,
+        requirementId: `req_scope_${index}`, sessionId: `ses_scope_${index}`, nativeSessionId: null,
+        prompt: 'Inspect available tools', model: 'faux/faux-1', reasoningEffort: null, cwd: scenario.cwd,
+        ...(scenario.remote ? { sandbox: { kind: 'e2b' as const, providerSandboxId: 'e2b-test-123', cwd: null,
+          credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: false } } : {}),
+        environment: {}, instructions: 'Test', signal: new AbortController().signal, timeoutMs: 30_000,
+        onNativeSession: () => undefined, onEvent: () => undefined });
+      assert.equal(outcome.status, 'succeeded');
+      const expected = scenario.role === 'reviewer' ? ['read', 'bash']
+        : [...codingToolNames, ...controlToolNames, ...(scenario.remote ? sandboxToolNames : [])];
+      assert.deepEqual(offered.sort(), expected.sort(), JSON.stringify(scenario));
+      assert.equal(prompt.includes('Use sandbox_upload for host attachment paths'), scenario.remote && scenario.role === 'rd');
+    }
+    assert.equal(connections, 0, 'selecting tools must not connect to E2B');
+    assert.deepEqual(sdk.commands, []);
+  } finally { await service.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('resumed Native conversations select sandbox tools from the current workspace after service reopen', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-native-tool-resume-'));
+  const sdk = fakeSdk();
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const databasePath = join(directory, 'native.sqlite');
+  let service = new NativeAgentService(databasePath, models, new E2BSandboxService(sdk.client));
+  let nativeSessionId: string | null = null;
+  try {
+    for (const remote of [true, false, true, false]) {
+      let offered: string[] = [];
+      let prompt = '';
+      faux.setResponses([(context) => {
+        offered = getCurrentTools(context.messages).map((tool) => tool.name);
+        prompt = getCurrentSystemPrompt(context.messages);
+        return fauxAssistantMessage('Workspace tools refreshed');
+      }]);
+      const outcome = await service.run({ requirementId: 'req_scope_resume', sessionId: 'ses_scope_resume',
+        nativeSessionId, prompt: 'Use the current workspace', model: 'faux/faux-1', reasoningEffort: null, cwd: directory,
+        ...(remote ? { sandbox: { kind: 'e2b' as const, providerSandboxId: 'e2b-test-123', cwd: null,
+          credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: false } } : {}),
+        environment: {}, instructions: 'Test', signal: new AbortController().signal, timeoutMs: 30_000,
+        onNativeSession: () => undefined, onEvent: () => undefined });
+      assert.equal(outcome.status, 'succeeded');
+      assert(outcome.nativeSessionId);
+      if (nativeSessionId) assert.equal(outcome.nativeSessionId, nativeSessionId);
+      nativeSessionId = outcome.nativeSessionId;
+      assert.deepEqual(offered.sort(), [...codingToolNames, ...controlToolNames, ...(remote ? sandboxToolNames : [])].sort());
+      assert.equal(prompt.includes('Use sandbox_upload for host attachment paths'), remote);
+      await service.close();
+      service = new NativeAgentService(databasePath, models, new E2BSandboxService(sdk.client));
+    }
+    assert.deepEqual(sdk.commands, []);
+  } finally { await service.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
 test('native sandbox transfer tools move binary attachments between host and remote paths', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'code-factory-e2b-transfer-'));
   const sdk = fakeSdk('/home/custom');
@@ -129,7 +220,7 @@ test('native sandbox transfer tools move binary attachments between host and rem
   } finally { await service.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test('native transfer errors hide provider details and sandbox tools reject local workspaces', async () => {
+test('native transfer errors hide provider details and sandbox tools are unavailable in local workspaces', async () => {
   for (const remote of [false, true]) {
     const directory = await mkdtemp(join(tmpdir(), 'code-factory-e2b-tool-errors-'));
     const sdk = fakeSdk();
@@ -155,7 +246,8 @@ test('native transfer errors hide provider details and sandbox tools reject loca
         onNativeSession: () => undefined, onEvent: () => undefined });
       assert.equal(outcome.status, 'succeeded');
       assert(transcript.includes('"isError":true'));
-      assert(transcript.includes(remote ? 'file upload failed' : 'selected E2B'));
+      assert(transcript.includes(remote ? 'file upload failed' : 'Tool sandbox_upload is not available'));
+      if (!remote) assert(transcript.includes('Tool sandbox_pause is not available'));
       assert.equal(transcript.includes('test-key'), false);
       assert.equal(transcript.includes('private contents'), false);
     } finally { await service.close(); await rm(directory, { recursive: true, force: true }); }
