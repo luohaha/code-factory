@@ -144,6 +144,7 @@ export class CodexAdapter implements AgentAdapter {
 
   buildRdInvocation(input: RdInvocationInput): AgentInvocation {
     const common = ['--json', '--color', 'never', '--dangerously-bypass-approvals-and-sandbox'];
+    if (input.portableAuth) common.push('-c', 'cli_auth_credentials_store="file"');
     if (input.model) common.push('--model', input.model);
     if (input.reasoningEffort) common.push('-c', `model_reasoning_effort=${JSON.stringify(input.reasoningEffort)}`);
     const images = (input.imagePaths ?? []).flatMap((path) => ['--image', path]);
@@ -157,6 +158,7 @@ export class CodexAdapter implements AgentAdapter {
 
   buildReviewInvocation(input: ReviewInvocationInput): AgentInvocation {
     const configurationArgs = [
+      ...(input.portableAuth ? ['-c', 'cli_auth_credentials_store="file"'] : []),
       ...(input.model ? ['--model', input.model] : []),
       ...(input.reasoningEffort ? ['-c', `model_reasoning_effort=${JSON.stringify(input.reasoningEffort)}`] : []),
     ];

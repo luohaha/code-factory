@@ -43,6 +43,7 @@ import {
 } from './model-catalog.js';
 import { HeadlessProcessRunner, type AgentProcessRunner, type ProcessRunRequest } from './process-runner.js';
 import { NativeAgentService } from './native-agent.js';
+import { dockerResources } from './docker-resources.js';
 import { NativeAuthService } from './native-auth-service.js';
 import { profileIdFromModel, profileModel, type NativeApiFormat, type NativeApiProfile } from './native-auth.js';
 import { E2BProviderError, E2BSandboxService, type E2BCredentials, type E2BHandle } from './e2b-execution-env.js';
@@ -76,6 +77,7 @@ import type {
   AgentTimer,
   AgentTimerSchedule,
   Sandbox,
+  DockerResources,
   TrackPullRequestInput,
   UpdateRequirementAgentConfigurationInput,
   UpdateRequirementInput,
@@ -644,6 +646,10 @@ export class AgentManager extends EventEmitter {
       && !this.nativeAuth().get(profileIdFromModel(model)!)) throw new StoreNotFoundError('Native API profile not found');
     const sandboxId = input.sandboxId === 'local' ? null : input.sandboxId;
     if (sandboxId) this.requireAvailableSandbox(sandboxId, input.provider);
+    const docker = input.docker == null ? null : dockerResources(input.docker);
+    if (docker && sandboxId && this.#store.getSandbox(sandboxId)?.kind === 'e2b') {
+      throw new TypeError('Docker resource isolation is only available for local workspaces');
+    }
     if (input.createdBy === 'rd_agent') {
       if (!input.sourceSessionId) throw new TypeError('sourceSessionId is required for an Agent-created requirement');
       const source = this.#store.listSessions().find((session) => session.id === input.sourceSessionId);
@@ -664,6 +670,7 @@ export class AgentManager extends EventEmitter {
       ...(model ? { model } : {}),
       ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
       ...(sandboxId ? { sandboxId } : {}),
+      docker,
       createdBy: input.createdBy ?? 'human',
       ...(input.parentRequirementId ? { parentRequirementId: input.parentRequirementId } : {}),
       ...(input.sourceSessionId ? { sourceSessionId: input.sourceSessionId } : {}),
@@ -706,8 +713,9 @@ export class AgentManager extends EventEmitter {
     const hasModel = Object.hasOwn(input, 'model');
     const hasReasoningEffort = Object.hasOwn(input, 'reasoningEffort');
     const hasSandbox = Object.hasOwn(input, 'sandboxId');
-    if (!hasTitle && !hasDescription && !hasProvider && !hasModel && !hasReasoningEffort && !hasSandbox) {
-      throw new TypeError('title, description, provider, model, reasoningEffort, or sandboxId is required');
+    const hasDocker = Object.hasOwn(input, 'docker');
+    if (!hasTitle && !hasDescription && !hasProvider && !hasModel && !hasReasoningEffort && !hasSandbox && !hasDocker) {
+      throw new TypeError('title, description, provider, model, reasoningEffort, sandboxId, or docker is required');
     }
     const current = this.#store.getRequirement(id);
     if (!current) throw new StoreNotFoundError(`Requirement ${id} not found`);
@@ -742,8 +750,13 @@ export class AgentManager extends EventEmitter {
       && this.#store.getSandbox(requestedSandboxId)?.kind === 'e2b' && !hasSandbox
       ? null : requestedSandboxId;
     if (sandboxId) this.requireAvailableSandbox(sandboxId, provider);
+    const docker = hasDocker ? dockerResources(input.docker) : current.docker;
+    if (docker && sandboxId && this.#store.getSandbox(sandboxId)?.kind === 'e2b') {
+      throw new TypeError('Docker resource isolation is only available for local workspaces');
+    }
     if (title === current.title && description === current.description && provider === current.provider
-      && model === current.model && reasoningEffort === current.reasoningEffort && sandboxId === current.sandboxId) return current;
+      && model === current.model && reasoningEffort === current.reasoningEffort && sandboxId === current.sandboxId
+      && JSON.stringify(docker) === JSON.stringify(current.docker)) return current;
 
     const requirement = this.#store.updateRequirement({
       requirementId: id,
@@ -753,6 +766,7 @@ export class AgentManager extends EventEmitter {
       model,
       reasoningEffort,
       sandboxId,
+      docker,
       now: new Date().toISOString(),
     });
     this.publish({
@@ -1561,6 +1575,7 @@ export class AgentManager extends EventEmitter {
       ? this.#native.run({ role: 'reviewer', requirementId: requirement.id, sessionId: requirement.session.id,
         nativeSessionId: null, prompt, model: model ?? null, reasoningEffort: reasoningEffort ?? null,
         cwd: selectedWorkspace?.cwd ?? this.workspaceRoot,
+        ...(requirement.docker ? { docker: requirement.docker } : {}),
         ...(selectedWorkspace?.kind === 'e2b' && selectedWorkspace.providerSandboxId && remoteCredentials
           ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedWorkspace.providerSandboxId, cwd: selectedWorkspace.cwd,
               credentials: remoteCredentials,
@@ -1571,7 +1586,7 @@ export class AgentManager extends EventEmitter {
         timeoutMode: 'elapsed', onNativeSession: () => undefined, onEvent })
       : this.runHeadlessReview(options.provider, {
         prompt, model, reasoningEffort, developerInstructions, selectedWorkspace,
-        runId, onEvent,
+        runId, onEvent, docker: requirement.docker,
       });
     return run.then((outcome) => {
       this.#store.finishReviewRequest(reviewRequestId, outcome, new Date().toISOString());
@@ -1611,6 +1626,7 @@ export class AgentManager extends EventEmitter {
   private runHeadlessReview(provider: 'codex' | 'claude-code', input: {
     prompt: string; model: string | undefined; reasoningEffort: AgentReasoningEffort | undefined;
     developerInstructions: string; selectedWorkspace: Sandbox | null; runId: string;
+    docker: DockerResources | null;
     onEvent: (event: import('./adapters/types.js').NormalizedAgentEvent) => void;
   }): Promise<RunOutcome> {
     const adapter = this.#adapters[provider];
@@ -1620,9 +1636,11 @@ export class AgentManager extends EventEmitter {
         ...(input.model ? { model: input.model } : {}),
         ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
         developerInstructions: input.developerInstructions,
+        portableAuth: Boolean(input.docker) && process.platform === 'darwin',
       }),
       adapter,
       workspaceRoot: input.selectedWorkspace?.cwd ?? this.workspaceRoot,
+      ...(input.docker ? { docker: input.docker } : {}),
       timeoutMs: Math.min(this.#timeoutMs, 30 * 60 * 1_000),
       timeoutMode: 'elapsed',
       maxOutputBytes: this.#maxOutputBytes,
@@ -1762,6 +1780,7 @@ export class AgentManager extends EventEmitter {
     const runNative = () => this.#native.run({ requirementId, sessionId: started.session.id, nativeSessionId: requirement.session.nativeSessionId,
           prompt, model: requirement.model, reasoningEffort: requirement.reasoningEffort,
           cwd: selectedSandbox?.cwd ?? this.workspaceRoot,
+          ...(requirement.docker ? { docker: requirement.docker, dockerPaths: [this.attachmentDirectory] } : {}),
           ...(selectedSandbox?.kind === 'e2b' && selectedSandbox.providerSandboxId && cloudCredentials
             ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedSandbox.providerSandboxId, cwd: selectedSandbox.cwd,
                 credentials: cloudCredentials,
@@ -1781,9 +1800,11 @@ export class AgentManager extends EventEmitter {
         ...(requirement.reasoningEffort ? { reasoningEffort: requirement.reasoningEffort } : {}),
         developerInstructions: this.buildRdDeveloperInstructions(),
         imagePaths,
+        portableAuth: Boolean(requirement.docker) && process.platform === 'darwin',
       }),
       adapter: this.#adapters[requirement.provider],
       workspaceRoot: selectedSandbox?.cwd ?? this.workspaceRoot,
+      ...(requirement.docker ? { docker: requirement.docker, dockerPaths: [this.attachmentDirectory] } : {}),
       environment: this.buildRdEnvironment(requirement),
       timeoutMs: this.#timeoutMs,
       timeoutMode: 'inactivity',

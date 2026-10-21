@@ -1,13 +1,18 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 
 import type { AgentAdapter, AgentInvocation, NormalizedAgentEvent } from './adapters/types.js';
-import type { RunOutcome } from './types.js';
+import type { DockerResources, RunOutcome } from './types.js';
+import { prepareDockerRun, type DockerRun } from './docker-runtime.js';
 
 export interface ProcessRunRequest {
   invocation: AgentInvocation;
   adapter: AgentAdapter;
   workspaceRoot: string;
   environment?: Readonly<Record<string, string>>;
+  docker?: DockerResources;
+  dockerPaths?: readonly string[];
+  /** A bidirectional worker keeps stdin open for steering until it exits. */
+  inputChannel?: (write: (line: string) => void) => void;
   timeoutMs: number;
   timeoutMode?: 'elapsed' | 'inactivity';
   maxOutputBytes: number;
@@ -119,6 +124,27 @@ function isProcessTreeAlive(child: ChildProcess, descendants: readonly ProcessSn
 
 export class HeadlessProcessRunner implements AgentProcessRunner {
   async run(request: ProcessRunRequest): Promise<RunOutcome> {
+    if (request.docker) {
+      if (request.signal?.aborted) return { status: 'cancelled', exitCode: null, nativeSessionId: null, finalMessage: null, error: 'Agent Run interrupted by human' };
+      let docker: DockerRun;
+      try {
+        docker = await prepareDockerRun({ resources: request.docker, invocation: request.invocation,
+          cwd: request.workspaceRoot, ...(request.environment ? { environment: request.environment } : {}),
+          ...(request.dockerPaths ? { paths: request.dockerPaths } : {}) });
+      } catch (error) {
+        if (request.signal?.aborted) return { status: 'cancelled', exitCode: null, nativeSessionId: null, finalMessage: null, error: 'Agent Run interrupted by human' };
+        throw error;
+      }
+      const { docker: _resources, ...localRequest } = request;
+      // --env NAME obtains each value from the docker client's environment, including multiline values.
+      const environment = Object.fromEntries(Object.entries(docker.environment).filter((item): item is [string, string] => item[1] !== undefined));
+      try {
+        if (request.signal?.aborted) return { status: 'cancelled', exitCode: null, nativeSessionId: null, finalMessage: null, error: 'Agent Run interrupted by human' };
+        return await this.run({ ...localRequest, invocation: docker.invocation, environment });
+      } finally {
+        await docker.remove();
+      }
+    }
     return await new Promise<RunOutcome>((resolve) => {
       const child = spawn(request.invocation.command, request.invocation.args, {
         cwd: request.workspaceRoot,
@@ -266,7 +292,10 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         finishClose(code, signal);
       });
 
-      child.stdin.end(request.invocation.input);
+      if (request.inputChannel) {
+        child.stdin.write(request.invocation.input);
+        request.inputChannel((line) => { if (!child.stdin.destroyed) child.stdin.write(`${line}\n`); });
+      } else child.stdin.end(request.invocation.input);
     });
   }
 }

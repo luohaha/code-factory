@@ -76,6 +76,7 @@ function requirementFrom(row: Row): Requirement {
     model: row.model === null ? null : String(row.model),
     reasoningEffort: row.reasoning_effort === null ? null : String(row.reasoning_effort) as Requirement['reasoningEffort'],
     sandboxId: row.sandbox_id === null ? null : String(row.sandbox_id),
+    docker: row.docker_json == null ? null : JSON.parse(String(row.docker_json)) as Requirement['docker'],
     createdBy: String(row.created_by) as Requirement['createdBy'],
     parentRequirementId: row.parent_requirement_id === null ? null : String(row.parent_requirement_id),
     sourceSessionId: row.source_session_id === null ? null : String(row.source_session_id),
@@ -428,9 +429,10 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     this.#db.exec('BEGIN IMMEDIATE');
     try {
       this.#db.prepare(`INSERT INTO requirements
-        (id, title, description, status, provider, model, reasoning_effort, sandbox_id, created_by, parent_requirement_id, source_session_id, created_at, updated_at)
-        VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(input.requirementId, input.title, input.description, input.provider, input.model ?? null, input.reasoningEffort ?? null, input.sandboxId ?? null, input.createdBy ?? 'human',
+        (id, title, description, status, provider, model, reasoning_effort, sandbox_id, docker_json, created_by, parent_requirement_id, source_session_id, created_at, updated_at)
+        VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(input.requirementId, input.title, input.description, input.provider, input.model ?? null, input.reasoningEffort ?? null, input.sandboxId ?? null,
+          input.docker ? JSON.stringify(input.docker) : null, input.createdBy ?? 'human',
           input.parentRequirementId ?? null, input.sourceSessionId ?? null, input.now, input.now);
       this.#db.prepare(`INSERT INTO agent_sessions
         (id, requirement_id, provider, state, created_at, updated_at)
@@ -460,6 +462,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     try {
       const current = this.getRequirement(input.requirementId);
       if (!current) throw new StoreNotFoundError(`Requirement ${input.requirementId} not found`);
+      const docker = input.docker === undefined ? current.docker : input.docker;
       if (current.status !== 'todo' && current.status !== 'waiting_confirmation') {
         throw new StoreConflictError(`Requirement ${input.requirementId} configuration can only be changed while it is todo or waiting for confirmation`);
       }
@@ -476,11 +479,14 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
         throw new StoreConflictError(`Requirement ${input.requirementId} workspace can only be changed while it is todo`);
       }
       this.#db.prepare(`UPDATE requirements
-        SET title = ?, description = ?, provider = ?, model = ?, reasoning_effort = ?, sandbox_id = ?, updated_at = ?
+        SET title = ?, description = ?, provider = ?, model = ?, reasoning_effort = ?, sandbox_id = ?, docker_json = ?, updated_at = ?
         WHERE id = ? AND status IN ('todo', 'waiting_confirmation')`)
-        .run(input.title, input.description, input.provider, input.model, input.reasoningEffort, input.sandboxId, input.now, input.requirementId);
+        .run(input.title, input.description, input.provider, input.model, input.reasoningEffort, input.sandboxId,
+          docker === null ? null : JSON.stringify(docker), input.now, input.requirementId);
       this.#db.prepare(`UPDATE agent_sessions SET provider = ?, native_session_id = ?, updated_at = ? WHERE id = ?`)
-        .run(input.provider, input.provider === current.provider ? current.session.nativeSessionId : null,
+        .run(input.provider, input.provider === current.provider
+          && !(input.provider === 'native-agent' && Boolean(docker) !== Boolean(current.docker))
+          ? current.session.nativeSessionId : null,
           input.now, current.session.id);
       const updated = this.requireBundle(input.requirementId);
       this.upsertSearchDocument({
@@ -1364,6 +1370,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     ensureColumn('requirements', 'model', 'TEXT');
     ensureColumn('requirements', 'reasoning_effort', "TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max'))");
     ensureColumn('requirements', 'sandbox_id', 'TEXT REFERENCES sandboxes(id)');
+    ensureColumn('requirements', 'docker_json', 'TEXT');
     this.#db.prepare(`UPDATE requirements SET sandbox_id = NULL
       WHERE sandbox_id IN (SELECT id FROM sandboxes WHERE kind = 'local-sandbox')`).run();
     ensureColumn('agent_sessions', 'last_consumed_message_sequence', 'INTEGER NOT NULL DEFAULT 0');

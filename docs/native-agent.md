@@ -28,6 +28,8 @@ flowchart LR
 
 ## RD Run lifecycle
 
+Local Requirements may also enable [Docker resource limits](docker-agents.md). In that mode the entire Native runtime, including the model client and control-plane tools, runs in the container and accesses the shared host paths. Its durable RD database is `native-docker-<requirement-id>.sqlite`, separate from the host Harness. Worker events and steering acknowledgements return to Manager over stdin/stdout. This is different from E2B, where only the execution environment is remote.
+
 1. Agent Manager reads unconsumed Human, Reviewer, and selected System inputs from `requirement_messages`, creates an `AgentRun`, and resolves its model, reasoning effort, and `sandboxId`.
 2. NativeAgentService creates or resumes the conversation, configures its model, `cwd`, and RD instructions, and submits the input to pi-durable. The default model is `openai/gpt-5.4`; model IDs use `provider/model` format.
 3. The Harness calls the model through pi-ai. The model invokes CodingTools or Code Factory native tools. Harness events become Code Factory messages and tool traces, exposed through ManagerEvents, SSE, and the dashboard.

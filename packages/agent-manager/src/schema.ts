@@ -38,6 +38,7 @@ export const schemaStatements = [
     model TEXT,
     reasoning_effort TEXT CHECK (reasoning_effort IN ('low', 'medium', 'high', 'xhigh', 'max')),
     sandbox_id TEXT REFERENCES sandboxes(id),
+    docker_json TEXT,
     created_by TEXT NOT NULL DEFAULT 'human' CHECK (created_by IN ('human', 'rd_agent')),
     parent_requirement_id TEXT REFERENCES requirements(id) ON DELETE SET NULL,
     source_session_id TEXT,

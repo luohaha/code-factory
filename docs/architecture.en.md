@@ -84,6 +84,12 @@ For remote browser access, Tailscale Serve can terminate HTTPS inside the tailne
 
 Every local headless RD and Reviewer invocation skips interactive approval and CLI sandbox checks. It therefore inherits the launching user's full filesystem, network, and command-execution permissions. A Native Reviewer uses the selected local or E2B `ExecutionEnv` for its tools. Agent Manager must only be started in a trusted workspace. Reviewers remain behaviorally read-only through their task instructions; this is not an operating-system security boundary.
 
+### Optional local Docker resources
+
+`Requirement.docker` is null for ordinary host execution, or `{ image, cpus, memoryMb }` for a local Docker Run. It is independent of local workspace selection and is rejected with E2B. RD and Reviewer containers share the host home read/write at the same path, preserve UID/GID, and use host networking. Each container has CPU and memory limits and is removed after execution, cancellation, or timeout. Linux CLI binaries come from a prepared image; host credentials and configuration are shared or bridged as described in [Docker Agents](docker-agents.md).
+
+Native Docker execution moves the entire Harness and model client into a worker, with an ordered stdin/stdout protocol for events, native session IDs, steering acknowledgements, and outcomes. Docker RD conversations use separate per-Requirement SQLite files beside the usual Native database so a host Harness cannot claim their work. The API-profile database remains shared. Switching Native execution between host and Docker clears the native session ID; changing image or limits retains it. The Manager owns product state and advances input cursors using the existing success/steering rules.
+
 ## 3. Entities
 
 ### Requirement

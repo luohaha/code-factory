@@ -5,6 +5,7 @@ import { AgentManager, MAX_MESSAGE_ATTACHMENT_BYTES } from './agent-manager.js';
 import { validateAgentManagerConfigurationPatch } from './configuration.js';
 import { DashboardServer } from './dashboard-server.js';
 import { E2BProviderError } from './e2b-execution-env.js';
+import { dockerResources } from './docker-resources.js';
 import { JevMessageDeliveryError } from './jev-message-decision.js';
 import type { Logger } from './logger.js';
 import { StoreConflictError, StoreNotFoundError } from './store.js';
@@ -375,6 +376,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           ...(model ? { model } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
           ...(body.sandboxId === undefined ? {} : { sandboxId: stringField(body, 'sandboxId', true)! }),
+          ...(body.docker === undefined ? {} : { docker: dockerResources(body.docker) }),
         });
         sendJson(response, 201, item);
         return;
@@ -460,6 +462,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           ...(model !== undefined ? { model } : {}),
           ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
           ...(body.sandboxId !== undefined ? { sandboxId: body.sandboxId === null ? null : stringField(body, 'sandboxId', true)! } : {}),
+          ...(body.docker === undefined ? {} : { docker: dockerResources(body.docker) }),
         }));
         return;
       }
@@ -484,6 +487,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           ...(model ? { model } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
           createdBy: 'rd_agent',
+          ...(body.docker === undefined ? {} : { docker: dockerResources(body.docker) }),
           sourceSessionId,
           parentRequirementId: stringField(body, 'parentRequirementId') ?? source.requirementId,
         });

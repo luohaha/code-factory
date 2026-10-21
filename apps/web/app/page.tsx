@@ -88,6 +88,7 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { NativeAuthSettings } from '@/components/native-auth-settings';
+import { DockerResourceFields } from '@/components/docker-resource-fields';
 import { AgentTraceTimeline } from '@/components/agent-trace-timeline';
 import { ThinkingLoader } from '@/components/ui/thinking-loader';
 import {
@@ -97,6 +98,7 @@ import {
   defaultManagerUrlForLocation,
   normalizeManagerUrl,
   type AgentConfiguration,
+  type DockerResources,
   type AgentManagerConfiguration,
   type AgentManagerConfigurationSnapshot,
   type AgentModelCatalogDto,
@@ -630,6 +632,8 @@ function EditRequirementAgentConfigurationDialog({
   const [model, setModel] = useState(requirement.model ?? '');
   const [reasoningEffort, setReasoningEffort] = useState(requirement.reasoningEffort ?? '');
   const [sandboxId, setSandboxId] = useState(requirement.sandboxId ?? '');
+  const [docker, setDocker] = useState<DockerResources | null>(requirement.docker ?? null);
+  const remote = sandboxes.some((sandbox) => sandbox.id === sandboxId && sandbox.kind === 'e2b');
   const movesFromE2B = requirement.status === 'waiting_confirmation'
     && requirement.provider === 'native-agent' && provider !== 'native-agent'
     && sandboxes.some((sandbox) => sandbox.id === requirement.sandboxId && sandbox.kind === 'e2b');
@@ -646,6 +650,7 @@ function EditRequirementAgentConfigurationDialog({
           ? reasoningEffort as AgentReasoningEffort
           : null,
         ...(requirement.status === 'todo' ? { sandboxId: sandboxId || null } : {}),
+        docker: remote ? null : docker,
       });
       setOpen(false);
     } catch (caught) {
@@ -665,6 +670,7 @@ function EditRequirementAgentConfigurationDialog({
           setModel(requirement.model ?? '');
           setReasoningEffort(requirement.reasoningEffort ?? '');
           setSandboxId(requirement.sandboxId ?? '');
+          setDocker(requirement.docker ?? null);
           setSubmitError(null);
         }
       }}
@@ -672,7 +678,7 @@ function EditRequirementAgentConfigurationDialog({
       <DialogTrigger render={<Button type="button" variant="outline" size="xs" disabled={busy} />}>
         <SlidersHorizontal data-icon="inline-start" />{t('Edit Agent configuration')}
       </DialogTrigger>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
         <form onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>{t('Edit Agent configuration')}</DialogTitle>
@@ -681,6 +687,8 @@ function EditRequirementAgentConfigurationDialog({
                 ? t('Choose the Agent, model, and reasoning effort to use when this TODO requirement starts.')
                 : t('Changes take effect on the next Run. Switching Agent starts a new provider conversation with the previous requirement messages; the previous provider context cannot be resumed.')}
               {movesFromE2B ? ` ${t('Headless Agents use the Default workspace when switching from an E2B workspace.')}` : null}
+              {provider === 'native-agent' && Boolean(docker) !== Boolean(requirement.docker)
+                ? ` ${t('Switching Native Agent between host and Docker starts a new conversation.')}` : null}
             </DialogDescription>
           </DialogHeader>
           {submitError ? (
@@ -755,6 +763,7 @@ function EditRequirementAgentConfigurationDialog({
                 </NativeSelect>
               </Field>
             ) : null}
+            <DockerResourceFields id={`${fieldId}-docker`} value={docker} onChange={setDocker} disabled={submitting} remote={remote} />
           </FieldGroup>
           <DialogFooter>
             <DialogClose render={<Button type="button" variant="outline" />}>{t('Cancel')}</DialogClose>
@@ -1247,6 +1256,9 @@ function NewRequirementDialog({ client, disabled, modelCatalog, sandboxes, onCre
   const [submitting, setSubmitting] = useState(false);
   const [provider, setProvider] = useState<AgentProvider>('codex');
   const [model, setModel] = useState('');
+  const [sandboxId, setSandboxId] = useState('');
+  const [docker, setDocker] = useState<DockerResources | null>(null);
+  const remote = sandboxes.some((sandbox) => sandbox.id === sandboxId && sandbox.kind === 'e2b');
 
   async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
     event.preventDefault();
@@ -1255,7 +1267,6 @@ function NewRequirementDialog({ client, disabled, modelCatalog, sandboxes, onCre
     const title = form.get('title');
     const description = form.get('description');
     const reasoningEffort = form.get('reasoningEffort');
-    const sandboxId = form.get('sandboxId');
     if (typeof title !== 'string' || typeof description !== 'string') return;
     setSubmitting(true);
     try {
@@ -1263,6 +1274,7 @@ function NewRequirementDialog({ client, disabled, modelCatalog, sandboxes, onCre
         title: title.trim(),
         description: description.trim(),
         provider,
+        docker: remote ? null : docker,
         ...(typeof sandboxId === 'string' && sandboxId ? { sandboxId } : {}),
         ...(model ? { model } : {}),
         ...(typeof reasoningEffort === 'string' && reasoningEffort
@@ -1272,6 +1284,8 @@ function NewRequirementDialog({ client, disabled, modelCatalog, sandboxes, onCre
       formElement.reset();
       setProvider('codex');
       setModel('');
+      setSandboxId('');
+      setDocker(null);
       setOpen(false);
     } catch {
       // The parent surfaces the API error while the dialog keeps the entered values.
@@ -1315,6 +1329,7 @@ function NewRequirementDialog({ client, disabled, modelCatalog, sandboxes, onCre
                   onChange={(event) => {
                     setProvider(event.target.value as AgentProvider);
                     setModel('');
+                    if (event.target.value !== 'native-agent' && remote) setSandboxId('');
                   }}
                 >
                   <NativeSelectOption value="codex">Codex headless</NativeSelectOption>
@@ -1347,13 +1362,15 @@ function NewRequirementDialog({ client, disabled, modelCatalog, sandboxes, onCre
               </Field>
               <Field>
                 <FieldLabel htmlFor="requirement-sandbox">{t('Workspace')}</FieldLabel>
-                <NativeSelect key={provider} id="requirement-sandbox" name="sandboxId" className="w-full" defaultValue="">
+                <NativeSelect id="requirement-sandbox" name="sandboxId" className="w-full" value={sandboxId}
+                  onChange={(event) => setSandboxId(event.target.value)}>
                   {sandboxes.filter((sandbox) => sandbox.id === 'local' || sandbox.kind === 'local' || provider === 'native-agent')
                     .map((sandbox) => <NativeSelectOption key={sandbox.id} value={sandbox.id === 'local' ? '' : sandbox.id}>
                       {sandbox.id === 'local' ? t('Default workspace') : sandbox.name} · {sandbox.cwd ?? t('Sandbox default directory')}
                     </NativeSelectOption>)}
                 </NativeSelect>
               </Field>
+              <DockerResourceFields id="requirement-docker" value={docker} onChange={setDocker} disabled={submitting} remote={remote} />
             </FieldGroup>
           </div>
           <DialogFooter className="mx-0 mb-0 shrink-0">
@@ -2390,6 +2407,7 @@ function RequirementDetail({
             <span className="max-w-full truncate" title={assignedWorkspace?.cwd ?? undefined}>
               {workspaceName}
             </span>
+            {requirement.docker ? <span>· Docker · {requirement.docker.cpus} CPU · {requirement.docker.memoryMb} MiB</span> : null}
           </SheetDescription>
           {(requirement.status === 'todo' || requirement.status === 'waiting_confirmation')
             && requirement.session.state !== 'running' ? (

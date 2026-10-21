@@ -1,4 +1,13 @@
 export const zhCN = {
+  'Resource isolation': '资源隔离',
+  'Host (no resource limits)': '宿主机（不限制资源）',
+  'Docker (CPU and memory limits)': 'Docker（限制 CPU 和内存）',
+  'Docker resource isolation is only available for local workspaces.': 'Docker 资源隔离仅支持本地工作区。',
+  'Docker requires a prepared Linux agent image and host networking. Your home directory is shared read/write.': 'Docker 需要预先准备 Linux Agent 镜像并启用 host 网络。主目录将以读写方式共享。',
+  'Docker image': 'Docker 镜像',
+  'CPU cores': 'CPU 核数',
+  'Memory (MiB)': '内存（MiB）',
+  'Switching Native Agent between host and Docker starts a new conversation.': '在宿主机和 Docker 之间切换 Native Agent 会开始新的会话。',
   'Browser storage is unavailable. This draft is kept only until this tab closes or reloads.': '浏览器存储不可用。此草稿仅保留到当前标签页关闭或刷新前。',
   'Workspace': '工作区',
   'Workspaces': '工作区',
