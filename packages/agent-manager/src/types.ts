@@ -20,6 +20,12 @@ export interface Sandbox {
 }
 export type AgentReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+export interface DockerResources {
+  image: string;
+  cpus: number;
+  memoryMb: number;
+}
+
 export type RequirementStatus =
   | 'todo'
   | 'doing'
@@ -73,6 +79,7 @@ export interface Requirement {
   model: string | null;
   reasoningEffort: AgentReasoningEffort | null;
   sandboxId: string | null;
+  docker: DockerResources | null;
   createdBy: RequirementCreator;
   parentRequirementId: string | null;
   sourceSessionId: string | null;
@@ -238,6 +245,7 @@ export interface CreateRequirementInput {
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
   sandboxId?: string | null;
+  docker?: DockerResources | null;
   createdBy?: RequirementCreator;
   parentRequirementId?: string;
   sourceSessionId?: string;
@@ -248,6 +256,7 @@ export interface UpdateRequirementAgentConfigurationInput {
   model?: string | null;
   reasoningEffort?: AgentReasoningEffort | null;
   sandboxId?: string | null;
+  docker?: DockerResources | null;
 }
 
 export interface UpdateRequirementInput extends UpdateRequirementAgentConfigurationInput {

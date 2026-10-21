@@ -42,6 +42,8 @@ Unsent conversation text and attachments return when you reopen a requirement or
 
 Headless agents inherit your filesystem, network, and command permissions. Run Code Factory in trusted repositories and limit dashboard access to trusted users.
 
+Local Codex, Claude Code, and Native Agent Requirements can opt into [Docker CPU and memory limits](docs/docker-agents.md). Docker shares your home directory and host network; prepare a Linux agent image before selecting it.
+
 ## Documentation
 
 - [Running Code Factory](docs/running-code-factory.md) — prerequisites, configuration, CLI options, and daemon operation.

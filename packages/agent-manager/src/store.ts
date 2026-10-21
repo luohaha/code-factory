@@ -22,6 +22,7 @@ import type {
   RunRole,
   SessionState,
   Sandbox,
+  DockerResources,
 } from './types.js';
 
 export class StoreConflictError extends Error {}
@@ -36,6 +37,7 @@ export interface CreateRequirementRecord {
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
   sandboxId?: string | null;
+  docker?: DockerResources | null;
   createdBy: RequirementCreator;
   parentRequirementId?: string;
   sourceSessionId?: string;
@@ -50,6 +52,7 @@ export interface UpdateRequirementRecord {
   model: string | null;
   reasoningEffort: AgentReasoningEffort | null;
   sandboxId: string | null;
+  docker?: DockerResources | null;
   now: string;
 }
 

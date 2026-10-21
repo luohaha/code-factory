@@ -17,7 +17,8 @@ import { configureNativeProfile, createNativeModels, NativeCredentialStore, Nati
   nativeAuthDatabasePath, profileIdFromModel } from './native-auth.js';
 import { E2BExecutionEnv, E2BSandboxService, type E2BCredentials } from './e2b-execution-env.js';
 import type { NormalizedAgentEvent } from './adapters/types.js';
-import type { AgentReasoningEffort, RunOutcome } from './types.js';
+import type { AgentReasoningEffort, DockerResources, RunOutcome } from './types.js';
+import { DockerNativeAgent } from './docker-native-agent.js';
 
 const execFileAsync = promisify(execFile);
 const CONTEXT = BACKGROUND_CONTEXT;
@@ -32,6 +33,8 @@ export interface NativeRunInput {
   model: string | null;
   reasoningEffort: AgentReasoningEffort | null;
   cwd: string;
+  docker?: DockerResources;
+  dockerPaths?: readonly string[];
   sandbox?: { kind: 'e2b'; providerSandboxId: string; credentials: E2BCredentials;
     cwd?: string | null; forwardGitHubToken: boolean };
   environment: Readonly<Record<string, string>>;
@@ -56,6 +59,7 @@ export class NativeAgentService {
   readonly #environments = new Map<ConversationId, Readonly<Record<string, string>>>();
   readonly #sandboxes = new Map<ConversationId, NativeRunInput['sandbox']>();
   readonly #active = new Map<string, { submit: (message: string) => Promise<boolean> }>();
+  readonly #docker = new DockerNativeAgent();
 
   constructor(databasePath: string, models?: MutableModels, e2b?: E2BSandboxService) {
     this.#databasePath = databasePath;
@@ -162,11 +166,12 @@ export class NativeAgentService {
 
   async steer(requirementId: string, message: string): Promise<boolean> {
     const active = this.#active.get(requirementId);
-    if (!active) return false;
+    if (!active) return this.#docker.steer(requirementId, message);
     return active.submit(message);
   }
 
   async run(input: NativeRunInput): Promise<RunOutcome> {
+    if (input.docker) return this.#docker.run(this.#databasePath, input);
     const reviewer = input.role === 'reviewer';
     type SteerSubmit = (message: string) => Promise<void>;
     let resolveReady!: (submit: SteerSubmit | null) => void;
@@ -292,6 +297,7 @@ export class NativeAgentService {
   }
 
   async close(): Promise<void> {
+    await this.#docker.close();
     if (this.#opening) await this.#opening;
     if (this.#harness) await this.#harness.close(CONTEXT);
     this.#harness = null;

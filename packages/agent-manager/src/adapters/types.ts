@@ -36,6 +36,7 @@ export interface RdInvocationInput {
   reasoningEffort?: AgentReasoningEffort;
   developerInstructions?: string;
   imagePaths?: string[];
+  portableAuth?: boolean;
 }
 
 export interface ReviewInvocationInput {
@@ -43,6 +44,7 @@ export interface ReviewInvocationInput {
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
   developerInstructions?: string;
+  portableAuth?: boolean;
 }
 
 export interface AgentAdapter {

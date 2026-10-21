@@ -5,11 +5,17 @@ export { DEFAULT_AGENT_MANAGER_URL, defaultManagerUrlForLocation, normalizeManag
 
 export type AgentProvider = 'codex' | 'claude-code' | 'native-agent';
 export type AgentReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export interface DockerResources {
+  image: string;
+  cpus: number;
+  memoryMb: number;
+}
 export interface AgentConfiguration {
   provider: AgentProvider;
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
   sandboxId?: string | null;
+  docker?: DockerResources | null;
 }
 
 export interface RequirementAgentConfigurationUpdate {
@@ -17,6 +23,7 @@ export interface RequirementAgentConfigurationUpdate {
   model?: string | null;
   reasoningEffort?: AgentReasoningEffort | null;
   sandboxId?: string | null;
+  docker?: DockerResources | null;
 }
 
 export interface RequirementUpdate extends RequirementAgentConfigurationUpdate {
@@ -69,6 +76,7 @@ export interface RequirementDto {
   model: string | null;
   reasoningEffort: AgentReasoningEffort | null;
   sandboxId: string | null;
+  docker: DockerResources | null;
   createdBy: 'human' | 'rd_agent';
   parentRequirementId: string | null;
   sourceSessionId: string | null;

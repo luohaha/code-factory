@@ -1,5 +1,7 @@
 # Agent Runners
 
+Local Codex, Claude Code, and Native Agent Requirements may select [Docker CPU and memory limits](docker-agents.md). The same option applies to their Reviewers. Headless invocations retain their provider adapters and streaming protocol; Native Docker uses a separate worker for the entire Harness. The host execution paths below remain the default.
+
 ## Native Agent (pi-durable)
 
 For the execution flow, persistence boundaries, native tools, and sandbox architecture, see the [Native Agent implementation guide](native-agent.md).

@@ -112,6 +112,7 @@ interface Requirement {
   model: string | null;
   reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
   sandboxId: string | null;
+  docker: { image: string; cpus: number; memoryMb: number } | null;
   createdBy: 'human' | 'rd_agent';
   parentRequirementId: string | null;
   sourceSessionId: string | null;
@@ -559,6 +560,9 @@ Request body:
 | model | string | no | CLI model for headless providers; `profile:<id>` for a selected Native Agent API profile |
 | reasoningEffort | string | no | low, medium, high, xhigh, or max; defaults to the selected provider's configuration |
 | sandboxId | string | no | Workspace ID from `/api/sandboxes`; omit or use `local` for Default workspace. Codex and Claude Code RD support Default and named local workspaces; Native Agent also supports E2B |
+| docker | object or null | no | `{ image, cpus, memoryMb }` enables local Docker resource limits; omit or null uses host execution. E2B cannot use Docker |
+
+`docker.image` must be an image reference already available locally, `cpus` must be a finite number from 0.01 to 1024, and `memoryMb` must be an integer from 64 to 1048576 (MiB). Unknown Docker options are rejected. The configuration applies to RD and Reviewer Runs. See [Docker setup and authentication](docker-agents.md).
 
 ~~~bash
 curl -X POST http://127.0.0.1:4310/api/requirements \
@@ -586,6 +590,9 @@ Changes a Requirement's title, description, or Agent configuration. The Requirem
 | model | string or null | no | Headless model identifier or Native Agent `profile:<id>`; null restores the previous default behavior |
 | reasoningEffort | string or null | no | low, medium, high, xhigh, or max; null restores the CLI default |
 | sandboxId | string or null | no | Workspace ID; null or `local` restores Default workspace. Codex and Claude Code RD cannot select E2B |
+| docker | object or null | no | Same resource configuration as creation; null disables Docker. Changes apply to subsequent RD and Reviewer Runs |
+
+Switching Native Agent between host and Docker clears its native session ID and starts a new conversation with the visible Requirement history. Updating only the Docker image or resource limits preserves that ID. Headless providers keep their native session IDs. Omitted Docker configuration is preserved; selecting E2B while Docker is enabled requires explicitly setting `docker: null` in the same update.
 
 ~~~bash
 curl -X PATCH http://127.0.0.1:4310/api/requirements/req_... \
