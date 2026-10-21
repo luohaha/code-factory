@@ -74,8 +74,8 @@ async function writeResponse(response: ServerResponse, webResponse: Response, he
 }
 
 export class DashboardServer {
-  readonly #dashboardRoot = resolve(fileURLToPath(new URL('../dashboard/', import.meta.url)));
-  readonly #clientRoot = resolve(fileURLToPath(new URL('../dashboard/client/', import.meta.url)));
+  readonly #dashboardRoot = resolve(fileURLToPath(new URL('../../dashboard/', import.meta.url)));
+  readonly #clientRoot = resolve(fileURLToPath(new URL('../../dashboard/client/', import.meta.url)));
   #worker: Promise<WorkerModule> | null = null;
 
   get available(): boolean {

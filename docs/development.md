@@ -5,6 +5,23 @@ Code Factory contains two independently installed Node.js packages and has no ro
 - `packages/agent-manager/` contains the TypeScript Agent Manager, both CLIs, and the npm package definition;
 - `apps/web/` contains the React dashboard bundled into the published package during the Agent Manager build.
 
+## Agent Manager source layout
+
+`packages/agent-manager/src/` groups modules by responsibility:
+
+| Directory | Contents |
+| --- | --- |
+| `core/` | Agent Manager orchestration and shared domain types |
+| `runtime/` | Native Agent, E2B execution and file transfer, provider credentials, model discovery, process runner, and `adapters/` for Codex and Claude Code |
+| `storage/` | Store interface, SQLite implementation, schema, and search indexing helpers |
+| `github/` | GitHub client, PR reconciliation and triggers, and repository identity |
+| `triggers/` | Agent trigger contract, timers, and Jev wake/message decisions |
+| `http/` | HTTP/SSE API and bundled dashboard serving |
+| `cli/` | CLI command implementations, RD CLI launcher, daemon, and startup banner |
+| `infrastructure/` | Workspace configuration, logging, package version, and workspace lock |
+
+The top-level `index.ts` preserves the public package exports. `cli.ts` and `code-factory-cli-main.ts` remain the published executable entrypoints, so commands still use `dist/cli.js` and `dist/code-factory-cli-main.js`. Relative module imports retain explicit `.js` suffixes. The build removes the previous `dist/` output before compiling so moved or deleted modules cannot linger in the package.
+
 ## Install dependencies manually
 
 Install each package from the repository root. Use `npm ci` when reproducing the checked-in lockfiles:

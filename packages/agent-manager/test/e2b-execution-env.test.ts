@@ -12,8 +12,8 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-work
 import { CommandExitError, FileType } from 'e2b';
 import type { SandboxInfo, SandboxOpts } from 'e2b';
 
-import { E2BExecutionEnv, E2BSandboxService, type E2BClient, type E2BHandle } from '../src/e2b-execution-env.js';
-import { NativeAgentService } from '../src/native-agent.js';
+import { E2BExecutionEnv, E2BSandboxService, type E2BClient, type E2BHandle } from '../src/runtime/e2b-execution-env.js';
+import { NativeAgentService } from '../src/runtime/native-agent.js';
 
 function fakeSdk(defaultDirectory = '/home/user') {
   const data = new Map<string, Uint8Array>();

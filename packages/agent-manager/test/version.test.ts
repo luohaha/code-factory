@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { CODE_FACTORY_VERSION } from '../src/version.ts';
+import { CODE_FACTORY_VERSION } from '../src/infrastructure/version.ts';
 
 const packageRoot = fileURLToPath(new URL('../', import.meta.url));
 

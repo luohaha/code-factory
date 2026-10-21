@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 
-import type { PullRequest, PullRequestStatus } from './types.js';
+import type { PullRequest, PullRequestStatus } from '../core/types.js';
 
 export const DEFAULT_GH_CLI_TIMEOUT_MS = 30_000;
 

@@ -5,11 +5,11 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, unlinkSync, wri
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 
-import { normalizeRepositoryKey } from './repository-key.js';
-import { ClaudeCodeAdapter } from './adapters/claude-code.js';
-import { CodexAdapter } from './adapters/codex.js';
-import type { AgentAdapter, NormalizedAgentTrace } from './adapters/types.js';
-import type { AgentTrigger, AgentTriggerContext, AgentTriggerMessage } from './agent-trigger.js';
+import { normalizeRepositoryKey } from '../github/repository-key.js';
+import { ClaudeCodeAdapter } from '../runtime/adapters/claude-code.js';
+import { CodexAdapter } from '../runtime/adapters/codex.js';
+import type { AgentAdapter, NormalizedAgentTrace } from '../runtime/adapters/types.js';
+import type { AgentTrigger, AgentTriggerContext, AgentTriggerMessage } from '../triggers/agent-trigger.js';
 import {
   DEFAULT_AGENT_MANAGER_CONFIGURATION,
   DYNAMIC_CONFIGURATION_FIELDS,
@@ -20,45 +20,45 @@ import {
   type AgentManagerConfiguration,
   type AgentManagerConfigurationPatch,
   type AgentManagerConfigurationSnapshot,
-} from './configuration.js';
+} from '../infrastructure/configuration.js';
 import {
   CODE_FACTORY_API_URL,
   CODE_FACTORY_REQUIREMENT_ID,
   CODE_FACTORY_SESSION_ID,
-} from './code-factory-cli.js';
+} from '../cli/code-factory-cli.js';
 import {
   installCodeFactoryCliLauncher,
   type CodeFactoryCliInvocation,
-} from './code-factory-cli-launcher.js';
-import { GhCliGitHubClient, type GitHubClient } from './github-client.js';
-import { decideJevWake, type JevWakeContext, type JevWakeDecision } from './jev-wake-decision.js';
-import { decideJevMessage, JevMessageDeliveryError, type JevMessageContext, type JevMessageDecision } from './jev-message-decision.js';
-import { createFileLogger, type Logger, type LogLevel } from './logger.js';
+} from '../cli/code-factory-cli-launcher.js';
+import { GhCliGitHubClient, type GitHubClient } from '../github/github-client.js';
+import { decideJevWake, type JevWakeContext, type JevWakeDecision } from '../triggers/jev-wake-decision.js';
+import { decideJevMessage, JevMessageDeliveryError, type JevMessageContext, type JevMessageDecision } from '../triggers/jev-message-decision.js';
+import { createFileLogger, type Logger, type LogLevel } from '../infrastructure/logger.js';
 import {
   ClaudeCodeModelDiscoverer,
   CodexModelDiscoverer,
   ModelCatalog,
   NativeAgentModelDiscoverer,
   type AgentModelCatalogService,
-} from './model-catalog.js';
-import { HeadlessProcessRunner, type AgentProcessRunner, type ProcessRunRequest } from './process-runner.js';
-import { NativeAgentService, type NativeSandboxAction, type NativeSandboxState } from './native-agent.js';
-import { NativeAuthService } from './native-auth-service.js';
-import { profileIdFromModel, profileModel, type NativeApiFormat, type NativeApiProfile } from './native-auth.js';
-import { E2BProviderError, E2BSandboxService, type E2BCredentials, type E2BHandle } from './e2b-execution-env.js';
-import { E2BCredentialStore, e2bCredentialsPath } from './e2b-credentials.js';
-import { PullRequestReconciler } from './pull-request-reconciler.js';
+} from '../runtime/model-catalog.js';
+import { HeadlessProcessRunner, type AgentProcessRunner, type ProcessRunRequest } from '../runtime/process-runner.js';
+import { NativeAgentService, type NativeSandboxAction, type NativeSandboxState } from '../runtime/native-agent.js';
+import { NativeAuthService } from '../runtime/native-auth-service.js';
+import { profileIdFromModel, profileModel, type NativeApiFormat, type NativeApiProfile } from '../runtime/native-auth.js';
+import { E2BProviderError, E2BSandboxService, type E2BCredentials, type E2BHandle } from '../runtime/e2b-execution-env.js';
+import { E2BCredentialStore, e2bCredentialsPath } from '../runtime/e2b-credentials.js';
+import { PullRequestReconciler } from '../github/pull-request-reconciler.js';
 import {
   PullRequestCiFailureTrigger,
   PullRequestCommentTrigger,
   PullRequestConflictTrigger,
   PullRequestStatusTrigger,
   type PullRequestSnapshotTrigger,
-} from './pull-request-triggers.js';
-import { TimerAgentTrigger } from './timer-agent-trigger.js';
-import { SqliteAgentManagerStore } from './sqlite-store.js';
-import type { AgentManagerStore } from './store.js';
-import { StoreConflictError, StoreNotFoundError } from './store.js';
+} from '../github/pull-request-triggers.js';
+import { TimerAgentTrigger } from '../triggers/timer-agent-trigger.js';
+import { SqliteAgentManagerStore } from '../storage/sqlite-store.js';
+import type { AgentManagerStore } from '../storage/store.js';
+import { StoreConflictError, StoreNotFoundError } from '../storage/store.js';
 import type {
   AgentProvider,
   AgentModelCatalogSnapshot,
@@ -1569,7 +1569,7 @@ export class AgentManager extends EventEmitter {
       REVIEWER_DEVELOPER_INSTRUCTIONS,
       options.prompt?.trim() ? `Additional review focus from the human: ${options.prompt.trim()}` : '',
     ].filter(Boolean).join('\n\n');
-    const onEvent = (event: import('./adapters/types.js').NormalizedAgentEvent) => {
+    const onEvent = (event: import('../runtime/adapters/types.js').NormalizedAgentEvent) => {
       this.recordAgentTraces(requirement.id, requirement.session.id, runId, event.traces);
       if (!event.message || (event.kind !== 'message' && event.kind !== 'completed')) return;
       const body = event.message.trim();
@@ -1629,7 +1629,7 @@ export class AgentManager extends EventEmitter {
   private runHeadlessReview(provider: 'codex' | 'claude-code', input: {
     prompt: string; model: string | undefined; reasoningEffort: AgentReasoningEffort | undefined;
     developerInstructions: string; selectedWorkspace: Sandbox | null; runId: string;
-    onEvent: (event: import('./adapters/types.js').NormalizedAgentEvent) => void;
+    onEvent: (event: import('../runtime/adapters/types.js').NormalizedAgentEvent) => void;
   }): Promise<RunOutcome> {
     const adapter = this.#adapters[provider];
     const request: ProcessRunRequest = {
@@ -1769,7 +1769,7 @@ export class AgentManager extends EventEmitter {
       this.publish({ type: 'requirement.updated', requirementId, sessionId: started.session.id, runId,
         payload: { requirement: this.requireRequirement(requirementId) } });
     };
-    const onEvent = (event: import('./adapters/types.js').NormalizedAgentEvent) => {
+    const onEvent = (event: import('../runtime/adapters/types.js').NormalizedAgentEvent) => {
       this.recordAgentTraces(requirementId, started.session.id, runId, event.traces);
       if (!event.message || (event.kind !== 'message' && event.kind !== 'completed')) return;
       const body = event.message.trim();

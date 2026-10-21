@@ -4,18 +4,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import type { AgentTriggerContext } from '../src/agent-trigger.ts';
-import type { GitHubClient, GitHubPullRequestSnapshot } from '../src/github-client.ts';
-import { createLogger, type LogWriter } from '../src/logger.ts';
-import { PullRequestReconciler } from '../src/pull-request-reconciler.ts';
+import type { AgentTriggerContext } from '../src/triggers/agent-trigger.ts';
+import type { GitHubClient, GitHubPullRequestSnapshot } from '../src/github/github-client.ts';
+import { createLogger, type LogWriter } from '../src/infrastructure/logger.ts';
+import { PullRequestReconciler } from '../src/github/pull-request-reconciler.ts';
 import {
   PullRequestStatusTrigger, PullRequestCommentTrigger, PullRequestCiFailureTrigger, PullRequestConflictTrigger,
   PULL_REQUEST_STATUS_TRIGGER_ID, PULL_REQUEST_COMMENT_TRIGGER_ID,
   PULL_REQUEST_CI_FAILURE_TRIGGER_ID, PULL_REQUEST_CONFLICT_TRIGGER_ID,
   type PullRequestSnapshotTrigger, type PullRequestTriggerRegistration,
-} from '../src/pull-request-triggers.ts';
-import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
-import type { PullRequest, TrackPullRequestInput } from '../src/types.ts';
+} from '../src/github/pull-request-triggers.ts';
+import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.ts';
+import type { PullRequest, TrackPullRequestInput } from '../src/core/types.ts';
 
 class MemoryWriter implements LogWriter {
   readonly lines: string[] = [];

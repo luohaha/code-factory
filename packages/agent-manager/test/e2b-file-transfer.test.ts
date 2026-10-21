@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import type { E2BHandle } from '../src/e2b-execution-env.js';
-import { downloadE2BFile, uploadE2BFile, validateTransferPaths } from '../src/e2b-file-transfer.js';
+import type { E2BHandle } from '../src/runtime/e2b-execution-env.js';
+import { downloadE2BFile, uploadE2BFile, validateTransferPaths } from '../src/runtime/e2b-file-transfer.js';
 
 function fakeFiles() {
   const files = new Map<string, Uint8Array>();

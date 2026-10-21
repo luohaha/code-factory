@@ -14,14 +14,14 @@ import { AssistantEntry, createRegistry, defineExtension, defineTool, Harness, s
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
 import { CodingTools, createBashTool, createReadTool } from '@earendil-works/pi-durable/tools';
 
-import { runCodeFactoryCli } from './code-factory-cli.js';
+import { runCodeFactoryCli } from '../cli/code-factory-cli.js';
 import { configureNativeProfile, createNativeModels, NativeCredentialStore, NativeProfileStore,
   nativeAuthDatabasePath, profileIdFromModel } from './native-auth.js';
 import { DeferredExecutionEnv } from './deferred-execution-env.js';
 import { E2BExecutionEnv, E2BSandboxService, type E2BCredentials, type E2BHandle } from './e2b-execution-env.js';
 import { downloadE2BFile, uploadE2BFile, validateTransferPaths } from './e2b-file-transfer.js';
 import type { NormalizedAgentEvent } from './adapters/types.js';
-import type { AgentReasoningEffort, RunOutcome, Sandbox } from './types.js';
+import type { AgentReasoningEffort, RunOutcome, Sandbox } from '../core/types.js';
 
 const execFileAsync = promisify(execFile);
 const CONTEXT = BACKGROUND_CONTEXT;

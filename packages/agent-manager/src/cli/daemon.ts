@@ -16,7 +16,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-import { acquireWorkspaceLock } from './workspace-lock.js';
+import { acquireWorkspaceLock } from '../infrastructure/workspace-lock.js';
 
 export type DaemonStatus = 'starting' | 'running' | 'restarting' | 'stopping' | 'failed';
 

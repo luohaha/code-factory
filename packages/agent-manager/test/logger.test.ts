@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { AgentManager } from '../src/agent-manager.ts';
-import { createFileLogger, createLogger, isLogLevel, type LogWriter } from '../src/logger.ts';
-import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
+import { AgentManager } from '../src/core/agent-manager.ts';
+import { createFileLogger, createLogger, isLogLevel, type LogWriter } from '../src/infrastructure/logger.ts';
+import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.ts';
 
 class MemoryWriter implements LogWriter {
   readonly lines: string[] = [];

@@ -1,4 +1,4 @@
-import type { MessageAuthor, RequirementMessage } from './types.js';
+import type { MessageAuthor, RequirementMessage } from '../core/types.js';
 
 /** A message produced by an external source and routed to one Requirement. */
 export interface AgentTriggerMessage {

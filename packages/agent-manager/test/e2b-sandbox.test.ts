@@ -10,15 +10,15 @@ import type { SandboxInfo } from 'e2b';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 
-import { AgentManager } from '../src/agent-manager.js';
-import { E2BCredentialStore, e2bCredentialsPath } from '../src/e2b-credentials.js';
-import { E2BSandboxService, type E2BClient, type E2BHandle } from '../src/e2b-execution-env.js';
-import { createLogger } from '../src/logger.js';
-import { NativeAgentService, type NativeRunInput } from '../src/native-agent.js';
-import { createAgentManagerServer } from '../src/server.js';
-import { sandboxesTableSql, schemaStatements } from '../src/schema.js';
-import { SqliteAgentManagerStore } from '../src/sqlite-store.js';
-import type { RunOutcome } from '../src/types.js';
+import { AgentManager } from '../src/core/agent-manager.js';
+import { E2BCredentialStore, e2bCredentialsPath } from '../src/runtime/e2b-credentials.js';
+import { E2BSandboxService, type E2BClient, type E2BHandle } from '../src/runtime/e2b-execution-env.js';
+import { createLogger } from '../src/infrastructure/logger.js';
+import { NativeAgentService, type NativeRunInput } from '../src/runtime/native-agent.js';
+import { createAgentManagerServer } from '../src/http/server.js';
+import { sandboxesTableSql, schemaStatements } from '../src/storage/schema.js';
+import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.js';
+import type { RunOutcome } from '../src/core/types.js';
 
 function fakeE2B(settings: { acceptRotated?: boolean; home?: string } = {}) {
   let state: 'running' | 'paused' = 'running';

@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { createModels } from '@earendil-works/pi-ai/models';
 
-import { configureNativeProfile, createNativeModels, NativeCredentialStore, NativeProfileStore, profileModel } from '../src/native-auth.js';
+import { configureNativeProfile, createNativeModels, NativeCredentialStore, NativeProfileStore, profileModel } from '../src/runtime/native-auth.js';
 
 test('Native API profiles persist multiple endpoints and configure isolated pi-ai providers', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'code-factory-profiles-'));

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { searchExcerpt } from '../src/search.ts';
+import { searchExcerpt } from '../src/storage/search.ts';
 
 test('search excerpts anchor to the earliest matched term when the complete phrase is absent', () => {
   const body = `${'Unrelated introduction. '.repeat(16)}The database worker eventually reported a deadlock during retry.`;

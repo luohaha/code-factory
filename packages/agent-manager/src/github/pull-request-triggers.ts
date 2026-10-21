@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
 
-import type { AgentTrigger, AgentTriggerContext } from './agent-trigger.js';
+import type { AgentTrigger, AgentTriggerContext } from '../triggers/agent-trigger.js';
 import type { GitHubCheck, GitHubClient, GitHubReviewActivity } from './github-client.js';
 import type { PullRequestReconciler } from './pull-request-reconciler.js';
-import type { PullRequestObservation } from './store.js';
-import type { PullRequest } from './types.js';
+import type { PullRequestObservation } from '../storage/store.js';
+import type { PullRequest } from '../core/types.js';
 
 export const PULL_REQUEST_STATUS_TRIGGER_ID = 'github.pull-request.status';
 export const PULL_REQUEST_COMMENT_TRIGGER_ID = 'github.pull-request.comment';

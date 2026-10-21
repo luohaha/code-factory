@@ -1,4 +1,4 @@
-import type { MessageAuthor } from './types.js';
+import type { MessageAuthor } from '../core/types.js';
 
 export interface JevMessageContext {
   sourceRequirement: { id: string; title: string; description: string };

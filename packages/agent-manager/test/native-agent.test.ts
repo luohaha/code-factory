@@ -8,11 +8,11 @@ import test from 'node:test';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 
-import { AgentManager } from '../src/agent-manager.js';
-import { createLogger } from '../src/logger.js';
-import { NativeAgentService } from '../src/native-agent.js';
-import { NativeProfileStore, nativeAuthDatabasePath, profileModel } from '../src/native-auth.js';
-import { SqliteAgentManagerStore } from '../src/sqlite-store.js';
+import { AgentManager } from '../src/core/agent-manager.js';
+import { createLogger } from '../src/infrastructure/logger.js';
+import { NativeAgentService } from '../src/runtime/native-agent.js';
+import { NativeProfileStore, nativeAuthDatabasePath, profileModel } from '../src/runtime/native-auth.js';
+import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.js';
 
 test('Agent Manager records a native RD Run and conversation reply', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'code-factory-native-manager-'));

@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { AgentManager } from '../src/agent-manager.ts';
-import type { JevWakeDecision } from '../src/jev-wake-decision.ts';
-import { createLogger, silentLogger, type LogWriter } from '../src/logger.ts';
-import type { AgentProcessRunner, ProcessRunRequest } from '../src/process-runner.ts';
-import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
-import type { MessageAuthor } from '../src/types.ts';
+import { AgentManager } from '../src/core/agent-manager.ts';
+import type { JevWakeDecision } from '../src/triggers/jev-wake-decision.ts';
+import { createLogger, silentLogger, type LogWriter } from '../src/infrastructure/logger.ts';
+import type { AgentProcessRunner, ProcessRunRequest } from '../src/runtime/process-runner.ts';
+import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.ts';
+import type { MessageAuthor } from '../src/core/types.ts';
 
 type SeenMessage = { author: MessageAuthor; body: string };
 

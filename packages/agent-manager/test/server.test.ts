@@ -5,18 +5,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { AgentManager, MAX_AGENT_TRACE_DETAIL_BYTES } from '../src/agent-manager.ts';
+import { AgentManager, MAX_AGENT_TRACE_DETAIL_BYTES } from '../src/core/agent-manager.ts';
 import {
   DEFAULT_AGENT_MANAGER_CONFIGURATION,
   MAX_PULL_REQUEST_RECONCILE_INTERVAL_SECONDS,
-} from '../src/configuration.ts';
-import { createLogger } from '../src/logger.ts';
-import type { AgentModelCatalogService } from '../src/model-catalog.ts';
-import type { AgentProcessRunner, ProcessRunRequest } from '../src/process-runner.ts';
-import { createAgentManagerServer } from '../src/server.ts';
-import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
-import type { RunOutcome } from '../src/types.ts';
-import { CODE_FACTORY_VERSION } from '../src/version.ts';
+} from '../src/infrastructure/configuration.ts';
+import { createLogger } from '../src/infrastructure/logger.ts';
+import type { AgentModelCatalogService } from '../src/runtime/model-catalog.ts';
+import type { AgentProcessRunner, ProcessRunRequest } from '../src/runtime/process-runner.ts';
+import { createAgentManagerServer } from '../src/http/server.ts';
+import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.ts';
+import type { RunOutcome } from '../src/core/types.ts';
+import { CODE_FACTORY_VERSION } from '../src/infrastructure/version.ts';
 
 async function readServerSentEvent(response: Response): Promise<Record<string, unknown>> {
   assert.ok(response.body);
