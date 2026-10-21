@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { ClaudeCodeAdapter } from '../src/adapters/claude-code.ts';
-import { CodexAdapter } from '../src/adapters/codex.ts';
+import { ClaudeCodeAdapter } from '../src/runtime/adapters/claude-code.ts';
+import { CodexAdapter } from '../src/runtime/adapters/codex.ts';
 
 test('Codex starts and resumes through stdin without disabling native context discovery', () => {
   const adapter = new CodexAdapter();

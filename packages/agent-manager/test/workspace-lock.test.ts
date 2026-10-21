@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import {
   acquireWorkspaceLock,
   WorkspaceAlreadyRunningError,
-} from '../src/workspace-lock.ts';
+} from '../src/infrastructure/workspace-lock.ts';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const cliPath = join(packageRoot, 'src', 'cli.ts');

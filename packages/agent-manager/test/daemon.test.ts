@@ -13,7 +13,7 @@ import {
   isProcessAlive,
   readDaemonState,
   type DaemonState,
-} from '../src/daemon.ts';
+} from '../src/cli/daemon.ts';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const cliPath = join(packageRoot, 'src', 'cli.ts');

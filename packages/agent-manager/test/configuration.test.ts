@@ -11,7 +11,7 @@ import {
   loadAgentManagerConfiguration,
   validateAgentManagerConfigurationPatch,
   writeAgentManagerConfiguration,
-} from '../src/configuration.ts';
+} from '../src/infrastructure/configuration.ts';
 
 test('configuration file is created with workspace defaults and restrictive permissions', () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-config-'));

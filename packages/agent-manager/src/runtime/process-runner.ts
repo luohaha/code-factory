@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 
 import type { AgentAdapter, AgentInvocation, NormalizedAgentEvent } from './adapters/types.js';
-import type { RunOutcome } from './types.js';
+import type { RunOutcome } from '../core/types.js';
 
 export interface ProcessRunRequest {
   invocation: AgentInvocation;

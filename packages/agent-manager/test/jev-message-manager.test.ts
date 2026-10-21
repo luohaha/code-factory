@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { AgentManager, type AgentManagerOptions } from '../src/agent-manager.ts';
-import { DEFAULT_AGENT_MANAGER_CONFIGURATION } from '../src/configuration.ts';
-import { JevMessageDeliveryError, type JevMessageContext, type JevMessageDecision } from '../src/jev-message-decision.ts';
-import { createLogger, silentLogger } from '../src/logger.ts';
-import type { ProcessRunRequest } from '../src/process-runner.ts';
-import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
+import { AgentManager, type AgentManagerOptions } from '../src/core/agent-manager.ts';
+import { DEFAULT_AGENT_MANAGER_CONFIGURATION } from '../src/infrastructure/configuration.ts';
+import { JevMessageDeliveryError, type JevMessageContext, type JevMessageDecision } from '../src/jev/jev-message-decision.ts';
+import { createLogger, silentLogger } from '../src/infrastructure/logger.ts';
+import type { ProcessRunRequest } from '../src/runtime/process-runner.ts';
+import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.ts';
 
 function fixture(decide: NonNullable<AgentManagerOptions['jevMessageDecision']>, options: Partial<AgentManagerOptions> = {}) {
   const requests: ProcessRunRequest[] = [];

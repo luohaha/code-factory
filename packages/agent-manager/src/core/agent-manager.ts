@@ -5,11 +5,11 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, unlinkSync, wri
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 
-import { normalizeRepositoryKey } from './repository-key.js';
-import { ClaudeCodeAdapter } from './adapters/claude-code.js';
-import { CodexAdapter } from './adapters/codex.js';
-import type { AgentAdapter, NormalizedAgentTrace } from './adapters/types.js';
-import type { AgentTrigger, AgentTriggerContext, AgentTriggerMessage } from './agent-trigger.js';
+import { normalizeRepositoryKey } from '../triggers/github/repository-key.js';
+import { ClaudeCodeAdapter } from '../runtime/adapters/claude-code.js';
+import { CodexAdapter } from '../runtime/adapters/codex.js';
+import type { AgentAdapter, NormalizedAgentTrace } from '../runtime/adapters/types.js';
+import type { AgentTrigger, AgentTriggerContext, AgentTriggerMessage } from '../triggers/agent-trigger.js';
 import {
   DEFAULT_AGENT_MANAGER_CONFIGURATION,
   DYNAMIC_CONFIGURATION_FIELDS,
@@ -20,45 +20,45 @@ import {
   type AgentManagerConfiguration,
   type AgentManagerConfigurationPatch,
   type AgentManagerConfigurationSnapshot,
-} from './configuration.js';
+} from '../infrastructure/configuration.js';
 import {
   CODE_FACTORY_API_URL,
   CODE_FACTORY_REQUIREMENT_ID,
   CODE_FACTORY_SESSION_ID,
-} from './code-factory-cli.js';
+} from '../cli/code-factory-cli.js';
 import {
   installCodeFactoryCliLauncher,
   type CodeFactoryCliInvocation,
-} from './code-factory-cli-launcher.js';
-import { GhCliGitHubClient, type GitHubClient } from './github-client.js';
-import { decideJevWake, type JevWakeContext, type JevWakeDecision } from './jev-wake-decision.js';
-import { decideJevMessage, JevMessageDeliveryError, type JevMessageContext, type JevMessageDecision } from './jev-message-decision.js';
-import { createFileLogger, type Logger, type LogLevel } from './logger.js';
+} from '../cli/code-factory-cli-launcher.js';
+import { GhCliGitHubClient, type GitHubClient } from '../triggers/github/github-client.js';
+import { decideJevWake, type JevWakeContext, type JevWakeDecision } from '../jev/jev-wake-decision.js';
+import { decideJevMessage, JevMessageDeliveryError, type JevMessageContext, type JevMessageDecision } from '../jev/jev-message-decision.js';
+import { createFileLogger, type Logger, type LogLevel } from '../infrastructure/logger.js';
 import {
   ClaudeCodeModelDiscoverer,
   CodexModelDiscoverer,
   ModelCatalog,
   NativeAgentModelDiscoverer,
   type AgentModelCatalogService,
-} from './model-catalog.js';
-import { HeadlessProcessRunner, type AgentProcessRunner, type ProcessRunRequest } from './process-runner.js';
-import { NativeAgentService } from './native-agent.js';
-import { NativeAuthService } from './native-auth-service.js';
-import { profileIdFromModel, profileModel, type NativeApiFormat, type NativeApiProfile } from './native-auth.js';
-import { E2BProviderError, E2BSandboxService, type E2BCredentials, type E2BHandle } from './e2b-execution-env.js';
-import { E2BCredentialStore, e2bCredentialsPath } from './e2b-credentials.js';
-import { PullRequestReconciler } from './pull-request-reconciler.js';
+} from '../runtime/model-catalog.js';
+import { HeadlessProcessRunner, type AgentProcessRunner, type ProcessRunRequest } from '../runtime/process-runner.js';
+import { NativeAgentService, type NativeSandboxAction, type NativeSandboxState } from '../runtime/native-agent.js';
+import { NativeAuthService } from '../runtime/native-auth-service.js';
+import { profileIdFromModel, profileModel, type NativeApiFormat, type NativeApiProfile } from '../runtime/native-auth.js';
+import { E2BProviderError, E2BSandboxService, type E2BCredentials, type E2BHandle } from '../runtime/e2b-execution-env.js';
+import { E2BCredentialStore, e2bCredentialsPath } from '../runtime/e2b-credentials.js';
+import { PullRequestReconciler } from '../triggers/github/pull-request-reconciler.js';
 import {
   PullRequestCiFailureTrigger,
   PullRequestCommentTrigger,
   PullRequestConflictTrigger,
   PullRequestStatusTrigger,
   type PullRequestSnapshotTrigger,
-} from './pull-request-triggers.js';
-import { TimerAgentTrigger } from './timer-agent-trigger.js';
-import { SqliteAgentManagerStore } from './sqlite-store.js';
-import type { AgentManagerStore } from './store.js';
-import { StoreConflictError, StoreNotFoundError } from './store.js';
+} from '../triggers/github/pull-request-triggers.js';
+import { TimerAgentTrigger } from '../triggers/timer-agent-trigger.js';
+import { SqliteAgentManagerStore } from '../storage/sqlite-store.js';
+import type { AgentManagerStore } from '../storage/store.js';
+import { StoreConflictError, StoreNotFoundError } from '../storage/store.js';
 import type {
   AgentProvider,
   AgentModelCatalogSnapshot,
@@ -929,8 +929,9 @@ export class AgentManager extends EventEmitter {
     return sandbox as Sandbox & { providerSandboxId: string };
   }
 
-  private ensureSandboxIdle(id: string): void {
-    if ([...this.#activeRdRuns.keys()].some((requirementId) => this.#store.getRequirement(requirementId)?.sandboxId === id)) {
+  private ensureSandboxIdle(id: string, exceptRequirementId?: string): void {
+    if ([...this.#activeRdRuns.keys()].some((requirementId) => requirementId !== exceptRequirementId &&
+      this.#store.getRequirement(requirementId)?.sandboxId === id)) {
       throw new StoreConflictError(`Sandbox ${id} has an active RD Run`);
     }
     if (this.#store.listReviewRequests().some((review) => review.status === 'running' &&
@@ -950,6 +951,23 @@ export class AgentManager extends EventEmitter {
     const sandbox = this.requireE2BSandbox(id);
     await this.#e2b.connect(sandbox.providerSandboxId, this.e2bCredentials(sandbox));
     return this.checkSandboxHealth(id);
+  }
+
+  private async controlNativeSandbox(requirementId: string, sessionId: string,
+    action: NativeSandboxAction): Promise<NativeSandboxState> {
+    const requirement = this.requireAgentSource(requirementId, sessionId);
+    if (requirement.provider !== 'native-agent' || !requirement.sandboxId || !this.#activeRdRuns.has(requirementId)) {
+      throw new StoreConflictError('Sandbox tools require an active Native Agent RD Run on E2B');
+    }
+    const sandbox = this.requireE2BSandbox(requirement.sandboxId);
+    if (action === 'pause') {
+      this.ensureSandboxIdle(sandbox.id, requirementId);
+      await this.#e2b.pause(sandbox.providerSandboxId, this.e2bCredentials(sandbox));
+    } else if (action === 'resume') {
+      await this.#e2b.connect(sandbox.providerSandboxId, this.e2bCredentials(sandbox));
+    }
+    const { id, name, kind, providerSandboxId, status, checkedAt } = await this.checkSandboxHealth(sandbox.id);
+    return { id, name, kind, providerSandboxId, status, checkedAt };
   }
 
   async deleteSandbox(id: string): Promise<void> {
@@ -1551,7 +1569,7 @@ export class AgentManager extends EventEmitter {
       REVIEWER_DEVELOPER_INSTRUCTIONS,
       options.prompt?.trim() ? `Additional review focus from the human: ${options.prompt.trim()}` : '',
     ].filter(Boolean).join('\n\n');
-    const onEvent = (event: import('./adapters/types.js').NormalizedAgentEvent) => {
+    const onEvent = (event: import('../runtime/adapters/types.js').NormalizedAgentEvent) => {
       this.recordAgentTraces(requirement.id, requirement.session.id, runId, event.traces);
       if (!event.message || (event.kind !== 'message' && event.kind !== 'completed')) return;
       const body = event.message.trim();
@@ -1611,7 +1629,7 @@ export class AgentManager extends EventEmitter {
   private runHeadlessReview(provider: 'codex' | 'claude-code', input: {
     prompt: string; model: string | undefined; reasoningEffort: AgentReasoningEffort | undefined;
     developerInstructions: string; selectedWorkspace: Sandbox | null; runId: string;
-    onEvent: (event: import('./adapters/types.js').NormalizedAgentEvent) => void;
+    onEvent: (event: import('../runtime/adapters/types.js').NormalizedAgentEvent) => void;
   }): Promise<RunOutcome> {
     const adapter = this.#adapters[provider];
     const request: ProcessRunRequest = {
@@ -1751,7 +1769,7 @@ export class AgentManager extends EventEmitter {
       this.publish({ type: 'requirement.updated', requirementId, sessionId: started.session.id, runId,
         payload: { requirement: this.requireRequirement(requirementId) } });
     };
-    const onEvent = (event: import('./adapters/types.js').NormalizedAgentEvent) => {
+    const onEvent = (event: import('../runtime/adapters/types.js').NormalizedAgentEvent) => {
       this.recordAgentTraces(requirementId, started.session.id, runId, event.traces);
       if (!event.message || (event.kind !== 'message' && event.kind !== 'completed')) return;
       const body = event.message.trim();
@@ -1765,6 +1783,7 @@ export class AgentManager extends EventEmitter {
           ...(selectedSandbox?.kind === 'e2b' && selectedSandbox.providerSandboxId && cloudCredentials
             ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedSandbox.providerSandboxId, cwd: selectedSandbox.cwd,
                 credentials: cloudCredentials,
+                control: (action) => this.controlNativeSandbox(requirementId, started.session.id, action),
                 forwardGitHubToken: selectedSandbox.repositoryUrl !== null
                   && new URL(selectedSandbox.repositoryUrl).hostname.toLowerCase() === 'github.com' } } : {}),
           environment: this.buildRdEnvironment(requirement), instructions: this.buildRdDeveloperInstructions(true, requirement.sandboxId),
@@ -1849,7 +1868,10 @@ export class AgentManager extends EventEmitter {
     } finally {
       if (handle) {
         const uploadedHandle = handle;
-        await Promise.all(uploaded.map(async (path) => {
+        // A remote cleanup request can auto-resume a sandbox the RD Agent deliberately paused.
+        const running = await this.#e2b.getInfo(sandbox.providerSandboxId!, credentials)
+          .then((info) => info.state === 'running', () => false);
+        if (running) await Promise.all(uploaded.map(async (path) => {
           try { await uploadedHandle.files.remove(path); } catch { /* Preserve the Run outcome. */ }
         }));
       }

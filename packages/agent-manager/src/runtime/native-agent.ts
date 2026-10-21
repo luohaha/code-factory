@@ -3,25 +3,34 @@ import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
+import type { Context } from '@earendil-works/chord';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { Type } from '@earendil-works/pi-ai';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import type { MutableModels } from '@earendil-works/pi-ai/models';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
+import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { AssistantEntry, createRegistry, defineExtension, defineTool, Harness, section, watchEvents, type ConversationId } from '@earendil-works/pi-durable';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
 import { CodingTools, createBashTool, createReadTool } from '@earendil-works/pi-durable/tools';
 
-import { runCodeFactoryCli } from './code-factory-cli.js';
+import { runCodeFactoryCli } from '../cli/code-factory-cli.js';
 import { configureNativeProfile, createNativeModels, NativeCredentialStore, NativeProfileStore,
   nativeAuthDatabasePath, profileIdFromModel } from './native-auth.js';
-import { E2BExecutionEnv, E2BSandboxService, type E2BCredentials } from './e2b-execution-env.js';
+import { DeferredExecutionEnv } from './deferred-execution-env.js';
+import { E2BExecutionEnv, E2BSandboxService, type E2BCredentials, type E2BHandle } from './e2b-execution-env.js';
+import { downloadE2BFile, uploadE2BFile, validateTransferPaths } from './e2b-file-transfer.js';
 import type { NormalizedAgentEvent } from './adapters/types.js';
-import type { AgentReasoningEffort, RunOutcome } from './types.js';
+import type { AgentReasoningEffort, RunOutcome, Sandbox } from '../core/types.js';
 
 const execFileAsync = promisify(execFile);
 const CONTEXT = BACKGROUND_CONTEXT;
 const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
+const CodeFactoryExtension = defineExtension({ name: 'code-factory' });
+const E2BSandboxExtension = defineExtension({ name: 'e2b-sandbox' });
+
+export type NativeSandboxAction = 'status' | 'pause' | 'resume';
+export type NativeSandboxState = Pick<Sandbox, 'id' | 'name' | 'kind' | 'providerSandboxId' | 'status' | 'checkedAt'>;
 
 export interface NativeRunInput {
   role?: 'rd' | 'reviewer';
@@ -33,7 +42,8 @@ export interface NativeRunInput {
   reasoningEffort: AgentReasoningEffort | null;
   cwd: string;
   sandbox?: { kind: 'e2b'; providerSandboxId: string; credentials: E2BCredentials;
-    cwd?: string | null; forwardGitHubToken: boolean };
+    cwd?: string | null; forwardGitHubToken: boolean;
+    control?: (action: NativeSandboxAction) => Promise<NativeSandboxState> };
   environment: Readonly<Record<string, string>>;
   instructions: string;
   signal: AbortSignal;
@@ -54,13 +64,27 @@ export class NativeAgentService {
   #profiles: NativeProfileStore | null = null;
   readonly #e2b: E2BSandboxService;
   readonly #environments = new Map<ConversationId, Readonly<Record<string, string>>>();
-  readonly #sandboxes = new Map<ConversationId, NativeRunInput['sandbox']>();
+  readonly #sandboxes = new Map<ConversationId, NonNullable<NativeRunInput['sandbox']> & { signal: AbortSignal }>();
+  readonly #sandboxEnvs = new Map<ConversationId, DeferredExecutionEnv>();
+  readonly #sandboxHandles = new Map<ConversationId, Promise<E2BHandle>>();
   readonly #active = new Map<string, { submit: (message: string) => Promise<boolean> }>();
 
   constructor(databasePath: string, models?: MutableModels, e2b?: E2BSandboxService) {
     this.#databasePath = databasePath;
     this.#models = models ?? null;
     this.#e2b = e2b ?? new E2BSandboxService();
+  }
+
+  #sandboxHandle(conversationId: ConversationId): Promise<E2BHandle> {
+    const sandbox = this.#sandboxes.get(conversationId);
+    if (!sandbox) throw new Error('This tool requires a selected E2B workspace');
+    let pending = this.#sandboxHandles.get(conversationId);
+    if (!pending) {
+      pending = this.#e2b.connect(sandbox.providerSandboxId, sandbox.credentials, sandbox.signal)
+        .catch((error: unknown) => { this.#sandboxHandles.delete(conversationId); throw error; });
+      this.#sandboxHandles.set(conversationId, pending);
+    }
+    return pending;
   }
 
   async #open(): Promise<Harness> {
@@ -135,24 +159,85 @@ export class NativeAgentService {
       parameters: Type.Object({}), execute: async (_args, api) => output(await invokeCli(['timer', 'show'], api.conversationId)) });
     const timerCancel = defineTool({ name: 'timer_cancel', description: 'Cancel an active wake-up timer.',
       parameters: Type.Object({ id: Type.String() }), execute: async ({ id }, api) => output(await invokeCli(['timer', 'cancel', '--id', id], api.conversationId)) });
+    const sandboxControl = async (action: NativeSandboxAction, conversationId: ConversationId) => {
+      const sandbox = this.#sandboxes.get(conversationId);
+      if (!sandbox?.control) throw new Error('Sandbox lifecycle tools require a selected E2B RD workspace');
+      const state = await sandbox.control(action);
+      if (action === 'resume') {
+        this.#sandboxHandles.delete(conversationId);
+        this.#sandboxEnvs.get(conversationId)?.reset();
+      }
+      return output(JSON.stringify(state));
+    };
+    const sandboxStatus = defineTool({ name: 'sandbox_status',
+      description: 'Check the selected E2B sandbox status without resuming it. Returns observed status and check time.',
+      parameters: Type.Object({}), execute: async (_args, api) => sandboxControl('status', api.conversationId) });
+    const sandboxPause = defineTool({ name: 'sandbox_pause',
+      description: 'Pause the selected E2B sandbox when remote work is finished or waiting. Preserves files and memory; the agent and host tools keep running. Rejected while another RD or Reviewer Run uses it. Finish remote operations before pausing; later file or command tools may auto-resume it.',
+      parameters: Type.Object({}), execute: async (_args, api) => sandboxControl('pause', api.conversationId) });
+    const sandboxResume = defineTool({ name: 'sandbox_resume',
+      description: 'Resume the selected E2B sandbox before using its files or commands again.',
+      parameters: Type.Object({}), execute: async (_args, api) => sandboxControl('resume', api.conversationId) });
+    const transfer = async (direction: 'upload' | 'download', localPath: string, remotePath: string,
+      overwrite: boolean, conversationId: ConversationId, env: ExecutionEnv | undefined,
+      context: Context) => {
+      const signal = context.abortSignal;
+      if (!this.#sandboxes.get(conversationId) || !env) throw new Error('File transfer requires a selected E2B workspace');
+      validateTransferPaths(localPath, remotePath);
+      try {
+        signal?.throwIfAborted();
+        const resolved = await env.absolutePath(remotePath, context);
+        if (!resolved.ok) throw resolved.error;
+        const handle = await this.#sandboxHandle(conversationId);
+        const byteSize = direction === 'upload'
+          ? await uploadE2BFile(handle, localPath, resolved.value, signal)
+          : await downloadE2BFile(handle, resolved.value, localPath, overwrite, signal);
+        return output(JSON.stringify({ localPath, remotePath: resolved.value, byteSize }));
+      } catch (error) {
+        if (signal?.aborted) throw new Error('E2B file transfer aborted');
+        const exists = error instanceof Error && 'code' in error && error.code === 'EEXIST';
+        throw new Error(exists ? 'Host destination already exists; choose another path or set overwrite to true'
+          : `E2B file ${direction} failed; check the source file, destination path, and sandbox connection`);
+      }
+    };
+    const sandboxUpload = defineTool({ name: 'sandbox_upload',
+      description: 'Stream a host file (including a conversation attachment) to the selected E2B sandbox. localPath is an absolute host path; remotePath is absolute or relative to the sandbox working directory. Creates remote parent directories and overwrites an existing remote file. Returns paths and byte count, never file contents.',
+      parameters: Type.Object({ localPath: Type.String(), remotePath: Type.String() }),
+      execute: async ({ localPath, remotePath }, api, context) => transfer('upload', localPath, remotePath, false, api.conversationId, api.env, context) });
+    const sandboxDownload = defineTool({ name: 'sandbox_download',
+      description: 'Stream a file from the selected E2B sandbox to an absolute host localPath. remotePath is absolute or relative to the sandbox working directory. Creates host parent directories. Existing host files are preserved unless overwrite is true. Returns paths and byte count for use in the reply, never file contents.',
+      parameters: Type.Object({ remotePath: Type.String(), localPath: Type.String(), overwrite: Type.Optional(Type.Boolean()) }),
+      execute: async ({ localPath, remotePath, overwrite }, api, context) => transfer('download', localPath, remotePath, overwrite ?? false, api.conversationId, api.env, context) });
     registry.install(defineExtension({
-      name: 'code-factory',
+      ...CodeFactoryExtension,
       tools: [prRegister, ghPr, propose, action, related, message, timerRegister, timerShow, timerCancel],
       sections: [section('code-factory', () => 'You are this Requirement’s long-lived RD Agent. Use the Code Factory tools to register PRs, propose TODO follow-ups, message other Requirement agents by ID, and manage timers. Humans confirm completion.'),
         section('workspace', (input) => input.env?.cwd)],
     }));
+    registry.install(defineExtension({
+      ...E2BSandboxExtension,
+      tools: [sandboxStatus, sandboxPause, sandboxResume, sandboxUpload, sandboxDownload],
+      sections: [section('e2b-sandbox', (input) => `Selected E2B workspace: ${input.env?.cwd || 'SDK default user directory'}. Use sandbox_upload for host attachment paths; read/write/bash operate remotely.`)],
+    }));
     this.#harness = await Harness.open(await openNodeSqliteStorage(this.#databasePath), {
       models,
       registry,
+      settings: { extensions: [CodingTools, CodeFactoryExtension] },
       env: async ({ conversationId, cwd }) => {
         const sandbox = this.#sandboxes.get(conversationId);
         if (sandbox) {
-          const handle = await this.#e2b.connect(sandbox.providerSandboxId, sandbox.credentials);
-          const commandEnv = Object.fromEntries((sandbox.forwardGitHubToken ? ['GH_TOKEN', 'GITHUB_TOKEN'] : [])
-            .flatMap((name) =>
-            process.env[name] ? [[name, process.env[name]!]] : []));
-          return E2BExecutionEnv.create(handle, sandbox.cwd === undefined ? cwd ?? process.cwd() : sandbox.cwd,
-            commandEnv, sandbox.credentials.domain);
+          let env = this.#sandboxEnvs.get(conversationId);
+          if (!env) {
+            const directory = sandbox.cwd === undefined ? cwd ?? process.cwd() : sandbox.cwd;
+            env = new DeferredExecutionEnv(`e2b:${sandbox.credentials.domain}:${sandbox.providerSandboxId}`, directory ?? '', async () => {
+              const handle = await this.#sandboxHandle(conversationId);
+              const commandEnv = Object.fromEntries((sandbox.forwardGitHubToken ? ['GH_TOKEN', 'GITHUB_TOKEN'] : [])
+                .flatMap((name) => process.env[name] ? [[name, process.env[name]!]] : []));
+              return E2BExecutionEnv.create(handle, directory, commandEnv, sandbox.credentials.domain, sandbox.signal);
+            });
+            this.#sandboxEnvs.set(conversationId, env);
+          }
+          return env;
         }
         return new NodeExecutionEnv({ cwd: cwd ?? process.cwd(), shellEnv: { ...process.env, ...this.#environments.get(conversationId) } });
       },
@@ -203,7 +288,9 @@ export class NativeAgentService {
       }
       const agent = { model: { provider, modelId }, cwd: input.cwd,
         ...(input.reasoningEffort ? { thinkingLevel: input.reasoningEffort } : {}),
-        ...(reviewer ? { extensions: [CodingTools], tools: [createReadTool(), createBashTool()] } : {}),
+        extensions: reviewer ? [CodingTools]
+          : [CodingTools, CodeFactoryExtension, ...(input.sandbox ? [E2BSandboxExtension] : [])],
+        tools: reviewer ? [createReadTool(), createBashTool()] : null,
         instructions: input.instructions };
       let conversation = input.nativeSessionId
         ? await harness.conversation(Number(input.nativeSessionId) as ConversationId, CONTEXT)
@@ -212,7 +299,7 @@ export class NativeAgentService {
       if (!conversation) throw new Error('Native conversation is missing');
       activeConversationId = conversation.id;
       this.#environments.set(conversation.id, input.environment);
-      this.#sandboxes.set(conversation.id, input.sandbox);
+      if (input.sandbox) this.#sandboxes.set(conversation.id, { ...input.sandbox, signal: input.signal });
       if (input.nativeSessionId) await conversation.configure(agent, CONTEXT);
       else input.onNativeSession(String(conversation.id));
       let timedOut = false;
@@ -287,6 +374,8 @@ export class NativeAgentService {
       if (activeConversationId !== undefined) {
         this.#environments.delete(activeConversationId);
         this.#sandboxes.delete(activeConversationId);
+        this.#sandboxEnvs.delete(activeConversationId);
+        this.#sandboxHandles.delete(activeConversationId);
       }
     }
   }
@@ -301,5 +390,7 @@ export class NativeAgentService {
     this.#credentials = null;
     this.#environments.clear();
     this.#sandboxes.clear();
+    this.#sandboxEnvs.clear();
+    this.#sandboxHandles.clear();
   }
 }

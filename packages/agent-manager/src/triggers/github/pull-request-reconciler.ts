@@ -1,15 +1,15 @@
-import type { AgentTriggerContext } from './agent-trigger.js';
-import { MAX_PULL_REQUEST_RECONCILE_INTERVAL_SECONDS } from './configuration.js';
+import type { AgentTriggerContext } from '../agent-trigger.js';
+import { MAX_PULL_REQUEST_RECONCILE_INTERVAL_SECONDS } from '../../infrastructure/configuration.js';
 import type { GitHubClient } from './github-client.js';
-import type { Logger } from './logger.js';
+import type { Logger } from '../../infrastructure/logger.js';
 import {
   gitHubCheckState,
   PULL_REQUEST_STATUS_TRIGGER_ID,
   type PullRequestSnapshotTrigger,
   type PullRequestTriggerRegistration,
 } from './pull-request-triggers.js';
-import type { AgentManagerStore } from './store.js';
-import type { PullRequest, TrackPullRequestInput } from './types.js';
+import type { AgentManagerStore } from '../../storage/store.js';
+import type { PullRequest, TrackPullRequestInput } from '../../core/types.js';
 
 /** @deprecated Built-in PR events now use event-specific trigger IDs. */
 export const PULL_REQUEST_TRIGGER_ID = 'github.pull-request';

@@ -1,4 +1,4 @@
-import type { MessageAuthor, RunStatus } from './types.js';
+import type { MessageAuthor, RunStatus } from '../core/types.js';
 
 /** Context for a best-effort decision after an RD Run ends. */
 export interface JevWakeContext {

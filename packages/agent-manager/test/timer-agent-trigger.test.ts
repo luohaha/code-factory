@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { AgentTriggerMessage } from '../src/agent-trigger.ts';
-import { silentLogger } from '../src/logger.ts';
-import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
-import { TimerAgentTrigger } from '../src/timer-agent-trigger.ts';
+import type { AgentTriggerMessage } from '../src/triggers/agent-trigger.ts';
+import { silentLogger } from '../src/infrastructure/logger.ts';
+import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.ts';
+import { TimerAgentTrigger } from '../src/triggers/timer-agent-trigger.ts';
 
 async function waitFor(check: () => boolean): Promise<void> {
   const deadline = Date.now() + 1_000;
