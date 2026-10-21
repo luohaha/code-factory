@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
@@ -37,20 +37,25 @@ test('real Docker enforces cgroup limits, shares home/UID, reaches host localhos
         onOutput: (line) => { output = line; }, invocation: { command: 'node', input: '', args: ['--input-type=module', '-e', `
           import { readFileSync, writeFileSync } from 'node:fs';
           import { execFileSync } from 'node:child_process';
+          import { userInfo } from 'node:os';
           const memory = readFileSync('/sys/fs/cgroup/memory.max', 'utf8').trim();
           const cpu = readFileSync('/sys/fs/cgroup/cpu.max', 'utf8').trim().split(' ').map(Number);
           for (const command of ['gh', 'codex', 'claude']) execFileSync(command, ['--version']);
+          execFileSync('ssh', ['-G', '-F', '/dev/null', 'github.com'], { stdio: ['ignore', 'pipe', 'pipe'] });
           const network = await (await fetch(${JSON.stringify(`${base}/probe`)})).text();
           writeFileSync('shared-output', 'home-write-ok');
-          console.log(JSON.stringify({ memory, cpu, network, home: process.env.HOME, uid: process.getuid(), cwd: process.cwd() }));
+          console.log(JSON.stringify({ memory, cpu, network, home: process.env.HOME, uid: process.getuid(), cwd: process.cwd(), username: userInfo().username, userHome: userInfo().homedir, groups: process.getgroups() }));
         `] } });
       assert.equal(outcome.status, 'succeeded', outcome.error ?? '');
-      const result = JSON.parse(output) as { memory: string; cpu: number[]; network: string; home: string; uid: number; cwd: string };
+      const result = JSON.parse(output) as { memory: string; cpu: number[]; network: string; home: string; uid: number; cwd: string; username: string; userHome: string; groups: number[] };
       assert.equal(Number(result.memory), 512 * 1024 * 1024);
       assert.equal(result.cpu[0]! / result.cpu[1]!, 0.5);
       assert.equal(result.network, 'host-network-ok');
       assert.equal(result.home, homedir());
       assert.equal(result.uid, process.getuid?.());
+      assert.equal(result.username, userInfo().username);
+      assert.equal(result.userHome, homedir());
+      for (const group of process.getgroups?.() ?? []) assert(result.groups.includes(group));
       assert.equal(result.cwd, directory);
       assert.equal(await readFile(join(directory, 'shared-output'), 'utf8'), 'home-write-ok');
       const profiles = new NativeProfileStore(nativeAuthDatabasePath(join(directory, 'native.sqlite')));

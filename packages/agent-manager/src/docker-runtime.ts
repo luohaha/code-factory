@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { accessSync, constants, existsSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import { delimiter, isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -24,6 +24,7 @@ export function dockerInvocation(input: {
   home?: string;
   uid?: number;
   gid?: number;
+  groups?: readonly number[];
 }): AgentInvocation {
   const resources = dockerResources(input.resources)!;
   const home = input.home ?? homedir();
@@ -34,6 +35,10 @@ export function dockerInvocation(input: {
     '--network', 'host', '--cpus', String(resources.cpus), '--memory', `${resources.memoryMb}m`,
     '--memory-swap', `${resources.memoryMb}m`, '--workdir', input.cwd,
     '--user', `${input.uid ?? process.getuid?.() ?? 1000}:${input.gid ?? process.getgid?.() ?? 1000}`];
+  for (const group of new Set(input.groups ?? process.getgroups?.() ?? [])) {
+    if (group !== (input.gid ?? process.getgid?.())) args.push('--group-add', String(group));
+  }
+  args.push('--tmpfs', '/run/code-factory:rw,nosuid,nodev,noexec,size=1m,mode=1777');
   for (const path of mounts) {
     if (/[\r\n,]/.test(path)) throw new TypeError('Docker mount paths cannot contain commas or newlines');
     args.push('--mount', `type=bind,source=${path},target=${path}`);
@@ -41,7 +46,8 @@ export function dockerInvocation(input: {
   for (const [key, value] of Object.entries(input.environment)) {
     if (value !== undefined && /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) args.push('--env', key);
   }
-  args.push('--entrypoint', input.invocation.command, resources.image, ...input.invocation.args);
+  args.push('--entrypoint', 'node', resources.image, '/opt/code-factory/dist/docker-agent-entrypoint.js',
+    input.invocation.command, ...input.invocation.args);
   return { command: 'docker', args, input: input.invocation.input };
 }
 
@@ -73,6 +79,8 @@ export async function prepareDockerRun(input: {
   const name = `code-factory-${randomUUID()}`;
   const environment: NodeJS.ProcessEnv = { ...process.env, ...input.environment };
   environment.HOME = homedir();
+  environment.CODE_FACTORY_DOCKER_USERNAME = userInfo().username;
+  environment.CODE_FACTORY_DOCKER_GROUPNAME = await credential('id', ['-gn'], process.env) ?? userInfo().username;
   // Linux tools must precede mounted host launchers and macOS binaries.
   environment.PATH = `${DOCKER_AGENT_PATH}:${environment.PATH ?? ''}`;
   delete environment.NODE_OPTIONS;

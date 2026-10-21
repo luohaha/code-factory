@@ -20,7 +20,8 @@ For an installed npm package, run `docker build -f docker/Dockerfile -t code-fac
 
 ## Shared paths and authentication
 
-- The launching user's **entire home directory is mounted read/write at the same absolute path**, and `HOME` is preserved. The selected workspace, temporary handoff directory, attachment storage, Native database directory, and configured external configuration/certificate paths are also mounted when necessary. Files are written with the host UID/GID. There is no disk quota.
+- The launching user's **entire home directory is mounted read/write at the same absolute path**, and `HOME` is preserved. The selected workspace, temporary handoff directory, attachment storage, Native database directory, and configured external configuration/certificate paths are also mounted when necessary. Files are written with the host UID/GID and supplementary groups. There is no disk quota.
+- A non-root bootstrap uses `libnss-wrapper` to resolve the launching user's name, UID/GID, and home, preserving the image's other account records. This lets SSH and tools using `getpwuid()` work when that UID is absent from the image. Identity files live in a small container-only tmpfs and disappear with the container; host account files are untouched. Custom images must derive from the bundled image or provide its bootstrap and `libnss-wrapper` paths.
 - Process environment values are forwarded using `--env NAME`; credential values are not placed in Docker command arguments or application logs. Linux image tools precede host tools on `PATH`. Host-specific Node loader settings are omitted.
 - Codex file authentication, sessions, instructions, Skills, and configuration remain in the shared `CODEX_HOME`. On macOS, Manager can also read the normal Codex Keychain entry, mount a private temporary auth file over `auth.json`, and save refreshed credentials back to that entry when the Run ends. Existing auth files are preserved; temporary credentials and an unused mountpoint are removed. Keychain access must be permitted for the launching process.
 - Existing `GH_TOKEN` / `GITHUB_TOKEN` values take precedence. Otherwise Manager resolves the current `github.com` token with the host's `gh auth token`, including Keychain-backed login, and forwards it as `GH_TOKEN`. HTTPS Git uses `gh auth git-credential` in the container so a macOS-only Git credential helper does not break GitHub pushes. Other Git hosts retain their configured helpers.
@@ -45,6 +46,6 @@ cd packages/agent-manager
 CODE_FACTORY_DOCKER_TEST_IMAGE=code-factory-agent:local npx tsx --test test/docker.integration.test.ts
 ```
 
-It verifies actual cgroup quotas, home writes, UID, localhost connectivity, installed CLIs, and a Native Run using a saved profile against a local fake model endpoint. Ordinary `npm test` skips this check unless the image variable is set.
+It verifies actual cgroup quotas, home writes, UID and user lookup, supplementary groups, SSH startup, localhost connectivity, installed CLIs, and a Native Run using a saved profile against a local fake model endpoint. Ordinary `npm test` skips this check unless the image variable is set.
 
 Docker behavior references: [resource constraints](https://docs.docker.com/engine/containers/resource_constraints/), [host networking and Docker Desktop setup](https://docs.docker.com/engine/network/drivers/host/).

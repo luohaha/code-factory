@@ -25,18 +25,18 @@ const noOutput: AgentAdapter = { provider: 'codex', parseLine: () => null,
   buildRdInvocation: () => { throw new Error('unused'); }, buildReviewInvocation: () => { throw new Error('unused'); } };
 
 test('Docker arguments bound CPU/memory, preserve paths/user/network and keep credentials out of argv', () => {
-  const invocation = dockerInvocation({ resources, name: 'agent-test', cwd: '/home/dev/repo', home: '/home/dev', uid: 501, gid: 20,
+  const invocation = dockerInvocation({ resources, name: 'agent-test', cwd: '/home/dev/repo', home: '/home/dev', uid: 501, gid: 20, groups: [20, 80],
     paths: ['/home/dev/repo/attachments', '/external/worktree'], environment: { GH_TOKEN: 'secret', HOME: '/home/dev' },
     invocation: { command: 'codex', args: ['exec', '-'], input: 'task' } });
   const args = invocation.args;
   for (const pair of [['--cpus', '1.5'], ['--memory', '512m'], ['--memory-swap', '512m'],
-    ['--network', 'host'], ['--user', '501:20'], ['--workdir', '/home/dev/repo'], ['--env', 'GH_TOKEN']]) {
+    ['--network', 'host'], ['--user', '501:20'], ['--group-add', '80'], ['--workdir', '/home/dev/repo'], ['--env', 'GH_TOKEN']]) {
     assert(args.some((value, index) => value === pair[0] && args[index + 1] === pair[1]));
   }
   assert(args.includes('type=bind,source=/home/dev,target=/home/dev'));
   assert(args.includes('type=bind,source=/external/worktree,target=/external/worktree'));
   assert(!args.some((value) => value.includes('attachments') || value.includes('secret')));
-  assert.deepEqual(args.slice(-4), ['codex', resources.image, 'exec', '-']);
+  assert.deepEqual(args.slice(-6), ['node', resources.image, '/opt/code-factory/dist/docker-agent-entrypoint.js', 'codex', 'exec', '-']);
   assert.equal(invocation.input, 'task');
   for (const invalid of [false, [], {}, { ...resources, image: '--privileged' }, { ...resources, cpus: NaN },
     { ...resources, cpus: 0 }, { ...resources, memoryMb: 63 }, { ...resources, memoryMb: 512.1 }, { ...resources, privileged: true }]) {
@@ -138,7 +138,8 @@ if (args[0] === 'create') {
 } else if (args[0] === 'start') {
   const args = JSON.parse(fs.readFileSync(root + '/' + process.argv.at(-1), 'utf8'));
   const index = args.indexOf('--entrypoint');
-  const command = args[index + 1]; let commandArgs = args.slice(index + 3);
+  let command = args[index + 1]; let commandArgs = args.slice(index + 3);
+  if (commandArgs[0] === '/opt/code-factory/dist/docker-agent-entrypoint.js') { command = commandArgs[1]; commandArgs = commandArgs.slice(2); }
   if (commandArgs[0] === '/opt/code-factory/dist/native-agent-worker.js') commandArgs = ['--import', ${JSON.stringify(import.meta.resolve('tsx'))}, ${JSON.stringify(worker)}];
   const child = cp.spawn(command === 'node' ? ${JSON.stringify(process.execPath)} : command, commandArgs, { stdio: 'inherit' });
   process.on('SIGTERM', () => child.kill('SIGTERM'));

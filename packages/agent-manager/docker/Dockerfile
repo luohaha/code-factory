@@ -2,8 +2,9 @@ FROM node:22-bookworm
 
 # Linux tools take precedence over executables in the mounted host home.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash ca-certificates curl git gh openssh-client python3 ripgrep \
+    bash ca-certificates curl git gh libnss-wrapper openssh-client python3 ripgrep \
     && rm -rf /var/lib/apt/lists/*
+RUN ln -s /usr/lib/*/libnss_wrapper.so /usr/local/lib/libnss_wrapper.so
 ARG CODEX_VERSION=latest
 ARG CLAUDE_CODE_VERSION=latest
 RUN npm install --global @openai/codex@${CODEX_VERSION} @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
