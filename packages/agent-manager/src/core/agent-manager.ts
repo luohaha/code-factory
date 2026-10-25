@@ -57,7 +57,8 @@ import {
 } from '../triggers/github/pull-request-triggers.js';
 import { TimerAgentTrigger } from '../triggers/timer-agent-trigger.js';
 import { SqliteAgentManagerStore } from '../storage/sqlite-store.js';
-import type { AgentManagerStore } from '../storage/store.js';
+import type { AgentManagerStore, CreateMessageAttachmentRecord } from '../storage/store.js';
+import { MAX_MESSAGE_ATTACHMENT_BYTES } from './message-attachments.js';
 import { StoreConflictError, StoreNotFoundError } from '../storage/store.js';
 import type {
   AgentProvider,
@@ -67,6 +68,7 @@ import type {
   ManagerEvent,
   MessageAuthor,
   MessageAttachment,
+  PublishedArtifact,
   PullRequest,
   RelatedRequirements,
   RequirementMessage,
@@ -119,7 +121,7 @@ export function defaultLogFilePath(databasePath: string): string {
   return resolve(workspaceDataDirectory, 'logs', 'agent-manager.log');
 }
 
-export const MAX_MESSAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+export { MAX_MESSAGE_ATTACHMENT_BYTES } from './message-attachments.js';
 export const MAX_MESSAGE_ATTACHMENTS = 6;
 export const MIN_AGENT_TIMER_INTERVAL_SECONDS = 60;
 export const MAX_AGENT_TIMER_INTERVAL_SECONDS = 365 * 24 * 60 * 60;
@@ -1206,6 +1208,46 @@ export class AgentManager extends EventEmitter {
     requirementId: string,
     input: { fileName: string; mediaType?: string; data: Buffer },
   ): MessageAttachment {
+    return this.storeAttachment(requirementId, input, (record) => this.#store.createMessageAttachment(record));
+  }
+
+  publishAgentArtifact(
+    requirementId: string,
+    sourceSessionId: string,
+    input: { fileName: string; mediaType?: string; data: Buffer },
+  ): PublishedArtifact {
+    const requirement = this.requireAgentSource(requirementId, sourceSessionId);
+    if (requirement.status === 'done' || requirement.status === 'cancelled') {
+      throw new StoreConflictError('Cannot publish artifacts to a terminal Requirement');
+    }
+    const run = this.#store.listRuns(requirementId).find((item) => item.role === 'rd' && item.status === 'running');
+    const message = this.storeAttachment(requirementId, input, (record) => this.#store.appendMessage({
+      id: `msg_${randomUUID()}`,
+      requirementId,
+      sessionId: sourceSessionId,
+      ...(run ? { runId: run.id } : {}),
+      author: 'rd_agent',
+      body: '',
+      attachmentIds: [record.id],
+      newAttachments: [record],
+      deliverToRd: false,
+      now: record.now,
+    }));
+    this.publishMessage(message);
+    const attachment = message.attachments[0]!;
+    return {
+      messageId: message.id,
+      attachment: { id: attachment.id, fileName: attachment.fileName, kind: attachment.kind,
+        mediaType: attachment.mediaType, byteSize: attachment.byteSize },
+      downloadPath: `/api/attachments/${encodeURIComponent(attachment.id)}?download=1`,
+    };
+  }
+
+  private storeAttachment<T>(
+    requirementId: string,
+    input: { fileName: string; mediaType?: string; data: Buffer },
+    persist: (record: CreateMessageAttachmentRecord) => T,
+  ): T {
     this.requireRequirement(requirementId);
     if (input.data.length === 0) throw new TypeError('Attachment cannot be empty');
     if (input.data.length > MAX_MESSAGE_ATTACHMENT_BYTES) {
@@ -1221,7 +1263,7 @@ export class AgentManager extends EventEmitter {
     mkdirSync(this.attachmentDirectory, { recursive: true });
     writeFileSync(localPath, input.data, { flag: 'wx', mode: 0o600 });
     try {
-      const attachment = this.#store.createMessageAttachment({
+      const result = persist({
         id,
         requirementId,
         fileName,
@@ -1232,13 +1274,13 @@ export class AgentManager extends EventEmitter {
         now: new Date().toISOString(),
       });
       this.logger.info('Message attachment uploaded', {
-        attachmentId: attachment.id,
+        attachmentId: id,
         requirementId,
-        kind: attachment.kind,
-        mediaType: attachment.mediaType,
-        byteSize: attachment.byteSize,
+        kind,
+        mediaType,
+        byteSize: input.data.length,
       });
-      return attachment;
+      return result;
     } catch (error) {
       try {
         unlinkSync(localPath);
@@ -2250,6 +2292,9 @@ export class AgentManager extends EventEmitter {
       native
         ? 'Use the native Code Factory tools to register PRs, propose separate TODO follow-ups, manage those proposals, inspect direct parent or child Requirements, message any other Requirement by ID, and manage timers.'
         : 'Use code-factory-cli to register PRs; propose separate TODO follow-ups; manage those proposals with lifecycle actions; inspect direct parent/child requirements; message any other Requirement by ID; and manage wake-up timers. Discover commands with code-factory-cli --help; do not call HTTP endpoints directly.',
+      native
+        ? 'Use artifact_publish to explicitly publish a regular host file as a conversation attachment for browser download. For E2B results, sandbox_download first, then publish its host localPath. Never read or encode file contents into tool arguments or replies; the publication tool transfers bytes outside model context.'
+        : 'Use code-factory-cli artifact publish to explicitly publish a regular local file as a conversation attachment for browser download. Do not read or encode file contents into the prompt or reply. The CLI transfers bytes outside model context and returns a relative download path; the dashboard resolves the link for remote users.',
       'Keep inter-agent communication concise. Send a message only when the recipient needs information or action to advance the work, and include only the context needed to act. Skip courtesy acknowledgments, repeated status updates, and redundant back-and-forth to conserve tokens.',
       'When available, Jev checks direct agent messages before delivery. If it rejects a message as unnecessary, do not resend or rephrase it without new information or action the recipient needs.',
       'Register PRs immediately after creation and refresh after your own metadata changes. Report registration failures without recreating PRs. The GitHub reconciler owns lifecycle; never register just to mirror status events.',
@@ -2375,6 +2420,11 @@ export class AgentManager extends EventEmitter {
       ...input,
       now: new Date().toISOString(),
     });
+    this.publishMessage(message);
+    return message;
+  }
+
+  private publishMessage(message: RequirementMessage): void {
     this.publish({
       type: 'message.created',
       requirementId: message.requirementId,
@@ -2385,7 +2435,6 @@ export class AgentManager extends EventEmitter {
         requirement: this.#store.getRequirement(message.requirementId),
       },
     });
-    return message;
   }
 
   private recordAgentTraces(

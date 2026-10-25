@@ -165,6 +165,13 @@ export interface MessageAttachment {
   createdAt: string;
 }
 
+/** Model-visible publication receipt. File bytes and host storage paths stay outside it. */
+export interface PublishedArtifact {
+  messageId: string;
+  attachment: Pick<MessageAttachment, 'id' | 'fileName' | 'kind' | 'mediaType' | 'byteSize'>;
+  downloadPath: string;
+}
+
 export interface PullRequest {
   id: string;
   requirementId: string;

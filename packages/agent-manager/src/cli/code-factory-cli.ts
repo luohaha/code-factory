@@ -1,9 +1,12 @@
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open, readFile } from 'node:fs/promises';
+import { basename, isAbsolute } from 'node:path';
 import { parseArgs, promisify } from 'node:util';
 
 import { normalizeRepositoryKey } from '../triggers/github/repository-key.js';
 import { CODE_FACTORY_VERSION } from '../infrastructure/version.js';
+import { MAX_MESSAGE_ATTACHMENT_BYTES } from '../core/message-attachments.js';
 
 export const CODE_FACTORY_API_URL = 'CODE_FACTORY_API_URL';
 export const CODE_FACTORY_REQUIREMENT_ID = 'CODE_FACTORY_REQUIREMENT_ID';
@@ -14,6 +17,7 @@ const HELP = `Usage: code-factory-cli <command>
 Code Factory control-plane commands for RD Agents.
 
 Commands:
+  artifact publish        Publish a file as a conversation download attachment
   pr register             Register or refresh a pull request
   requirement propose     Propose a separately tracked TODO requirement
   requirement action      Manage a requirement proposed by this RD Agent
@@ -59,6 +63,29 @@ Example:
   code-factory-cli pr register --from-github https://github.com/OWNER/REPO/pull/123
 
 Context: CODE_FACTORY_API_URL and CODE_FACTORY_REQUIREMENT_ID.`;
+
+const ARTIFACT_PUBLISH_HELP = `Usage: code-factory-cli artifact publish [options]
+
+Explicitly publish one regular file to this Requirement's conversation. Available
+to Codex, Claude Code, and Native RD Agents. Bytes are uploaded outside model
+context; do not read, paste, or base64-encode the file into the prompt or reply.
+
+Required options:
+  --path PATH             Absolute file path on the Agent Manager host
+
+Optional options:
+  --name NAME             Download filename (defaults to the source basename)
+  --media-type TYPE       MIME type (defaults to application/octet-stream)
+
+Files must be non-empty and at most 20 MB. Raster images are detected by signature;
+other types are downloaded as files. E2B Agents must sandbox_download to a host
+path first. The result contains metadata and a relative downloadPath. The
+dashboard supplies a link using the browser's Manager URL, including remote URLs.
+Source files are preserved. A new RD message is created without waking RD again.
+Do not publish credentials or secrets. Publication is explicit and never automatic.
+
+Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
+CODE_FACTORY_SESSION_ID.`;
 
 const REQUIREMENT_PROPOSE_HELP = `Usage: code-factory-cli requirement propose [options]
 
@@ -160,6 +187,7 @@ export interface CodeFactoryCliRuntime {
   runGitHub: (args: string[]) => Promise<string>;
   readTextFile: (path: string) => Promise<string>;
   requestTimeoutMs: number;
+  requestAbortSignal?: AbortSignal;
   writeOut: (value: string) => void;
   writeError: (value: string) => void;
 }
@@ -171,6 +199,36 @@ class CliUsageError extends Error {
 }
 
 class CliRequestError extends Error {}
+
+async function readArtifactFile(path: string, signal?: AbortSignal): Promise<Buffer<ArrayBuffer>> {
+  try {
+    signal?.throwIfAborted();
+    // O_NONBLOCK lets us reject FIFOs without waiting for another process to open them.
+    const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      const info = await file.stat();
+      if (!info.isFile()) throw new CliUsageError('--path must refer to a regular file', ARTIFACT_PUBLISH_HELP);
+      if (info.size === 0 || info.size > MAX_MESSAGE_ATTACHMENT_BYTES) {
+        throw new CliUsageError('Artifact must be non-empty and at most 20 MB', ARTIFACT_PUBLISH_HELP);
+      }
+      const data = Buffer.alloc(MAX_MESSAGE_ATTACHMENT_BYTES + 1);
+      let size = 0;
+      while (size < data.length) {
+        signal?.throwIfAborted();
+        const { bytesRead } = await file.read(data, size, data.length - size, null);
+        if (bytesRead === 0) break;
+        size += bytesRead;
+      }
+      if (size === 0 || size > MAX_MESSAGE_ATTACHMENT_BYTES) {
+        throw new CliUsageError('Artifact must be non-empty and at most 20 MB', ARTIFACT_PUBLISH_HELP);
+      }
+      return data.subarray(0, size);
+    } finally { await file.close(); }
+  } catch (error) {
+    if (error instanceof CliUsageError) throw error;
+    throw new CliRequestError(signal?.aborted ? 'Artifact publication aborted' : 'Unable to read artifact file; check the path and permissions');
+  }
+}
 
 function defaultRuntime(): CodeFactoryCliRuntime {
   return {
@@ -435,6 +493,7 @@ async function requestJson(
   url: string,
   method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
   body?: Record<string, unknown>,
+  upload?: { data: Buffer<ArrayBuffer>; fileName: string; mediaType: string },
 ): Promise<unknown> {
   const retryGuidance = method === 'GET'
     ? ''
@@ -444,14 +503,15 @@ async function requestJson(
   try {
     response = await runtime.fetch(url, {
       method,
-      headers: { 'content-type': 'application/json' },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(runtime.requestTimeoutMs),
+      headers: upload ? { 'content-type': upload.mediaType, 'x-file-name': encodeURIComponent(upload.fileName) }
+        : { 'content-type': 'application/json' },
+      ...(upload ? { body: upload.data } : body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.any([AbortSignal.timeout(runtime.requestTimeoutMs), ...(runtime.requestAbortSignal ? [runtime.requestAbortSignal] : [])]),
     });
     text = await response.text();
   } catch (error) {
     const timeout = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
-    const detail = timeout ? 'timed out' : `failed: ${error instanceof Error ? error.message : String(error)}`;
+    const detail = timeout ? 'timed out' : upload ? 'failed' : `failed: ${error instanceof Error ? error.message : String(error)}`;
     throw new CliRequestError(`Code Factory API request ${detail}${retryGuidance}`);
   }
   let payload: unknown = null;
@@ -463,7 +523,9 @@ async function requestJson(
     }
   }
   if (!response.ok) {
-    throw new CliRequestError(`Code Factory API returned ${response.status}: ${errorMessage(payload, response.statusText)}`);
+    throw new CliRequestError(upload
+      ? `Artifact publication returned HTTP ${response.status}${retryGuidance}`
+      : `Code Factory API returned ${response.status}: ${errorMessage(payload, response.statusText)}`);
   }
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new CliRequestError(`Code Factory API returned an invalid response object${retryGuidance}`);
@@ -494,8 +556,30 @@ export async function runCodeFactoryCli(
   let endpoint: string;
   let method: 'GET' | 'POST' | 'DELETE' = 'POST';
   let body: Record<string, unknown> | undefined;
+  let upload: { data: Buffer<ArrayBuffer>; fileName: string; mediaType: string } | undefined;
   try {
-    if (command === 'pr register') {
+    if (command === 'artifact publish') {
+      help = ARTIFACT_PUBLISH_HELP;
+      if (writesHelp(args.slice(2))) {
+        runtime.writeOut(`${help}\n`);
+        return 0;
+      }
+      apiBaseUrl(runtime.environment);
+      const values = parseOptions(args.slice(2), help, {
+        path: { type: 'string' }, name: { type: 'string' }, 'media-type': { type: 'string' },
+      });
+      const path = required(values.path as string | undefined, '--path', help);
+      if (!isAbsolute(path) || path.includes('\0')) throw new CliUsageError('--path must be an absolute host file path', help);
+      const requirementId = required(runtime.environment[CODE_FACTORY_REQUIREMENT_ID], CODE_FACTORY_REQUIREMENT_ID, help);
+      const sessionId = required(runtime.environment[CODE_FACTORY_SESSION_ID], CODE_FACTORY_SESSION_ID, help);
+      const mediaType = (values['media-type'] as string | undefined) ?? 'application/octet-stream';
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*\/[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*$/.test(mediaType) || mediaType.length > 100) {
+        throw new CliUsageError('--media-type must be a MIME type without parameters', help);
+      }
+      const fileName = values.name === undefined ? basename(path) : required(values.name as string, '--name', help);
+      endpoint = `/agent/requirements/${encodeURIComponent(requirementId)}/artifacts?sourceSessionId=${encodeURIComponent(sessionId)}`;
+      upload = { data: await readArtifactFile(path, runtime.requestAbortSignal), fileName, mediaType };
+    } else if (command === 'pr register') {
       help = PR_REGISTER_HELP;
       if (writesHelp(args.slice(2))) {
         runtime.writeOut(`${help}\n`);
@@ -617,7 +701,7 @@ export async function runCodeFactoryCli(
     } else {
       throw new CliUsageError(`Unknown command: ${args.join(' ')}`, HELP);
     }
-    const result = await requestJson(runtime, `${apiBaseUrl(runtime.environment)}${endpoint}`, method, body);
+    const result = await requestJson(runtime, `${apiBaseUrl(runtime.environment)}${endpoint}`, method, body, upload);
     runtime.writeOut(`${JSON.stringify(result)}\n`);
     return 0;
   } catch (error) {

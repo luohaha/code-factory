@@ -700,6 +700,12 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     if (new Set(attachmentIds).size !== attachmentIds.length) throw new TypeError('attachmentIds must be unique');
     this.#db.exec('BEGIN IMMEDIATE');
     try {
+      for (const attachment of input.newAttachments ?? []) {
+        if (attachment.requirementId !== input.requirementId || !attachmentIds.includes(attachment.id)) {
+          throw new TypeError('New attachments must belong to and be bound to this message');
+        }
+        this.createMessageAttachment(attachment);
+      }
       for (const attachmentId of attachmentIds) {
         const attachment = this.#db.prepare(`SELECT requirement_id, message_id FROM message_attachments
           WHERE id = ?`).get(attachmentId) as Row | undefined;

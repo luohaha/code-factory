@@ -69,6 +69,14 @@ code-factory-cli timer cancel --help
 
 `pr register` registers a newly created PR or refreshes metadata changed by the RD Agent. `requirement propose` records separate follow-up work as a linked TODO Requirement; `requirement action` starts, stops, deletes, or completes that proposal through the normal Requirement state machine. `requirement related` lists direct parent and child Requirements; `requirement message` can address any other Requirement's RD Agent by known ID. `timer register` registers a one-time wake-up by default or a recurring one with `--repeat`; `timer show` recovers timer IDs and statuses for the current Requirement; `timer cancel` stops an active timer. The commands print the Agent API JSON response on stdout. Exit code `0` means success, `2` means invalid input or missing context, and `1` means an execution, network, HTTP, or response-format failure. Errors go to stderr. API requests and GitHub lookups time out after 30 seconds; writes are never automatically retried. A timeout or invalid response can occur after the server commits a write: inspect the Requirement before retrying, especially when proposing or managing follow-up work.
 
+All RD providers can publish a generated file to their Requirement conversation for remote browser download:
+
+```bash
+code-factory-cli artifact publish --path /absolute/path/report.csv --name report.csv --media-type text/csv
+```
+
+`--path` is an absolute host path to a non-empty regular file of at most 20 MB. `--name` and `--media-type` are optional. The CLI transfers raw bytes with bounded reads and returns only attachment metadata and a relative download path; it never prints file contents or host storage paths. The dashboard resolves download links against its Manager URL, including remote HTTPS origins. Publication creates a persisted RD attachment message without delivering it back to RD or starting another Run, reuses attachment retention, and preserves the original file. Do not read or encode the artifact into model context or publish credentials. Native RD Agents use the equivalent `artifact_publish` tool, including after `sandbox_download` for E2B results. A transport failure may follow a committed publication; inspect the conversation before retrying.
+
 Prefer registration from an explicit PR URL, using the authenticated local `gh` CLI:
 
 ```bash
