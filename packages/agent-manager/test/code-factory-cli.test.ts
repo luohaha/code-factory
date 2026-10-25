@@ -11,9 +11,9 @@ import {
   CODE_FACTORY_SESSION_ID,
   type CodeFactoryCliRuntime,
   runCodeFactoryCli,
-} from '../src/code-factory-cli.ts';
-import { installCodeFactoryCliLauncher } from '../src/code-factory-cli-launcher.ts';
-import { CODE_FACTORY_VERSION } from '../src/version.ts';
+} from '../src/cli/code-factory-cli.ts';
+import { installCodeFactoryCliLauncher } from '../src/cli/code-factory-cli-launcher.ts';
+import { CODE_FACTORY_VERSION } from '../src/infrastructure/version.ts';
 
 interface CapturedRequest {
   url: string;

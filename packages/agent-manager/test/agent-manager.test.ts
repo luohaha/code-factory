@@ -5,27 +5,27 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 
-import type { AgentTrigger, AgentTriggerContext, AgentTriggerMessage } from '../src/agent-trigger.ts';
-import { AgentManager, MAX_HANDOFF_PROMPT_CHARS } from '../src/agent-manager.ts';
-import { DEFAULT_AGENT_MANAGER_CONFIGURATION } from '../src/configuration.ts';
+import type { AgentTrigger, AgentTriggerContext, AgentTriggerMessage } from '../src/triggers/agent-trigger.ts';
+import { AgentManager, MAX_HANDOFF_PROMPT_CHARS } from '../src/core/agent-manager.ts';
+import { DEFAULT_AGENT_MANAGER_CONFIGURATION } from '../src/infrastructure/configuration.ts';
 import {
   CODE_FACTORY_API_URL,
   CODE_FACTORY_REQUIREMENT_ID,
   CODE_FACTORY_SESSION_ID,
-} from '../src/code-factory-cli.ts';
-import type { GitHubClient, GitHubPullRequestSnapshot } from '../src/github-client.ts';
-import { silentLogger } from '../src/logger.ts';
-import { NativeAgentService, type NativeRunInput } from '../src/native-agent.ts';
-import type { AgentProcessRunner, ProcessRunRequest } from '../src/process-runner.ts';
+} from '../src/cli/code-factory-cli.ts';
+import type { GitHubClient, GitHubPullRequestSnapshot } from '../src/triggers/github/github-client.ts';
+import { silentLogger } from '../src/infrastructure/logger.ts';
+import { NativeAgentService, type NativeRunInput } from '../src/runtime/native-agent.ts';
+import type { AgentProcessRunner, ProcessRunRequest } from '../src/runtime/process-runner.ts';
 import {
   PULL_REQUEST_CI_FAILURE_TRIGGER_ID,
   PULL_REQUEST_COMMENT_TRIGGER_ID,
   PULL_REQUEST_CONFLICT_TRIGGER_ID,
   PULL_REQUEST_STATUS_TRIGGER_ID,
-} from '../src/pull-request-triggers.ts';
-import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
-import { TIMER_AGENT_TRIGGER_ID } from '../src/timer-agent-trigger.ts';
-import type { PullRequest, RunOutcome } from '../src/types.ts';
+} from '../src/triggers/github/pull-request-triggers.ts';
+import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.ts';
+import { TIMER_AGENT_TRIGGER_ID } from '../src/triggers/timer-agent-trigger.ts';
+import type { PullRequest, RunOutcome } from '../src/core/types.ts';
 
 class DeferredRunner implements AgentProcessRunner {
   requests: ProcessRunRequest[] = [];

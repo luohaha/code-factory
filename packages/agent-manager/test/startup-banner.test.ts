@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { formatStartupBanner } from '../src/startup-banner.ts';
+import { formatStartupBanner } from '../src/cli/startup-banner.ts';
 
 test('startup banner always exposes workspace paths and service URLs', () => {
   assert.equal(formatStartupBanner({

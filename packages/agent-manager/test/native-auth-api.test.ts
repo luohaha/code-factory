@@ -5,11 +5,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 
-import { AgentManager } from '../src/agent-manager.js';
-import { NativeProfileStore, nativeAuthDatabasePath, profileModel } from '../src/native-auth.js';
-import { createLogger } from '../src/logger.js';
-import { createAgentManagerServer } from '../src/server.js';
-import { SqliteAgentManagerStore } from '../src/sqlite-store.js';
+import { AgentManager } from '../src/core/agent-manager.js';
+import { NativeProfileStore, nativeAuthDatabasePath, profileModel } from '../src/runtime/native-auth.js';
+import { createLogger } from '../src/infrastructure/logger.js';
+import { createAgentManagerServer } from '../src/http/server.js';
+import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.js';
 
 test('Native API profiles are saved without exposing keys and selected by requirements', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-native-auth-api-'));

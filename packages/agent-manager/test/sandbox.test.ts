@@ -6,11 +6,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { AgentManager } from '../src/agent-manager.js';
-import { createLogger } from '../src/logger.js';
-import { createAgentManagerServer } from '../src/server.js';
-import { SqliteAgentManagerStore } from '../src/sqlite-store.js';
-import type { AgentProcessRunner, ProcessRunRequest } from '../src/process-runner.js';
+import { AgentManager } from '../src/core/agent-manager.js';
+import { createLogger } from '../src/infrastructure/logger.js';
+import { createAgentManagerServer } from '../src/http/server.js';
+import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.js';
+import type { AgentProcessRunner, ProcessRunRequest } from '../src/runtime/process-runner.js';
 
 test('local execution uses the managed workspace without creating a sandbox worktree', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-sandbox-'));

@@ -1,21 +1,31 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
+import { getCurrentSystemPrompt, getCurrentTools } from '@earendil-works/pi-ai';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import { CommandExitError, FileType } from 'e2b';
 import type { SandboxInfo, SandboxOpts } from 'e2b';
 
-import { E2BExecutionEnv, E2BSandboxService, type E2BClient, type E2BHandle } from '../src/e2b-execution-env.js';
-import { NativeAgentService } from '../src/native-agent.js';
+import { E2BExecutionEnv, E2BSandboxService, type E2BClient, type E2BHandle } from '../src/runtime/e2b-execution-env.js';
+import { NativeAgentService } from '../src/runtime/native-agent.js';
 
-function fakeSdk(defaultDirectory = '/home/user') {
+const codingToolNames = ['read', 'write', 'edit', 'bash'];
+const controlToolNames = ['pr_register', 'requirement_propose', 'requirement_action',
+  'requirement_related', 'requirement_message', 'timer_register', 'timer_show', 'timer_cancel'];
+const sandboxToolNames = ['sandbox_status', 'sandbox_pause', 'sandbox_resume', 'sandbox_upload', 'sandbox_download'];
+
+function fakeSdk(defaultDirectory = '/home/user', before: {
+  connect?: (signal?: AbortSignal) => Promise<void>;
+  discover?: (signal?: AbortSignal) => Promise<void>;
+} = {}) {
   const data = new Map<string, Uint8Array>();
   const commands: Array<{ command: string; cwd: string | undefined; hasCwd: boolean; envs: Record<string, string> | undefined }> = [];
   const decoder = new TextDecoder();
@@ -26,9 +36,14 @@ function fakeSdk(defaultDirectory = '/home/user') {
       async read(path: string, options?: { format?: string }) {
         const content = data.get(path);
         if (!content) throw new Error(`Missing ${path}`);
+        if (options?.format === 'stream') return new ReadableStream({ start(controller) { controller.enqueue(content); controller.close(); } });
         return options?.format === 'bytes' ? content : decoder.decode(content);
       },
-      async write(path: string, value: string | ArrayBuffer) {
+      async write(path: string, value: string | ArrayBuffer | ReadableStream<Uint8Array>) {
+        if (value instanceof ReadableStream) {
+          data.set(path, new Uint8Array(await new Response(value).arrayBuffer()));
+          return;
+        }
         data.set(path, typeof value === 'string' ? encoder.encode(value) : new Uint8Array(value));
       },
       async exists(path: string) { return data.has(path); },
@@ -51,10 +66,13 @@ function fakeSdk(defaultDirectory = '/home/user') {
     commands: {
       async run(command: string, options: {
         cwd?: string; envs?: Record<string, string>; onStdout?: (value: string) => void;
-        onStderr?: (value: string) => void; background?: boolean;
+        onStderr?: (value: string) => void; background?: boolean; signal?: AbortSignal;
       }) {
         commands.push({ command, cwd: options.cwd, hasCwd: Object.hasOwn(options, 'cwd'), envs: options.envs });
-        if (command === 'pwd') return { exitCode: 0, stdout: `${defaultDirectory}\n`, stderr: '' };
+        if (command === 'pwd') {
+          await before.discover?.(options.signal);
+          return { exitCode: 0, stdout: `${defaultDirectory}\n`, stderr: '' };
+        }
         if (options.background) {
           const path = command.match(/ > '([^']+)' 2>&1$/)?.[1];
           assert(path);
@@ -81,6 +99,7 @@ function fakeSdk(defaultDirectory = '/home/user') {
     async connect(id, options) {
       assert.equal(id, 'e2b-test-123');
       assert.equal(options.apiKey, 'test-key');
+      await before.connect?.(options.signal);
       return handle;
     },
     async getInfo(id) { return { sandboxId: id, state: 'paused' } as SandboxInfo; },
@@ -89,6 +108,195 @@ function fakeSdk(defaultDirectory = '/home/user') {
   };
   return { handle, client, data, commands, get createOptions() { return createOptions; } };
 }
+
+for (const role of ['rd', 'reviewer'] as const) {
+  for (const stage of ['connect', 'discover'] as const) {
+    test(`Native ${role} timeout cancels lazy E2B ${stage}`, async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'code-factory-e2b-lazy-cancel-'));
+      let receivedSignal: AbortSignal | undefined;
+      let providerCompleted = false;
+      const sdk = fakeSdk('/home/user', { [stage]: async (signal?: AbortSignal) => {
+        receivedSignal = signal;
+        // The fallback bounds a regression without requiring wall-clock assertions.
+        await delay(1_000, undefined, signal ? { signal } : {});
+        providerCompleted = true;
+      } });
+      const faux = fauxProvider();
+      const models = createModels();
+      models.setProvider(faux.provider);
+      faux.setResponses([fauxAssistantMessage(fauxToolCall('bash', { command: 'echo must-not-run' }), { stopReason: 'toolUse' })]);
+      const service = new NativeAgentService(join(directory, 'native.sqlite'), models, new E2BSandboxService(sdk.client));
+      const controller = new AbortController();
+      try {
+        const outcome = await service.run({ role, requirementId: 'req_lazy_cancel', sessionId: 'ses_lazy_cancel',
+          nativeSessionId: null, prompt: 'Use remote tools', model: 'faux/faux-1', reasoningEffort: null, cwd: directory,
+          sandbox: { kind: 'e2b', providerSandboxId: 'e2b-test-123', cwd: null,
+            credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: false },
+          environment: {}, instructions: 'Test', signal: controller.signal, timeoutMs: 300, timeoutMode: 'elapsed',
+          onNativeSession: () => undefined, onEvent: () => undefined });
+        assert.equal(outcome.status, 'timed_out');
+        assert.equal(controller.signal.aborted, false, 'the Harness timeout must supply cancellation independently of Stop Run');
+        assert.equal(receivedSignal?.aborted, true);
+        assert.equal(providerCompleted, false);
+        assert(sdk.commands.every((entry) => entry.command === 'pwd'));
+        if (stage === 'connect') assert.deepEqual(sdk.commands, []);
+      } finally { await service.close(); await rm(directory, { recursive: true, force: true }); }
+    });
+  }
+}
+
+test('only E2B RD Runs offer sandbox tools; Default, named local, and Reviewer tools stay scoped', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-native-tool-scope-'));
+  const namedDirectory = join(directory, 'named-local');
+  await mkdir(namedDirectory);
+  const sdk = fakeSdk();
+  let connections = 0;
+  const e2b = new E2BSandboxService({ ...sdk.client, connect: async (id, options) => {
+    connections++;
+    return sdk.client.connect(id, options);
+  } });
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const service = new NativeAgentService(join(directory, 'native.sqlite'), models, e2b);
+  const scenarios: Array<{ role: 'rd' | 'reviewer'; remote: boolean; cwd: string }> = [
+    { role: 'rd', remote: false, cwd: directory },
+    { role: 'rd', remote: true, cwd: directory },
+    { role: 'rd', remote: false, cwd: namedDirectory },
+    { role: 'reviewer', remote: false, cwd: directory },
+    { role: 'reviewer', remote: true, cwd: directory },
+  ];
+  try {
+    for (const [index, scenario] of scenarios.entries()) {
+      let offered: string[] = [];
+      let prompt = '';
+      faux.setResponses([(context) => {
+        offered = getCurrentTools(context.messages).map((tool) => tool.name);
+        prompt = getCurrentSystemPrompt(context.messages);
+        return fauxAssistantMessage('Inspected tool list');
+      }]);
+      const outcome = await service.run({ role: scenario.role,
+        requirementId: `req_scope_${index}`, sessionId: `ses_scope_${index}`, nativeSessionId: null,
+        prompt: 'Inspect available tools', model: 'faux/faux-1', reasoningEffort: null, cwd: scenario.cwd,
+        ...(scenario.remote ? { sandbox: { kind: 'e2b' as const, providerSandboxId: 'e2b-test-123', cwd: null,
+          credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: false } } : {}),
+        environment: {}, instructions: 'Test', signal: new AbortController().signal, timeoutMs: 30_000,
+        onNativeSession: () => undefined, onEvent: () => undefined });
+      assert.equal(outcome.status, 'succeeded');
+      const expected = scenario.role === 'reviewer' ? ['read', 'bash']
+        : [...codingToolNames, ...controlToolNames, ...(scenario.remote ? sandboxToolNames : [])];
+      assert.deepEqual(offered.sort(), expected.sort(), JSON.stringify(scenario));
+      assert.equal(prompt.includes('Use sandbox_upload for host attachment paths'), scenario.remote && scenario.role === 'rd');
+    }
+    assert.equal(connections, 0, 'selecting tools must not connect to E2B');
+    assert.deepEqual(sdk.commands, []);
+  } finally { await service.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('resumed Native conversations select sandbox tools from the current workspace after service reopen', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-native-tool-resume-'));
+  const sdk = fakeSdk();
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const databasePath = join(directory, 'native.sqlite');
+  let service = new NativeAgentService(databasePath, models, new E2BSandboxService(sdk.client));
+  let nativeSessionId: string | null = null;
+  try {
+    for (const remote of [true, false, true, false]) {
+      let offered: string[] = [];
+      let prompt = '';
+      faux.setResponses([(context) => {
+        offered = getCurrentTools(context.messages).map((tool) => tool.name);
+        prompt = getCurrentSystemPrompt(context.messages);
+        return fauxAssistantMessage('Workspace tools refreshed');
+      }]);
+      const outcome = await service.run({ requirementId: 'req_scope_resume', sessionId: 'ses_scope_resume',
+        nativeSessionId, prompt: 'Use the current workspace', model: 'faux/faux-1', reasoningEffort: null, cwd: directory,
+        ...(remote ? { sandbox: { kind: 'e2b' as const, providerSandboxId: 'e2b-test-123', cwd: null,
+          credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: false } } : {}),
+        environment: {}, instructions: 'Test', signal: new AbortController().signal, timeoutMs: 30_000,
+        onNativeSession: () => undefined, onEvent: () => undefined });
+      assert.equal(outcome.status, 'succeeded');
+      assert(outcome.nativeSessionId);
+      if (nativeSessionId) assert.equal(outcome.nativeSessionId, nativeSessionId);
+      nativeSessionId = outcome.nativeSessionId;
+      assert.deepEqual(offered.sort(), [...codingToolNames, ...controlToolNames, ...(remote ? sandboxToolNames : [])].sort());
+      assert.equal(prompt.includes('Use sandbox_upload for host attachment paths'), remote);
+      await service.close();
+      service = new NativeAgentService(databasePath, models, new E2BSandboxService(sdk.client));
+    }
+    assert.deepEqual(sdk.commands, []);
+  } finally { await service.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('native sandbox transfer tools move binary attachments between host and remote paths', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-e2b-transfer-'));
+  const sdk = fakeSdk('/home/custom');
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const localPath = join(directory, 'attachment.bin');
+  const downloaded = join(directory, 'output', 'result.bin');
+  const binary = Buffer.from([0, 255, 128, 10, 13, 0, 1]);
+  await writeFile(localPath, binary);
+  let transcript = '';
+  faux.setResponses([
+    fauxAssistantMessage(fauxToolCall('sandbox_upload', { localPath, remotePath: 'input/data.bin' }), { stopReason: 'toolUse' }),
+    fauxAssistantMessage(fauxToolCall('sandbox_download', { localPath: downloaded, remotePath: 'input/data.bin' }), { stopReason: 'toolUse' }),
+    (context) => { transcript = JSON.stringify(context.messages); return fauxAssistantMessage('File ready'); },
+  ]);
+  const service = new NativeAgentService(join(directory, 'native.sqlite'), models, new E2BSandboxService(sdk.client));
+  try {
+    const outcome = await service.run({ requirementId: 'req_transfer', sessionId: 'ses_transfer', nativeSessionId: null,
+      prompt: `Process host attachment ${localPath}`, model: 'faux/faux-1', reasoningEffort: null, cwd: directory,
+      sandbox: { kind: 'e2b', providerSandboxId: 'e2b-test-123', cwd: null,
+        credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: false },
+      environment: {}, instructions: 'Test', signal: new AbortController().signal, timeoutMs: 30_000,
+      onNativeSession: () => undefined, onEvent: () => undefined });
+    assert.equal(outcome.status, 'succeeded');
+    assert.deepEqual(await readFile(downloaded), binary);
+    assert.deepEqual(sdk.data.get('/home/custom/input/data.bin'), new Uint8Array(binary));
+    assert.match(transcript, /byteSize/);
+    assert.equal(transcript.includes('test-key'), false);
+    assert.equal(transcript.includes('"isError":true'), false);
+    assert.equal(existsSync(join(directory, 'input')), false);
+  } finally { await service.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('native transfer errors hide provider details and sandbox tools are unavailable in local workspaces', async () => {
+  for (const remote of [false, true]) {
+    const directory = await mkdtemp(join(tmpdir(), 'code-factory-e2b-tool-errors-'));
+    const sdk = fakeSdk();
+    sdk.handle.files.write = async () => { throw new Error('provider leaked test-key or file contents'); };
+    const faux = fauxProvider();
+    const models = createModels();
+    models.setProvider(faux.provider);
+    const localPath = join(directory, 'input');
+    await writeFile(localPath, 'private contents');
+    let transcript = '';
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall('sandbox_upload', { localPath, remotePath: '/input' }), { stopReason: 'toolUse' }),
+      ...(remote ? [] : [fauxAssistantMessage(fauxToolCall('sandbox_pause', {}), { stopReason: 'toolUse' })]),
+      (context) => { transcript = JSON.stringify(context.messages); return fauxAssistantMessage('Tool failed'); },
+    ]);
+    const service = new NativeAgentService(join(directory, 'native.sqlite'), models, new E2BSandboxService(sdk.client));
+    try {
+      const outcome = await service.run({ requirementId: 'req_errors', sessionId: 'ses_errors', nativeSessionId: null,
+        prompt: 'Try sandbox tools', model: 'faux/faux-1', reasoningEffort: null, cwd: directory,
+        ...(remote ? { sandbox: { kind: 'e2b' as const, providerSandboxId: 'e2b-test-123', cwd: null,
+          credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: false } } : {}),
+        environment: {}, instructions: 'Test', signal: new AbortController().signal, timeoutMs: 30_000,
+        onNativeSession: () => undefined, onEvent: () => undefined });
+      assert.equal(outcome.status, 'succeeded');
+      assert(transcript.includes('"isError":true'));
+      assert(transcript.includes(remote ? 'file upload failed' : 'Tool sandbox_upload is not available'));
+      if (!remote) assert(transcript.includes('Tool sandbox_pause is not available'));
+      assert.equal(transcript.includes('test-key'), false);
+      assert.equal(transcript.includes('private contents'), false);
+    } finally { await service.close(); await rm(directory, { recursive: true, force: true }); }
+  }
+});
 
 test('E2B service passes explicit credentials and durable lifecycle to SDK', async () => {
   const sdk = fakeSdk();
@@ -151,7 +359,7 @@ test('an unset E2B directory uses the SDK default for commands and relative file
   assert(sdk.data.has('/home/custom-user/note.txt'));
   await env.exec('echo hello', undefined, context);
   assert.equal(sdk.commands.at(-1)?.hasCwd, false);
-  // pi-durable's bash and gh_pr tools explicitly pass env.cwd.
+  // pi-durable's bash tool explicitly passes env.cwd.
   await env.exec('echo hello', { cwd: env.cwd }, context);
   assert.equal(sdk.commands.at(-1)?.hasCwd, false);
   const beforeSpill = sdk.commands.length;
@@ -292,7 +500,7 @@ for (const cwd of ['/home/user/repo', null]) {
       fauxAssistantMessage(fauxToolCall('write', { path: 'note.txt', content: 'before\n' }), { stopReason: 'toolUse' }),
       fauxAssistantMessage(fauxToolCall('edit', { path: 'note.txt', edits: [{ oldText: 'before', newText: 'after' }] }), { stopReason: 'toolUse' }),
       fauxAssistantMessage(fauxToolCall('read', { path: 'note.txt' }), { stopReason: 'toolUse' }),
-      fauxAssistantMessage(fauxToolCall('bash', { command: 'echo hello' }), { stopReason: 'toolUse' }),
+      fauxAssistantMessage(fauxToolCall('bash', { command: 'gh pr view --json title' }), { stopReason: 'toolUse' }),
       (context) => fauxAssistantMessage(JSON.stringify(context.messages).includes('after') ? 'Remote tools succeeded' : 'Missing remote edit'),
     ]);
     const service = new NativeAgentService(join(directory, 'native.sqlite'), models,
@@ -309,7 +517,7 @@ for (const cwd of ['/home/user/repo', null]) {
       assert.equal(outcome.status, 'succeeded');
       assert.equal(outcome.finalMessage, 'Remote tools succeeded');
       assert.equal(new TextDecoder().decode(sdk.data.get(`${cwd ?? '/home/user'}/note.txt`)), 'after\n');
-      assert(sdk.commands.some((entry) => entry.command.includes('echo hello') && entry.cwd === (cwd ?? undefined)));
+      assert(sdk.commands.some((entry) => entry.command.includes('gh pr view --json title') && entry.cwd === (cwd ?? undefined)));
       assert.equal(sdk.commands.some((entry) => entry.envs?.GH_TOKEN !== undefined), false);
       assert.equal(existsSync(join(directory, 'note.txt')), false);
     } finally {

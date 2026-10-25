@@ -5,7 +5,7 @@ interface PackageMetadata {
 }
 
 const packageMetadata: PackageMetadata = JSON.parse(
-  readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+  readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
 ) as PackageMetadata;
 
 if (typeof packageMetadata.version !== 'string' || !packageMetadata.version) {

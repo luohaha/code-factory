@@ -3,7 +3,7 @@ import type {
   AgentReasoningEffort,
   AgentTraceKind,
   AgentTraceStatus,
-} from '../types.js';
+} from '../../core/types.js';
 
 export interface AgentInvocation {
   command: string;
