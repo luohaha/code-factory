@@ -62,6 +62,7 @@ test('code-factory-cli help discovers the supported RD commands', async () => {
 
   assert.equal(exitCode, 0);
   assert.match(output.join(''), /pr register/);
+  assert.match(output.join(''), /artifact publish/);
   assert.match(output.join(''), /timer register/);
   assert.match(output.join(''), /timer show/);
   assert.match(output.join(''), /requirement propose/);

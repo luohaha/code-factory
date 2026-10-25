@@ -21,6 +21,8 @@ Each requirement has its own persistent agent context. Agents can split work int
 
 Native Agents using E2B can check, pause, and resume their selected sandbox and transfer files between the host and sandbox, including conversation attachments. Pausing preserves remote state while the Agent continues on the host.
 
+Codex, Claude Code, and Native RD Agents can explicitly publish generated files as conversation attachments. Remote browser users can download them from the conversation; file bytes stay outside model context during publication.
+
 Requirement details include collapsible tool calls with arguments, results, and execution status, plus a live working indicator. Both follow the dashboard's light/dark theme and English/Simplified Chinese language setting.
 
 ## How It Works
@@ -41,6 +43,8 @@ npx --package @luoyixin/code-factory code-factory-agent-manager start --daemon
 Open [http://127.0.0.1:4310](http://127.0.0.1:4310), create a requirement, and select an agent to begin. The startup directory becomes the default workspace; the dashboard is bundled with Agent Manager.
 
 Unsent conversation text and attachments return when you reopen a requirement or reload the dashboard in the same browser.
+
+E2B sandbox creation defaults to the `e2b.app` domain when left blank and connects an execution environment without preparing a repository; the Native Agent chooses and clones the task repository when needed. Optional sandbox environment variables supply tokens and build settings to Native Agent commands. See the [Native Agent guide](docs/native-agent.md).
 
 Headless agents inherit your filesystem, network, and command permissions. Run Code Factory in trusted repositories and limit dashboard access to trusted users.
 

@@ -16,9 +16,13 @@ import type { SandboxInfo, SandboxOpts } from 'e2b';
 
 import { E2BExecutionEnv, E2BSandboxService, type E2BClient, type E2BHandle } from '../src/runtime/e2b-execution-env.js';
 import { NativeAgentService } from '../src/runtime/native-agent.js';
+import { AgentManager } from '../src/core/agent-manager.js';
+import { createAgentManagerServer } from '../src/http/server.js';
+import { silentLogger } from '../src/infrastructure/logger.js';
+import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.js';
 
 const codingToolNames = ['read', 'write', 'edit', 'bash'];
-const controlToolNames = ['pr_register', 'requirement_propose', 'requirement_action',
+const controlToolNames = ['artifact_publish', 'pr_register', 'requirement_propose', 'requirement_action',
   'requirement_related', 'requirement_message', 'timer_register', 'timer_show', 'timer_cancel'];
 const sandboxToolNames = ['sandbox_status', 'sandbox_pause', 'sandbox_resume', 'sandbox_upload', 'sandbox_download'];
 
@@ -230,7 +234,7 @@ test('resumed Native conversations select sandbox tools from the current workspa
   } finally { await service.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
-test('native sandbox transfer tools move binary attachments between host and remote paths', async () => {
+test('native sandbox downloads can be explicitly published as browser attachments without model-visible bytes', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'code-factory-e2b-transfer-'));
   const sdk = fakeSdk('/home/custom');
   const faux = fauxProvider();
@@ -238,30 +242,54 @@ test('native sandbox transfer tools move binary attachments between host and rem
   models.setProvider(faux.provider);
   const localPath = join(directory, 'attachment.bin');
   const downloaded = join(directory, 'output', 'result.bin');
-  const binary = Buffer.from([0, 255, 128, 10, 13, 0, 1]);
+  const binary = Buffer.from('BINARY_ARTIFACT_CONTENT_STAYS_OUT_OF_CONTEXT\0\xff', 'latin1');
   await writeFile(localPath, binary);
+  const manager = new AgentManager({ workspaceRoot: directory, store: new SqliteAgentManagerStore(':memory:'),
+    attachmentDirectory: join(directory, 'published'), logger: silentLogger });
+  const requirement = manager.createRequirement({ title: 'Publish sandbox result', description: 'Share a binary output', provider: 'native-agent' });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+  const url = `http://127.0.0.1:${address.port}`;
   let transcript = '';
   faux.setResponses([
     fauxAssistantMessage(fauxToolCall('sandbox_upload', { localPath, remotePath: 'input/data.bin' }), { stopReason: 'toolUse' }),
     fauxAssistantMessage(fauxToolCall('sandbox_download', { localPath: downloaded, remotePath: 'input/data.bin' }), { stopReason: 'toolUse' }),
+    fauxAssistantMessage(fauxToolCall('artifact_publish', { localPath: downloaded, fileName: '沙箱结果.bin' }), { stopReason: 'toolUse' }),
     (context) => { transcript = JSON.stringify(context.messages); return fauxAssistantMessage('File ready'); },
   ]);
   const service = new NativeAgentService(join(directory, 'native.sqlite'), models, new E2BSandboxService(sdk.client));
   try {
-    const outcome = await service.run({ requirementId: 'req_transfer', sessionId: 'ses_transfer', nativeSessionId: null,
+    const outcome = await service.run({ requirementId: requirement.id, sessionId: requirement.session.id, nativeSessionId: null,
       prompt: `Process host attachment ${localPath}`, model: 'faux/faux-1', reasoningEffort: null, cwd: directory,
       sandbox: { kind: 'e2b', providerSandboxId: 'e2b-test-123', cwd: null,
         credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: false },
-      environment: {}, instructions: 'Test', signal: new AbortController().signal, timeoutMs: 30_000,
+      environment: { CODE_FACTORY_API_URL: `${url}/api`, CODE_FACTORY_REQUIREMENT_ID: requirement.id,
+        CODE_FACTORY_SESSION_ID: requirement.session.id }, instructions: 'Test', signal: new AbortController().signal, timeoutMs: 30_000,
       onNativeSession: () => undefined, onEvent: () => undefined });
     assert.equal(outcome.status, 'succeeded');
     assert.deepEqual(await readFile(downloaded), binary);
     assert.deepEqual(sdk.data.get('/home/custom/input/data.bin'), new Uint8Array(binary));
     assert.match(transcript, /byteSize/);
     assert.equal(transcript.includes('test-key'), false);
+    assert.equal(transcript.includes('BINARY_ARTIFACT_CONTENT'), false);
+    assert.equal(transcript.includes(binary.toString('base64')), false);
+    assert.match(transcript, /downloadPath/);
     assert.equal(transcript.includes('"isError":true'), false);
     assert.equal(existsSync(join(directory, 'input')), false);
-  } finally { await service.close(); await rm(directory, { recursive: true, force: true }); }
+    const message = manager.listMessages(requirement.id)[0]!;
+    assert.equal(message.author, 'rd_agent');
+    assert.equal(message.deliverToRd, false);
+    assert.equal(message.attachments[0]?.fileName, '沙箱结果.bin');
+    const response = await fetch(`${url}/api/attachments/${message.attachments[0]!.id}?download=1`);
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), binary);
+  } finally {
+    await service.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('native transfer errors hide provider details and sandbox tools are unavailable in local workspaces', async () => {
@@ -526,3 +554,55 @@ for (const cwd of ['/home/user/repo', null]) {
     }
   });
 }
+
+test('Native commands receive configured variables and refresh them on resume without persisting values', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-e2b-env-run-'));
+  const sdk = fakeSdk();
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const service = new NativeAgentService(join(directory, 'native.sqlite'), models, new E2BSandboxService(sdk.client));
+  const savedToken = process.env.GH_TOKEN;
+  const savedGithubToken = process.env.GITHUB_TOKEN;
+  process.env.GH_TOKEN = 'host-token-must-not-win';
+  delete process.env.GITHUB_TOKEN;
+  let nativeSessionId: string | null = null;
+  try {
+    for (const environmentVariables of [{ GITHUB_TOKEN: 'configured-runtime-token', CUSTOM: 'configured-runtime-value' }, {}]) {
+      faux.setResponses([
+        fauxAssistantMessage(fauxToolCall('bash', { command: 'use configured environment' }), { stopReason: 'toolUse' }),
+        fauxAssistantMessage('Done'),
+      ]);
+      const outcome = await service.run({ requirementId: 'req_env', sessionId: 'ses_env', nativeSessionId,
+        prompt: 'Use the remote environment', model: 'faux/faux-1', reasoningEffort: null, cwd: '/home/user/repo',
+        sandbox: { kind: 'e2b', providerSandboxId: 'e2b-test-123', cwd: null,
+          credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: true, environmentVariables },
+        environment: {}, instructions: 'Test', signal: new AbortController().signal, timeoutMs: 30_000,
+        onNativeSession: (id) => { nativeSessionId = id; }, onEvent: () => undefined });
+      assert.equal(outcome.status, 'succeeded');
+      const command = sdk.commands.findLast((entry) => entry.command.includes('use configured environment'));
+      assert(command);
+      assert.equal(command.cwd, undefined);
+      if (environmentVariables.GITHUB_TOKEN) {
+        assert.equal(command.envs?.GITHUB_TOKEN, 'configured-runtime-token');
+        assert.equal(command.envs?.CUSTOM, 'configured-runtime-value');
+        assert.equal(command.envs?.GH_TOKEN, undefined);
+      } else {
+        assert.equal(command.envs?.GITHUB_TOKEN, undefined);
+        assert.equal(command.envs?.CUSTOM, undefined);
+        assert.equal(command.envs?.GH_TOKEN, 'host-token-must-not-win');
+      }
+    }
+  } finally {
+    await service.close();
+    if (savedToken === undefined) delete process.env.GH_TOKEN;
+    else process.env.GH_TOKEN = savedToken;
+    if (savedGithubToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = savedGithubToken;
+    try {
+      const database = await readFile(join(directory, 'native.sqlite'));
+      assert.equal(database.includes('configured-runtime-token'), false);
+      assert.equal(database.includes('configured-runtime-value'), false);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  }
+});

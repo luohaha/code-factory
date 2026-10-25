@@ -87,7 +87,9 @@ export interface SandboxDto {
   credentialEnvVar: string | null;
   domain: string | null;
   credentialRef: string | null;
+  /** Legacy repository metadata; newly created sandboxes are not bound to a repository. */
   repositoryUrl: string | null;
+  environmentVariableNames?: string[];
   template: string | null;
   status: 'running' | 'paused' | 'terminated' | 'unreachable' | 'unknown';
   checkedAt: string | null;
@@ -282,11 +284,13 @@ export interface RequirementActionAcceptedDto {
 }
 
 export class AgentManagerApiError extends Error {
+  readonly status: number;
   constructor(
     message: string,
-    readonly status: number,
+    status: number,
   ) {
     super(message);
+    this.status = status;
   }
 }
 
@@ -439,13 +443,13 @@ export class AgentManagerClient {
     return this.request('/api/sandboxes', { method: 'POST', body: JSON.stringify({ kind: 'local', ...input }) });
   }
 
-  createSandbox(input: { name: string; domain: string; apiKey: string;
-    providerSandboxId?: string; template?: string }): Promise<SandboxDto> {
+  createSandbox(input: { name: string; domain?: string; apiKey: string;
+    providerSandboxId?: string; template?: string; environmentVariables?: Record<string, string | null> }): Promise<SandboxDto> {
     return this.request('/api/sandboxes', { method: 'POST', body: JSON.stringify({ kind: 'e2b', ...input }) });
   }
 
   updateWorkspace(id: string, input: { name?: string; cwd?: string; domain?: string;
-    apiKey?: string }): Promise<SandboxDto> {
+    apiKey?: string; environmentVariables?: Record<string, string | null> }): Promise<SandboxDto> {
     return this.request(`/api/sandboxes/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) });
   }
 
@@ -526,8 +530,8 @@ export class AgentManagerClient {
     return body as MessageAttachmentDto;
   }
 
-  attachmentUrl(id: string): string {
-    return `${this.baseUrl}/api/attachments/${encodeURIComponent(id)}`;
+  attachmentUrl(id: string, download = false): string {
+    return `${this.baseUrl}/api/attachments/${encodeURIComponent(id)}${download ? '?download=1' : ''}`;
   }
 
   requestReview(id: string, configuration: AgentConfiguration): Promise<{

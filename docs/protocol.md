@@ -82,6 +82,8 @@ Only Open PRs can be reviewed. Each request captures the current head SHA, and a
 
 RD developer/system instructions name the relevant `code-factory-cli` commands rather than embedding this HTTP schema. Agent Manager injects the API base URL, Requirement ID, and Session ID as CLI environment context. The commands below remain the canonical transport protocol used by the CLI and other integrations.
 
+`code-factory-cli artifact publish` (or Native `artifact_publish`) posts raw output bytes to `POST /api/agent/requirements/:id/artifacts?sourceSessionId=<id>`. The Manager atomically creates an attachment and an `rd_agent` message with `deliverToRd=false`, then emits the existing `message.created` event. Publication never queues another RD Run. The receipt includes only public metadata and a relative download path; browser clients use their configured Manager origin. `GET /api/attachments/:id?download=1` forces a file download for every type, including previewable images. Ordinary attachment validation and retention apply. See the [artifact API contract](agent-manager-api.md#post-apiagentrequirementsidartifacts).
+
 Register or update a PR:
 
 ~~~http

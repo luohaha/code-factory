@@ -41,7 +41,7 @@ export interface NativeRunInput {
   reasoningEffort: AgentReasoningEffort | null;
   cwd: string;
   sandbox?: { kind: 'e2b'; providerSandboxId: string; credentials: E2BCredentials;
-    cwd?: string | null; forwardGitHubToken: boolean;
+    cwd?: string | null; forwardGitHubToken: boolean; environmentVariables?: Readonly<Record<string, string>>;
     control?: (action: NativeSandboxAction, signal?: AbortSignal) => Promise<NativeSandboxState> };
   environment: Readonly<Record<string, string>>;
   instructions: string;
@@ -63,6 +63,7 @@ export class NativeAgentService {
   #profiles: NativeProfileStore | null = null;
   readonly #e2b: E2BSandboxService;
   readonly #environments = new Map<ConversationId, Readonly<Record<string, string>>>();
+  readonly #signals = new Map<ConversationId, AbortSignal>();
   readonly #sandboxes = new Map<ConversationId, NonNullable<NativeRunInput['sandbox']> & { signal: AbortSignal }>();
   readonly #sandboxEnvs = new Map<ConversationId, DeferredExecutionEnv>();
   readonly #sandboxHandles = new Map<ConversationId, Promise<E2BHandle>>();
@@ -108,11 +109,12 @@ export class NativeAgentService {
     this.#profiles = new NativeProfileStore(nativeAuthDatabasePath(this.#databasePath));
     const registry = createRegistry();
     registry.install(CodingTools);
-    const invokeCli = async (args: string[], conversationId: ConversationId): Promise<string> => {
+    const invokeCli = async (args: string[], conversationId: ConversationId, signal?: AbortSignal): Promise<string> => {
       let stdout = '';
       let stderr = '';
       const status = await runCodeFactoryCli(args, {
         environment: { ...process.env, ...this.#environments.get(conversationId) },
+        ...(signal ? { requestAbortSignal: signal } : {}),
         writeOut: (value) => { stdout += value; },
         writeError: (value) => { stderr += value; },
         runGitHub: async (ghArgs) => (await execFileAsync('gh', ghArgs, { timeout: 30_000, maxBuffer: 1024 * 1024 })).stdout,
@@ -121,6 +123,17 @@ export class NativeAgentService {
       return stdout;
     };
     const output = (text: string) => ({ content: [{ type: 'text' as const, text }] });
+    const artifactPublish = defineTool({ name: 'artifact_publish',
+      description: 'Explicitly publish a non-empty regular host file (at most 20 MB) as an RD conversation attachment for remote browser download. localPath is an absolute Agent Manager host path. For E2B output, sandbox_download first. Transfers bytes outside model context and returns only metadata and a relative download path. Never publish credentials or secrets.',
+      parameters: Type.Object({ localPath: Type.String(), fileName: Type.Optional(Type.String()), mediaType: Type.Optional(Type.String()) }),
+      execute: async ({ localPath, fileName, mediaType }, api, context) => {
+        const signal = this.#signals.get(api.conversationId);
+        const operation = signal ? withAbortSignal(signal, context) : context;
+        return output(await invokeCli(['artifact', 'publish', '--path', localPath,
+          ...(fileName === undefined ? [] : ['--name', fileName]),
+          ...(mediaType === undefined ? [] : ['--media-type', mediaType])], api.conversationId, operation.abortSignal));
+      },
+    });
     const prRegister = defineTool({ name: 'pr_register',
       description: 'Register a GitHub pull request immediately after creation, or refresh its metadata after your own push or edit. The reconciler owns lifecycle state.',
       parameters: Type.Object({ url: Type.String() }),
@@ -204,8 +217,8 @@ export class NativeAgentService {
       execute: async ({ localPath, remotePath, overwrite }, api, context) => transfer('download', localPath, remotePath, overwrite ?? false, api.conversationId, api.env, context) });
     registry.install(defineExtension({
       ...CodeFactoryExtension,
-      tools: [prRegister, propose, action, related, message, timerRegister, timerShow, timerCancel],
-      sections: [section('code-factory', () => 'You are this Requirement’s long-lived RD Agent. Use bash to run GitHub CLI commands. Use the Code Factory tools to register PRs, propose TODO follow-ups, message other Requirement agents by ID, and manage timers. Humans confirm completion.'),
+      tools: [artifactPublish, prRegister, propose, action, related, message, timerRegister, timerShow, timerCancel],
+      sections: [section('code-factory', () => 'You are this Requirement’s long-lived RD Agent. Use bash to run GitHub CLI commands. Use the Code Factory tools to publish artifacts for browser download, register PRs, propose TODO follow-ups, message other Requirement agents by ID, and manage timers. Humans confirm completion.'),
         section('workspace', (input) => input.env?.cwd)],
     }));
     registry.install(defineExtension({
@@ -226,9 +239,11 @@ export class NativeAgentService {
             env = new DeferredExecutionEnv(`e2b:${sandbox.credentials.domain}:${sandbox.providerSandboxId}`, directory ?? '', async (context) => {
               const operation = withAbortSignal(sandbox.signal, context);
               const handle = await this.#sandboxHandle(conversationId, operation);
-              const commandEnv = Object.fromEntries((sandbox.forwardGitHubToken ? ['GH_TOKEN', 'GITHUB_TOKEN'] : [])
+              const configured = sandbox.environmentVariables ?? {};
+              const hasConfiguredToken = Object.hasOwn(configured, 'GH_TOKEN') || Object.hasOwn(configured, 'GITHUB_TOKEN');
+              const commandEnv = Object.fromEntries((sandbox.forwardGitHubToken && !hasConfiguredToken ? ['GH_TOKEN', 'GITHUB_TOKEN'] : [])
                 .flatMap((name) => process.env[name] ? [[name, process.env[name]!]] : []));
-              return E2BExecutionEnv.create(handle, directory, commandEnv, sandbox.credentials.domain, operation.abortSignal);
+              return E2BExecutionEnv.create(handle, directory, { ...commandEnv, ...configured }, sandbox.credentials.domain, operation.abortSignal);
             });
             this.#sandboxEnvs.set(conversationId, env);
           }
@@ -294,6 +309,7 @@ export class NativeAgentService {
       if (!conversation) throw new Error('Native conversation is missing');
       activeConversationId = conversation.id;
       this.#environments.set(conversation.id, input.environment);
+      this.#signals.set(conversation.id, input.signal);
       if (input.sandbox) this.#sandboxes.set(conversation.id, { ...input.sandbox, signal: input.signal });
       if (input.nativeSessionId) await conversation.configure(agent, CONTEXT);
       else input.onNativeSession(String(conversation.id));
@@ -368,6 +384,7 @@ export class NativeAgentService {
       if (!reviewer) this.#active.delete(input.requirementId);
       if (activeConversationId !== undefined) {
         this.#environments.delete(activeConversationId);
+        this.#signals.delete(activeConversationId);
         this.#sandboxes.delete(activeConversationId);
         this.#sandboxEnvs.delete(activeConversationId);
         this.#sandboxHandles.delete(activeConversationId);
@@ -384,6 +401,7 @@ export class NativeAgentService {
     if (this.#credentials) await this.#credentials.close();
     this.#credentials = null;
     this.#environments.clear();
+    this.#signals.clear();
     this.#sandboxes.clear();
     this.#sandboxEnvs.clear();
     this.#sandboxHandles.clear();

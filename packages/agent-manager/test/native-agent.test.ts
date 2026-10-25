@@ -357,6 +357,50 @@ test('native message tool returns Jev rejection feedback to the sending agent', 
   }
 });
 
+test('Stop Run aborts a pending native artifact publication request', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-artifact-stop-'));
+  const localPath = join(directory, 'report.csv');
+  await writeFile(localPath, 'PRIVATE_ARTIFACT_CONTENT');
+  let received!: () => void;
+  const publicationReceived = new Promise<void>((resolve) => { received = resolve; });
+  let disconnected!: () => void;
+  const publicationDisconnected = new Promise<void>((resolve) => { disconnected = resolve; });
+  const server = createServer((request, response) => {
+    assert.equal(request.url, '/api/agent/requirements/req_stop/artifacts?sourceSessionId=ses_stop');
+    response.once('close', disconnected);
+    request.resume();
+    request.once('end', received);
+    // Deliberately keep the response pending until the client cancels it.
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert(address && typeof address !== 'string');
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  faux.setResponses([fauxAssistantMessage(fauxToolCall('artifact_publish', { localPath }), { stopReason: 'toolUse' })]);
+  const service = new NativeAgentService(join(directory, 'native.sqlite'), models);
+  const controller = new AbortController();
+  try {
+    const run = service.run({ requirementId: 'req_stop', sessionId: 'ses_stop', nativeSessionId: null,
+      prompt: 'Publish the report', model: 'faux/faux-1', reasoningEffort: null, cwd: directory,
+      environment: { CODE_FACTORY_API_URL: `http://127.0.0.1:${address.port}/api`,
+        CODE_FACTORY_REQUIREMENT_ID: 'req_stop', CODE_FACTORY_SESSION_ID: 'ses_stop' },
+      instructions: 'Test', signal: controller.signal, timeoutMs: 30_000,
+      onNativeSession: () => undefined, onEvent: () => undefined });
+    await publicationReceived;
+    controller.abort();
+    assert.equal((await run).status, 'cancelled');
+    await publicationDisconnected;
+  } finally {
+    controller.abort();
+    await service.close();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('native control-plane tool calls the requirement CLI with session context', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'code-factory-tools-'));
   const server = createServer((request, response) => {

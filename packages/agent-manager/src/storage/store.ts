@@ -85,6 +85,8 @@ export interface AppendMessageRecord {
   author: MessageAuthor;
   body: string;
   attachmentIds?: string[];
+  /** Create and bind these attachments in the same transaction as the message. */
+  newAttachments?: CreateMessageAttachmentRecord[];
   deliverToRd: boolean;
   now: string;
 }

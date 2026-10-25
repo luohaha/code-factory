@@ -81,6 +81,7 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/review-requests | List Review Requests |
 | GET | /api/events | Subscribe to the resumable SSE stream |
 | POST | /api/agent/pull-requests | Register or update a PR from an RD Agent |
+| POST | /api/agent/requirements/:id/artifacts | Publish an RD output as a conversation attachment |
 | POST | /api/agent/requirements | Propose a follow-up Requirement from an RD Agent |
 | POST | /api/agent/requirements/:id/action | Apply a lifecycle action to a Requirement proposed by the current RD Agent |
 | GET | /api/agent/requirements/:id/related | List a source Requirement's direct parent and children |
@@ -495,7 +496,35 @@ Success: 201 Created. Include the returned ID in attachmentIds on a later start 
 
 ### GET /api/attachments/:id
 
-Returns attachment content. Safe raster images use Content-Disposition: inline. Other files are forced to download with attachment. Every response includes X-Content-Type-Options: nosniff. Returns 404 Not Found for an unknown attachment.
+Returns attachment content. Safe raster images use Content-Disposition: inline. Other files are forced to download with attachment. With the optional `download=1` query parameter, every type uses Content-Disposition: attachment, including raster images. Every response includes X-Content-Type-Options: nosniff. Returns 404 Not Found for an unknown attachment.
+
+### POST /api/agent/requirements/:id/artifacts
+
+Publishes one output from any RD provider to its own Requirement conversation. Required query parameter `sourceSessionId` must match that Requirement's RD Session. The body is raw file bytes, `X-File-Name` is the URI-encoded download filename, and `Content-Type` supplies a MIME type. Files must be non-empty and at most 20 MB. Filename sanitization, raster signature detection, MIME normalization, attachment storage and retention follow the ordinary upload rules. Only PNG/JPEG/GIF/WebP signatures receive image previews; other data uses `kind=file` and forced download, including HTML and SVG. This endpoint accepts bytes, never a host path or E2B credentials.
+
+Success: 201 Created with a `PublishedArtifact` receipt:
+
+~~~json
+{
+  "messageId": "msg_...",
+  "attachment": {
+    "id": "att_...",
+    "fileName": "report.csv",
+    "kind": "file",
+    "mediaType": "text/csv",
+    "byteSize": 128
+  },
+  "downloadPath": "/api/attachments/att_...?download=1"
+}
+~~~
+
+Attachment metadata and the new `rd_agent` message are written atomically. The message has an empty body, one attachment, `deliverToRd=false`, and the active RD Run ID when one exists. It emits the existing `message.created` event, persists across restarts, and does not start or queue another Run. The receipt excludes content, credentials and host paths. Clients resolve the relative download path against their Manager origin; the dashboard does this automatically. Returns 400 for missing/mismatched Session, empty or oversized data; 404 for an unknown Requirement; and 409 for DONE or CANCELLED Requirements. Mutations are never automatically retried; inspect the conversation after an ambiguous transport failure.
+
+RD Agents use the CLI, which also checks that the host source is a regular file and bounds reads even if it grows:
+
+~~~bash
+code-factory-cli artifact publish --path /absolute/path/report.csv --name report.csv --media-type text/csv
+~~~
 
 ### GET /api/pull-requests
 
@@ -519,21 +548,21 @@ Success: 200 OK with {"items": ReviewRequest[]}. An unknown pullRequestId return
 
 ### GET /api/sandboxes
 
-Returns `{ "items": Sandbox[] }`. The built-in `local` item is named `Default workspace` and uses the Agent Manager startup directory. It cannot be edited or deleted. Named local workspaces have `kind: "local"`, a distinct ID, name, and absolute `cwd` on the Manager host. An E2B record includes `kind: "e2b"`, `providerSandboxId`, `domain`, `credentialRef`, `repositoryUrl` and `cwd` (both null for new workspaces; legacy values are read-only), `template`, `status` (`running`, `paused`, `terminated`, `unreachable`, or `unknown`), and `checkedAt`. The key is never returned. Status is the last observation; use `/health` to refresh it. Legacy local worktrees are hidden, and old Requirement selections migrate to Default workspace. The API retains `sandboxId` for Requirement workspace selection for compatibility.
+Returns `{ "items": Sandbox[] }`. The built-in `local` item is named `Default workspace` and uses the Agent Manager startup directory. It cannot be edited or deleted. Named local workspaces have `kind: "local"`, a distinct ID, name, and absolute `cwd` on the Manager host. An E2B record includes `kind: "e2b"`, `providerSandboxId`, `domain`, `credentialRef`, `environmentVariableNames` (sorted names only, never values), `repositoryUrl` and `cwd` (both null for new workspaces; legacy values are read-only), `template`, `status` (`running`, `paused`, `terminated`, `unreachable`, or `unknown`), and `checkedAt`. The key is never returned. Status is the last observation; use `/health` to refresh it. Legacy local worktrees are hidden, and old Requirement selections migrate to Default workspace. The API retains `sandboxId` for Requirement workspace selection for compatibility.
 
 ### POST /api/sandboxes
 
 For a named local workspace, send `{ "kind": "local", "name": "Feature checkout", "cwd": "/absolute/path/to/checkout" }`. The directory must already exist on the Agent Manager host and differ from Default workspace. A missing directory returns 400 immediately and no workspace record is created. No worktree is created automatically.
 
-For E2B, send `{ "kind": "e2b", "name": "Build sandbox", "domain": "e2b.example", "apiKey": "..." }`. Optional `template` defaults to `base`; supply `providerSandboxId` to connect to an existing sandbox. Provisioning only uses the E2B SDK to create/connect and read status. It does not read Git origin, clone code, inspect remote directories, or check Git, `gh`, or authentication. `cwd` and `repositoryUrl` are no longer configuration inputs and return 400 if supplied; new records save both as null. When the Native Agent runs, commands use the SDK default directory and it reuses or clones repositories as required by the task. Configure remote GitHub authentication when needed. The API key is saved in a separate owner-only credential database and never returned or logged. A duplicate provider sandbox ID returns 409. Multiple Requirements may select the same sandbox.
+For E2B, send `{ "kind": "e2b", "name": "Build sandbox", "domain": "e2b.example", "apiKey": "..." }`. Optional `domain` defaults to `e2b.app` when omitted, empty, or whitespace-only. Optional `template` defaults to `base`; supply `providerSandboxId` to connect to an existing sandbox. Provisioning only uses the E2B SDK to create/connect and read status. It does not read Git origin, clone code, inspect remote directories, or check Git, `gh`, or authentication. `cwd` and `repositoryUrl` are no longer configuration inputs and return 400 if supplied; new records save both as null. When the Native Agent runs, commands use the SDK default directory and it reuses or clones repositories as required by the task. Configure remote GitHub authentication when needed. Optional `environmentVariables` provides name/value pairs, for example `{ "GH_TOKEN": "...", "BUILD_MODE": "test" }`. Values live in the owner-only E2B credential database and are never returned in workspace responses; only their sorted names are returned. The API key is saved in a separate owner-only credential database and never returned or logged. A duplicate provider sandbox ID returns 409. Multiple Requirements may select the same sandbox.
 
 ### PATCH /api/sandboxes/:id
 
-Updates a named workspace. Local workspaces accept `name` and/or `cwd`; the directory must exist on the Manager host and differ from Default workspace. A missing directory returns 400 and preserves the record. E2B workspaces accept only `name`, `domain`, and/or `apiKey`. `cwd` and `repositoryUrl` updates return 400. Changed E2B connection settings are verified through SDK connect/status before persistence; repository contents and GitHub authentication are not inspected. A new key replaces the stored credential only after verification; omit `apiKey` to keep it. Existing directory and repository metadata remain unchanged for legacy workspaces. The provider sandbox ID and template cannot be changed in place. A workspace cannot change its directory or E2B connection while an RD or Reviewer Run is active. Default workspace returns 400.
+Updates a named workspace. Local workspaces accept `name` and/or `cwd`; the directory must exist on the Manager host and differ from Default workspace. A missing directory returns 400 and preserves the record. E2B workspaces accept `name`, `domain`, `apiKey`, and/or `environmentVariables`. Omitting `domain` keeps the saved domain; an empty or whitespace-only domain resets it to `e2b.app`. Environment variables use a patch: omitted names retain their values, string values replace them, and `null` removes a name. An empty object changes nothing; an empty string sets an empty value. Environment changes apply to subsequent Native RD and Reviewer commands, survive Manager restarts, and are rejected with 409 while the sandbox has an active RD or Reviewer Run. API key rotation preserves variables omitted from the patch. Variable names must match `[A-Za-z_][A-Za-z0-9_]*` and contain at most 128 characters; values must be strings without NUL. The resulting configuration supports at most 100 entries and 64 KiB of UTF-8 names and values. Local workspace endpoints do not accept these variables. `cwd` and `repositoryUrl` updates return 400. Changed E2B connection settings are verified through SDK connect/status before persistence. After verification, submitted fields and the environment patch merge into the latest stored workspace, preserving concurrent edits to omitted fields. If another request changes the connection credentials or an RD/Reviewer Run starts during verification, the pending update returns 409 and must be retried; repository contents and GitHub authentication are not inspected. A new key replaces the stored credential only after verification; omit `apiKey` to keep it. Existing directory and repository metadata remain unchanged for legacy workspaces. The provider sandbox ID and template cannot be changed in place. A workspace cannot change its directory or E2B connection while an RD or Reviewer Run is active. Default workspace returns 400.
 
 ### GET /api/sandboxes/:id/health
 
-Uses the E2B SDK without resuming the sandbox and persists the observed status and `checkedAt`. Returns the updated Sandbox. A missing E2B sandbox reports `terminated`; other provider lookup errors report `unreachable`.
+Uses the E2B SDK without resuming the sandbox and persists only the observed status and `checkedAt` on the latest workspace record, preserving settings and credential edits made while the lookup is pending. Returns the updated Sandbox. A missing E2B sandbox reports `terminated`; other provider lookup errors report `unreachable`.
 
 ### POST /api/sandboxes/:id/pause and /resume
 
@@ -743,7 +772,7 @@ Cancels an active Agent Timer owned by the Requirement. Success: 200 OK with the
 
 Starts a short-lived Reviewer Run for a registered Open PR. The id is Code Factory's pr_<uuid>, not the GitHub PR number.
 
-The Reviewer uses the workspace selected by the PR's Requirement. Native Agent Requirements require a Native Agent Reviewer. Its model runs on the Agent Manager host, while `read` and `bash` use the selected local directory or E2B remote checkout. The E2B sandbox needs Git and authenticated `gh`, but no Codex or Claude Code CLI. Codex and Claude Code Requirements accept either headless Reviewer in their selected local directory.
+The Reviewer uses the workspace selected by the PR's Requirement. Native Agent Requirements require a Native Agent Reviewer. Its model runs on the Agent Manager host, while `read` and `bash` use the selected local directory or E2B remote checkout. GitHub CLI review operations need remote `gh` and authentication when used, but no Codex or Claude Code CLI. Codex and Claude Code Requirements accept either headless Reviewer in their selected local directory.
 
 Request body:
 

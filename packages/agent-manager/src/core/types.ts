@@ -18,6 +18,10 @@ export interface Sandbox {
   checkedAt: string | null;
   createdAt: string;
 }
+/** Public workspace metadata; environment values remain in the credential store. */
+export interface SandboxSummary extends Sandbox {
+  environmentVariableNames?: string[];
+}
 export type AgentReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export type RequirementStatus =
@@ -163,6 +167,13 @@ export interface MessageAttachment {
   byteSize: number;
   localPath: string;
   createdAt: string;
+}
+
+/** Model-visible publication receipt. File bytes and host storage paths stay outside it. */
+export interface PublishedArtifact {
+  messageId: string;
+  attachment: Pick<MessageAttachment, 'id' | 'fileName' | 'kind' | 'mediaType' | 'byteSize'>;
+  downloadPath: string;
 }
 
 export interface PullRequest {

@@ -15,6 +15,15 @@ before(async () => {
   server = await createServer({
     root: fileURLToPath(new URL('../../', import.meta.url)),
     server: { host: '127.0.0.1', port: 0 },
+    plugins: [{ name: 'artifact-download-fixture', configureServer(vite) {
+      // Chromium downloads bypass page.route; serve their bytes from the fixture origin.
+      vite.middlewares.use((request, response, next) => {
+        if (!request.url?.startsWith('/api/attachments/') || !request.url.endsWith('?download=1')) return next();
+        response.writeHead(200, { 'content-type': 'application/octet-stream',
+          'content-disposition': 'attachment; filename="result.bin"' });
+        response.end('result');
+      });
+    } }],
   });
   await server.listen();
   baseUrl = server.resolvedUrls.local[0];
@@ -61,6 +70,32 @@ async function fixture(t, locale = 'en', colorScheme = 'light', mobile = false) 
 }
 
 for (const [locale, theme, mobile] of [['en', 'light', false], ['zh-CN', 'dark', true]]) {
+  void test(`RD artifacts provide working file and image download links (${locale})`, async (t) => {
+    const { page, data, open } = await fixture(t, locale, theme, mobile);
+    const attachment = (id, fileName, kind, mediaType) => ({ id, fileName, kind, mediaType, byteSize: 6,
+      requirementId: data.requirement.id, messageId: 'msg_artifact', localPath: '/host/private/artifact', createdAt: new Date().toISOString() });
+    await page.route(`**/api/requirements/${data.requirement.id}/messages*`, (route) => route.fulfill({ json: {
+      items: [{ id: 'msg_artifact', requirementId: data.requirement.id, sequence: 2, author: 'rd_agent', body: '',
+        attachments: [attachment('att_report', '报告.csv', 'file', 'text/csv'), attachment('att_image', '图表.png', 'image', 'image/png')],
+        createdAt: new Date().toISOString() }], hasMore: false,
+    } }));
+    await open(false);
+    for (const [id, name] of [['att_report', '报告.csv'], ['att_image', '图表.png']]) {
+      const link = page.getByRole('link', { name: `${locale === 'zh-CN' ? '下载' : 'Download'} ${name}`, exact: true });
+      await link.waitFor();
+      const url = new URL(await link.getAttribute('href'));
+      assert.equal(url.pathname, `/api/attachments/${id}`);
+      assert.equal(url.search, '?download=1');
+      assert.equal(url.origin, new URL(baseUrl).origin);
+      assert.equal(await link.getAttribute('download'), name);
+      const pending = page.waitForEvent('download');
+      await link.click();
+      const download = await pending;
+      assert.equal(await download.failure(), null);
+    }
+    assert.equal(await page.getByText('/host/private/artifact', { exact: true }).count(), 0);
+  });
+
   void test(`tool cards preserve keyboard access, locale, theme and bounded layout (${locale}, ${theme})`, async (t) => {
     const { page, open, data } = await fixture(t, locale, theme, mobile);
     data.trace[1].detail = JSON.stringify({ lines: 120, found: true, content: "long-line".repeat(2000) });
