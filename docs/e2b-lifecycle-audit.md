@@ -27,7 +27,7 @@ flowchart LR
 - **Humans and Manager initiate workspace operations.** The Workspaces page and `/api/sandboxes` endpoints create, attach, inspect, pause, resume, and delete sandboxes. There is no corresponding `code-factory-cli sandbox` command.
 - **Native E2B RD Agents can control their selected sandbox.** `sandbox_status`, `sandbox_pause`, and `sandbox_resume` call Manager for the current Requirement's sandbox; they do not accept another sandbox ID. An Agent may pause the sandbox during its own RD Run and continue model/control plane work on the host. Another active RD Run or any active Reviewer sharing the sandbox prevents the pause. Reviewers do not receive these tools.
 - **NativeAgentService connects lazily for remote operations.** The Harness `env` factory returns a `DeferredExecutionEnv`; the first remote file or command operation calls `connect`. Model-only replies, status checks, and host control plane tools do not wake the sandbox. Manager also connects when delivering an oversized Requirement/message body as a remote temporary file. Cleanup skips paused or unreachable instances to avoid waking them again.
-- **The E2B control plane performs timeout pauses and automatic resumes.** Manager sets the policy for new instances but has no sandbox heartbeat, Run lease renewal service, or scheduled resource collector. The first remote operation's `connect` may extend the deadline; it does not keep a long command alive throughout execution. External E2B consoles and other clients holding credentials can also operate the sandbox.
+- **The E2B control plane applies each instance's timeout and resume policy.** Manager explicitly requests pause-on-timeout and auto-resume for new instances; attached instances keep their existing policy, which may kill them on timeout. Manager has no sandbox heartbeat, Run lease renewal service, or scheduled resource collector. The first remote operation's `connect` may extend the deadline; it does not keep a long command alive throughout execution. External E2B consoles and other clients holding credentials can also operate the sandbox.
 - **The model, Harness, and conversation database stay on the host.** E2B handles file and shell operations routed through `ExecutionEnv`, including GitHub commands through remote `bash`. Requirement/PR/Timer control plane tools stay on the host. `sandbox_upload` and `sandbox_download` can access host files with the launching user's permissions. After the host shuts down, remote resources remain subject to E2B's own policies.
 
 Implementation entry points: [E2B service and execution environment](../packages/agent-manager/src/runtime/e2b-execution-env.ts), [NativeAgentService](../packages/agent-manager/src/runtime/native-agent.ts), [Manager lifecycle methods](../packages/agent-manager/src/core/agent-manager.ts), and [HTTP routes](../packages/agent-manager/src/http/server.ts). See the [API reference](agent-manager-api.md#get-apisandboxes) for endpoint fields.
@@ -46,7 +46,8 @@ Implementation entry points: [E2B service and execution environment](../packages
 | Change domain / API key | Verifies through `connect` + `getInfo` before saving; key rotation removes the old credential reference | Connection changes are rejected during an active RD or Reviewer Run. Verification may resume the instance. Renaming alone does not connect |
 | Human clicks Pause | Checks active RD/Reviewer usage, then calls `pause` and refreshes health | Conflicts with an active Run; idle Requirements may remain bound |
 | Human clicks Resume | Calls `connect` and refreshes health | No active-Run restriction; cannot restore a destroyed instance |
-| A new instance reaches its provider timeout | E2B executes `onTimeout: 'pause'` | Does not pass through Manager's active-Run checks |
+| An instance created by Code Factory reaches its provider timeout | Configured to pause through `onTimeout: 'pause'` | Expected behavior when the provider honors the requested policy; does not pass through Manager's active-Run checks |
+| An attached instance reaches its provider timeout | Follows its existing policy: pause or kill | Attachment does not convert kill-on-timeout to pause-on-timeout; a killed instance cannot be resumed |
 | Run succeeds, fails, times out, or receives Stop Run | Finishes/aborts the Agent Run; **does not automatically pause or kill the sandbox** | Stop Run aborts the conversation. The output spill path attempts to kill its remote command handle; that does not destroy the sandbox |
 | Requirement completes/is cancelled, or retention cleanup runs | Updates or deletes Requirement data; **does not collect the sandbox** | Retained completed Requirements still prevent workspace deletion; removing references does not automatically kill it |
 | Manager shuts down normally or crashes | Normal shutdown closes host conversations, Store, and credential storage without sandbox cleanup | Manager shutdown does not imply the remote resource has stopped or stopped accruing charges |
@@ -60,7 +61,7 @@ stateDiagram-v2
     [*] --> running: Create or attach / connect
     running --> paused: Human or RD pause / new instance timeout
     paused --> running: Connect / supported activity with autoResume enabled
-    running --> terminated: Delete / external kill
+    running --> terminated: Delete / external kill / kill-on-timeout policy
     paused --> terminated: Delete / external kill
     terminated --> [*]
 ```
@@ -69,11 +70,21 @@ stateDiagram-v2
 
 ## 3. The 10-minute setting is not an activity-based idle timeout
 
-New instances use these fixed options:
+E2B's documented default is **kill on timeout**, not pause. Code Factory explicitly overrides that default when it creates a new instance; attaching an existing instance does not change its policy. See [E2B auto-pause configuration](https://docs.e2b.dev/sandbox/persistence#auto-pause).
+
+| Creation path | Timeout action |
+| --- | --- |
+| SDK creation without an explicit lifecycle policy | Provider default: `kill` |
+| New instance created by Code Factory | Explicitly requests `pause`, with auto-resume enabled |
+| Existing instance attached to Code Factory | Existing policy, which may be `kill` or `pause` |
+
+Code Factory creates new instances with these fixed options:
 
 ```ts
 { timeoutMs: 600_000, lifecycle: { onTimeout: 'pause', autoResume: true } }
 ```
+
+The locked SDK maps this request to `autoPause: true` in the provider API. The deterministic service test checks the options passed to the SDK; it does not wait for a real sandbox to expire. No real target-domain timeout experiment was run, so the configured policy must not be presented as an observed cloud result. To diagnose a specific instance, inspect `lifecycle.onTimeout` in the provider SDK's `getInfo` result. Manager does not persist that policy in its sandbox record; cached status and check time do not establish it.
 
 This is **E2B's expiry policy**. The repository neither tracks the last business activity to reset a 10-minute countdown nor calls `Sandbox.setTimeout`. Commands and file reads/writes do not automatically extend the expiry of a running instance. After a pause, the next supported operation can trigger automatic resume; see [E2B auto-resume](https://docs.e2b.dev/sandbox/auto-resume). A continuous build, test, or service can therefore encounter a pause and connection interruption mid-operation. Resume does not guarantee that the current command request continues seamlessly.
 
