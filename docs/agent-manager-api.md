@@ -81,6 +81,7 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/review-requests | List Review Requests |
 | GET | /api/events | Subscribe to the resumable SSE stream |
 | POST | /api/agent/pull-requests | Register or update a PR from an RD Agent |
+| POST | /api/agent/requirements/:id/artifacts | Publish an RD output as a conversation attachment |
 | POST | /api/agent/requirements | Propose a follow-up Requirement from an RD Agent |
 | POST | /api/agent/requirements/:id/action | Apply a lifecycle action to a Requirement proposed by the current RD Agent |
 | GET | /api/agent/requirements/:id/related | List a source Requirement's direct parent and children |
@@ -495,7 +496,35 @@ Success: 201 Created. Include the returned ID in attachmentIds on a later start 
 
 ### GET /api/attachments/:id
 
-Returns attachment content. Safe raster images use Content-Disposition: inline. Other files are forced to download with attachment. Every response includes X-Content-Type-Options: nosniff. Returns 404 Not Found for an unknown attachment.
+Returns attachment content. Safe raster images use Content-Disposition: inline. Other files are forced to download with attachment. With the optional `download=1` query parameter, every type uses Content-Disposition: attachment, including raster images. Every response includes X-Content-Type-Options: nosniff. Returns 404 Not Found for an unknown attachment.
+
+### POST /api/agent/requirements/:id/artifacts
+
+Publishes one output from any RD provider to its own Requirement conversation. Required query parameter `sourceSessionId` must match that Requirement's RD Session. The body is raw file bytes, `X-File-Name` is the URI-encoded download filename, and `Content-Type` supplies a MIME type. Files must be non-empty and at most 20 MB. Filename sanitization, raster signature detection, MIME normalization, attachment storage and retention follow the ordinary upload rules. Only PNG/JPEG/GIF/WebP signatures receive image previews; other data uses `kind=file` and forced download, including HTML and SVG. This endpoint accepts bytes, never a host path or E2B credentials.
+
+Success: 201 Created with a `PublishedArtifact` receipt:
+
+~~~json
+{
+  "messageId": "msg_...",
+  "attachment": {
+    "id": "att_...",
+    "fileName": "report.csv",
+    "kind": "file",
+    "mediaType": "text/csv",
+    "byteSize": 128
+  },
+  "downloadPath": "/api/attachments/att_...?download=1"
+}
+~~~
+
+Attachment metadata and the new `rd_agent` message are written atomically. The message has an empty body, one attachment, `deliverToRd=false`, and the active RD Run ID when one exists. It emits the existing `message.created` event, persists across restarts, and does not start or queue another Run. The receipt excludes content, credentials and host paths. Clients resolve the relative download path against their Manager origin; the dashboard does this automatically. Returns 400 for missing/mismatched Session, empty or oversized data; 404 for an unknown Requirement; and 409 for DONE or CANCELLED Requirements. Mutations are never automatically retried; inspect the conversation after an ambiguous transport failure.
+
+RD Agents use the CLI, which also checks that the host source is a regular file and bounds reads even if it grows:
+
+~~~bash
+code-factory-cli artifact publish --path /absolute/path/report.csv --name report.csv --media-type text/csv
+~~~
 
 ### GET /api/pull-requests
 

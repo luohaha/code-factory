@@ -276,7 +276,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         response.writeHead(200, {
           'content-type': item.mediaType,
           'content-length': data.length,
-          'content-disposition': `${item.kind === 'image' ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(item.fileName)}`,
+          'content-disposition': `${item.kind === 'image' && url.searchParams.get('download') !== '1' ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(item.fileName)}`,
           'cache-control': 'private, max-age=31536000, immutable',
           'x-content-type-options': 'nosniff',
         });
@@ -337,6 +337,18 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
       if (request.method === 'POST' && attachmentUpload) {
         const requirementId = decodeURIComponent(attachmentUpload[1]!);
         const item = manager.uploadMessageAttachment(requirementId, {
+          fileName: fileNameHeader(request),
+          mediaType: Array.isArray(request.headers['content-type']) ? request.headers['content-type'][0] : request.headers['content-type'],
+          data: await readBinary(request, MAX_MESSAGE_ATTACHMENT_BYTES),
+        });
+        sendJson(response, 201, item);
+        return;
+      }
+      const artifactPublication = url.pathname.match(/^\/api\/agent\/requirements\/([^/]+)\/artifacts$/);
+      if (request.method === 'POST' && artifactPublication) {
+        const sourceSessionId = url.searchParams.get('sourceSessionId')?.trim();
+        if (!sourceSessionId) throw new TypeError('sourceSessionId is required');
+        const item = manager.publishAgentArtifact(decodeURIComponent(artifactPublication[1]!), sourceSessionId, {
           fileName: fileNameHeader(request),
           mediaType: Array.isArray(request.headers['content-type']) ? request.headers['content-type'][0] : request.headers['content-type'],
           data: await readBinary(request, MAX_MESSAGE_ATTACHMENT_BYTES),

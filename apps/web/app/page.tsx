@@ -17,6 +17,7 @@ import {
   Check,
   CircleDot,
   Clock3,
+  Download,
   FileText,
   FolderGit2,
   ExternalLink,
@@ -424,6 +425,7 @@ function formatBytes(value: number): string {
 function MessageAttachments({ attachments, apiUrl }: { attachments: MessageAttachmentDto[]; apiUrl: string }) {
   const { t } = useI18n();
   if (attachments.length === 0) return null;
+  const client = new AgentManagerClient(apiUrl);
   const images = attachments.filter((attachment) => attachment.kind === 'image');
   const files = attachments.filter((attachment) => attachment.kind !== 'image');
   return (
@@ -431,27 +433,34 @@ function MessageAttachments({ attachments, apiUrl }: { attachments: MessageAttac
       {images.length > 0 ? (
         <div className={`grid gap-2 ${images.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
           {images.map((attachment) => {
-            const url = `${apiUrl}/api/attachments/${encodeURIComponent(attachment.id)}`;
+            const url = client.attachmentUrl(attachment.id);
             return (
-              <a
-                key={attachment.id}
-                href={url}
-                target="_blank"
-                rel="noreferrer"
-                className="group relative block min-w-0 overflow-hidden rounded-xl border border-black/8 bg-black/4 dark:border-white/10 dark:bg-white/5"
-                title={t('Open {name}', { name: attachment.fileName })}
-              >
-                {/* oxlint-disable-next-line next/no-img-element -- Attachment URLs are dynamic local API resources. */}
-                <img
-                  src={url}
-                  alt={attachment.fileName}
-                  loading="lazy"
-                  className="max-h-72 min-h-24 w-full object-cover transition duration-200 group-hover:scale-[1.015]"
-                />
-                <span className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-2 py-1 text-[9px] text-white opacity-0 backdrop-blur-sm transition group-hover:opacity-100">
-                  {attachment.fileName}
-                </span>
-              </a>
+              <div key={attachment.id} className="min-w-0 space-y-1">
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="group relative block min-w-0 overflow-hidden rounded-xl border border-black/8 bg-black/4 dark:border-white/10 dark:bg-white/5"
+                  title={t('Open {name}', { name: attachment.fileName })}
+                >
+                  {/* oxlint-disable-next-line next/no-img-element -- Attachment URLs are dynamic local API resources. */}
+                  <img
+                    src={url}
+                    alt={attachment.fileName}
+                    loading="lazy"
+                    className="max-h-72 min-h-24 w-full object-cover transition duration-200 group-hover:scale-[1.015]"
+                  />
+                  <span className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-2 py-1 text-[9px] text-white opacity-0 backdrop-blur-sm transition group-hover:opacity-100">
+                    {attachment.fileName}
+                  </span>
+                </a>
+                <a href={client.attachmentUrl(attachment.id, true)} download={attachment.fileName}
+                  className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                  aria-label={t('Download {name}', { name: attachment.fileName })}>
+                  <Download className="size-3 shrink-0" />
+                  <span className="truncate">{t('Download {name}', { name: attachment.fileName })}</span>
+                </a>
+              </div>
             );
           })}
         </div>
@@ -461,8 +470,9 @@ function MessageAttachments({ attachments, apiUrl }: { attachments: MessageAttac
           {files.map((attachment) => (
             <a
               key={attachment.id}
-              href={`${apiUrl}/api/attachments/${encodeURIComponent(attachment.id)}`}
-              target="_blank"
+              href={client.attachmentUrl(attachment.id, true)}
+              download={attachment.fileName}
+              aria-label={t('Download {name}', { name: attachment.fileName })}
               rel="noreferrer"
               className="flex min-w-0 items-center gap-2.5 rounded-xl border border-black/8 bg-black/4 px-3 py-2.5 transition hover:bg-black/7 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/8"
             >
@@ -471,6 +481,7 @@ function MessageAttachments({ attachments, apiUrl }: { attachments: MessageAttac
                 <span className="block truncate text-[11px] font-medium">{attachment.fileName}</span>
                 <span className="mt-0.5 block text-[9px] opacity-65">{formatBytes(attachment.byteSize)} · {attachment.mediaType}</span>
               </span>
+              <Download className="size-4 shrink-0" />
             </a>
           ))}
         </div>

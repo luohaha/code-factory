@@ -175,6 +175,7 @@ export const zhCN = {
   '{count}h': '{count} 小时',
   '{count}d': '{count} 天',
   'Open {name}': '打开 {name}',
+  'Download {name}': '下载 {name}',
   '{count} messages pending': '{count} 条消息待处理',
   'Start': '开始执行',
   'Delete': '删除',

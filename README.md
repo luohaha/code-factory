@@ -21,6 +21,8 @@ Each requirement has its own persistent agent context. Agents can split work int
 
 Native Agents using E2B can check, pause, and resume their selected sandbox and transfer files between the host and sandbox, including conversation attachments. Pausing preserves remote state while the Agent continues on the host.
 
+Codex, Claude Code, and Native RD Agents can explicitly publish generated files as conversation attachments. Remote browser users can download them from the conversation; file bytes stay outside model context during publication.
+
 Requirement details include collapsible tool calls with arguments, results, and execution status, plus a live working indicator. Both follow the dashboard's light/dark theme and English/Simplified Chinese language setting.
 
 ## How It Works

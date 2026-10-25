@@ -282,11 +282,13 @@ export interface RequirementActionAcceptedDto {
 }
 
 export class AgentManagerApiError extends Error {
+  readonly status: number;
   constructor(
     message: string,
-    readonly status: number,
+    status: number,
   ) {
     super(message);
+    this.status = status;
   }
 }
 
@@ -526,8 +528,8 @@ export class AgentManagerClient {
     return body as MessageAttachmentDto;
   }
 
-  attachmentUrl(id: string): string {
-    return `${this.baseUrl}/api/attachments/${encodeURIComponent(id)}`;
+  attachmentUrl(id: string, download = false): string {
+    return `${this.baseUrl}/api/attachments/${encodeURIComponent(id)}${download ? '?download=1' : ''}`;
   }
 
   requestReview(id: string, configuration: AgentConfiguration): Promise<{
