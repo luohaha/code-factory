@@ -99,6 +99,8 @@ npm run test:browser
 
 The browser tests start and stop an isolated Vite server and mock Agent Manager responses, so they do not read or change a running workspace. Test files run sequentially because their servers share the project's local Wrangler state. To use an installed Google Chrome instead of downloading Chromium, run `PLAYWRIGHT_CHANNEL=chrome npm run test:browser`.
 
+CI pins the GitHub Actions runner to `ubuntu-24.04`. The locked Playwright `1.58.2` explicitly [supports Ubuntu 24.04](https://github.com/microsoft/playwright/blob/v1.58.2/packages/playwright-core/src/server/utils/hostPlatform.ts) and provides its [Chromium system dependencies](https://github.com/microsoft/playwright/blob/v1.58.2/packages/playwright-core/src/server/registry/nativeDeps.ts). Using `ubuntu-latest` selected Ubuntu 26.04, where that Playwright version rejects Chromium installation. Pinning the supported image restores compatibility without changing dependencies or the minimum supported Node.js version (`22.19.0`). CI continues to run `npx playwright install --with-deps chromium`, `npm run test:browser`, and Agent Manager's `npm run release:check`. Before changing the runner image or Playwright version, verify all three on the proposed image.
+
 Before a release, follow the additional audit, version, changelog, and package-content checks in the [release guide](releasing.md).
 
 ## Dashboard development dependency audit

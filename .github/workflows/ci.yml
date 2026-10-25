@@ -15,7 +15,9 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    # Playwright 1.58.2 supports Ubuntu 24.04, but not 26.04.
+    # Pin the OS so ubuntu-latest migrations cannot break Chromium installation.
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
