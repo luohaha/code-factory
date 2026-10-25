@@ -116,7 +116,10 @@ for (const locale of ['en', 'zh-CN']) {
     assert.equal(workspace.domain, chinese ? 'e2b.example' : 'e2b.app');
     await page.getByRole('button', { name: /Task sandbox/ }).click();
     assert.equal((await dialog.innerText()).includes('browser-token'), false);
-    const edit = () => dialog.getByRole('button', { name: chinese ? '编辑工作区' : 'Edit workspace', exact: true }).click();
+    const edit = async () => {
+      await dialog.getByRole('button', { name: chinese ? '编辑工作区' : 'Edit workspace', exact: true }).click();
+      await page.waitForFunction((domain) => document.querySelector('#edit-workspace-domain')?.value === domain, workspace.domain);
+    };
     const save = () => dialog.getByRole('button', { name: chinese ? '保存修改' : 'Save changes', exact: true }).click();
     await edit();
     await dialog.getByText(domainHint, { exact: true }).waitFor();
@@ -144,10 +147,11 @@ for (const locale of ['en', 'zh-CN']) {
     assert.equal((await dialog.innerText()).includes('rotated-browser-token'), false);
     await edit();
     await dialog.locator('#edit-workspace-domain').fill('');
-    assert.equal(await dialog.locator('#edit-workspace-domain').inputValue(), '');
+    const waitForBlankDomain = () => page.waitForFunction(() => document.querySelector('#edit-workspace-domain')?.value === '');
+    await waitForBlankDomain();
     for (const name of ['GH_TOKEN', 'EXTRA']) {
       await dialog.getByRole('button', { name: `${chinese ? '移除变量' : 'Remove variable'} ${name}`, exact: true }).click();
-      assert.equal(await dialog.locator('#edit-workspace-domain').inputValue(), '');
+      await waitForBlankDomain();
     }
     await save();
     await dialog.getByRole('button', { name: chinese ? '编辑工作区' : 'Edit workspace', exact: true }).waitFor();
