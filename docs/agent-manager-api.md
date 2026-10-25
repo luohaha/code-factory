@@ -537,7 +537,7 @@ Uses the E2B SDK without resuming the sandbox and persists the observed status a
 
 ### POST /api/sandboxes/:id/pause and /resume
 
-Use the E2B SDK and return the refreshed Sandbox. Pausing is rejected with 409 while any selected Requirement has an active RD or Reviewer Run. This dashboard/API rule is unchanged by the Native RD `sandbox_pause` tool, which permits its own active RD Run but rejects other active RD Runs and every active Reviewer sharing that sandbox. Native sandbox lifecycle and host/remote file transfer tools are documented in [Native Agent tools](native-agent.md#native-tools-and-the-control-plane-boundary); they add no HTTP endpoints. Resume connects to the sandbox, including one paused by the idle timeout.
+Use the E2B SDK and return the refreshed Sandbox. Pausing is rejected with 409 while any selected Requirement has an active RD or Reviewer Run. This dashboard/API rule is unchanged by the Native RD `sandbox_pause` tool, which permits its own active RD Run but rejects other active RD Runs and every active Reviewer sharing that sandbox. Native sandbox lifecycle and host/remote file transfer tools are documented in [Native Agent tools](native-agent.md#native-tools-and-the-control-plane-boundary); they add no HTTP endpoints. Resume connects to the sandbox, including one paused by the provider timeout. New sandboxes start with a 10-minute timeout, pause-on-timeout, and auto-resume; attaching a sandbox does not change its lifecycle policy. Lazy connections may extend the deadline, but there is no Run-scoped heartbeat to keep long commands alive. Run completion and Manager shutdown do not automatically pause or kill sandboxes. See the [E2B lifecycle audit](e2b-lifecycle-audit.md).
 
 ### DELETE /api/sandboxes/:id
 
