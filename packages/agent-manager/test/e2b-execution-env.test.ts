@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
 import { getCurrentSystemPrompt, getCurrentTools } from '@earendil-works/pi-ai';
@@ -21,7 +22,10 @@ const controlToolNames = ['pr_register', 'requirement_propose', 'requirement_act
   'requirement_related', 'requirement_message', 'timer_register', 'timer_show', 'timer_cancel'];
 const sandboxToolNames = ['sandbox_status', 'sandbox_pause', 'sandbox_resume', 'sandbox_upload', 'sandbox_download'];
 
-function fakeSdk(defaultDirectory = '/home/user') {
+function fakeSdk(defaultDirectory = '/home/user', before: {
+  connect?: (signal?: AbortSignal) => Promise<void>;
+  discover?: (signal?: AbortSignal) => Promise<void>;
+} = {}) {
   const data = new Map<string, Uint8Array>();
   const commands: Array<{ command: string; cwd: string | undefined; hasCwd: boolean; envs: Record<string, string> | undefined }> = [];
   const decoder = new TextDecoder();
@@ -62,10 +66,13 @@ function fakeSdk(defaultDirectory = '/home/user') {
     commands: {
       async run(command: string, options: {
         cwd?: string; envs?: Record<string, string>; onStdout?: (value: string) => void;
-        onStderr?: (value: string) => void; background?: boolean;
+        onStderr?: (value: string) => void; background?: boolean; signal?: AbortSignal;
       }) {
         commands.push({ command, cwd: options.cwd, hasCwd: Object.hasOwn(options, 'cwd'), envs: options.envs });
-        if (command === 'pwd') return { exitCode: 0, stdout: `${defaultDirectory}\n`, stderr: '' };
+        if (command === 'pwd') {
+          await before.discover?.(options.signal);
+          return { exitCode: 0, stdout: `${defaultDirectory}\n`, stderr: '' };
+        }
         if (options.background) {
           const path = command.match(/ > '([^']+)' 2>&1$/)?.[1];
           assert(path);
@@ -92,6 +99,7 @@ function fakeSdk(defaultDirectory = '/home/user') {
     async connect(id, options) {
       assert.equal(id, 'e2b-test-123');
       assert.equal(options.apiKey, 'test-key');
+      await before.connect?.(options.signal);
       return handle;
     },
     async getInfo(id) { return { sandboxId: id, state: 'paused' } as SandboxInfo; },
@@ -99,6 +107,42 @@ function fakeSdk(defaultDirectory = '/home/user') {
     async kill() { return true; },
   };
   return { handle, client, data, commands, get createOptions() { return createOptions; } };
+}
+
+for (const role of ['rd', 'reviewer'] as const) {
+  for (const stage of ['connect', 'discover'] as const) {
+    test(`Native ${role} timeout cancels lazy E2B ${stage}`, async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'code-factory-e2b-lazy-cancel-'));
+      let receivedSignal: AbortSignal | undefined;
+      let providerCompleted = false;
+      const sdk = fakeSdk('/home/user', { [stage]: async (signal?: AbortSignal) => {
+        receivedSignal = signal;
+        // The fallback bounds a regression without requiring wall-clock assertions.
+        await delay(1_000, undefined, signal ? { signal } : {});
+        providerCompleted = true;
+      } });
+      const faux = fauxProvider();
+      const models = createModels();
+      models.setProvider(faux.provider);
+      faux.setResponses([fauxAssistantMessage(fauxToolCall('bash', { command: 'echo must-not-run' }), { stopReason: 'toolUse' })]);
+      const service = new NativeAgentService(join(directory, 'native.sqlite'), models, new E2BSandboxService(sdk.client));
+      const controller = new AbortController();
+      try {
+        const outcome = await service.run({ role, requirementId: 'req_lazy_cancel', sessionId: 'ses_lazy_cancel',
+          nativeSessionId: null, prompt: 'Use remote tools', model: 'faux/faux-1', reasoningEffort: null, cwd: directory,
+          sandbox: { kind: 'e2b', providerSandboxId: 'e2b-test-123', cwd: null,
+            credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: false },
+          environment: {}, instructions: 'Test', signal: controller.signal, timeoutMs: 300, timeoutMode: 'elapsed',
+          onNativeSession: () => undefined, onEvent: () => undefined });
+        assert.equal(outcome.status, 'timed_out');
+        assert.equal(controller.signal.aborted, false, 'the Harness timeout must supply cancellation independently of Stop Run');
+        assert.equal(receivedSignal?.aborted, true);
+        assert.equal(providerCompleted, false);
+        assert(sdk.commands.every((entry) => entry.command === 'pwd'));
+        if (stage === 'connect') assert.deepEqual(sdk.commands, []);
+      } finally { await service.close(); await rm(directory, { recursive: true, force: true }); }
+    });
+  }
 }
 
 test('only E2B RD Runs offer sandbox tools; Default, named local, and Reviewer tools stay scoped', async () => {

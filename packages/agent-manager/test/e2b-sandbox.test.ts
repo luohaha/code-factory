@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import type { SandboxInfo } from 'e2b';
 import { createModels } from '@earendil-works/pi-ai/models';
@@ -20,7 +21,8 @@ import { sandboxesTableSql, schemaStatements } from '../src/storage/schema.js';
 import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.js';
 import type { RunOutcome } from '../src/core/types.js';
 
-function fakeE2B(settings: { acceptRotated?: boolean; home?: string } = {}) {
+function fakeE2B(settings: { acceptRotated?: boolean; home?: string;
+  before?: (action: 'status' | 'pause' | 'resume', signal?: AbortSignal) => Promise<void> } = {}) {
   let state: 'running' | 'paused' = 'running';
   let killed = false;
   const calls: string[] = [];
@@ -69,22 +71,77 @@ function fakeE2B(settings: { acceptRotated?: boolean; home?: string } = {}) {
       return handle('created-e2b-id');
     },
     async connect(id, options) {
-      calls.push(`connect:${id}`);
       check(options);
+      await settings.before?.('resume', options.signal);
+      calls.push(`connect:${id}`);
       state = 'running';
       return handle(id);
     },
     async getInfo(id, options) {
       check(options);
+      await settings.before?.('status', options.signal);
       calls.push(`info:${id}`);
       return { sandboxId: id, templateId: 'base', state } as SandboxInfo;
     },
-    async pause(id, options) { check(options); calls.push(`pause:${id}`); state = 'paused'; return true; },
+    async pause(id, options) {
+      check(options);
+      await settings.before?.('pause', options.signal);
+      calls.push(`pause:${id}`); state = 'paused'; return true;
+    },
     async kill(id, options) { check(options); calls.push(`kill:${id}`); killed = true; return true; },
   };
   return { service: new E2BSandboxService(client), calls, remoteCommands,
     remoteFiles, remoteWrites,
     get killed() { return killed; } };
+}
+
+for (const mode of ['stop', 'timeout'] as const) {
+  for (const action of ['status', 'pause', 'resume'] as const) {
+    test(`Native sandbox_${action} cancels its provider request on ${mode}`, async () => {
+      const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-lifecycle-cancel-'));
+      let enabled = false;
+      let receivedSignal: AbortSignal | undefined;
+      let providerCompleted = false;
+      let started!: () => void;
+      const requestStarted = new Promise<void>((resolve) => { started = resolve; });
+      const sdk = fakeE2B({ before: async (operation, signal) => {
+        if (!enabled || operation !== action) return;
+        receivedSignal = signal;
+        started();
+        await delay(1_000, undefined, signal ? { signal } : {});
+        providerCompleted = true;
+      } });
+      const faux = fauxProvider();
+      const models = createModels();
+      models.setProvider(faux.provider);
+      faux.setResponses([fauxAssistantMessage(fauxToolCall(`sandbox_${action}`, {}), { stopReason: 'toolUse' })]);
+      const manager = new AgentManager({ workspaceRoot: directory, databasePath: ':memory:',
+        store: new SqliteAgentManagerStore(':memory:'), e2bService: sdk.service,
+        nativeService: new NativeAgentService(join(directory, 'native.sqlite'), models, sdk.service),
+        timeoutMs: mode === 'timeout' ? 300 : 30_000, logger: createLogger({ level: 'silent' }) });
+      try {
+        const workspace = await manager.createE2BSandbox({ name: 'Cancellation', domain: 'e2b.example', apiKey: 'test-key' });
+        if (action === 'resume') await manager.pauseSandbox(workspace.id);
+        const before = manager.listSandboxes().find((item) => item.id === workspace.id);
+        const requirement = manager.createRequirement({ title: 'Cancel lifecycle', description: 'Exercise cancellation',
+          provider: 'native-agent', model: 'faux/faux-1', sandboxId: workspace.id });
+        enabled = true;
+        const run = manager.runRequirement(requirement.id);
+        await Promise.race([requestStarted, run.then(() => assert.fail('Run ended before its lifecycle request started'))]);
+        if (mode === 'stop') manager.interruptRdRun(requirement.id, 'stop');
+        await run;
+        assert.equal(receivedSignal?.aborted, true);
+        assert.equal(providerCompleted, false);
+        assert.deepEqual(manager.listRuns(requirement.id).map((item) => item.status), [mode === 'stop' ? 'cancelled' : 'timed_out']);
+        assert.deepEqual(manager.listSandboxes().find((item) => item.id === workspace.id), before,
+          'cancellation must not persist a lifecycle result or an unreachable health status');
+        assert.equal(manager.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, 0);
+      } finally {
+        enabled = false;
+        await manager.close(); rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  }
 }
 
 test('native lifecycle tools leave E2B paused through model turns, Run completion and a status-only resumed Run', async () => {

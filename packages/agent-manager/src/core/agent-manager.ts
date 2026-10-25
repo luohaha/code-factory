@@ -912,13 +912,18 @@ export class AgentManager extends EventEmitter {
     }
   }
 
-  async checkSandboxHealth(id: string): Promise<Sandbox> {
+  async checkSandboxHealth(id: string, signal?: AbortSignal): Promise<Sandbox> {
+    signal?.throwIfAborted();
     const sandbox = this.#store.getSandbox(id);
     if (!sandbox) throw new StoreNotFoundError(`Sandbox ${id} not found`);
     if (sandbox.kind !== 'e2b' || !sandbox.providerSandboxId) return sandbox;
     let status: Sandbox['status'];
-    try { status = (await this.#e2b.getInfo(sandbox.providerSandboxId, this.e2bCredentials(sandbox))).state; }
-    catch (error) { status = error instanceof Error && error.name === 'SandboxNotFoundError' ? 'terminated' : 'unreachable'; }
+    try { status = (await this.#e2b.getInfo(sandbox.providerSandboxId, this.e2bCredentials(sandbox), signal)).state; }
+    catch (error) {
+      signal?.throwIfAborted();
+      status = error instanceof Error && error.name === 'SandboxNotFoundError' ? 'terminated' : 'unreachable';
+    }
+    signal?.throwIfAborted();
     return this.#store.updateSandbox({ ...sandbox, status, checkedAt: new Date().toISOString() });
   }
 
@@ -954,7 +959,8 @@ export class AgentManager extends EventEmitter {
   }
 
   private async controlNativeSandbox(requirementId: string, sessionId: string,
-    action: NativeSandboxAction): Promise<NativeSandboxState> {
+    action: NativeSandboxAction, signal: AbortSignal): Promise<NativeSandboxState> {
+    signal.throwIfAborted();
     const requirement = this.requireAgentSource(requirementId, sessionId);
     if (requirement.provider !== 'native-agent' || !requirement.sandboxId || !this.#activeRdRuns.has(requirementId)) {
       throw new StoreConflictError('Sandbox tools require an active Native Agent RD Run on E2B');
@@ -962,11 +968,12 @@ export class AgentManager extends EventEmitter {
     const sandbox = this.requireE2BSandbox(requirement.sandboxId);
     if (action === 'pause') {
       this.ensureSandboxIdle(sandbox.id, requirementId);
-      await this.#e2b.pause(sandbox.providerSandboxId, this.e2bCredentials(sandbox));
+      await this.#e2b.pause(sandbox.providerSandboxId, this.e2bCredentials(sandbox), signal);
     } else if (action === 'resume') {
-      await this.#e2b.connect(sandbox.providerSandboxId, this.e2bCredentials(sandbox));
+      await this.#e2b.connect(sandbox.providerSandboxId, this.e2bCredentials(sandbox), signal);
     }
-    const { id, name, kind, providerSandboxId, status, checkedAt } = await this.checkSandboxHealth(sandbox.id);
+    signal.throwIfAborted();
+    const { id, name, kind, providerSandboxId, status, checkedAt } = await this.checkSandboxHealth(sandbox.id, signal);
     return { id, name, kind, providerSandboxId, status, checkedAt };
   }
 
@@ -1783,7 +1790,8 @@ export class AgentManager extends EventEmitter {
           ...(selectedSandbox?.kind === 'e2b' && selectedSandbox.providerSandboxId && cloudCredentials
             ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedSandbox.providerSandboxId, cwd: selectedSandbox.cwd,
                 credentials: cloudCredentials,
-                control: (action) => this.controlNativeSandbox(requirementId, started.session.id, action),
+                control: (action, signal) => this.controlNativeSandbox(requirementId, started.session.id, action,
+                  signal ? AbortSignal.any([controller.signal, signal]) : controller.signal),
                 forwardGitHubToken: selectedSandbox.repositoryUrl !== null
                   && new URL(selectedSandbox.repositoryUrl).hostname.toLowerCase() === 'github.com' } } : {}),
           environment: this.buildRdEnvironment(requirement), instructions: this.buildRdDeveloperInstructions(true, requirement.sandboxId),

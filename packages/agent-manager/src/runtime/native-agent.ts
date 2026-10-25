@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import type { Context } from '@earendil-works/chord';
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import { awaitWithContext, BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context';
 import { Type } from '@earendil-works/pi-ai';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import type { MutableModels } from '@earendil-works/pi-ai/models';
@@ -42,7 +42,7 @@ export interface NativeRunInput {
   cwd: string;
   sandbox?: { kind: 'e2b'; providerSandboxId: string; credentials: E2BCredentials;
     cwd?: string | null; forwardGitHubToken: boolean;
-    control?: (action: NativeSandboxAction) => Promise<NativeSandboxState> };
+    control?: (action: NativeSandboxAction, signal?: AbortSignal) => Promise<NativeSandboxState> };
   environment: Readonly<Record<string, string>>;
   instructions: string;
   signal: AbortSignal;
@@ -74,16 +74,23 @@ export class NativeAgentService {
     this.#e2b = e2b ?? new E2BSandboxService();
   }
 
-  #sandboxHandle(conversationId: ConversationId): Promise<E2BHandle> {
+  async #sandboxHandle(conversationId: ConversationId, context: Context): Promise<E2BHandle> {
     const sandbox = this.#sandboxes.get(conversationId);
     if (!sandbox) throw new Error('This tool requires a selected E2B workspace');
+    context.abortSignal?.throwIfAborted();
     let pending = this.#sandboxHandles.get(conversationId);
     if (!pending) {
-      pending = this.#e2b.connect(sandbox.providerSandboxId, sandbox.credentials, sandbox.signal)
-        .catch((error: unknown) => { this.#sandboxHandles.delete(conversationId); throw error; });
+      pending = this.#e2b.connect(sandbox.providerSandboxId, sandbox.credentials, context.abortSignal);
       this.#sandboxHandles.set(conversationId, pending);
     }
-    return pending;
+    try {
+      const handle = await awaitWithContext(pending, context);
+      context.abortSignal?.throwIfAborted();
+      return handle;
+    } catch (error) {
+      if (this.#sandboxHandles.get(conversationId) === pending) this.#sandboxHandles.delete(conversationId);
+      throw error;
+    }
   }
 
   async #open(): Promise<Harness> {
@@ -141,10 +148,13 @@ export class NativeAgentService {
       parameters: Type.Object({}), execute: async (_args, api) => output(await invokeCli(['timer', 'show'], api.conversationId)) });
     const timerCancel = defineTool({ name: 'timer_cancel', description: 'Cancel an active wake-up timer.',
       parameters: Type.Object({ id: Type.String() }), execute: async ({ id }, api) => output(await invokeCli(['timer', 'cancel', '--id', id], api.conversationId)) });
-    const sandboxControl = async (action: NativeSandboxAction, conversationId: ConversationId) => {
+    const sandboxControl = async (action: NativeSandboxAction, conversationId: ConversationId, context: Context) => {
       const sandbox = this.#sandboxes.get(conversationId);
       if (!sandbox?.control) throw new Error('Sandbox lifecycle tools require a selected E2B RD workspace');
-      const state = await sandbox.control(action);
+      const operation = withAbortSignal(sandbox.signal, context);
+      operation.abortSignal?.throwIfAborted();
+      const state = await awaitWithContext(sandbox.control(action, operation.abortSignal), operation);
+      operation.abortSignal?.throwIfAborted();
       if (action === 'resume') {
         this.#sandboxHandles.delete(conversationId);
         this.#sandboxEnvs.get(conversationId)?.reset();
@@ -153,24 +163,26 @@ export class NativeAgentService {
     };
     const sandboxStatus = defineTool({ name: 'sandbox_status',
       description: 'Check the selected E2B sandbox status without resuming it. Returns observed status and check time.',
-      parameters: Type.Object({}), execute: async (_args, api) => sandboxControl('status', api.conversationId) });
+      parameters: Type.Object({}), execute: async (_args, api, context) => sandboxControl('status', api.conversationId, context) });
     const sandboxPause = defineTool({ name: 'sandbox_pause',
       description: 'Pause the selected E2B sandbox when remote work is finished or waiting. Preserves files and memory; the agent and host tools keep running. Rejected while another RD or Reviewer Run uses it. Finish remote operations before pausing; later file or command tools may auto-resume it.',
-      parameters: Type.Object({}), execute: async (_args, api) => sandboxControl('pause', api.conversationId) });
+      parameters: Type.Object({}), execute: async (_args, api, context) => sandboxControl('pause', api.conversationId, context) });
     const sandboxResume = defineTool({ name: 'sandbox_resume',
       description: 'Resume the selected E2B sandbox before using its files or commands again.',
-      parameters: Type.Object({}), execute: async (_args, api) => sandboxControl('resume', api.conversationId) });
+      parameters: Type.Object({}), execute: async (_args, api, context) => sandboxControl('resume', api.conversationId, context) });
     const transfer = async (direction: 'upload' | 'download', localPath: string, remotePath: string,
       overwrite: boolean, conversationId: ConversationId, env: ExecutionEnv | undefined,
       context: Context) => {
-      const signal = context.abortSignal;
-      if (!this.#sandboxes.get(conversationId) || !env) throw new Error('File transfer requires a selected E2B workspace');
+      const sandbox = this.#sandboxes.get(conversationId);
+      if (!sandbox || !env) throw new Error('File transfer requires a selected E2B workspace');
+      const operation = withAbortSignal(sandbox.signal, context);
+      const signal = operation.abortSignal;
       validateTransferPaths(localPath, remotePath);
       try {
         signal?.throwIfAborted();
-        const resolved = await env.absolutePath(remotePath, context);
+        const resolved = await env.absolutePath(remotePath, operation);
         if (!resolved.ok) throw resolved.error;
-        const handle = await this.#sandboxHandle(conversationId);
+        const handle = await this.#sandboxHandle(conversationId, operation);
         const byteSize = direction === 'upload'
           ? await uploadE2BFile(handle, localPath, resolved.value, signal)
           : await downloadE2BFile(handle, resolved.value, localPath, overwrite, signal);
@@ -211,11 +223,12 @@ export class NativeAgentService {
           let env = this.#sandboxEnvs.get(conversationId);
           if (!env) {
             const directory = sandbox.cwd === undefined ? cwd ?? process.cwd() : sandbox.cwd;
-            env = new DeferredExecutionEnv(`e2b:${sandbox.credentials.domain}:${sandbox.providerSandboxId}`, directory ?? '', async () => {
-              const handle = await this.#sandboxHandle(conversationId);
+            env = new DeferredExecutionEnv(`e2b:${sandbox.credentials.domain}:${sandbox.providerSandboxId}`, directory ?? '', async (context) => {
+              const operation = withAbortSignal(sandbox.signal, context);
+              const handle = await this.#sandboxHandle(conversationId, operation);
               const commandEnv = Object.fromEntries((sandbox.forwardGitHubToken ? ['GH_TOKEN', 'GITHUB_TOKEN'] : [])
                 .flatMap((name) => process.env[name] ? [[name, process.env[name]!]] : []));
-              return E2BExecutionEnv.create(handle, directory, commandEnv, sandbox.credentials.domain, sandbox.signal);
+              return E2BExecutionEnv.create(handle, directory, commandEnv, sandbox.credentials.domain, operation.abortSignal);
             });
             this.#sandboxEnvs.set(conversationId, env);
           }

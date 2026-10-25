@@ -15,14 +15,19 @@ export interface E2BCredentials { domain: string; apiKey: string }
 export class E2BProviderError extends Error {}
 
 export async function getE2BDefaultCwd(sandbox: E2BHandle, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
   try {
     const result = await sandbox.commands.run('pwd', { timeoutMs: 30_000, ...(signal ? { signal } : {}) });
+    signal?.throwIfAborted();
     const directory = result.stdout.trim();
     if (result.exitCode !== 0 || !posix.isAbsolute(directory) || directory.includes('\0') || directory.includes('\n')) {
       throw new Error();
     }
     return directory;
-  } catch { throw new E2BProviderError('Could not determine the E2B default working directory'); }
+  } catch {
+    signal?.throwIfAborted();
+    throw new E2BProviderError('Could not determine the E2B default working directory');
+  }
 }
 
 /** Narrow SDK seam so the same adapter is exercised by deterministic provider tests. */
@@ -52,13 +57,26 @@ export class E2BSandboxService {
   }
 
   async connect(id: string, credentials: E2BCredentials, signal?: AbortSignal): Promise<E2BHandle> {
-    try { return await this.client.connect(id, { ...credentials, ...(signal ? { signal } : {}) }); }
-    catch { throw new E2BProviderError('E2B sandbox connection failed; check the domain, API key, and sandbox ID'); }
+    signal?.throwIfAborted();
+    try {
+      const handle = await this.client.connect(id, { ...credentials, ...(signal ? { signal } : {}) });
+      signal?.throwIfAborted();
+      return handle;
+    } catch {
+      signal?.throwIfAborted();
+      throw new E2BProviderError('E2B sandbox connection failed; check the domain, API key, and sandbox ID');
+    }
   }
 
-  async getInfo(id: string, credentials: E2BCredentials): Promise<SandboxInfo> {
-    try { return await this.client.getInfo(id, credentials); }
+  async getInfo(id: string, credentials: E2BCredentials, signal?: AbortSignal): Promise<SandboxInfo> {
+    signal?.throwIfAborted();
+    try {
+      const info = await this.client.getInfo(id, { ...credentials, ...(signal ? { signal } : {}) });
+      signal?.throwIfAborted();
+      return info;
+    }
     catch (error) {
+      signal?.throwIfAborted();
       if (error instanceof SandboxNotFoundError) {
         const missing = new Error('E2B sandbox not found');
         missing.name = 'SandboxNotFoundError';
@@ -68,9 +86,16 @@ export class E2BSandboxService {
     }
   }
 
-  async pause(id: string, credentials: E2BCredentials): Promise<boolean> {
-    try { return await this.client.pause(id, credentials); }
-    catch { throw new E2BProviderError('E2B sandbox pause failed'); }
+  async pause(id: string, credentials: E2BCredentials, signal?: AbortSignal): Promise<boolean> {
+    signal?.throwIfAborted();
+    try {
+      const paused = await this.client.pause(id, { ...credentials, ...(signal ? { signal } : {}) });
+      signal?.throwIfAborted();
+      return paused;
+    } catch {
+      signal?.throwIfAborted();
+      throw new E2BProviderError('E2B sandbox pause failed');
+    }
   }
 
   async kill(id: string, credentials: E2BCredentials): Promise<boolean> {
@@ -115,6 +140,7 @@ export class E2BExecutionEnv implements ExecutionEnv {
 
   static async create(sandbox: E2BHandle, cwd: string | null,
     commandEnv: Readonly<Record<string, string>> = {}, domain = 'e2b.app', signal?: AbortSignal): Promise<E2BExecutionEnv> {
+    signal?.throwIfAborted();
     if (cwd !== null) return new E2BExecutionEnv(sandbox, cwd, commandEnv, domain);
     return new E2BExecutionEnv(sandbox, await getE2BDefaultCwd(sandbox, signal), commandEnv, domain, true);
   }
