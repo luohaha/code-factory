@@ -146,7 +146,9 @@ for (const locale of ['en', 'zh-CN']) {
     assert.deepEqual(patches[1].environmentVariables, { CUSTOM: null, GH_TOKEN: 'rotated-browser-token', EXTRA: 'extra-value' });
     assert.equal((await dialog.innerText()).includes('rotated-browser-token'), false);
     await edit();
-    await dialog.locator('#edit-workspace-domain').fill('');
+    const domainInput = dialog.locator('#edit-workspace-domain');
+    await domainInput.press('ControlOrMeta+A');
+    await domainInput.press('Backspace');
     const waitForBlankDomain = () => page.waitForFunction(() => document.querySelector('#edit-workspace-domain')?.value === '');
     await waitForBlankDomain();
     for (const name of ['GH_TOKEN', 'EXTRA']) {
