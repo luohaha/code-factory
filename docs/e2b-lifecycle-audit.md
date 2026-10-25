@@ -92,6 +92,23 @@ This is **E2B's expiry policy**. The repository neither tracks the last business
 
 There are separate Agent and command timeouts: RD defaults to 60 minutes without Harness activity, Reviewer has a total elapsed-time limit of at most 30 minutes, and shell commands may have their own timeout. These timers do not renew the sandbox lease. In particular, Manager's protection against human Pause during an active Run cannot prevent the provider from pausing the instance on expiry.
 
+### When `setTimeout` and `connect` are called
+
+Code Factory does not call the sandbox SDK's `setTimeout` method (`set_timeout` in Python), either at Run startup or on a timer. The initial `timeoutMs` passed to `create` is a creation option, not a later renewal call. `connect` is triggered by operations rather than a periodic schedule:
+
+| Trigger | SDK call timing |
+| --- | --- |
+| Create a workspace without an existing sandbox ID | Calls `create`, not the Manager's `connect` wrapper |
+| Attach an existing sandbox ID | Calls `connect` before reading and saving its status |
+| Change the domain or submit an API key | Calls `connect` to verify the connection settings before saving; renaming or editing only environment variables does not connect |
+| Human Resume or Native RD `sandbox_resume` | Calls `connect` immediately; the Native tool also clears the cached handle and resets the deferred environment |
+| Native RD or Reviewer Run first accesses remote files or commands | Calls `connect` lazily, including on first upload/download, and caches the handle for that Run |
+| Oversized input needs a remote temporary file | Manager separately calls `connect` and uploads the payload before invoking the Native runner |
+
+Within a Run, later model turns and remote tools reuse the cached handle. Run cleanup removes it, so a later Run connects again on its first remote operation. A successful Native `sandbox_resume` invalidates the handle, so the next remote operation connects again even within the same Run. Failed or cancelled connection initialization also removes its cached promise, allowing a subsequent attempt to reconnect. These calls do not require the sandbox to be paused; they can also connect to a running instance.
+
+Ordinary Run startup, model-only replies, health/status queries, host control-plane tools, and long-command output polling do not themselves call `connect` or renew a lease. A Run may therefore contain several model/tool rounds after its last connection without extending the provider deadline. See [Manager call sites](../packages/agent-manager/src/core/agent-manager.ts) and [Native handle caching and cleanup](../packages/agent-manager/src/runtime/native-agent.ts). The call sites were also checked against `1ef8d4a`; this clarification does not revise the earlier capability-audit baseline.
+
 ## 4. Available capabilities and boundaries
 
 | Capability | Implemented | Boundary |
