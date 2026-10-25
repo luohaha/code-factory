@@ -4,14 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { createLogger } from '../src/logger.ts';
+import { createLogger } from '../src/infrastructure/logger.ts';
 import {
   AGENT_MODEL_REFRESH_INTERVAL_MS,
   ClaudeCodeModelDiscoverer,
   CodexModelDiscoverer,
   ModelCatalog,
   type AgentModelDiscoverer,
-} from '../src/model-catalog.ts';
+} from '../src/runtime/model-catalog.ts';
 
 const logger = createLogger({ level: 'silent' });
 

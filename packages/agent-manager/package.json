@@ -43,7 +43,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && npm run build:dashboard",
+    "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc -p tsconfig.json && npm run build:dashboard",
     "build:dashboard": "npm --prefix ../../apps/web run build && node scripts/sync-dashboard.mjs",
     "check:license": "node ../../scripts/check-license.mjs",
     "check:version": "node ../../scripts/check-version.mjs",

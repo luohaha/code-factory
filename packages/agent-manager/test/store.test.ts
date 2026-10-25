@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
-import { SqliteAgentManagerStore } from '../src/sqlite-store.ts';
-import { StoreConflictError } from '../src/store.ts';
-import type { AgentTraceEvent } from '../src/types.ts';
+import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.ts';
+import { StoreConflictError } from '../src/storage/store.ts';
+import type { AgentTraceEvent } from '../src/core/types.ts';
 
 const now = '2026-09-10T12:00:00.000Z';
 

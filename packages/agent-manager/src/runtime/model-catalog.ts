@@ -3,13 +3,13 @@ import { createInterface } from 'node:readline';
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
 
-import type { Logger } from './logger.js';
+import type { Logger } from '../infrastructure/logger.js';
 import type {
   AgentModel,
   AgentModelCatalogSnapshot,
   AgentModelProviderCatalog,
   AgentProvider,
-} from './types.js';
+} from '../core/types.js';
 
 export const AGENT_MODEL_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 const DISCOVERY_TIMEOUT_MS = 15_000;

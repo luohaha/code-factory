@@ -19,6 +19,8 @@ Code Factory brings requirements, coding agents, and GitHub pull requests into o
 
 Each requirement has its own persistent agent context. Agents can split work into child requirements and work in parallel, while humans steer the work, request reviews, and confirm completion.
 
+Native Agents using E2B can check, pause, and resume their selected sandbox and transfer files between the host and sandbox, including conversation attachments. Pausing preserves remote state while the Agent continues on the host.
+
 Requirement details include collapsible tool calls with arguments, results, and execution status, plus a live working indicator. Both follow the dashboard's light/dark theme and English/Simplified Chinese language setting.
 
 ## How It Works

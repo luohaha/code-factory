@@ -5,6 +5,24 @@ Code Factory contains two independently installed Node.js packages and has no ro
 - `packages/agent-manager/` contains the TypeScript Agent Manager, both CLIs, and the npm package definition;
 - `apps/web/` contains the React dashboard bundled into the published package during the Agent Manager build.
 
+## Agent Manager source layout
+
+`packages/agent-manager/src/` groups modules by responsibility:
+
+| Directory | Contents |
+| --- | --- |
+| `core/` | Agent Manager orchestration and shared domain types |
+| `runtime/` | Native Agent, E2B execution and file transfer, provider credentials, model discovery, process runner, and `adapters/` for Codex and Claude Code |
+| `storage/` | Store interface, SQLite implementation, schema, and search indexing helpers |
+| `triggers/` | Agent trigger contract and timers |
+| `triggers/github/` | GitHub client, PR reconciliation and triggers, and repository identity |
+| `jev/` | Jev wake and inter-agent message decisions |
+| `http/` | HTTP/SSE API and bundled dashboard serving |
+| `cli/` | CLI command implementations, RD CLI launcher, daemon, and startup banner |
+| `infrastructure/` | Workspace configuration, logging, package version, and workspace lock |
+
+The top-level `index.ts` preserves the public package exports. `cli.ts` and `code-factory-cli-main.ts` remain the published executable entrypoints, so commands still use `dist/cli.js` and `dist/code-factory-cli-main.js`. Relative module imports retain explicit `.js` suffixes. The build removes the previous `dist/` output before compiling so moved or deleted modules cannot linger in the package.
+
 ## Install dependencies manually
 
 Install each package from the repository root. Use `npm ci` when reproducing the checked-in lockfiles:
@@ -98,6 +116,8 @@ npm run test:browser
 ~~~
 
 The browser tests start and stop an isolated Vite server and mock Agent Manager responses, so they do not read or change a running workspace. Test files run sequentially because their servers share the project's local Wrangler state. To use an installed Google Chrome instead of downloading Chromium, run `PLAYWRIGHT_CHANNEL=chrome npm run test:browser`.
+
+CI pins the GitHub Actions runner to `ubuntu-24.04`. The locked Playwright `1.58.2` explicitly [supports Ubuntu 24.04](https://github.com/microsoft/playwright/blob/v1.58.2/packages/playwright-core/src/server/utils/hostPlatform.ts) and provides its [Chromium system dependencies](https://github.com/microsoft/playwright/blob/v1.58.2/packages/playwright-core/src/server/registry/nativeDeps.ts). Using `ubuntu-latest` selected Ubuntu 26.04, where that Playwright version rejects Chromium installation. Pinning the supported image restores compatibility without changing dependencies or the minimum supported Node.js version (`22.19.0`). CI continues to run `npx playwright install --with-deps chromium`, `npm run test:browser`, and Agent Manager's `npm run release:check`. Before changing the runner image or Playwright version, verify all three on the proposed image.
 
 Before a release, follow the additional audit, version, changelog, and package-content checks in the [release guide](releasing.md).
 

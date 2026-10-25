@@ -255,7 +255,6 @@ export const zhCN = {
   'Run count': '运行数量',
   '{count} Runs': '共 {count} 个运行',
   'RD Agent is working': 'RD Agent 正在工作',
-  'New messages are queued by default.': '新消息默认排队等待处理。',
   'Arguments': '参数',
   'Result': '结果',
   'Copy arguments': '复制参数',

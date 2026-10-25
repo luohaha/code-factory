@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
-import { E2BCredentialStore } from '../src/e2b-credentials.js';
-import { applyEnvironmentVariablePatch, environmentVariablePatch } from '../src/sandbox-environment.js';
+import { E2BCredentialStore } from '../src/runtime/e2b-credentials.js';
+import { applyEnvironmentVariablePatch, environmentVariablePatch } from '../src/runtime/sandbox-environment.js';
 
 test('environment patches preserve exact values, retain omitted keys, remove null keys, and bound the combined configuration', () => {
   assert.deepEqual(applyEnvironmentVariablePatch({ KEEP: 'keep', REMOVE: 'remove', TOKEN: 'old' },

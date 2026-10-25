@@ -1,16 +1,16 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 
-import { AgentManager, MAX_MESSAGE_ATTACHMENT_BYTES } from './agent-manager.js';
-import { validateAgentManagerConfigurationPatch } from './configuration.js';
+import { AgentManager, MAX_MESSAGE_ATTACHMENT_BYTES } from '../core/agent-manager.js';
+import { validateAgentManagerConfigurationPatch } from '../infrastructure/configuration.js';
 import { DashboardServer } from './dashboard-server.js';
-import { E2BProviderError } from './e2b-execution-env.js';
-import { environmentVariablePatch } from './sandbox-environment.js';
-import { JevMessageDeliveryError } from './jev-message-decision.js';
-import type { Logger } from './logger.js';
-import { StoreConflictError, StoreNotFoundError } from './store.js';
-import type { AgentProvider, AgentReasoningEffort, ManagerEvent, PullRequestStatus } from './types.js';
-import { CODE_FACTORY_VERSION } from './version.js';
+import { E2BProviderError } from '../runtime/e2b-execution-env.js';
+import { environmentVariablePatch } from '../runtime/sandbox-environment.js';
+import { JevMessageDeliveryError } from '../jev/jev-message-decision.js';
+import type { Logger } from '../infrastructure/logger.js';
+import { StoreConflictError, StoreNotFoundError } from '../storage/store.js';
+import type { AgentProvider, AgentReasoningEffort, ManagerEvent, PullRequestStatus } from '../core/types.js';
+import { CODE_FACTORY_VERSION } from '../infrastructure/version.js';
 
 export interface AgentManagerServerOptions {
   host?: string;

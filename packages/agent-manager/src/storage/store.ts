@@ -22,7 +22,7 @@ import type {
   RunRole,
   SessionState,
   Sandbox,
-} from './types.js';
+} from '../core/types.js';
 
 export class StoreConflictError extends Error {}
 export class StoreNotFoundError extends Error {}

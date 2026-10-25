@@ -1,6 +1,6 @@
 import { NativeProfileStore, nativeAuthDatabasePath, type NativeApiFormat, type NativeApiProfile,
   type NativeApiProfileSecret } from './native-auth.js';
-import { StoreNotFoundError } from './store.js';
+import { StoreNotFoundError } from '../storage/store.js';
 
 /** Web-facing profile operations. API responses contain metadata only. */
 export class NativeAuthService {

@@ -3,12 +3,12 @@ import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { AgentManager } from './agent-manager.js';
+import { AgentManager } from '../core/agent-manager.js';
 import {
   defaultConfigurationPath,
   loadAgentManagerConfiguration,
   validateAgentManagerConfiguration,
-} from './configuration.js';
+} from '../infrastructure/configuration.js';
 import {
   inspectDaemon,
   runDaemonSupervisor,
@@ -16,15 +16,15 @@ import {
   stopDaemon,
   type DaemonState,
 } from './daemon.js';
-import { isLogLevel, type Logger } from './logger.js';
-import { createAgentManagerServer, listen } from './server.js';
+import { isLogLevel, type Logger } from '../infrastructure/logger.js';
+import { createAgentManagerServer, listen } from '../http/server.js';
 import { formatStartupBanner } from './startup-banner.js';
-import { CODE_FACTORY_VERSION } from './version.js';
+import { CODE_FACTORY_VERSION } from '../infrastructure/version.js';
 import {
   acquireWorkspaceLock,
   defaultWorkspaceLockPath,
   WorkspaceAlreadyRunningError,
-} from './workspace-lock.js';
+} from '../infrastructure/workspace-lock.js';
 
 const command = process.argv[2];
 
@@ -111,7 +111,7 @@ async function runForeground(args: readonly string[]): Promise<void> {
   });
   const sourceExecution = import.meta.url.endsWith('.ts');
   const agentCliEntrypoint = fileURLToPath(new URL(
-    sourceExecution ? './code-factory-cli-main.ts' : './code-factory-cli-main.js',
+    sourceExecution ? '../code-factory-cli-main.ts' : '../code-factory-cli-main.js',
     import.meta.url,
   ));
   const workspaceLock = acquireWorkspaceLock(workspaceRoot);

@@ -1,7 +1,7 @@
 import type { AgentTrigger, AgentTriggerContext } from './agent-trigger.js';
-import type { Logger } from './logger.js';
-import type { AgentManagerStore } from './store.js';
-import type { AgentTimer } from './types.js';
+import type { Logger } from '../infrastructure/logger.js';
+import type { AgentManagerStore } from '../storage/store.js';
+import type { AgentTimer } from '../core/types.js';
 
 export const TIMER_AGENT_TRIGGER_ID = 'timer';
 

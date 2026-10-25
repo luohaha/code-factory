@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import type { AgentAdapter } from '../src/adapters/types.ts';
-import { CodexAdapter } from '../src/adapters/codex.ts';
-import { HeadlessProcessRunner } from '../src/process-runner.ts';
+import type { AgentAdapter } from '../src/runtime/adapters/types.ts';
+import { CodexAdapter } from '../src/runtime/adapters/codex.ts';
+import { HeadlessProcessRunner } from '../src/runtime/process-runner.ts';
 
 const noOutputAdapter: AgentAdapter = {
   provider: 'codex',
