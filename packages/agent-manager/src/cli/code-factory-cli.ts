@@ -66,23 +66,17 @@ Context: CODE_FACTORY_API_URL and CODE_FACTORY_REQUIREMENT_ID.`;
 
 const ARTIFACT_PUBLISH_HELP = `Usage: code-factory-cli artifact publish [options]
 
-Explicitly publish one regular file to this Requirement's conversation. Available
-to Codex, Claude Code, and Native RD Agents. Bytes are uploaded outside model
-context; do not read, paste, or base64-encode the file into the prompt or reply.
+Publish a host file as a conversation attachment for browser download.
 
 Required options:
-  --path PATH             Absolute file path on the Agent Manager host
+  --path PATH             Absolute host path to a non-empty regular file (max 20 MB)
 
 Optional options:
   --name NAME             Download filename (defaults to the source basename)
   --media-type TYPE       MIME type (defaults to application/octet-stream)
 
-Files must be non-empty and at most 20 MB. Raster images are detected by signature;
-other types are downloaded as files. E2B Agents must sandbox_download to a host
-path first. The result contains metadata and a relative downloadPath. The
-dashboard supplies a link using the browser's Manager URL, including remote URLs.
-Source files are preserved. A new RD message is created without waking RD again.
-Do not publish credentials or secrets. Publication is explicit and never automatic.
+For E2B output, sandbox_download to the host first. Returns metadata and a relative
+download path, never file contents. Do not publish secrets.
 
 Context: CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID, and
 CODE_FACTORY_SESSION_ID.`;
