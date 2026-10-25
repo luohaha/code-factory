@@ -441,7 +441,7 @@ export class AgentManagerClient {
     return this.request('/api/sandboxes', { method: 'POST', body: JSON.stringify({ kind: 'local', ...input }) });
   }
 
-  createSandbox(input: { name: string; domain: string; apiKey: string;
+  createSandbox(input: { name: string; domain?: string; apiKey: string;
     providerSandboxId?: string; template?: string; environmentVariables?: Record<string, string | null> }): Promise<SandboxDto> {
     return this.request('/api/sandboxes', { method: 'POST', body: JSON.stringify({ kind: 'e2b', ...input }) });
   }

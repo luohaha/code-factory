@@ -81,6 +81,7 @@ export const zhCN = {
   'Existing E2B sandbox ID': '现有 E2B 沙箱 ID',
   'Existing E2B sandbox ID (optional)': '现有 E2B 沙箱 ID（可选）',
   'E2B domain': 'E2B 域名',
+  'Leave blank to use e2b.app.': '留空默认使用 e2b.app。',
   'E2B domain (E2B_DOMAIN)': 'E2B 域名（E2B_DOMAIN）',
   'E2B API key': 'E2B API 密钥',
   'E2B API key (E2B_API_KEY)': 'E2B API 密钥（E2B_API_KEY）',

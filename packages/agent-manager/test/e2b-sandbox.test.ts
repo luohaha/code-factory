@@ -258,6 +258,51 @@ test('native sandbox pause excludes only its own active RD Run and protects shar
   }
 });
 
+test('E2B domain defaults apply to creation, attachment and blank edits while omitted edits preserve custom domains', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-default-domain-'));
+  const sdk = fakeE2B({ additionalCredentials: [{ domain: 'e2b.app', apiKey: 'test-key' }] });
+  const store = new SqliteAgentManagerStore(':memory:');
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath: ':memory:', store,
+    e2bService: sdk.service, logger: createLogger({ level: 'silent' }) });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sandboxes`;
+  const request = (path: string, method: string, body?: unknown) => fetch(`${base}${path}`, {
+    method, ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+  });
+  try {
+    for (const fields of [{}, { domain: '' }, { domain: ' \t ' }, { providerSandboxId: 'external-e2b-id' }]) {
+      const response = await request('', 'POST', { kind: 'e2b', name: 'Default domain', apiKey: 'test-key',
+        ...fields, environmentVariables: { CUSTOM: 'saved' } });
+      assert.equal(response.status, 201);
+      const sandbox = await response.json() as Sandbox;
+      assert.equal(sandbox.domain, 'e2b.app');
+      assert.equal(store.getSandbox(sandbox.id)?.domain, 'e2b.app');
+      assert.equal((await request(`/${sandbox.id}/health`, 'GET')).status, 200);
+      const custom = await request(`/${sandbox.id}`, 'PATCH', { domain: ' E2B.EXAMPLE ' });
+      assert.equal(custom.status, 200);
+      assert.equal((await custom.json() as Sandbox).domain, 'e2b.example');
+      const renamed = await request(`/${sandbox.id}`, 'PATCH', { name: 'Keep custom domain' });
+      assert.equal(renamed.status, 200);
+      assert.equal((await renamed.json() as Sandbox).domain, 'e2b.example');
+      const reset = await request(`/${sandbox.id}`, 'PATCH', { domain: 'domain' in fields ? fields.domain : '' });
+      assert.equal(reset.status, 200);
+      assert.equal((await reset.json() as Sandbox).domain, 'e2b.app');
+      assert.deepEqual(manager.listSandboxes().find((item) => item.id === sandbox.id)?.environmentVariableNames, ['CUSTOM']);
+      assert.equal((await request(`/${sandbox.id}`, 'DELETE')).status, 204);
+    }
+    const calls = sdk.calls.length;
+    for (const domain of [null, 42, 'https://e2b.app']) {
+      assert.equal((await request('', 'POST', { kind: 'e2b', name: 'Invalid domain', apiKey: 'test-key', domain })).status, 400);
+    }
+    assert.equal(sdk.calls.length, calls, 'invalid domains must be rejected before provisioning');
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('E2B sandbox API provisions, allows reuse, checks health and controls lifecycle', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-api-'));
   const databasePath = join(directory, 'factory.sqlite');

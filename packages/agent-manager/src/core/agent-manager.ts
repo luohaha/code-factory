@@ -846,11 +846,11 @@ export class AgentManager extends EventEmitter {
   }
 
   async createE2BSandbox(input: { name: string; template?: string;
-    providerSandboxId?: string; domain: string; apiKey: string;
+    providerSandboxId?: string; domain?: string; apiKey: string;
     environmentVariables?: EnvironmentVariablePatch }): Promise<SandboxSummary> {
     const name = input.name.trim();
     if (!name || name.length > 80) throw new TypeError('sandbox name must contain 1 to 80 characters');
-    const domain = input.domain.trim().toLowerCase();
+    const domain = (input.domain?.trim() || 'e2b.app').toLowerCase();
     if (!/^[a-zA-Z0-9.-]+(?::[0-9]+)?$/.test(domain)) throw new TypeError('E2B_DOMAIN must be a domain name');
     const apiKey = input.apiKey.trim();
     if (!apiKey) throw new TypeError('E2B_API_KEY is required');
@@ -902,7 +902,7 @@ export class AgentManager extends EventEmitter {
       return this.#store.updateSandbox({ ...current, name, cwd });
     }
     if (!current.providerSandboxId) throw new TypeError('E2B workspace has no provider sandbox ID');
-    const domain = input.domain === undefined ? current.domain ?? 'e2b.app' : input.domain.trim().toLowerCase();
+    const domain = input.domain === undefined ? current.domain ?? 'e2b.app' : (input.domain.trim() || 'e2b.app').toLowerCase();
     if (!/^[a-zA-Z0-9.-]+(?::[0-9]+)?$/.test(domain)) throw new TypeError('E2B_DOMAIN must be a domain name');
     const apiKey = input.apiKey?.trim();
     if (input.apiKey !== undefined && !apiKey) throw new TypeError('E2B_API_KEY must be non-empty');

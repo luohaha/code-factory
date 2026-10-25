@@ -3572,7 +3572,8 @@ function Dashboard() {
       const sandbox = createPathKind === 'local'
         ? await client.createLocalExecution({ name: name.trim(), cwd: value('cwd') })
         : await client.createSandbox({ name: name.trim(),
-          domain: value('domain'), apiKey: value('apiKey'),
+          apiKey: value('apiKey'),
+          ...(value('domain') ? { domain: value('domain') } : {}),
           ...(Object.keys(environmentVariables).length ? { environmentVariables } : {}),
           ...(value('providerSandboxId') ? { providerSandboxId: value('providerSandboxId') } : {}),
           ...(value('template') ? { template: value('template') } : {}),
@@ -3981,7 +3982,8 @@ function Dashboard() {
                       <>
                         <Field>
                           <FieldLabel htmlFor="execution-path-domain">{t('E2B domain')}</FieldLabel>
-                          <Input id="execution-path-domain" name="domain" required placeholder={t('E2B domain (E2B_DOMAIN)')} />
+                          <Input id="execution-path-domain" name="domain" placeholder="e2b.app" aria-describedby="execution-path-domain-hint" />
+                          <p id="execution-path-domain-hint" className="text-xs text-muted-foreground">{t('Leave blank to use e2b.app.')}</p>
                         </Field>
                         <Field>
                           <FieldLabel htmlFor="execution-path-key">{t('E2B API key')}</FieldLabel>
@@ -4035,7 +4037,9 @@ function Dashboard() {
                     {selectedWorkspace.kind === 'e2b' ? <>
                       <Field>
                         <FieldLabel htmlFor="edit-workspace-domain">{t('E2B domain')}</FieldLabel>
-                        <Input id="edit-workspace-domain" name="domain" required defaultValue={selectedWorkspace.domain ?? ''} />
+                        <Input id="edit-workspace-domain" name="domain" defaultValue={selectedWorkspace.domain ?? ''}
+                          placeholder="e2b.app" aria-describedby="edit-workspace-domain-hint" />
+                        <p id="edit-workspace-domain-hint" className="text-xs text-muted-foreground">{t('Leave blank to use e2b.app.')}</p>
                       </Field>
                       <Field>
                         <FieldLabel htmlFor="edit-workspace-key">{t('E2B API key')}</FieldLabel>

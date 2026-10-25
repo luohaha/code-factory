@@ -57,7 +57,7 @@ for (const locale of ['en', 'zh-CN']) {
         variables = input.environmentVariables ?? {};
         workspace = {
           id: 'sbx_created', name: input.name, kind: 'e2b', cwd: null,
-          providerSandboxId: input.providerSandboxId ?? 'new-remote-id', domain: input.domain,
+          providerSandboxId: input.providerSandboxId ?? 'new-remote-id', domain: input.domain || 'e2b.app',
           credentialRef: 'e2b_credential', credentialEnvVar: null, repositoryUrl: null,
           template: input.template ?? 'base', status: 'running', checkedAt: null, createdAt: new Date().toISOString(),
           environmentVariableNames: Object.keys(variables).sort(),
@@ -72,7 +72,7 @@ for (const locale of ['en', 'zh-CN']) {
           if (value === null) delete variables[name];
           else variables[name] = value;
         }
-        workspace = { ...workspace, name: input.name, domain: input.domain,
+        workspace = { ...workspace, name: input.name, domain: input.domain === undefined ? workspace.domain : input.domain || 'e2b.app',
           environmentVariableNames: Object.keys(variables).sort() };
         body = workspace;
       }
@@ -86,7 +86,10 @@ for (const locale of ['en', 'zh-CN']) {
     const dialog = page.getByRole('dialog');
     await dialog.locator('#execution-path-kind').selectOption('e2b');
     await dialog.locator('#execution-path-name').fill('Task sandbox');
-    await dialog.locator('#execution-path-domain').fill('e2b.example');
+    const domainHint = chinese ? '留空默认使用 e2b.app。' : 'Leave blank to use e2b.app.';
+    await dialog.getByText(domainHint, { exact: true }).waitFor();
+    assert.equal(await dialog.locator('#execution-path-domain').getAttribute('required'), null);
+    if (chinese) await dialog.locator('#execution-path-domain').fill('e2b.example');
     await dialog.locator('#execution-path-key').fill('test-key');
     await dialog.getByText(chinese ? 'Agent 可以根据任务需要克隆仓库并准备工具。' : 'The Agent can clone a repository and prepare tools when the task needs them.', { exact: true }).waitFor();
     await dialog.locator('summary').click();
@@ -107,14 +110,16 @@ for (const locale of ['en', 'zh-CN']) {
     }
     await dialog.getByRole('button', { name: chinese ? '创建' : 'Create', exact: true }).click();
     await dialog.waitFor({ state: 'hidden' });
-    assert.deepEqual(writes, [{ kind: 'e2b', name: 'Task sandbox', domain: 'e2b.example', apiKey: 'test-key',
+    assert.deepEqual(writes, [{ kind: 'e2b', name: 'Task sandbox', apiKey: 'test-key',
       environmentVariables: { GH_TOKEN: 'browser-token', CUSTOM: 'original-value' },
-      ...(chinese ? { providerSandboxId: 'existing-remote-id' } : {}) }]);
+      ...(chinese ? { domain: 'e2b.example', providerSandboxId: 'existing-remote-id' } : {}) }]);
+    assert.equal(workspace.domain, chinese ? 'e2b.example' : 'e2b.app');
     await page.getByRole('button', { name: /Task sandbox/ }).click();
     assert.equal((await dialog.innerText()).includes('browser-token'), false);
     const edit = () => dialog.getByRole('button', { name: chinese ? '编辑工作区' : 'Edit workspace', exact: true }).click();
     const save = () => dialog.getByRole('button', { name: chinese ? '保存修改' : 'Save changes', exact: true }).click();
     await edit();
+    await dialog.getByText(domainHint, { exact: true }).waitFor();
     assert.equal(await dialog.locator('input[name="cwd"]').count(), 0);
     assert.equal(await variableName(1).getAttribute('readonly'), '');
     assert.equal(await variableValue(1).inputValue(), '');
@@ -138,12 +143,15 @@ for (const locale of ['en', 'zh-CN']) {
     assert.deepEqual(patches[1].environmentVariables, { CUSTOM: null, GH_TOKEN: 'rotated-browser-token', EXTRA: 'extra-value' });
     assert.equal((await dialog.innerText()).includes('rotated-browser-token'), false);
     await edit();
+    await dialog.locator('#edit-workspace-domain').fill('');
     for (const name of ['GH_TOKEN', 'EXTRA']) {
       await dialog.getByRole('button', { name: `${chinese ? '移除变量' : 'Remove variable'} ${name}`, exact: true }).click();
     }
     await save();
     await dialog.getByRole('button', { name: chinese ? '编辑工作区' : 'Edit workspace', exact: true }).waitFor();
     assert.deepEqual(patches[2].environmentVariables, { EXTRA: null, GH_TOKEN: null });
+    assert.equal(patches[2].domain, '');
+    assert.equal(workspace.domain, 'e2b.app');
     assert.deepEqual(variables, {});
   });
 }

@@ -400,7 +400,8 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         }
         sendJson(response, 201, await manager.createE2BSandbox({
           name: stringField(body, 'name', true)!,
-          domain: stringField(body, 'domain', true)!, apiKey: stringField(body, 'apiKey', true)!,
+          apiKey: stringField(body, 'apiKey', true)!,
+          ...(body.domain === undefined ? {} : { domain: stringField(body, 'domain')! }),
           ...(body.environmentVariables === undefined ? {} : { environmentVariables: environmentVariablePatch(body.environmentVariables) }),
           ...(body.template === undefined ? {} : { template: stringField(body, 'template', true)! }),
           ...(body.providerSandboxId === undefined ? {} : { providerSandboxId: stringField(body, 'providerSandboxId', true)! }),
@@ -432,7 +433,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         sendJson(response, 200, await manager.updateSandbox(decodeURIComponent(sandbox[1]!), {
           ...(body.name === undefined ? {} : { name: stringField(body, 'name', true)! }),
           ...(body.cwd === undefined ? {} : { cwd: body.cwd === null ? null : stringField(body, 'cwd')! }),
-          ...(body.domain === undefined ? {} : { domain: stringField(body, 'domain', true)! }),
+          ...(body.domain === undefined ? {} : { domain: stringField(body, 'domain')! }),
           ...(body.apiKey === undefined ? {} : { apiKey: stringField(body, 'apiKey', true)! }),
           ...(body.environmentVariables === undefined ? {} : { environmentVariables: environmentVariablePatch(body.environmentVariables) }),
         }));
