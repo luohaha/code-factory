@@ -51,7 +51,7 @@ Headless agents inherit your filesystem, network, and command permissions. Run C
 - [Architecture and domain model](docs/architecture.en.md) — requirement lifecycle, sessions, messaging, and review workflow.
 - [Headless Agent Runner](docs/agent-runners.md) — Codex and Claude Code integration.
 - [Native Agent guide](docs/native-agent.md) — API profiles, tools, and E2B sandboxes.
-- [E2B lifecycle and readiness audit (中文)](docs/e2b-lifecycle-audit.zh-CN.md) — current lifecycle, control ownership, and capability gaps.
+- [E2B lifecycle and readiness audit](docs/e2b-lifecycle-audit.md) — current lifecycle, control ownership, and capability gaps.
 - [HTTP API reference](docs/agent-manager-api.md) and [event protocol](docs/protocol.md).
 - [Development guide](docs/development.md) — source installation, builds, and checks.
 - [Release guide](docs/releasing.md) and [roadmap](docs/roadmap.md).
