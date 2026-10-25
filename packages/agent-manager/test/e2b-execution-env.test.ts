@@ -17,7 +17,7 @@ import { E2BExecutionEnv, E2BSandboxService, type E2BClient, type E2BHandle } fr
 import { NativeAgentService } from '../src/runtime/native-agent.js';
 
 const codingToolNames = ['read', 'write', 'edit', 'bash'];
-const controlToolNames = ['pr_register', 'gh_pr', 'requirement_propose', 'requirement_action',
+const controlToolNames = ['pr_register', 'requirement_propose', 'requirement_action',
   'requirement_related', 'requirement_message', 'timer_register', 'timer_show', 'timer_cancel'];
 const sandboxToolNames = ['sandbox_status', 'sandbox_pause', 'sandbox_resume', 'sandbox_upload', 'sandbox_download'];
 
@@ -315,7 +315,7 @@ test('an unset E2B directory uses the SDK default for commands and relative file
   assert(sdk.data.has('/home/custom-user/note.txt'));
   await env.exec('echo hello', undefined, context);
   assert.equal(sdk.commands.at(-1)?.hasCwd, false);
-  // pi-durable's bash and gh_pr tools explicitly pass env.cwd.
+  // pi-durable's bash tool explicitly passes env.cwd.
   await env.exec('echo hello', { cwd: env.cwd }, context);
   assert.equal(sdk.commands.at(-1)?.hasCwd, false);
   const beforeSpill = sdk.commands.length;
@@ -456,7 +456,7 @@ for (const cwd of ['/home/user/repo', null]) {
       fauxAssistantMessage(fauxToolCall('write', { path: 'note.txt', content: 'before\n' }), { stopReason: 'toolUse' }),
       fauxAssistantMessage(fauxToolCall('edit', { path: 'note.txt', edits: [{ oldText: 'before', newText: 'after' }] }), { stopReason: 'toolUse' }),
       fauxAssistantMessage(fauxToolCall('read', { path: 'note.txt' }), { stopReason: 'toolUse' }),
-      fauxAssistantMessage(fauxToolCall('bash', { command: 'echo hello' }), { stopReason: 'toolUse' }),
+      fauxAssistantMessage(fauxToolCall('bash', { command: 'gh pr view --json title' }), { stopReason: 'toolUse' }),
       (context) => fauxAssistantMessage(JSON.stringify(context.messages).includes('after') ? 'Remote tools succeeded' : 'Missing remote edit'),
     ]);
     const service = new NativeAgentService(join(directory, 'native.sqlite'), models,
@@ -473,7 +473,7 @@ for (const cwd of ['/home/user/repo', null]) {
       assert.equal(outcome.status, 'succeeded');
       assert.equal(outcome.finalMessage, 'Remote tools succeeded');
       assert.equal(new TextDecoder().decode(sdk.data.get(`${cwd ?? '/home/user'}/note.txt`)), 'after\n');
-      assert(sdk.commands.some((entry) => entry.command.includes('echo hello') && entry.cwd === (cwd ?? undefined)));
+      assert(sdk.commands.some((entry) => entry.command.includes('gh pr view --json title') && entry.cwd === (cwd ?? undefined)));
       assert.equal(sdk.commands.some((entry) => entry.envs?.GH_TOKEN !== undefined), false);
       assert.equal(existsSync(join(directory, 'note.txt')), false);
     } finally {

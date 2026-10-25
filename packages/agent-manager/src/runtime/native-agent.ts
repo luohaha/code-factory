@@ -25,7 +25,6 @@ import type { AgentReasoningEffort, RunOutcome, Sandbox } from '../core/types.js
 
 const execFileAsync = promisify(execFile);
 const CONTEXT = BACKGROUND_CONTEXT;
-const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 const CodeFactoryExtension = defineExtension({ name: 'code-factory' });
 const E2BSandboxExtension = defineExtension({ name: 'e2b-sandbox' });
 
@@ -120,23 +119,6 @@ export class NativeAgentService {
       parameters: Type.Object({ url: Type.String() }),
       execute: async ({ url }, api) => output(await invokeCli(['pr', 'register', '--from-github', url], api.conversationId)),
     });
-    const ghPr = defineTool({ name: 'gh_pr',
-      description: 'Run a GitHub PR command in the selected execution environment. Use view for metadata, create for a draft PR, and edit or ready for your own PR. Register afterward with pr_register.',
-      parameters: Type.Object({ action: Type.Union([Type.Literal('view'), Type.Literal('create'), Type.Literal('edit'), Type.Literal('ready')]), args: Type.Array(Type.String()) }),
-      outputLimits: { retain: 'tail' },
-      execute: async ({ action, args }, api, context) => {
-        if (!api.env) throw new Error('GitHub PR commands require an execution environment');
-        const command = ['gh', 'pr', action, ...args].map(shellQuote).join(' ');
-        const result = await api.env.exec(command, {
-          cwd: api.env.cwd,
-          timeout: 30,
-          onOutput: (value) => api.output(value),
-        }, context);
-        if (!result.ok) throw result.error;
-        if (result.value.exitCode !== 0) throw new Error(`gh pr ${action} exited with code ${result.value.exitCode}`);
-        return {};
-      },
-    });
     const propose = defineTool({ name: 'requirement_propose',
       description: 'Propose a separately tracked TODO child requirement. Do not start it unless the human requests that.',
       parameters: Type.Object({ title: Type.String(), description: Type.String() }),
@@ -210,8 +192,8 @@ export class NativeAgentService {
       execute: async ({ localPath, remotePath, overwrite }, api, context) => transfer('download', localPath, remotePath, overwrite ?? false, api.conversationId, api.env, context) });
     registry.install(defineExtension({
       ...CodeFactoryExtension,
-      tools: [prRegister, ghPr, propose, action, related, message, timerRegister, timerShow, timerCancel],
-      sections: [section('code-factory', () => 'You are this Requirement’s long-lived RD Agent. Use the Code Factory tools to register PRs, propose TODO follow-ups, message other Requirement agents by ID, and manage timers. Humans confirm completion.'),
+      tools: [prRegister, propose, action, related, message, timerRegister, timerShow, timerCancel],
+      sections: [section('code-factory', () => 'You are this Requirement’s long-lived RD Agent. Use bash to run GitHub CLI commands. Use the Code Factory tools to register PRs, propose TODO follow-ups, message other Requirement agents by ID, and manage timers. Humans confirm completion.'),
         section('workspace', (input) => input.env?.cwd)],
     }));
     registry.install(defineExtension({

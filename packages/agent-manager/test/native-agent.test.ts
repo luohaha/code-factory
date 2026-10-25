@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -392,12 +392,11 @@ test('native control-plane tool calls the requirement CLI with session context',
   }
 });
 
-test('native gh_pr runs inside the selected execution environment with literal arguments', async () => {
+test('native bash runs GitHub PR commands in the selected local execution environment', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'code-factory-gh-pr-'));
-  const sandbox = join(directory, 'sandbox');
+  const workspace = join(directory, 'workspace');
   const binaryDirectory = join(directory, 'bin');
-  const marker = join(directory, 'unexpected-file');
-  await mkdir(sandbox);
+  await mkdir(workspace);
   await mkdir(binaryDirectory);
   const gh = join(binaryDirectory, 'gh');
   await writeFile(gh, '#!/bin/sh\nprintf "%s\\n" "$PWD" "$@"\n');
@@ -405,26 +404,24 @@ test('native gh_pr runs inside the selected execution environment with literal a
   const faux = fauxProvider();
   const models = createModels();
   models.setProvider(faux.provider);
-  const literalArgument = `$(touch ${marker})`;
-  let sawSandboxCommand = false;
+  let sawWorkspaceCommand = false;
   faux.setResponses([
-    fauxAssistantMessage(fauxToolCall('gh_pr', { action: 'view', args: ['--title', 'two words', literalArgument] }), { stopReason: 'toolUse' }),
+    fauxAssistantMessage(fauxToolCall('bash', { command: 'gh pr view --json title' }), { stopReason: 'toolUse' }),
     (context) => {
-      const messages = JSON.stringify(context.messages);
-      sawSandboxCommand = messages.includes(sandbox) && messages.includes('two words') && messages.includes(literalArgument);
-      return fauxAssistantMessage(sawSandboxCommand ? 'PR command ran in sandbox' : 'PR command ran elsewhere');
+      sawWorkspaceCommand = context.messages.some((message) => message.role === 'toolResult' && !message.isError
+        && message.content.some((part) => part.type === 'text' && part.text.includes(`${workspace}\npr\nview\n--json\ntitle\n`)));
+      return fauxAssistantMessage(sawWorkspaceCommand ? 'PR command ran in workspace' : 'PR command ran elsewhere');
     },
   ]);
   const service = new NativeAgentService(join(directory, 'native.sqlite'), models);
   try {
     const outcome = await service.run({ requirementId: 'req_gh', sessionId: 'ses_gh', nativeSessionId: null,
       prompt: 'Inspect PR', model: 'faux/faux-1', reasoningEffort: null,
-      cwd: sandbox, environment: { PATH: `${binaryDirectory}:${process.env.PATH ?? ''}` }, instructions: 'Test agent',
+      cwd: workspace, environment: { PATH: `${binaryDirectory}:${process.env.PATH ?? ''}` }, instructions: 'Test agent',
       signal: new AbortController().signal, timeoutMs: 30_000,
       onNativeSession: () => undefined, onEvent: () => undefined });
     assert.equal(outcome.status, 'succeeded');
-    assert.equal(sawSandboxCommand, true);
-    await assert.rejects(stat(marker), { code: 'ENOENT' });
+    assert.equal(sawWorkspaceCommand, true);
   } finally {
     await service.close();
     await rm(directory, { recursive: true, force: true });
