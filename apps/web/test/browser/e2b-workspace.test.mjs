@@ -144,8 +144,10 @@ for (const locale of ['en', 'zh-CN']) {
     assert.equal((await dialog.innerText()).includes('rotated-browser-token'), false);
     await edit();
     await dialog.locator('#edit-workspace-domain').fill('');
+    assert.equal(await dialog.locator('#edit-workspace-domain').inputValue(), '');
     for (const name of ['GH_TOKEN', 'EXTRA']) {
       await dialog.getByRole('button', { name: `${chinese ? '移除变量' : 'Remove variable'} ${name}`, exact: true }).click();
+      assert.equal(await dialog.locator('#edit-workspace-domain').inputValue(), '');
     }
     await save();
     await dialog.getByRole('button', { name: chinese ? '编辑工作区' : 'Edit workspace', exact: true }).waitFor();

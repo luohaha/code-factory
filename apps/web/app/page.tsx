@@ -2658,6 +2658,7 @@ function Dashboard() {
   const [createPathKind, setCreatePathKind] = useState<'local' | 'e2b'>('local');
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
   const [workspaceDialogMode, setWorkspaceDialogMode] = useState<'details' | 'edit' | 'delete'>('details');
+  const [editedWorkspaceDomain, setEditedWorkspaceDomain] = useState('');
   const [savingWorkspace, setSavingWorkspace] = useState(false);
   const [workspaceDialogError, setWorkspaceDialogError] = useState<string | null>(null);
   const [busySandboxId, setBusySandboxId] = useState<string | null>(null);
@@ -4037,7 +4038,8 @@ function Dashboard() {
                     {selectedWorkspace.kind === 'e2b' ? <>
                       <Field>
                         <FieldLabel htmlFor="edit-workspace-domain">{t('E2B domain')}</FieldLabel>
-                        <Input id="edit-workspace-domain" name="domain" defaultValue={selectedWorkspace.domain ?? ''}
+                        <Input id="edit-workspace-domain" name="domain" value={editedWorkspaceDomain}
+                          onChange={(event) => setEditedWorkspaceDomain(event.target.value)}
                           placeholder="e2b.app" aria-describedby="edit-workspace-domain-hint" />
                         <p id="edit-workspace-domain-hint" className="text-xs text-muted-foreground">{t('Leave blank to use e2b.app.')}</p>
                       </Field>
@@ -4118,7 +4120,10 @@ function Dashboard() {
                     </div>
                     {selectedWorkspace.id === 'local'
                       ? <DialogClose render={<Button type="button" variant="outline" />}>{t('Close')}</DialogClose>
-                      : <Button type="button" onClick={() => { setWorkspaceDialogMode('edit'); setWorkspaceDialogError(null); }}>{t('Edit workspace')}</Button>}
+                      : <Button type="button" onClick={() => {
+                          setEditedWorkspaceDomain(selectedWorkspace.domain ?? '');
+                          setWorkspaceDialogMode('edit'); setWorkspaceDialogError(null);
+                        }}>{t('Edit workspace')}</Button>}
                   </DialogFooter>
                 </> : null}
               </DialogContent>
