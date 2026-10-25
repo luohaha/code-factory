@@ -41,7 +41,7 @@ export interface NativeRunInput {
   reasoningEffort: AgentReasoningEffort | null;
   cwd: string;
   sandbox?: { kind: 'e2b'; providerSandboxId: string; credentials: E2BCredentials;
-    cwd?: string | null; forwardGitHubToken: boolean;
+    cwd?: string | null; forwardGitHubToken: boolean; environmentVariables?: Readonly<Record<string, string>>;
     control?: (action: NativeSandboxAction, signal?: AbortSignal) => Promise<NativeSandboxState> };
   environment: Readonly<Record<string, string>>;
   instructions: string;
@@ -239,9 +239,11 @@ export class NativeAgentService {
             env = new DeferredExecutionEnv(`e2b:${sandbox.credentials.domain}:${sandbox.providerSandboxId}`, directory ?? '', async (context) => {
               const operation = withAbortSignal(sandbox.signal, context);
               const handle = await this.#sandboxHandle(conversationId, operation);
-              const commandEnv = Object.fromEntries((sandbox.forwardGitHubToken ? ['GH_TOKEN', 'GITHUB_TOKEN'] : [])
+              const configured = sandbox.environmentVariables ?? {};
+              const hasConfiguredToken = Object.hasOwn(configured, 'GH_TOKEN') || Object.hasOwn(configured, 'GITHUB_TOKEN');
+              const commandEnv = Object.fromEntries((sandbox.forwardGitHubToken && !hasConfiguredToken ? ['GH_TOKEN', 'GITHUB_TOKEN'] : [])
                 .flatMap((name) => process.env[name] ? [[name, process.env[name]!]] : []));
-              return E2BExecutionEnv.create(handle, directory, commandEnv, sandbox.credentials.domain, operation.abortSignal);
+              return E2BExecutionEnv.create(handle, directory, { ...commandEnv, ...configured }, sandbox.credentials.domain, operation.abortSignal);
             });
             this.#sandboxEnvs.set(conversationId, env);
           }

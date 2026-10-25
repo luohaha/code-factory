@@ -89,6 +89,7 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { NativeAuthSettings } from '@/components/native-auth-settings';
+import { WorkspaceEnvironmentVariables, workspaceEnvironmentVariables } from '@/components/workspace-environment-variables';
 import { AgentTraceTimeline } from '@/components/agent-trace-timeline';
 import { ThinkingLoader } from '@/components/ui/thinking-loader';
 import {
@@ -2668,6 +2669,7 @@ function Dashboard() {
   const [createPathKind, setCreatePathKind] = useState<'local' | 'e2b'>('local');
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
   const [workspaceDialogMode, setWorkspaceDialogMode] = useState<'details' | 'edit' | 'delete'>('details');
+  const [editedWorkspaceDomain, setEditedWorkspaceDomain] = useState('');
   const [savingWorkspace, setSavingWorkspace] = useState(false);
   const [workspaceDialogError, setWorkspaceDialogError] = useState<string | null>(null);
   const [busySandboxId, setBusySandboxId] = useState<string | null>(null);
@@ -3578,10 +3580,13 @@ function Dashboard() {
         const entry = fields.get(field);
         return typeof entry === 'string' ? entry.trim() : '';
       };
+      const environmentVariables = workspaceEnvironmentVariables(fields);
       const sandbox = createPathKind === 'local'
         ? await client.createLocalExecution({ name: name.trim(), cwd: value('cwd') })
         : await client.createSandbox({ name: name.trim(),
-          domain: value('domain'), apiKey: value('apiKey'),
+          apiKey: value('apiKey'),
+          ...(value('domain') ? { domain: value('domain') } : {}),
+          ...(Object.keys(environmentVariables).length ? { environmentVariables } : {}),
           ...(value('providerSandboxId') ? { providerSandboxId: value('providerSandboxId') } : {}),
           ...(value('template') ? { template: value('template') } : {}),
         });
@@ -3607,11 +3612,13 @@ function Dashboard() {
     setSavingWorkspace(true);
     setWorkspaceDialogError(null);
     try {
+      const environmentVariables = workspaceEnvironmentVariables(fields);
       const updated = await client.updateWorkspace(selectedWorkspace.id, {
         name: value('name'),
         ...(selectedWorkspace.kind === 'local' ? { cwd: value('cwd') } : {}),
         ...(selectedWorkspace.kind === 'e2b' ? {
           domain: value('domain'),
+          ...(Object.keys(environmentVariables).length ? { environmentVariables } : {}),
           ...(value('apiKey') ? { apiKey: value('apiKey') } : {}),
         } : {}),
       });
@@ -3987,18 +3994,20 @@ function Dashboard() {
                       <>
                         <Field>
                           <FieldLabel htmlFor="execution-path-domain">{t('E2B domain')}</FieldLabel>
-                          <Input id="execution-path-domain" name="domain" required placeholder={t('E2B domain (E2B_DOMAIN)')} />
+                          <Input id="execution-path-domain" name="domain" placeholder="e2b.app" aria-describedby="execution-path-domain-hint" />
+                          <p id="execution-path-domain-hint" className="text-xs text-muted-foreground">{t('Leave blank to use e2b.app.')}</p>
                         </Field>
                         <Field>
                           <FieldLabel htmlFor="execution-path-key">{t('E2B API key')}</FieldLabel>
                           <Input id="execution-path-key" name="apiKey" type="password" required autoComplete="off" placeholder={t('E2B API key (E2B_API_KEY)')} />
                         </Field>
-                        <p className="text-xs text-muted-foreground">{t('The Agent prepares repositories in the sandbox when needed for the task.')}</p>
+                        <p className="text-xs text-muted-foreground">{t('The Agent can clone a repository and prepare tools when the task needs them.')}</p>
                         <details className="rounded-lg border border-border p-3 text-sm">
                           <summary className="cursor-pointer font-medium">{t('Advanced E2B options')}</summary>
                           <div className="mt-3 grid gap-3">
                             <Input name="providerSandboxId" aria-label={t('Existing E2B sandbox ID')} placeholder={t('Existing E2B sandbox ID (optional)')} />
                             <Input name="template" aria-label={t('E2B template')} placeholder={t('E2B template (default: base)')} />
+                            <WorkspaceEnvironmentVariables key={createPathOpen ? 'open' : 'closed'} />
                           </div>
                         </details>
                       </>
@@ -4040,13 +4049,17 @@ function Dashboard() {
                     {selectedWorkspace.kind === 'e2b' ? <>
                       <Field>
                         <FieldLabel htmlFor="edit-workspace-domain">{t('E2B domain')}</FieldLabel>
-                        <Input id="edit-workspace-domain" name="domain" required defaultValue={selectedWorkspace.domain ?? ''} />
+                        <Input id="edit-workspace-domain" name="domain" value={editedWorkspaceDomain}
+                          onChange={(event) => setEditedWorkspaceDomain(event.target.value)}
+                          placeholder="e2b.app" aria-describedby="edit-workspace-domain-hint" />
+                        <p id="edit-workspace-domain-hint" className="text-xs text-muted-foreground">{t('Leave blank to use e2b.app.')}</p>
                       </Field>
                       <Field>
                         <FieldLabel htmlFor="edit-workspace-key">{t('E2B API key')}</FieldLabel>
                         <Input id="edit-workspace-key" name="apiKey" type="password" autoComplete="off"
                           placeholder={t('Leave blank to keep current key')} />
                       </Field>
+                      <WorkspaceEnvironmentVariables names={selectedWorkspace.environmentVariableNames ?? []} />
                     </> : null}
                   </FieldGroup>
                   <DialogFooter>
@@ -4094,6 +4107,7 @@ function Dashboard() {
                       {selectedWorkspace.providerSandboxId ? <div className="min-w-0 sm:col-span-2"><dt className="text-muted-foreground">{t('Existing E2B sandbox ID')}</dt><dd className="mt-1 break-all font-mono">{selectedWorkspace.providerSandboxId}</dd></div> : null}
                       <div><dt className="text-muted-foreground">{t('E2B template')}</dt><dd className="mt-1 break-all">{selectedWorkspace.template}</dd></div>
                       <div><dt className="text-muted-foreground">{t('E2B domain')}</dt><dd className="mt-1 break-all">{selectedWorkspace.domain}</dd></div>
+                      {selectedWorkspace.environmentVariableNames?.length ? <div className="min-w-0 sm:col-span-2"><dt className="text-muted-foreground">{t('Environment variables')}</dt><dd className="mt-1 break-all font-mono">{selectedWorkspace.environmentVariableNames.join(', ')}</dd></div> : null}
                       <div className="min-w-0 sm:col-span-2"><dt className="text-muted-foreground">{t('Credential reference')}</dt><dd className="mt-1 break-all font-mono">{selectedWorkspace.credentialRef ?? selectedWorkspace.credentialEnvVar}</dd></div>
                       {selectedWorkspace.checkedAt ? <div className="sm:col-span-2"><dt className="text-muted-foreground">{t('Last checked')}</dt><dd className="mt-1">{new Date(selectedWorkspace.checkedAt).toLocaleString(locale)}</dd></div> : null}
                     </> : null}
@@ -4117,7 +4131,10 @@ function Dashboard() {
                     </div>
                     {selectedWorkspace.id === 'local'
                       ? <DialogClose render={<Button type="button" variant="outline" />}>{t('Close')}</DialogClose>
-                      : <Button type="button" onClick={() => { setWorkspaceDialogMode('edit'); setWorkspaceDialogError(null); }}>{t('Edit workspace')}</Button>}
+                      : <Button type="button" onClick={() => {
+                          setEditedWorkspaceDomain(selectedWorkspace.domain ?? '');
+                          setWorkspaceDialogMode('edit'); setWorkspaceDialogError(null);
+                        }}>{t('Edit workspace')}</Button>}
                   </DialogFooter>
                 </> : null}
               </DialogContent>
