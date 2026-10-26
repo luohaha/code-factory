@@ -95,6 +95,10 @@ for (const locale of ['en', 'zh-CN']) {
     await dialog.locator('summary').click();
     assert.equal(await dialog.locator('input[name="repositoryUrl"]').count(), 0);
     assert.equal(await dialog.locator('input[name="cwd"]').count(), 0);
+    const environmentHint = chinese
+      ? '变量值保存后不再显示。更改将在下一条 Native RD 或 Reviewer 命令中生效，运行期间也可修改。已启动的命令和后台进程需重启才能使用新值。'
+      : 'Values stay hidden after saving. Changes apply to the next Native RD or Reviewer command, even during a Run. Restart running commands and background processes to use new values.';
+    await dialog.getByText(environmentHint, { exact: true }).waitFor();
     const addVariable = () => dialog.getByRole('button', { name: chinese ? '添加变量' : 'Add variable', exact: true }).click();
     const variableName = (index) => dialog.getByRole('textbox', { name: `${chinese ? '变量名' : 'Variable name'} ${index}`, exact: true });
     const variableValue = (index) => dialog.getByLabel(`${chinese ? '变量值' : 'Variable value'} ${index}`, { exact: true });
@@ -123,6 +127,7 @@ for (const locale of ['en', 'zh-CN']) {
     const save = () => dialog.getByRole('button', { name: chinese ? '保存修改' : 'Save changes', exact: true }).click();
     await edit();
     await dialog.getByText(domainHint, { exact: true }).waitFor();
+    await dialog.getByText(environmentHint, { exact: true }).waitFor();
     assert.equal(await dialog.locator('input[name="cwd"]').count(), 0);
     assert.equal(await variableName(1).getAttribute('readonly'), '');
     assert.equal(await variableValue(1).inputValue(), '');

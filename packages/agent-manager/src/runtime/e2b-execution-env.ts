@@ -131,7 +131,8 @@ export class E2BExecutionEnv implements ExecutionEnv {
   readonly #sdkDefaultDirectory: string | null;
   cwd: string;
 
-  constructor(readonly sandbox: E2BHandle, cwd: string, readonly commandEnv: Readonly<Record<string, string>> = {},
+  constructor(readonly sandbox: E2BHandle, cwd: string,
+    private readonly getCommandEnv: () => Readonly<Record<string, string>> = () => ({}),
     domain = 'e2b.app', useSdkDefaultCwd = false) {
     this.id = `e2b:${domain}:${sandbox.sandboxId}`;
     this.cwd = cwd;
@@ -139,10 +140,10 @@ export class E2BExecutionEnv implements ExecutionEnv {
   }
 
   static async create(sandbox: E2BHandle, cwd: string | null,
-    commandEnv: Readonly<Record<string, string>> = {}, domain = 'e2b.app', signal?: AbortSignal): Promise<E2BExecutionEnv> {
+    getCommandEnv: () => Readonly<Record<string, string>> = () => ({}), domain = 'e2b.app', signal?: AbortSignal): Promise<E2BExecutionEnv> {
     signal?.throwIfAborted();
-    if (cwd !== null) return new E2BExecutionEnv(sandbox, cwd, commandEnv, domain);
-    return new E2BExecutionEnv(sandbox, await getE2BDefaultCwd(sandbox, signal), commandEnv, domain, true);
+    if (cwd !== null) return new E2BExecutionEnv(sandbox, cwd, getCommandEnv, domain);
+    return new E2BExecutionEnv(sandbox, await getE2BDefaultCwd(sandbox, signal), getCommandEnv, domain, true);
   }
 
   private commandDirectory(cwd?: string): { cwd?: string } {
@@ -309,6 +310,11 @@ export class E2BExecutionEnv implements ExecutionEnv {
     return created.ok ? ok(path) : created;
   }
 
+  private commandEnvironment(options?: ShellExecOptions): Record<string, string> {
+    // Resolve once, immediately before launch. Cached connections never cache configured values.
+    return { ...(options?.inheritEnv === false ? {} : this.getCommandEnv()), ...options?.env };
+  }
+
   async exec(command: string, options: ShellExecOptions | undefined, context: Context): Promise<Result<ShellExecResult, ExecutionError>> {
     if (context.abortSignal?.aborted) return err(new ExecutionError('aborted', 'Command aborted'));
     if (options?.spill) return this.execWithSpill(command, { ...options, spill: options.spill }, context);
@@ -321,7 +327,7 @@ export class E2BExecutionEnv implements ExecutionEnv {
     try {
       const result = await this.sandbox.commands.run(command, {
         ...this.commandDirectory(options?.cwd),
-        envs: { ...(options?.inheritEnv === false ? {} : this.commandEnv), ...options?.env },
+        envs: this.commandEnvironment(options),
         ...(options?.timeout === undefined ? { timeoutMs: 0 } : { timeoutMs: Math.ceil(options.timeout * 1000) }),
         ...(context.abortSignal ? { signal: context.abortSignal } : {}),
         onStdout: onOutput,
@@ -346,11 +352,10 @@ export class E2BExecutionEnv implements ExecutionEnv {
     // then read bounded slices so neither the SDK nor Agent Manager holds the complete output.
     const path = `/tmp/code-factory-output-${randomUUID()}.log`;
     const directory = this.commandDirectory(options.cwd);
-    const envs = { ...(options.inheritEnv === false ? {} : this.commandEnv), ...options.env };
     const wrapped = `bash -lc ${quote(command)} > ${quote(path)} 2>&1`;
     let handle: CommandHandle;
     try {
-      handle = await this.sandbox.commands.run(wrapped, { ...directory, envs, background: true,
+      handle = await this.sandbox.commands.run(wrapped, { ...directory, envs: this.commandEnvironment(options), background: true,
         ...(options.timeout === undefined ? { timeoutMs: 0 } : { timeoutMs: Math.ceil(options.timeout * 1000) }),
         ...(context.abortSignal ? { signal: context.abortSignal } : {}) });
     } catch (error) { return err(executionError(error)); }

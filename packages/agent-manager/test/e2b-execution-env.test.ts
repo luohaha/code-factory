@@ -351,7 +351,7 @@ test('E2B service does not expose provider error text containing an API key', as
 
 test('E2B ExecutionEnv uses the remote SDK for files and shell commands', async () => {
   const sdk = fakeSdk();
-  const env = new E2BExecutionEnv(sdk.handle, '/home/user/repo', { GH_TOKEN: 'temporary-token' });
+  const env = new E2BExecutionEnv(sdk.handle, '/home/user/repo', () => ({ GH_TOKEN: 'temporary-token' }));
   const context = BACKGROUND_CONTEXT;
   assert.equal(env.id, 'e2b:e2b.app:e2b-test-123');
   assert.deepEqual(await env.absolutePath('src/../note.txt', context), { ok: true, value: '/home/user/repo/note.txt' });
@@ -377,6 +377,65 @@ test('E2B ExecutionEnv uses the remote SDK for files and shell commands', async 
   assert.deepEqual(await env.exec('fail', undefined, context), { ok: true, value: { exitCode: 7 } });
   assert.equal(sdk.data.has('/home/user/repo/note.txt'), true);
 });
+
+test('foreground and background commands sample a fresh consistent environment once at launch', async () => {
+  const sdk = fakeSdk();
+  let configured: Record<string, string> = { REPLACE: 'before', REMOVE: 'removed', KEEP: 'saved' };
+  let reads = 0;
+  const env = new E2BExecutionEnv(sdk.handle, '/home/user/repo', () => { reads++; return configured; });
+  for (const spill of [undefined, { afterBytes: 1000, afterLines: 100 }]) {
+    const initial = { ...configured };
+    const before = reads;
+    assert.equal((await env.exec('echo first', { ...(spill ? { spill } : {}) }, BACKGROUND_CONTEXT)).ok, true);
+    const first = sdk.commands.findLast((entry) => entry.command.includes('echo first'))!;
+    assert.deepEqual(first.envs, initial);
+    assert.equal(reads, before + 1);
+    configured = { REPLACE: 'after', ADDED: 'added', KEEP: 'saved' };
+    assert.equal((await env.exec('echo next', { env: { KEEP: 'tool-override' }, ...(spill ? { spill } : {}) }, BACKGROUND_CONTEXT)).ok, true);
+    assert.deepEqual(sdk.commands.findLast((entry) => entry.command.includes('echo next'))?.envs,
+      { REPLACE: 'after', ADDED: 'added', KEEP: 'tool-override' });
+    assert.deepEqual(first.envs, initial);
+    assert.equal(reads, before + 2);
+    assert.equal((await env.exec('echo isolated', { inheritEnv: false, env: { ONLY: 'tool' }, ...(spill ? { spill } : {}) }, BACKGROUND_CONTEXT)).ok, true);
+    assert.deepEqual(sdk.commands.findLast((entry) => entry.command.includes('echo isolated'))?.envs, { ONLY: 'tool' });
+    assert.equal(reads, before + 2, 'inheritEnv=false must bypass the configured environment');
+    configured = { REPLACE: 'before', REMOVE: 'removed', KEEP: 'saved' };
+  }
+});
+
+for (const stage of ['connect', 'discover'] as const) {
+  test(`Native commands read environment updates made during lazy ${stage}`, async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'code-factory-e2b-late-env-'));
+    let release!: () => void; let entered!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const sdk = fakeSdk('/home/user', { [stage]: async () => { entered(); await pending; } });
+    const faux = fauxProvider();
+    const models = createModels(); models.setProvider(faux.provider);
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall('bash', { command: 'echo after-connection' }), { stopReason: 'toolUse' }),
+      fauxAssistantMessage('Done'),
+    ]);
+    const service = new NativeAgentService(join(directory, 'native.sqlite'), models, new E2BSandboxService(sdk.client));
+    let configured: Record<string, string> = { OLD: 'before' };
+    const run = service.run({ requirementId: 'req_late', sessionId: 'ses_late', nativeSessionId: null,
+      prompt: 'Use remote commands', model: 'faux/faux-1', reasoningEffort: null, cwd: directory,
+      sandbox: { kind: 'e2b', providerSandboxId: 'e2b-test-123', cwd: null,
+        credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: false,
+        getEnvironmentVariables: () => configured },
+      environment: {}, instructions: 'Test', signal: new AbortController().signal, timeoutMs: 30_000,
+      onNativeSession: () => undefined, onEvent: () => undefined });
+    try {
+      await started;
+      configured = { NEW: 'after' };
+      release();
+      assert.equal((await run).status, 'succeeded');
+      assert.deepEqual(sdk.commands.find((entry) => entry.command.includes('echo after-connection'))?.envs, { NEW: 'after' });
+    } finally {
+      release(); await run; await service.close(); await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
 
 test('an unset E2B directory uses the SDK default for commands and relative file paths', async () => {
   const sdk = fakeSdk('/home/custom-user');
@@ -555,6 +614,45 @@ for (const cwd of ['/home/user/repo', null]) {
   });
 }
 
+test('live explicit GitHub tokens including empty values suppress host forwarding, and new sandboxes never forward host tokens', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'code-factory-e2b-token-priority-'));
+  const sdk = fakeSdk();
+  const faux = fauxProvider();
+  const models = createModels(); models.setProvider(faux.provider);
+  const service = new NativeAgentService(join(directory, 'native.sqlite'), models, new E2BSandboxService(sdk.client));
+  const savedToken = process.env.GH_TOKEN; const savedGithubToken = process.env.GITHUB_TOKEN;
+  process.env.GH_TOKEN = 'host-gh-token'; process.env.GITHUB_TOKEN = 'host-github-token';
+  try {
+    for (const forwardGitHubToken of [false, true]) {
+      let configured: Record<string, string> = { GITHUB_TOKEN: 'explicit-token' };
+      const bash = (command: string) => fauxAssistantMessage(fauxToolCall('bash', { command }), { stopReason: 'toolUse' });
+      faux.setResponses([
+        bash('echo configured-token'),
+        () => { configured = { GH_TOKEN: '' }; return bash('echo empty-token'); },
+        () => { configured = {}; return bash('echo removed-token'); },
+        fauxAssistantMessage('Done'),
+      ]);
+      const outcome = await service.run({ requirementId: 'req_tokens', sessionId: 'ses_tokens', nativeSessionId: null,
+        prompt: 'Use remote commands', model: 'faux/faux-1', reasoningEffort: null, cwd: directory,
+        sandbox: { kind: 'e2b', providerSandboxId: 'e2b-test-123', cwd: null,
+          credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken,
+          getEnvironmentVariables: () => configured },
+        environment: {}, instructions: 'Test', signal: new AbortController().signal, timeoutMs: 30_000,
+        onNativeSession: () => undefined, onEvent: () => undefined });
+      assert.equal(outcome.status, 'succeeded');
+      assert.deepEqual(sdk.commands.findLast((entry) => entry.command.includes('echo configured-token'))?.envs, { GITHUB_TOKEN: 'explicit-token' });
+      assert.deepEqual(sdk.commands.findLast((entry) => entry.command.includes('echo empty-token'))?.envs, { GH_TOKEN: '' });
+      assert.deepEqual(sdk.commands.findLast((entry) => entry.command.includes('echo removed-token'))?.envs,
+        forwardGitHubToken ? { GH_TOKEN: 'host-gh-token', GITHUB_TOKEN: 'host-github-token' } : {});
+    }
+  } finally {
+    await service.close();
+    if (savedToken === undefined) delete process.env.GH_TOKEN; else process.env.GH_TOKEN = savedToken;
+    if (savedGithubToken === undefined) delete process.env.GITHUB_TOKEN; else process.env.GITHUB_TOKEN = savedGithubToken;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('Native commands receive configured variables and refresh them on resume without persisting values', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'code-factory-e2b-env-run-'));
   const sdk = fakeSdk();
@@ -576,7 +674,7 @@ test('Native commands receive configured variables and refresh them on resume wi
       const outcome = await service.run({ requirementId: 'req_env', sessionId: 'ses_env', nativeSessionId,
         prompt: 'Use the remote environment', model: 'faux/faux-1', reasoningEffort: null, cwd: '/home/user/repo',
         sandbox: { kind: 'e2b', providerSandboxId: 'e2b-test-123', cwd: null,
-          credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: true, environmentVariables },
+          credentials: { domain: 'e2b.example', apiKey: 'test-key' }, forwardGitHubToken: true, getEnvironmentVariables: () => environmentVariables },
         environment: {}, instructions: 'Test', signal: new AbortController().signal, timeoutMs: 30_000,
         onNativeSession: (id) => { nativeSessionId = id; }, onEvent: () => undefined });
       assert.equal(outcome.status, 'succeeded');

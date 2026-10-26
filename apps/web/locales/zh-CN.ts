@@ -35,7 +35,7 @@ export const zhCN = {
   'The directory must already exist on the Agent Manager host.': '目录必须已存在于 Agent Manager 所在节点。',
   'Advanced E2B options': 'E2B 高级选项',
   'Environment variables': '环境变量',
-  'Values stay hidden after saving and apply to later Native Agent commands.': '变量值保存后不再显示，更改将用于后续 Native Agent 命令。',
+  'Values stay hidden after saving. Changes apply to the next Native RD or Reviewer command, even during a Run. Restart running commands and background processes to use new values.': '变量值保存后不再显示。更改将在下一条 Native RD 或 Reviewer 命令中生效，运行期间也可修改。已启动的命令和后台进程需重启才能使用新值。',
   'Variable name': '变量名',
   'Variable value': '变量值',
   'Add variable': '添加变量',
