@@ -152,7 +152,8 @@ for (const locale of ['en', 'zh-CN']) {
     assert.equal((await dialog.innerText()).includes('rotated-browser-token'), false);
     await edit();
     const domainInput = dialog.locator('#edit-workspace-domain');
-    await domainInput.press('ControlOrMeta+A');
+    await domainInput.click();
+    await domainInput.selectText();
     await domainInput.press('Backspace');
     const waitForBlankDomain = () => page.waitForFunction(() => document.querySelector('#edit-workspace-domain')?.value === '');
     await waitForBlankDomain();
