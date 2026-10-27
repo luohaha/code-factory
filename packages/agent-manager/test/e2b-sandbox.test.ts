@@ -20,10 +20,17 @@ import { NativeAgentService, type NativeRunInput } from '../src/runtime/native-a
 import { createAgentManagerServer } from '../src/http/server.js';
 import { sandboxesTableSql, schemaStatements } from '../src/storage/schema.js';
 import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.js';
-import type { RunOutcome, Sandbox } from '../src/core/types.js';
+import type { ManagerEvent, RunOutcome, Sandbox } from '../src/core/types.js';
+
+function gate() {
+  let release!: () => void;
+  const wait = new Promise<void>((resolve) => { release = resolve; });
+  return { wait, release };
+}
 
 function fakeE2B(settings: { additionalCredentials?: E2BCredentials[]; home?: string;
   beforeConnect?: () => Promise<void>; beforeGetInfo?: () => Promise<void>;
+  waitForCommand?: (command: string) => Promise<void>;
   before?: (action: 'status' | 'pause' | 'resume', signal?: AbortSignal) => Promise<void> } = {}) {
   let state: 'running' | 'paused' = 'running';
   let killed = false;
@@ -55,7 +62,7 @@ function fakeE2B(settings: { additionalCredentials?: E2BCredentials[]; home?: st
         const path = command.match(/ > '([^']+)' 2>&1$/)?.[1];
         assert(path);
         remoteFiles.set(path, 'Remote command completed\n');
-        return { wait: async () => ({ exitCode: 0 }), kill: async () => true };
+        return { wait: async () => { await settings.waitForCommand?.(command); return { exitCode: 0 }; }, kill: async () => true };
       }
       if (command.startsWith('if test -f ')) {
         const path = command.match(/test -f '([^']+)'/)?.[1];
@@ -209,6 +216,70 @@ test('native lifecycle tools preserve E2B pause and apply environment edits on a
   }
 });
 
+test('active Native tools refresh variables before first connection, after pause/resume, and in the continued conversation', { timeout: 30_000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-dynamic-pause-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const sdk = fakeE2B();
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const beforeFirst = gate(); const releaseFirst = gate();
+  const paused = gate(); const releasePaused = gate();
+  const call = (name: string) => fauxAssistantMessage(fauxToolCall(name, {}), { stopReason: 'toolUse' });
+  const bash = (command: string) => fauxAssistantMessage(fauxToolCall('bash', { command }), { stopReason: 'toolUse' });
+  faux.setResponses([
+    async () => { beforeFirst.release(); await releaseFirst.wait; return bash('echo initial-command'); },
+    call('sandbox_pause'), call('sandbox_status'),
+    async () => { paused.release(); await releasePaused.wait; return call('sandbox_resume'); },
+    bash('echo resumed-command'), fauxAssistantMessage('Done'),
+    bash('echo continued-command'), fauxAssistantMessage('Continued'),
+  ]);
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    nativeService: new NativeAgentService(join(directory, 'native.sqlite'), models, sdk.service),
+    logger: createLogger({ level: 'silent' }) });
+  const secrets = new E2BCredentialStore(e2bCredentialsPath(databasePath));
+  let run: ReturnType<AgentManager['runRequirement']> | undefined;
+  try {
+    const sandbox = await manager.createE2BSandbox({ name: 'Paused edits', domain: 'e2b.example', apiKey: 'test-key',
+      environmentVariables: { GH_TOKEN: 'pause-original-token', CUSTOM: 'pause-original', REMOVE: 'pause-remove' } });
+    await manager.pauseSandbox(sandbox.id);
+    const requirement = manager.createRequirement({ title: 'Edit while paused', description: 'Use remote commands',
+      provider: 'native-agent', model: 'faux/faux-1', sandboxId: sandbox.id });
+    run = manager.runRequirement(requirement.id);
+    await beforeFirst.wait;
+    const before = sdk.calls.length;
+    const first = await manager.updateSandbox(sandbox.id, { environmentVariables: { CUSTOM: 'pause-before-first', ADDED: 'pause-added' } });
+    assert.equal(sdk.calls.length, before, 'active variable edits must not connect a paused sandbox');
+    assert.equal(secrets.read(sandbox.credentialRef!), null);
+    releaseFirst.release();
+    await paused.wait;
+    assert.deepEqual(sdk.remoteCommands.find((entry) => entry.command.includes('echo initial-command'))?.envs,
+      { GH_TOKEN: 'pause-original-token', CUSTOM: 'pause-before-first', REMOVE: 'pause-remove', ADDED: 'pause-added' });
+    const beforePausedEdit = sdk.calls.length;
+    const second = await manager.updateSandbox(sandbox.id, { environmentVariables: { GH_TOKEN: null, CUSTOM: 'pause-after', REMOVE: null } });
+    assert.equal(sdk.calls.length, beforePausedEdit);
+    assert.equal(second.status, 'paused');
+    assert.equal(secrets.read(first.credentialRef!), null);
+    releasePaused.release();
+    const finished = await run;
+    assert.equal(finished.session.state, 'waiting_human');
+    assert.deepEqual(sdk.remoteCommands.find((entry) => entry.command.includes('echo resumed-command'))?.envs,
+      { CUSTOM: 'pause-after', ADDED: 'pause-added' });
+    assert.equal(manager.listSandboxes().find((item) => item.id === sandbox.id)?.credentialRef, second.credentialRef);
+    await manager.updateSandbox(sandbox.id, { environmentVariables: { CUSTOM: 'pause-continued', ADDED: null } });
+    const continued = await manager.runRequirement(requirement.id, 'Continue with latest variables');
+    assert.equal(continued.session.nativeSessionId, finished.session.nativeSessionId);
+    assert(manager.listRuns(requirement.id).every((item) => item.status === 'succeeded'));
+    assert.deepEqual(sdk.remoteCommands.find((entry) => entry.command.includes('echo continued-command'))?.envs, { CUSTOM: 'pause-continued' });
+    assert.equal(secrets.read(second.credentialRef!), null);
+  } finally {
+    releaseFirst.release(); releasePaused.release();
+    await run;
+    secrets.close(); await manager.close(); rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('native sandbox pause excludes only its own active RD Run and protects shared RD and Reviewer Runs', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-shared-pause-'));
   const sdk = fakeE2B();
@@ -255,6 +326,131 @@ test('native sandbox pause excludes only its own active RD Run and protects shar
   } finally {
     for (const pending of captured) pending.finish(finished);
     await manager.close(); rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('active shared Native RD and Reviewer tools use live environment patches without changing launched commands', { timeout: 30_000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-dynamic-shared-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const names = ['first', 'second', 'reviewer'] as const;
+  const started = names.map(() => gate());
+  const completion = names.map(() => gate());
+  const healthStarted = gate();
+  const healthCompletion = gate();
+  let holdHealth = false;
+  const sdk = fakeE2B({
+    waitForCommand: async (command) => {
+      const index = names.findIndex((name) => command.includes(`hold-${name}`));
+      if (index !== -1) { started[index]!.release(); await completion[index]!.wait; }
+    },
+    beforeGetInfo: async () => {
+      if (!holdHealth) return;
+      holdHealth = false;
+      healthStarted.release();
+      await healthCompletion.wait;
+    },
+  });
+  const models = createModels();
+  const transcripts: string[] = [];
+  for (const name of names) {
+    const faux = fauxProvider({ provider: name, api: `faux-shared-${name}` });
+    models.setProvider(faux.provider);
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall('bash', { command: `echo hold-${name}` }), { stopReason: 'toolUse' }),
+      fauxAssistantMessage(fauxToolCall('bash', { command: `echo next-${name}` }), { stopReason: 'toolUse' }),
+      (context) => { transcripts.push(JSON.stringify(context)); return fauxAssistantMessage(`${name} finished`); },
+      fauxAssistantMessage('RD accepted the review'),
+    ]);
+  }
+  const store = new SqliteAgentManagerStore(databasePath);
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath, store, e2bService: sdk.service,
+    nativeService: new NativeAgentService(join(directory, 'native.sqlite'), models, sdk.service),
+    logger: createLogger({ level: 'silent' }) });
+  const server = createAgentManagerServer(manager);
+  const secrets = new E2BCredentialStore(e2bCredentialsPath(databasePath));
+  const runs: Array<ReturnType<AgentManager['runRequirement']>> = [];
+  let review: Promise<RunOutcome> | undefined;
+  let health: ReturnType<AgentManager['checkSandboxHealth']> | undefined;
+  try {
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const originalEnvironment = { GITHUB_TOKEN: 'live-original-token', REPLACE: 'live-before', REMOVE: 'live-removed', KEEP: 'live-kept' };
+    const sandbox = await manager.createE2BSandbox({ name: 'Live shared', domain: 'e2b.example', apiKey: 'test-key',
+      environmentVariables: originalEnvironment });
+    const requirements = names.slice(0, 2).map((name) => manager.createRequirement({ title: name, description: 'Use shared E2B',
+      provider: 'native-agent', model: `${name}/faux-1`, sandboxId: sandbox.id }));
+    for (const [index, requirement] of requirements.entries()) {
+      runs.push(manager.runRequirement(requirement.id));
+      await started[index]!.wait;
+    }
+    const pr = manager.trackPullRequest({ requirementId: requirements[1]!.id, repository: 'example/repo', number: 9,
+      url: 'https://github.com/example/repo/pull/9', title: 'Live review', baseBranch: 'main',
+      headBranch: 'feature', headSha: 'abc123', status: 'open' });
+    review = manager.requestReview(pr.id, { provider: 'native-agent', model: 'reviewer/faux-1' });
+    await started[2]!.wait;
+    for (const requirement of requirements) assert.equal(manager.getRequirement(requirement.id)?.session.state, 'running');
+    assert.equal(manager.listReviewRequests(pr.id)[0]?.status, 'running');
+    const launched = sdk.remoteCommands.filter((entry) => entry.command.includes('echo hold-'));
+    assert.equal(launched.length, 3);
+    for (const command of launched) assert.deepEqual(command.envs, originalEnvironment);
+
+    holdHealth = true;
+    health = manager.checkSandboxHealth(sandbox.id);
+    await healthStarted.wait;
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sandboxes/${sandbox.id}`;
+    const patch = async (environmentVariables: Record<string, string | null>) => {
+      const response = await fetch(url, { method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ environmentVariables }) });
+      const body = await response.json() as { credentialRef: string; environmentVariableNames: string[] };
+      assert.equal(response.status, 200);
+      assert.equal(JSON.stringify(body).includes('live-'), false, 'responses contain names, never values');
+      return body;
+    };
+    const edited = await patch({ GITHUB_TOKEN: 'live-replacement-token', REPLACE: 'live-after', REMOVE: null, ADDED: 'live-added' });
+    const concurrent = await Promise.all([patch({ ALPHA: 'live-alpha' }), patch({ BETA: 'live-beta' })]);
+    const expected = { GITHUB_TOKEN: 'live-replacement-token', REPLACE: 'live-after', KEEP: 'live-kept',
+      ADDED: 'live-added', ALPHA: 'live-alpha', BETA: 'live-beta' };
+    const current = store.getSandbox(sandbox.id)!;
+    healthCompletion.release();
+    assert.equal((await health).credentialRef, current.credentialRef, 'health must not restore an obsolete reference');
+    assert.equal(secrets.read(sandbox.credentialRef!), null);
+    assert.equal(secrets.read(edited.credentialRef), null);
+    for (const result of concurrent) if (result.credentialRef !== current.credentialRef) assert.equal(secrets.read(result.credentialRef), null);
+    assert.deepEqual(secrets.readEnvironment(current.credentialRef!), expected);
+    for (const command of launched) assert.deepEqual(command.envs, originalEnvironment, 'already launched commands retain their environment');
+
+    completion[0]!.release(); completion[1]!.release();
+    await Promise.all(runs);
+    for (const requirement of requirements) assert(manager.listRuns(requirement.id).some((run) => run.role === 'rd' && run.status === 'succeeded'));
+    await assert.rejects(manager.updateSandbox(sandbox.id, { domain: 'new.e2b.example' }), /active Reviewer Run/);
+    await assert.rejects(manager.updateSandbox(sandbox.id, { apiKey: 'new-key' }), /active Reviewer Run/);
+    await patch({ REVIEW_ONLY: 'live-review-only' });
+    const followup = new Promise<void>((resolve) => {
+      manager.on('event', (event: ManagerEvent) => {
+        if (event.type === 'run.succeeded' && event.requirementId === requirements[1]!.id && event.payload.role === 'rd') resolve();
+      });
+    });
+    completion[2]!.release();
+    assert.equal((await review).status, 'succeeded');
+    await followup;
+    for (const name of names) {
+      const next = sdk.remoteCommands.find((entry) => entry.command.includes(`echo next-${name}`));
+      assert(next, 'a real Native bash tool must launch its next command');
+      assert.deepEqual(next.envs, { ...expected, ...(name === 'reviewer' ? { REVIEW_ONLY: 'live-review-only' } : {}) });
+      assert.equal(Object.hasOwn(next.envs!, 'REMOVE'), false);
+    }
+    for (const requirement of requirements) transcripts.push(JSON.stringify(manager.listMessages(requirement.id)));
+    assert.equal(transcripts.join().includes('live-'), false, 'values must not enter model context or conversation events');
+    const database = new DatabaseSync(e2bCredentialsPath(databasePath));
+    try { assert.equal(database.prepare('SELECT COUNT(*) AS count FROM e2b_credentials').get()?.count, 1); }
+    finally { database.close(); }
+  } finally {
+    completion.forEach((item) => item.release()); healthCompletion.release();
+    await Promise.allSettled([...runs, ...(review ? [review] : []), ...(health ? [health] : [])]);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    secrets.close(); await manager.close();
+    try {
+      for (const path of [databasePath, join(directory, 'native.sqlite')]) assert.equal(readFileSync(path).includes('live-'), false);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
   }
 });
 
@@ -729,7 +925,7 @@ test('Native RD instructions let the Agent select and clone its own repository i
     assert.equal(requests.length, 1);
     assert.equal(requests[0]!.sandbox?.cwd, null);
     assert.equal(requests[0]!.sandbox?.forwardGitHubToken, false);
-    assert.deepEqual(requests[0]!.sandbox?.environmentVariables, { GH_TOKEN: 'runtime-only-token', CUSTOM: 'runtime-only-custom' });
+    assert.deepEqual(requests[0]!.sandbox?.getEnvironmentVariables?.(), { GH_TOKEN: 'runtime-only-token', CUSTOM: 'runtime-only-custom' });
     assert.match(requests[0]!.instructions, /Configured environment variable names: CUSTOM, GH_TOKEN/);
     assert.equal(JSON.stringify({ prompt: requests[0]!.prompt, instructions: requests[0]!.instructions }).includes('runtime-only'), false);
     assert.match(requests[0]!.instructions, /This sandbox may be empty/);
@@ -738,8 +934,8 @@ test('Native RD instructions let the Agent select and clone its own repository i
     assert.doesNotMatch(requests[0]!.instructions, /must already contain a Git checkout|must remain authenticated/);
     await manager.updateSandbox(sandbox.id, { environmentVariables: { GH_TOKEN: 'rotated-token', CUSTOM: null } });
     await manager.runRequirement(requirement.id, 'Use the updated environment');
-    assert.deepEqual(requests[1]!.sandbox?.environmentVariables, { GH_TOKEN: 'rotated-token' });
-    assert.deepEqual(requests[0]!.sandbox?.environmentVariables, { GH_TOKEN: 'runtime-only-token', CUSTOM: 'runtime-only-custom' });
+    assert.deepEqual(requests[1]!.sandbox?.getEnvironmentVariables?.(), { GH_TOKEN: 'rotated-token' });
+    assert.deepEqual(requests[0]!.sandbox?.getEnvironmentVariables?.(), { GH_TOKEN: 'rotated-token' });
   } finally {
     await manager.close();
     rmSync(directory, { recursive: true, force: true });
@@ -873,7 +1069,7 @@ for (const lookupFails of [false, true]) {
       const outcome = await manager.runRequirement(requirement.id);
       assert.equal(outcome.status, 'waiting_confirmation');
       assert.equal(requests[0]?.sandbox?.credentials.apiKey, 'test-key');
-      assert.deepEqual(requests[0]?.sandbox?.environmentVariables, { GH_TOKEN: 'replacement-token', CUSTOM: 'configured' });
+      assert.deepEqual(requests[0]?.sandbox?.getEnvironmentVariables?.(), { GH_TOKEN: 'replacement-token', CUSTOM: 'configured' });
     } finally {
       finishLookup();
       await health?.catch(() => undefined);
@@ -949,7 +1145,7 @@ for (const stage of ['connect', 'status']) {
           provider: 'native-agent', sandboxId: saved.id });
         assert.equal((await manager.runRequirement(requirement.id)).status, 'waiting_confirmation');
         assert.deepEqual(requests[0]?.sandbox?.credentials, { domain: saved.domain, apiKey: rotateKey ? 'new-key' : 'test-key' });
-        assert.deepEqual(requests[0]?.sandbox?.environmentVariables, expectedEnvironment);
+        assert.deepEqual(requests[0]?.sandbox?.getEnvironmentVariables?.(), expectedEnvironment);
       } finally {
         release();
         await connection?.catch(() => undefined);
@@ -1030,7 +1226,7 @@ test('failed sandbox persistence preserves the old environment and removes the u
   }
 });
 
-test('environment and in-flight connection updates are rejected while an RD Run is active', async () => {
+test('environment edits succeed while an RD Run is active and connection updates remain protected', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-env-active-'));
   const databasePath = join(directory, 'factory.sqlite');
   let finish!: (outcome: RunOutcome) => void;
@@ -1066,11 +1262,13 @@ test('environment and in-flight connection updates are rejected while an RD Run 
       provider: 'native-agent', sandboxId: sandbox.id });
     const run = manager.runRequirement(requirement.id);
     await started;
-    await assert.rejects(manager.updateSandbox(sandbox.id, { environmentVariables: { GH_TOKEN: 'new' } }), /active RD Run/);
+    const edited = await manager.updateSandbox(sandbox.id, { environmentVariables: { GH_TOKEN: 'new' } });
+    await assert.rejects(manager.updateSandbox(sandbox.id, { domain: 'new.e2b.example' }), /active RD Run/);
+    await assert.rejects(manager.updateSandbox(sandbox.id, { apiKey: 'new-key' }), /active RD Run/);
     const rejected = assert.rejects(connection, /active RD Run/);
     releaseConnection();
     await rejected;
-    assert.deepEqual(manager.listSandboxes().find((item) => item.id === sandbox.id), sandbox);
+    assert.deepEqual(manager.listSandboxes().find((item) => item.id === sandbox.id), edited);
     finish({ status: 'succeeded', exitCode: 0, nativeSessionId: null, finalMessage: null, error: null });
     await run;
     assert.deepEqual((await manager.updateSandbox(sandbox.id, { environmentVariables: { GH_TOKEN: null } })).environmentVariableNames, []);

@@ -912,7 +912,7 @@ export class AgentManager extends EventEmitter {
     applyEnvironmentVariablePatch(this.e2bEnvironment(current), input.environmentVariables ?? {});
     const secretsChanged = apiKey !== undefined || input.environmentVariables !== undefined;
     const needsConnection = domain !== current.domain || apiKey !== undefined;
-    if (needsConnection || secretsChanged) this.ensureSandboxIdle(id);
+    if (needsConnection) this.ensureSandboxIdle(id);
     const previousApiKey = needsConnection ? this.e2bApiKey(current) : null;
     let status = current.status;
     let checkedAt = current.checkedAt;
@@ -1668,7 +1668,7 @@ export class AgentManager extends EventEmitter {
         ...(selectedWorkspace?.kind === 'e2b' && selectedWorkspace.providerSandboxId && remoteCredentials
           ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedWorkspace.providerSandboxId, cwd: selectedWorkspace.cwd,
               credentials: remoteCredentials,
-              environmentVariables: this.e2bEnvironment(selectedWorkspace),
+              getEnvironmentVariables: () => this.e2bEnvironment(this.requireE2BSandbox(selectedWorkspace.id)),
               forwardGitHubToken: selectedWorkspace.repositoryUrl !== null
                 && new URL(selectedWorkspace.repositoryUrl).hostname.toLowerCase() === 'github.com' } } : {}),
         environment: {}, instructions: `${developerInstructions}\nUse the bash tool for GitHub CLI commands in the selected workspace.`,
@@ -1870,7 +1870,7 @@ export class AgentManager extends EventEmitter {
           ...(selectedSandbox?.kind === 'e2b' && selectedSandbox.providerSandboxId && cloudCredentials
             ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedSandbox.providerSandboxId, cwd: selectedSandbox.cwd,
                 credentials: cloudCredentials,
-                environmentVariables: this.e2bEnvironment(selectedSandbox),
+                getEnvironmentVariables: () => this.e2bEnvironment(this.requireE2BSandbox(selectedSandbox.id)),
                 control: (action, signal) => this.controlNativeSandbox(requirementId, started.session.id, action,
                   signal ? AbortSignal.any([controller.signal, signal]) : controller.signal),
                 forwardGitHubToken: selectedSandbox.repositoryUrl !== null

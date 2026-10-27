@@ -33,7 +33,7 @@ export function WorkspaceEnvironmentVariables({ names = [] }: { names?: string[]
   }
   return <Field>
     <FieldLabel>{t('Environment variables')}</FieldLabel>
-    <p className="text-xs text-muted-foreground">{t('Values stay hidden after saving and apply to later Native Agent commands.')}</p>
+    <p className="text-xs text-muted-foreground">{t('Values stay hidden after saving. Changes apply to the next Native RD or Reviewer command, even during a Run. Restart running commands and background processes to use new values.')}</p>
     <input type="hidden" name="environmentVariables" value={JSON.stringify(Object.fromEntries(updates))} />
     <div className="grid gap-2">
       {rows.map((row, index) => {
