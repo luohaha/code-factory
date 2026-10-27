@@ -22,6 +22,8 @@ export const sandboxesTableSql = `CREATE TABLE IF NOT EXISTS sandboxes (
     credential_ref TEXT,
     repository_url TEXT,
     template TEXT,
+    cpu_count INTEGER,
+    memory_mb INTEGER,
     status TEXT NOT NULL DEFAULT 'unknown' CHECK (status IN ('running', 'paused', 'terminated', 'unreachable', 'unknown')),
     checked_at TEXT,
     created_at TEXT NOT NULL

@@ -322,19 +322,21 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
 
   createSandbox(sandbox: Sandbox): Sandbox {
     this.#db.prepare(`INSERT INTO sandboxes
-      (id, name, kind, cwd, provider_sandbox_id, credential_env_var, domain, credential_ref, repository_url, template, status, checked_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(sandbox.id, sandbox.name, sandbox.kind, sandbox.cwd,
+      (id, name, kind, cwd, provider_sandbox_id, credential_env_var, domain, credential_ref, repository_url, template,
+        cpu_count, memory_mb, status, checked_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(sandbox.id, sandbox.name, sandbox.kind, sandbox.cwd,
       sandbox.providerSandboxId, sandbox.credentialEnvVar, sandbox.domain, sandbox.credentialRef, sandbox.repositoryUrl,
-      sandbox.template, sandbox.status,
+      sandbox.template, sandbox.cpuCount, sandbox.memoryMB, sandbox.status,
       sandbox.checkedAt, sandbox.createdAt);
     return sandbox;
   }
 
   updateSandbox(sandbox: Sandbox): Sandbox {
     const changed = this.#db.prepare(`UPDATE sandboxes SET name = ?, cwd = ?, provider_sandbox_id = ?, credential_env_var = ?,
-      domain = ?, credential_ref = ?, repository_url = ?, template = ?, status = ?, checked_at = ? WHERE id = ?`).run(sandbox.name, sandbox.cwd,
+      domain = ?, credential_ref = ?, repository_url = ?, template = ?, cpu_count = ?, memory_mb = ?, status = ?, checked_at = ?
+      WHERE id = ?`).run(sandbox.name, sandbox.cwd,
       sandbox.providerSandboxId, sandbox.credentialEnvVar, sandbox.domain, sandbox.credentialRef, sandbox.repositoryUrl,
-      sandbox.template, sandbox.status,
+      sandbox.template, sandbox.cpuCount, sandbox.memoryMB, sandbox.status,
       sandbox.checkedAt, sandbox.id);
     if (!changed.changes) throw new StoreNotFoundError(`Sandbox ${sandbox.id} not found`);
     return sandbox;
@@ -354,6 +356,8 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       credentialRef: row.credential_ref === null ? null : String(row.credential_ref),
       repositoryUrl: row.repository_url === null ? null : String(row.repository_url),
       template: row.template === null ? null : String(row.template),
+      cpuCount: row.cpu_count === null || row.cpu_count === undefined ? null : Number(row.cpu_count),
+      memoryMB: row.memory_mb === null || row.memory_mb === undefined ? null : Number(row.memory_mb),
       status: String(row.status) as Sandbox['status'],
       checkedAt: row.checked_at === null ? null : String(row.checked_at),
       createdAt: String(row.created_at),
@@ -396,6 +400,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     try {
       this.#db.exec('BEGIN IMMEDIATE');
       this.#db.exec(sandboxesTableSql.replace('sandboxes (', 'sandboxes_default_cwd ('));
+      // Legacy copies predate resource columns, so they stay out of the copy list and start as NULL.
       this.#db.exec(`INSERT INTO sandboxes_default_cwd
         (id, name, kind, cwd, provider_sandbox_id, credential_env_var, domain, credential_ref,
           repository_url, template, status, checked_at, created_at)
@@ -420,6 +425,9 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       .map((column) => String(column.name)));
     for (const name of ['domain', 'credential_ref', 'repository_url']) {
       if (!columns.has(name)) this.#db.exec(`ALTER TABLE sandboxes ADD COLUMN ${name} TEXT`);
+    }
+    for (const name of ['cpu_count', 'memory_mb']) {
+      if (!columns.has(name)) this.#db.exec(`ALTER TABLE sandboxes ADD COLUMN ${name} INTEGER`);
     }
     this.#db.exec('DROP INDEX IF EXISTS sandboxes_provider_id');
   }

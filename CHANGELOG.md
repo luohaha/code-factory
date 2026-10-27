@@ -6,6 +6,10 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+### Added
+
+- Create an E2B workspace with explicit resources. `cpuCount` (1-8) and `memoryMB` (512-8192) are accepted at workspace creation, and the bundled dashboard exposes them under the advanced E2B options. Because E2B sizes a sandbox from its template, Agent Manager builds a derived template from the selected one the first time a resource shape is requested and reuses it afterwards. Workspace records now expose the `cpuCount` and `memoryMB` E2B last reported, refreshed by health checks and connection edits.
+
 ## [0.2.9] - 2026-10-27
 
 ### Added

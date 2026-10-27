@@ -416,6 +416,8 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
           ...(body.domain === undefined ? {} : { domain: stringField(body, 'domain')! }),
           ...(body.environmentVariables === undefined ? {} : { environmentVariables: environmentVariablePatch(body.environmentVariables) }),
           ...(body.template === undefined ? {} : { template: stringField(body, 'template', true)! }),
+          ...(body.cpuCount === undefined ? {} : { cpuCount: positiveIntegerField(body, 'cpuCount') }),
+          ...(body.memoryMB === undefined ? {} : { memoryMB: positiveIntegerField(body, 'memoryMB') }),
           ...(body.providerSandboxId === undefined ? {} : { providerSandboxId: stringField(body, 'providerSandboxId', true)! }),
         }));
         return;
