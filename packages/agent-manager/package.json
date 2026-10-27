@@ -1,6 +1,6 @@
 {
   "name": "@luoyixin/code-factory",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "Workspace-scoped manager for long-running Codex, Claude Code, and native development sessions.",
   "license": "Apache-2.0",
   "type": "module",
@@ -65,7 +65,7 @@
     "@earendil-works/chord": "1.0.0",
     "@earendil-works/pi-ai": "1.0.0",
     "@earendil-works/pi-durable": "1.0.0",
-    "e2b": "^2.52.0",
+    "e2b": "^2.61.0",
     "winston": "^3.19.0",
     "winston-daily-rotate-file": "^5.0.0"
   }

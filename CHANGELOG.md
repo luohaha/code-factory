@@ -6,6 +6,33 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-10-27
+
+### Added
+
+- Preserve unsent Requirement conversation text and attachments across reloads and browser tabs.
+- Publish RD-generated files as downloadable conversation attachments through the CLI or Native Agent tools.
+- Give Native E2B RD Agents sandbox status, pause/resume, and binary file transfer tools.
+- Configure E2B command environment variables and apply edits to the next Native RD or Reviewer command, including during active Runs.
+- Add a local development script that builds the application and manages its daemon.
+
+### Changed
+
+- Create E2B workspaces without preparing a repository; Native Agents inspect the sandbox and prepare repositories as needed. Blank domains default to `e2b.app`, and commands use the sandbox default directory when none is configured.
+- Show collapsible tool calls and live working indicators in Requirement conversations, and simplify README guidance.
+- Include both sender and recipient conversation histories in Jev's inter-agent message checks.
+- Document E2B timeout, pause/resume, and lifecycle boundaries, and pin browser CI to a Playwright-supported Ubuntu version.
+
+### Fixed
+
+- Preserve E2B credential and environment edits during concurrent connection checks, and propagate Native tool cancellation through lazy initialization and sandbox lifecycle requests.
+- Preserve executable permissions for the built Agent Manager and control-plane CLIs.
+
+### Security
+
+- Update the E2B SDK to 2.61.0 and its locked `undici` dependency to 8.12.3, resolving production dependency denial-of-service and integrity advisories.
+- Update the dashboard's locked `fast-uri` dependency to 3.1.9 to address URI parsing advisories.
+
 ## [0.2.8] - 2026-10-19
 
 ### Added
