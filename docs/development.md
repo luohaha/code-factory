@@ -21,7 +21,7 @@ Code Factory contains two independently installed Node.js packages and has no ro
 | `cli/` | CLI command implementations, RD CLI launcher, daemon, and startup banner |
 | `infrastructure/` | Workspace configuration, logging, package version, and workspace lock |
 
-The top-level `index.ts` preserves the public package exports. `cli.ts` and `code-factory-cli-main.ts` remain the published executable entrypoints, so commands still use `dist/cli.js` and `dist/code-factory-cli-main.js`. Relative module imports retain explicit `.js` suffixes. The build removes the previous `dist/` output before compiling so moved or deleted modules cannot linger in the package.
+The top-level `index.ts` preserves the public package exports. `cli.ts` and `code-factory-cli-main.ts` remain the published executable entrypoints, so commands still use `dist/cli.js` and `dist/code-factory-cli-main.js`. Relative module imports retain explicit `.js` suffixes. The build removes the previous `dist/` output before compiling so moved or deleted modules cannot linger in the package. After compilation it restores executable permissions for both CLIs, keeping existing `npm link` commands usable after every rebuild.
 
 ## Install dependencies manually
 
@@ -35,6 +35,46 @@ npm ci --prefix packages/agent-manager
 When intentionally changing dependencies, run `npm install` in the corresponding package directory so only its lockfile is updated.
 
 ## Build and run a source checkout
+
+For local testing, use the development script from the repository root:
+
+~~~bash
+./scripts/dev.sh --port 4311
+~~~
+
+The default `up` command installs dependencies with `npm ci` in either package if its `node_modules/` directory is missing, builds Agent Manager and the bundled dashboard, runs `npm link`, then starts or restarts the workspace daemon. Repeating it rebuilds the checkout and reloads the running service. It reuses the daemon's previous start options unless you supply replacements; `--port 4311` selects a separate local test port. Add `--open` to open the dashboard. Existing dependency installations are reused; run `npm ci` manually after lockfile changes.
+
+The managed workspace defaults to the directory from which you invoke the script. To manage another repository, pass `--workspace` before the Agent Manager options, or call the script by its absolute path from that repository:
+
+~~~bash
+./scripts/dev.sh --workspace /path/to/your-project --port 4311 --open
+
+cd /path/to/your-project
+/path/to/code-factory/scripts/dev.sh --port 4311
+~~~
+
+Use the same workspace for lifecycle commands. `start`, `restart`, `stop`, and `status` use the existing build without rebuilding or changing the global link:
+
+~~~bash
+./scripts/dev.sh status
+./scripts/dev.sh stop
+./scripts/dev.sh start --port 4311
+./scripts/dev.sh restart
+
+./scripts/dev.sh stop --workspace /path/to/your-project
+~~~
+
+`start` runs as a daemon. `status` returns exit code `3` if no daemon is running. `up`, `start`, and `restart` forward remaining options to Agent Manager; an optional `--` separates script options from CLI options. The script launches the CLI from its own checkout, so it also works when another worktree owns the global command. `npm link` makes both global CLI commands point to this checkout and requires write access to the configured npm global prefix.
+
+To build or update the global link separately:
+
+~~~bash
+./scripts/dev.sh build
+./scripts/dev.sh link
+./scripts/dev.sh --help
+~~~
+
+For a foreground process, build first and use the direct CLI command below without `--daemon`.
 
 Build Agent Manager and its bundled dashboard:
 
