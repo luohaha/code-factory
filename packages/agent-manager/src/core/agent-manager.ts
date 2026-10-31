@@ -134,7 +134,7 @@ export const MAX_HANDOFF_PROMPT_CHARS = 32_000;
 
 const MAX_HANDOFF_PENDING_CHARS = 12_000;
 const MAX_INLINE_DESCRIPTION_CHARS = 4_000;
-const MAX_PENDING_JEV_FAILURE_CONTINUATIONS = 2;
+const MAX_CONSECUTIVE_RD_FAILURES = 2;
 const HANDOFF_DECISION_PATTERN = /\b(decid(?:e|ed|ing)|decis(?:ion|ions)|agree(?:d|ment)?|approv(?:e|ed|al)|confirm(?:ed|ation)?|must|require(?:d|ment)?|scope|worktree|branch|pull request|pr #|commit|follow.up)\b|决定|确认|同意|必须|工作树|分支|拉取请求|待办/i;
 
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
@@ -2079,7 +2079,8 @@ export class AgentManager extends EventEmitter {
     const requirement = this.#store.getRequirement(requirementId);
     if (!requirement) return 'state_changed';
     const runs = this.#store.listRuns(requirementId);
-    const latestRdRun = runs.find((run) => run.role === 'rd');
+    const rdRuns = runs.filter((run) => run.role === 'rd');
+    const latestRdRun = rdRuns[0];
     if (!latestRdRun) return 'state_changed';
     const hasNewMessages = runStatus === 'succeeded'
       ? requirement.session.pendingMessageCount > 0
@@ -2097,10 +2098,11 @@ export class AgentManager extends EventEmitter {
     if (this.#store.listAgentTimers(requirementId).some((timer) => timer.status === 'active')) {
       return 'work_already_pending';
     }
-    // Failures retain their input. Bound automatic retries using durable, unconsumed
-    // Jev messages so restarting the Manager cannot reset the allowance.
-    if (runStatus !== 'succeeded' && this.#store.listPendingRdMessages(requirementId)
-      .filter((message) => message.author === 'jev').length >= MAX_PENDING_JEV_FAILURE_CONTINUATIONS) {
+    // Use consecutive durable RD outcomes, independent of pending Jev messages.
+    // A successful or cancelled RD Run breaks the streak; Reviewer Runs do not.
+    const recentRdRuns = rdRuns.slice(0, MAX_CONSECUTIVE_RD_FAILURES);
+    if (runStatus !== 'succeeded' && recentRdRuns.length === MAX_CONSECUTIVE_RD_FAILURES
+      && recentRdRuns.every((run) => run.status === 'failed' || run.status === 'timed_out')) {
       return 'failure_retry_limit_reached';
     }
     return null;
