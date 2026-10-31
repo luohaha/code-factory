@@ -16,6 +16,7 @@ export interface AgentManagerConfiguration {
   pullRequestReconcileIntervalSeconds: number;
   cancelledRequirementRetentionDays: number;
   doneRequirementRetentionDays: number;
+  attachmentRetentionDays: number;
   logLevel: LogLevel;
   logFilePath: string | null;
   logMaxSize: string | number;
@@ -46,6 +47,7 @@ export const DEFAULT_AGENT_MANAGER_CONFIGURATION: Readonly<AgentManagerConfigura
   pullRequestReconcileIntervalSeconds: 30,
   cancelledRequirementRetentionDays: 7,
   doneRequirementRetentionDays: 365,
+  attachmentRetentionDays: 7,
   logLevel: 'info',
   logFilePath: null,
   logMaxSize: '20m',
@@ -58,6 +60,7 @@ export const DYNAMIC_CONFIGURATION_FIELDS: ReadonlySet<keyof AgentManagerConfigu
   'pullRequestReconcileIntervalSeconds',
   'cancelledRequirementRetentionDays',
   'doneRequirementRetentionDays',
+  'attachmentRetentionDays',
   'logLevel',
 ]);
 
@@ -163,6 +166,14 @@ export function validateAgentManagerConfigurationPatch(value: unknown): AgentMan
       input.doneRequirementRetentionDays,
       'doneRequirementRetentionDays',
       0,
+      MAX_REQUIREMENT_RETENTION_DAYS,
+    );
+  }
+  if (input.attachmentRetentionDays !== undefined) {
+    output.attachmentRetentionDays = integerInRange(
+      input.attachmentRetentionDays,
+      'attachmentRetentionDays',
+      1,
       MAX_REQUIREMENT_RETENTION_DAYS,
     );
   }

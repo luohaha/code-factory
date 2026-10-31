@@ -190,6 +190,8 @@ export const schemaStatements = [
     ON manager_events (requirement_id, type, id)`,
   `CREATE INDEX IF NOT EXISTS messages_requirement_created
     ON requirement_messages (requirement_id, created_at, id)`,
+  `CREATE INDEX IF NOT EXISTS attachments_created
+    ON message_attachments (created_at, id)`,
   `CREATE INDEX IF NOT EXISTS attachments_requirement_created
     ON message_attachments (requirement_id, created_at, id)`,
   `CREATE INDEX IF NOT EXISTS pull_requests_requirement_updated

@@ -27,6 +27,8 @@ import {
   type CreateRequirementRecord,
   type UpdateRequirementRecord,
   type PurgeExpiredRequirementsRecord,
+  type PurgeExpiredAttachmentsRecord,
+  type PurgeExpiredAttachmentsResult,
   type PurgeExpiredRequirementsResult,
   type PullRequestObservation,
   type UpsertPullRequestRecord,
@@ -1229,6 +1231,31 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
         .run(input.cancelledBefore, input.doneBefore);
       this.#db.exec('COMMIT');
       return { requirements };
+    } catch (error) {
+      this.#db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  purgeExpiredAttachments(input: PurgeExpiredAttachmentsRecord): PurgeExpiredAttachmentsResult {
+    // Keep files available while either an RD or Reviewer Run may still be using them.
+    const expiredPredicate = `attachment.created_at <= ? AND NOT EXISTS (
+      SELECT 1 FROM agent_runs active_run
+      WHERE active_run.requirement_id = attachment.requirement_id AND active_run.status = 'running'
+    )`;
+    this.#db.exec('BEGIN IMMEDIATE');
+    try {
+      const rows = this.#db.prepare(`SELECT DISTINCT attachment.requirement_id
+        FROM message_attachments attachment WHERE ${expiredPredicate}`)
+        .all(input.createdBefore) as Row[];
+      this.#db.prepare(`INSERT OR IGNORE INTO pending_attachment_deletions (local_path, created_at)
+        SELECT attachment.local_path, ? FROM message_attachments attachment WHERE ${expiredPredicate}`)
+        .run(input.now, input.createdBefore);
+      const result = this.#db.prepare(`DELETE FROM message_attachments WHERE id IN (
+        SELECT attachment.id FROM message_attachments attachment WHERE ${expiredPredicate}
+      )`).run(input.createdBefore);
+      this.#db.exec('COMMIT');
+      return { attachmentCount: Number(result.changes), requirementIds: rows.map((row) => String(row.requirement_id)) };
     } catch (error) {
       this.#db.exec('ROLLBACK');
       throw error;
