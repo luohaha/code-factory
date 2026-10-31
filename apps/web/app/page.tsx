@@ -1502,7 +1502,7 @@ function ManagerConfigurationDialog({
           <form id={formId} onSubmit={submit} />
           <DialogHeader>
             <DialogTitle>{t('Agent Manager configuration')}</DialogTitle>
-            <DialogDescription>{t('Native Agent credentials, reconciliation, requirement retention, commit attribution, Jev, and log level changes apply immediately. Other settings take effect after restart.')}</DialogDescription>
+            <DialogDescription>{t('Native Agent credentials, reconciliation, requirement and attachment retention, commit attribution, Jev, and log level changes apply immediately. Other settings take effect after restart.')}</DialogDescription>
           </DialogHeader>
           {configuration?.restartRequired ? (
             <Alert className="mt-4">
@@ -1587,6 +1587,11 @@ function ManagerConfigurationDialog({
                       <NativeSelectOption value="error">error</NativeSelectOption>
                       <NativeSelectOption value="silent">silent</NativeSelectOption>
                     </NativeSelect>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="configuration-attachment-retention">{t('Attachment retention (days)')}</FieldLabel>
+                    <Input form={formId} id="configuration-attachment-retention" type="number" min="1" max="36500" step="1" value={values.attachmentRetentionDays} onChange={(event) => update('attachmentRetentionDays', Number(event.target.value))} required />
+                    <p className="text-[10px] text-muted-foreground">{t('Attachments expire from their upload time. Default: 30 days. Cleanup runs daily and when this setting is saved.')}</p>
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="configuration-cancelled-retention">{t('Cancelled requirement retention (days)')}</FieldLabel>
@@ -2682,6 +2687,7 @@ function Dashboard() {
     requirementId: string | null;
     items: RequirementMessageDto[];
   }>({ requirementId: null, items: [] });
+  const [expiredAttachmentCutoffs, setExpiredAttachmentCutoffs] = useState<Record<string, string>>({});
   const [loadedConversationRequirementId, setLoadedConversationRequirementId] = useState<string | null>(null);
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [olderMessagesLoading, setOlderMessagesLoading] = useState(false);
@@ -3048,6 +3054,17 @@ function Dashboard() {
     eventRevisionRef.current += 1;
     notifyForEvent(event);
     const payload = event.payload;
+    if (event.type === 'attachments.purged' && typeof payload.createdBefore === 'string'
+      && Array.isArray(payload.requirementIds)) {
+      const cutoff = payload.createdBefore;
+      setExpiredAttachmentCutoffs((current) => {
+        const next = { ...current };
+        for (const id of payload.requirementIds ?? []) {
+          if (typeof id === 'string' && (!next[id] || next[id] < cutoff)) next[id] = cutoff;
+        }
+        return next;
+      });
+    }
     const removesRequirement = event.type === 'requirement.deleted'
       || event.type === 'requirements.purged';
     if (event.type === 'requirement.deleted' && event.requirementId) {
@@ -3273,7 +3290,13 @@ function Dashboard() {
   const selectedRequirement = requirements.find((item) => item.id === selectedId) ?? null;
   const selectedRuns = runs.filter((run) => run.requirementId === selectedId);
   const selectedPullRequests = pullRequests.filter((pullRequest) => pullRequest.requirementId === selectedId);
-  const selectedMessages = conversation.requirementId === selectedId ? conversation.items : [];
+  const selectedMessages = useMemo(() => {
+    if (conversation.requirementId !== selectedId) return [];
+    const cutoff = selectedId ? expiredAttachmentCutoffs[selectedId] : undefined;
+    return cutoff ? conversation.items.map((message) => ({
+      ...message, attachments: message.attachments.filter((attachment) => attachment.createdAt > cutoff),
+    })) : conversation.items;
+  }, [conversation, selectedId, expiredAttachmentCutoffs]);
   const selectedMessageLoading = detailMode === 'conversation' && selectedId !== null
     && (messageLoading || conversation.requirementId !== selectedId);
   const normalizedQuery = query.trim();

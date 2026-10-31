@@ -371,6 +371,7 @@ Returns the configuration file path, file-backed desired values, and any fields 
     "pullRequestReconcileIntervalSeconds": 30,
     "cancelledRequirementRetentionDays": 7,
     "doneRequirementRetentionDays": 365,
+    "attachmentRetentionDays": 30,
     "logLevel": "info",
     "logFilePath": null,
     "logMaxSize": "20m",
@@ -384,7 +385,7 @@ Returns the configuration file path, file-backed desired values, and any fields 
 
 ### PATCH /api/configuration
 
-Accepts any subset of `values`. The patch is merged into the file-backed desired values and the complete validated document is atomically written; unrelated launch-only overrides are never persisted. `pullRequestReconcileIntervalSeconds`, `cancelledRequirementRetentionDays`, `doneRequirementRetentionDays`, `logLevel`, and `jevApiKey` apply immediately. All other fields are persisted, returned in `restartRequiredFields`, and apply on restart.
+Accepts any subset of `values`. The patch is merged into the file-backed desired values and the complete validated document is atomically written; unrelated launch-only overrides are never persisted. `pullRequestReconcileIntervalSeconds`, `cancelledRequirementRetentionDays`, `doneRequirementRetentionDays`, `attachmentRetentionDays`, `logLevel`, and `jevApiKey` apply immediately. All other fields are persisted, returned in `restartRequiredFields`, and apply on restart.
 
 ~~~bash
 curl -X PATCH http://127.0.0.1:4310/api/configuration \
@@ -392,7 +393,11 @@ curl -X PATCH http://127.0.0.1:4310/api/configuration \
   -d '{"pullRequestReconcileIntervalSeconds":10,"logLevel":"debug"}'
 ~~~
 
-`port` must be an integer from 1 to 65535. The reconcile interval must be an integer from 0 to 2147483 seconds, the largest whole-second delay supported by Node.js timers. Each Requirement retention value must be an integer from 0 to 36500 days; `0` deletes matching Requirements as they become terminal. Updating either retention value triggers a scan immediately, in addition to the startup and daily scans. A terminal Requirement with any running Run is deferred; a zero-day purge is retried immediately when that Run finishes. Requirement-linked domain records are deleted in one transaction; pending attachment-file deletions are persisted as tombstones and retried until the file is absent. `logLevel` accepts `debug`, `info`, `warn`, `error`, or `silent`. Paths and origins accept a non-empty string or `null`; a null database or log path selects its workspace default, while a null origin disables CORS. Unknown fields return 400 Bad Request.
+`port` must be an integer from 1 to 65535. The reconcile interval must be an integer from 0 to 2147483 seconds, the largest whole-second delay supported by Node.js timers. Each Requirement retention value must be an integer from 0 to 36500 days; `0` deletes matching Requirements as they become terminal. Updating either retention value triggers a scan immediately, in addition to the startup and daily scans. A terminal Requirement with any running Run is deferred; a zero-day purge is retried immediately when that Run finishes. Requirement-linked domain records are deleted in one transaction; pending attachment-file deletions are persisted as tombstones and retried until the file is absent.
+
+`attachmentRetentionDays` accepts integers from `1` to `36500` (default `30`, a fixed 30-day month). It expires uploaded and Agent-published files by `createdAt`, including uploads not yet bound to a message. Startup, daily scans, and saving this setting reclaim expired attachment metadata and files, preserving Requirements and message text. Requirements with any running RD or Reviewer Run defer attachment expiry until a later scan. Deletion tombstones are committed with metadata removal and failed file deletions are retried on subsequent scans. Expired attachment IDs return 404. Increasing retention cannot restore deleted attachments.
+
+`logLevel` accepts `debug`, `info`, `warn`, `error`, or `silent`. Paths and origins accept a non-empty string or `null`; a null database or log path selects its workspace default, while a null origin disables CORS. Unknown fields return 400 Bad Request.
 
 Set `jevApiKey` to a non-empty string to enable Jev decisions, or to `null` or `""` to disable them. The key is stored in the workspace configuration file and never echoed by this API. When a successful, failed, or timed-out RD Run leaves a Requirement waiting for confirmation, Jev evaluates the Requirement title and description, Run status, and three latest conversation messages, including each author's identity, if no messages arrived after that Run captured its input and there are no active Reviewer Runs or timers. A failed or timed-out Run does not need an RD reply for Jev to consider recovery; its System error message is part of the conversation. Attempted input remains pending after failure and is delivered again on retry, but does not suppress Jev's decision. Jev can leave the session waiting, send `continue.` immediately as Jev, or create a one-time timer to send `continue.` as Jev after 1–60 minutes. Cancelled Runs do not trigger Jev. Jev failures leave the normal waiting flow intact.
 
@@ -492,11 +497,11 @@ curl -X POST http://127.0.0.1:4310/api/requirements/req_.../attachments \
   --data-binary @debug.log
 ~~~
 
-Success: 201 Created. Include the returned ID in attachmentIds on a later start or reply request. A message supports up to six attachments. Attachments and their messages persist across Agent Manager restarts.
+Success: 201 Created. Include the returned ID in attachmentIds on a later start or reply request. A message supports up to six attachments. Attachments and their messages persist across Agent Manager restarts. Attachment files and metadata expire independently after `attachmentRetentionDays` (30 days by default), measured from upload time; message text remains.
 
 ### GET /api/attachments/:id
 
-Returns attachment content. Safe raster images use Content-Disposition: inline. Other files are forced to download with attachment. With the optional `download=1` query parameter, every type uses Content-Disposition: attachment, including raster images. Every response includes X-Content-Type-Options: nosniff. Returns 404 Not Found for an unknown attachment.
+Returns attachment content. Safe raster images use Content-Disposition: inline. Other files are forced to download with attachment. With the optional `download=1` query parameter, every type uses Content-Disposition: attachment, including raster images. Every response includes X-Content-Type-Options: nosniff. Returns 404 Not Found for an unknown or reclaimed attachment.
 
 ### POST /api/agent/requirements/:id/artifacts
 

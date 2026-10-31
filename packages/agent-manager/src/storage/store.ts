@@ -153,6 +153,16 @@ export interface PurgeExpiredRequirementsRecord {
   now: string;
 }
 
+export interface PurgeExpiredAttachmentsRecord {
+  createdBefore: string;
+  now: string;
+}
+
+export interface PurgeExpiredAttachmentsResult {
+  attachmentCount: number;
+  requirementIds: string[];
+}
+
 export interface PurgeExpiredRequirementsResult {
   requirements: Array<{
     id: string;
@@ -243,6 +253,7 @@ export interface AgentManagerStore {
     now: string,
   ): RequirementWithSession;
   purgeExpiredRequirements(input: PurgeExpiredRequirementsRecord): PurgeExpiredRequirementsResult;
+  purgeExpiredAttachments(input: PurgeExpiredAttachmentsRecord): PurgeExpiredAttachmentsResult;
   listPendingAttachmentDeletions(): string[];
   completePendingAttachmentDeletion(localPath: string): void;
   appendEvent(input: AppendEventRecord): ManagerEvent;

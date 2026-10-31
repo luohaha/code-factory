@@ -4,6 +4,7 @@ export const MANAGER_EVENT_TYPES = [
   'requirement.deleted',
   'requirement.completed',
   'requirements.purged',
+  'attachments.purged',
   'run.started',
   'run.succeeded',
   'run.failed',

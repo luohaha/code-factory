@@ -195,6 +195,7 @@ Current event types include:
 - `requirement.created` / `requirement.updated` / `requirement.deleted` / `requirement.completed` / `requirements.purged`;
 - `message.created`;
 - `pull_request.created` / `pull_request.updated`;
+- `attachments.purged` (attachment count, affected Requirement IDs, and inclusive `createdBefore` cutoff);
 - `review_request.started`;
 - `timer.created` / `timer.fired` / `timer.cancelled`;
 - `run.started` / `run.succeeded` / `run.failed` / `run.timed_out` / `run.cancelled` / `run.trace.appended`;
