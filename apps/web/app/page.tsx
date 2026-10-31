@@ -1591,7 +1591,7 @@ function ManagerConfigurationDialog({
                   <Field>
                     <FieldLabel htmlFor="configuration-attachment-retention">{t('Attachment retention (days)')}</FieldLabel>
                     <Input form={formId} id="configuration-attachment-retention" type="number" min="1" max="36500" step="1" value={values.attachmentRetentionDays} onChange={(event) => update('attachmentRetentionDays', Number(event.target.value))} required />
-                    <p className="text-[10px] text-muted-foreground">{t('Attachments expire from their upload time. Default: 30 days. Cleanup runs daily and when this setting is saved.')}</p>
+                    <p className="text-[10px] text-muted-foreground">{t('Uploaded and Agent-published attachments expire from their upload time. Default: 7 days. Cleanup runs daily and when this setting is saved.')}</p>
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="configuration-cancelled-retention">{t('Cancelled requirement retention (days)')}</FieldLabel>

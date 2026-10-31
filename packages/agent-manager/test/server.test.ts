@@ -282,7 +282,7 @@ test('HTTP API reports its version and reads, validates, persists, and applies c
     assert.equal(initial.values.commitCoAuthorEnabled, true);
     assert.equal(initial.values.cancelledRequirementRetentionDays, 7);
     assert.equal(initial.values.doneRequirementRetentionDays, 365);
-    assert.equal(initial.values.attachmentRetentionDays, 30);
+    assert.equal(initial.values.attachmentRetentionDays, 7);
     assert.equal(initial.restartRequired, false);
 
     const updateResponse = await fetch(`${baseUrl}/api/configuration`, {

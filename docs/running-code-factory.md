@@ -110,7 +110,7 @@ Configuration-file values are used by default. Logging environment variables tak
   "pullRequestReconcileIntervalSeconds": 30,
   "cancelledRequirementRetentionDays": 7,
   "doneRequirementRetentionDays": 365,
-  "attachmentRetentionDays": 30,
+  "attachmentRetentionDays": 7,
   "logLevel": "info",
   "logFilePath": null,
   "logMaxSize": "20m",
@@ -120,7 +120,7 @@ Configuration-file values are used by default. Logging environment variables tak
 
 `databasePath` and `logFilePath` use workspace defaults when set to `null`; `allowedOrigin: null` disables CORS headers. Set `pullRequestReconcileIntervalSeconds` to `0` to disable GitHub polling. Its largest accepted value is `2147483` seconds, matching Node.js timer limits. `cancelledRequirementRetentionDays` and `doneRequirementRetentionDays` accept whole numbers from `0` to `36500`; `0` deletes matching Requirements as they become terminal. Agent Manager also scans at startup, after either setting changes, and daily thereafter. Requirements with a running RD or Reviewer Run are deferred; a zero-day purge is retried as soon as that Run finishes. Expiry removes the Requirement and all related domain records in one SQLite transaction while recording attachment-file deletion tombstones; unsuccessful file deletions are retried on later scans.
 
-`attachmentRetentionDays` accepts whole numbers from `1` to `36500`, defaulting to `30` (one fixed 30-day month). Set it in dashboard Settings or through `PATCH /api/configuration`; the change applies immediately and triggers a scan. Attachment expiry is measured from upload time and covers both Human uploads (including unclaimed uploads) and Agent-published files in `attachments/`, independently of Requirement status. Scans run at startup and daily. A running RD or Reviewer Run defers expiry for its Requirement until a later scan. Expiry removes file metadata and stored bytes while keeping message text; downloads then return 404. Pending file deletions survive restarts and retry on later scans. Increasing the period does not restore reclaimed files, and original source files used for artifact publication are untouched.
+`attachmentRetentionDays` accepts whole numbers from `1` to `36500`, defaulting to `7`. Set it in dashboard Settings or through `PATCH /api/configuration`; the change applies immediately and triggers a scan. Attachment expiry is measured from upload time and covers both Human uploads (including unclaimed uploads) and Agent-published files in `attachments/`, independently of Requirement status. Scans run at startup and daily. A running RD or Reviewer Run defers expiry for its Requirement until a later scan. Expiry removes file metadata and stored bytes while keeping message text; downloads then return 404. Pending file deletions survive restarts and retry on later scans. Increasing the period does not restore reclaimed files, and original source files used for artifact publication are untouched.
 
 `jevApiKey: null` disables Jev decisions; direct Agent messages continue to be delivered normally. Add a TypeSafe AI API key in dashboard settings to enable a necessity check for every direct Agent message and let Jev choose whether an RD Run should continue immediately, after a short delay, or wait for a human. Explicitly unnecessary messages are refused with feedback to the sender. If a message check fails, normal delivery proceeds without an extra sender notice. Clearing the key takes effect immediately. The key is stored in this configuration file with restrictive permissions and is hidden from API responses.
 

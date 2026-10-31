@@ -65,7 +65,7 @@ test('configuration file fills omitted defaults and rejects unknown or invalid f
     assert.throws(() => validateAgentManagerConfigurationPatch({
       doneRequirementRetentionDays: MAX_REQUIREMENT_RETENTION_DAYS + 1,
     }), /doneRequirementRetentionDays/);
-    assert.equal(DEFAULT_AGENT_MANAGER_CONFIGURATION.attachmentRetentionDays, 30);
+    assert.equal(DEFAULT_AGENT_MANAGER_CONFIGURATION.attachmentRetentionDays, 7);
     for (const value of [1, MAX_REQUIREMENT_RETENTION_DAYS]) {
       assert.deepEqual(validateAgentManagerConfigurationPatch({ attachmentRetentionDays: value }), {
         attachmentRetentionDays: value,

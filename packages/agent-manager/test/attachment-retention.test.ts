@@ -6,13 +6,15 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
 import { AgentManager } from '../src/core/agent-manager.ts';
+import type { PublishedArtifact } from '../src/core/types.ts';
+import { runCodeFactoryCli } from '../src/cli/code-factory-cli.ts';
 import { DEFAULT_AGENT_MANAGER_CONFIGURATION } from '../src/infrastructure/configuration.ts';
 import { createAgentManagerServer } from '../src/http/server.ts';
 import { silentLogger } from '../src/infrastructure/logger.ts';
 import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.ts';
 
 const now = '2026-10-31T12:00:00.000Z';
-const cutoff = '2026-10-01T12:00:00.000Z';
+const cutoff = '2026-10-24T12:00:00.000Z';
 const success = { status: 'succeeded' as const, exitCode: 0, nativeSessionId: null, finalMessage: null, error: null };
 
 function createRequirement(store: SqliteAgentManagerStore, id = 'req-1') {
@@ -31,7 +33,7 @@ test('attachment expiry includes the boundary and unclaimed uploads, preserving 
     createRequirement(store);
     createAttachment(store, 'old', '2026-09-30T12:00:00.000Z');
     createAttachment(store, 'boundary', cutoff);
-    createAttachment(store, 'new', '2026-10-01T12:00:00.001Z');
+    createAttachment(store, 'new', '2026-10-24T12:00:00.001Z');
     const message = store.appendMessage({ id: 'msg-1', requirementId: 'req-1', sessionId: 'ses-req-1',
       author: 'human', body: 'Keep this text', attachmentIds: ['old', 'new'], deliverToRd: true, now });
     assert.deepEqual(store.purgeExpiredAttachments({ createdBefore: cutoff, now }), {
@@ -93,7 +95,7 @@ test('attachment metadata and deletion tombstones roll back together if expiry f
   }
 });
 
-test('startup and daily scans use the default 30 days; dynamic changes apply immediately and stop on close', async (t) => {
+test('startup and daily scans use the default 7 days; dynamic changes apply immediately and stop on close', async (t) => {
   t.mock.timers.enable({ apis: ['Date', 'setInterval'], now: Date.parse(now) });
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-attachment-sweep-'));
   const store = new SqliteAgentManagerStore(':memory:');
@@ -101,7 +103,7 @@ test('startup and daily scans use the default 30 days; dynamic changes apply imm
   const paths = ['expired', 'tomorrow', 'recent'].map((id) => join(directory, id));
   for (const path of paths) writeFileSync(path, 'data');
   createAttachment(store, 'expired', cutoff, paths[0]!);
-  createAttachment(store, 'tomorrow', '2026-10-02T12:00:00.000Z', paths[1]!);
+  createAttachment(store, 'tomorrow', '2026-10-25T12:00:00.000Z', paths[1]!);
   createAttachment(store, 'recent', '2026-10-29T12:00:00.000Z', paths[2]!);
   const manager = new AgentManager({ workspaceRoot: process.cwd(), store, logger: silentLogger,
     configuration: { ...DEFAULT_AGENT_MANAGER_CONFIGURATION, pullRequestReconcileIntervalSeconds: 0 },
@@ -109,7 +111,7 @@ test('startup and daily scans use the default 30 days; dynamic changes apply imm
       getModels: () => Promise.resolve({ refreshIntervalSeconds: 86_400, providers: [] }) } });
   try {
     manager.startConfiguredServices();
-    assert.equal(manager.getConfiguration().values.attachmentRetentionDays, 30);
+    assert.equal(manager.getConfiguration().values.attachmentRetentionDays, 7);
     assert.equal(manager.getMessageAttachment('expired'), null);
     assert.equal(existsSync(paths[0]!), false);
     assert.equal(existsSync(paths[1]!), true);
@@ -151,11 +153,11 @@ test('failed and interrupted file cleanup remains durable across restarts and re
   const reopened = new SqliteAgentManagerStore(databasePath);
   const manager = new AgentManager({ workspaceRoot: process.cwd(), store: reopened, logger: silentLogger });
   try {
-    manager.updateConfiguration({ attachmentRetentionDays: 30 });
+    manager.updateConfiguration({ attachmentRetentionDays: 7 });
     assert.equal(existsSync(interruptedPath), false);
     assert.deepEqual(reopened.listPendingAttachmentDeletions(), [blockedPath]);
     rmSync(blockedPath, { recursive: true });
-    manager.updateConfiguration({ attachmentRetentionDays: 30 });
+    manager.updateConfiguration({ attachmentRetentionDays: 7 });
     assert.deepEqual(reopened.listPendingAttachmentDeletions(), []);
   } finally {
     await manager.close();
@@ -163,8 +165,7 @@ test('failed and interrupted file cleanup remains durable across restarts and re
   }
 });
 
-
-test('HTTP configuration expiry reclaims uploads and published artifacts, returning 404 while keeping the conversation', async (t) => {
+test('the default seven-day policy reclaims Human uploads and CLI-published artifacts while preserving the conversation', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse(now) });
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-attachment-http-'));
   const store = new SqliteAgentManagerStore(':memory:');
@@ -184,13 +185,24 @@ test('HTTP configuration expiry reclaims uploads and published artifacts, return
     const uploaded = await upload.json() as { id: string; localPath: string };
     store.appendMessage({ id: 'msg-upload', requirementId: requirement.id, sessionId: requirement.session.id,
       author: 'human', body: 'Keep this conversation', attachmentIds: [uploaded.id], deliverToRd: true, now });
-    const published = manager.publishAgentArtifact(requirement.id, requirement.session.id, { fileName: 'report.txt', data: Buffer.from('data') });
+    const sourcePath = join(directory, 'report-source.txt');
+    writeFileSync(sourcePath, 'data');
+    const output: string[] = [];
+    const errors: string[] = [];
+    const status = await runCodeFactoryCli(['artifact', 'publish', '--path', sourcePath, '--name', 'report.txt'], {
+      environment: { CODE_FACTORY_API_URL: `${url}/api`, CODE_FACTORY_REQUIREMENT_ID: requirement.id,
+        CODE_FACTORY_SESSION_ID: requirement.session.id },
+      writeOut: (value) => output.push(value), writeError: (value) => errors.push(value),
+    });
+    assert.equal(status, 0, errors.join(''));
+    const published = JSON.parse(output.join('')) as PublishedArtifact;
     const publishedPath = manager.getMessageAttachment(published.attachment.id)!.localPath;
     assert.equal((await fetch(`${url}/api/attachments/${uploaded.id}`)).status, 200);
     assert.equal((await fetch(`${url}${published.downloadPath}`)).status, 200);
-    t.mock.timers.tick(2 * 86_400_000);
+    assert.equal(manager.getConfiguration().values.attachmentRetentionDays, 7);
+    t.mock.timers.tick(8 * 86_400_000);
     const response = await fetch(`${url}/api/configuration`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ attachmentRetentionDays: 1 }),
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ attachmentRetentionDays: 7 }),
     });
     assert.equal(response.status, 200);
     assert.equal((await response.json() as { restartRequired: boolean }).restartRequired, false);
@@ -198,6 +210,7 @@ test('HTTP configuration expiry reclaims uploads and published artifacts, return
     assert.equal((await fetch(`${url}${published.downloadPath}`)).status, 404);
     assert.equal(existsSync(uploaded.localPath), false);
     assert.equal(existsSync(publishedPath), false);
+    assert.equal(existsSync(sourcePath), true, 'reclamation preserves the original CLI publication source');
     assert.equal(manager.listMessages(requirement.id)[0]?.body, 'Keep this conversation');
     assert.equal(manager.listMessages(requirement.id).length, 2);
     assert.ok(manager.listMessages(requirement.id).every((message) => message.attachments.length === 0));

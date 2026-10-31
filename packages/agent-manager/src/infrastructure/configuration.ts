@@ -47,7 +47,7 @@ export const DEFAULT_AGENT_MANAGER_CONFIGURATION: Readonly<AgentManagerConfigura
   pullRequestReconcileIntervalSeconds: 30,
   cancelledRequirementRetentionDays: 7,
   doneRequirementRetentionDays: 365,
-  attachmentRetentionDays: 30,
+  attachmentRetentionDays: 7,
   logLevel: 'info',
   logFilePath: null,
   logMaxSize: '20m',

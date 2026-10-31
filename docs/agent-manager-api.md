@@ -371,7 +371,7 @@ Returns the configuration file path, file-backed desired values, and any fields 
     "pullRequestReconcileIntervalSeconds": 30,
     "cancelledRequirementRetentionDays": 7,
     "doneRequirementRetentionDays": 365,
-    "attachmentRetentionDays": 30,
+    "attachmentRetentionDays": 7,
     "logLevel": "info",
     "logFilePath": null,
     "logMaxSize": "20m",
@@ -395,7 +395,7 @@ curl -X PATCH http://127.0.0.1:4310/api/configuration \
 
 `port` must be an integer from 1 to 65535. The reconcile interval must be an integer from 0 to 2147483 seconds, the largest whole-second delay supported by Node.js timers. Each Requirement retention value must be an integer from 0 to 36500 days; `0` deletes matching Requirements as they become terminal. Updating either retention value triggers a scan immediately, in addition to the startup and daily scans. A terminal Requirement with any running Run is deferred; a zero-day purge is retried immediately when that Run finishes. Requirement-linked domain records are deleted in one transaction; pending attachment-file deletions are persisted as tombstones and retried until the file is absent.
 
-`attachmentRetentionDays` accepts integers from `1` to `36500` (default `30`, a fixed 30-day month). It expires uploaded and Agent-published files by `createdAt`, including uploads not yet bound to a message. Startup, daily scans, and saving this setting reclaim expired attachment metadata and files, preserving Requirements and message text. Requirements with any running RD or Reviewer Run defer attachment expiry until a later scan. Deletion tombstones are committed with metadata removal and failed file deletions are retried on subsequent scans. Expired attachment IDs return 404. Increasing retention cannot restore deleted attachments.
+`attachmentRetentionDays` accepts integers from `1` to `36500` (default `7`). It expires uploaded and Agent-published files by `createdAt`, including uploads not yet bound to a message. Startup, daily scans, and saving this setting reclaim expired attachment metadata and files, preserving Requirements and message text. Requirements with any running RD or Reviewer Run defer attachment expiry until a later scan. Deletion tombstones are committed with metadata removal and failed file deletions are retried on subsequent scans. Expired attachment IDs return 404. Increasing retention cannot restore deleted attachments.
 
 `logLevel` accepts `debug`, `info`, `warn`, `error`, or `silent`. Paths and origins accept a non-empty string or `null`; a null database or log path selects its workspace default, while a null origin disables CORS. Unknown fields return 400 Bad Request.
 
@@ -497,7 +497,7 @@ curl -X POST http://127.0.0.1:4310/api/requirements/req_.../attachments \
   --data-binary @debug.log
 ~~~
 
-Success: 201 Created. Include the returned ID in attachmentIds on a later start or reply request. A message supports up to six attachments. Attachments and their messages persist across Agent Manager restarts. Attachment files and metadata expire independently after `attachmentRetentionDays` (30 days by default), measured from upload time; message text remains.
+Success: 201 Created. Include the returned ID in attachmentIds on a later start or reply request. A message supports up to six attachments. Attachments and their messages persist across Agent Manager restarts. Attachment files and metadata expire independently after `attachmentRetentionDays` (7 days by default), measured from upload time; message text remains.
 
 ### GET /api/attachments/:id
 
