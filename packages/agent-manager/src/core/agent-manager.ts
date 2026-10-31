@@ -134,6 +134,7 @@ export const MAX_HANDOFF_PROMPT_CHARS = 32_000;
 
 const MAX_HANDOFF_PENDING_CHARS = 12_000;
 const MAX_INLINE_DESCRIPTION_CHARS = 4_000;
+const MAX_PENDING_JEV_FAILURE_CONTINUATIONS = 2;
 const HANDOFF_DECISION_PATTERN = /\b(decid(?:e|ed|ing)|decis(?:ion|ions)|agree(?:d|ment)?|approv(?:e|ed|al)|confirm(?:ed|ation)?|must|require(?:d|ment)?|scope|worktree|branch|pull request|pr #|commit|follow.up)\b|决定|确认|同意|必须|工作树|分支|拉取请求|待办/i;
 
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
@@ -145,6 +146,7 @@ type JevWakeSkipReason =
   | 'rd_reply_missing'
   | 'state_changed'
   | 'work_already_pending'
+  | 'failure_retry_limit_reached'
   | 'request_failed'
   | 'application_failed';
 
@@ -2094,6 +2096,12 @@ export class AgentManager extends EventEmitter {
     }
     if (this.#store.listAgentTimers(requirementId).some((timer) => timer.status === 'active')) {
       return 'work_already_pending';
+    }
+    // Failures retain their input. Bound automatic retries using durable, unconsumed
+    // Jev messages so restarting the Manager cannot reset the allowance.
+    if (runStatus !== 'succeeded' && this.#store.listPendingRdMessages(requirementId)
+      .filter((message) => message.author === 'jev').length >= MAX_PENDING_JEV_FAILURE_CONTINUATIONS) {
+      return 'failure_retry_limit_reached';
     }
     return null;
   }

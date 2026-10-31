@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import { AgentManager } from '../src/core/agent-manager.ts';
@@ -322,6 +325,105 @@ test('Jev can decide again after a failed retry retains human and Jev input', as
     assert.deepEqual(manager.listRuns(requirement.id).map((run) => run.status),
       ['succeeded', 'failed', 'failed']);
     assert.equal(manager.getRequirement(requirement.id)?.session.pendingMessageCount, 0);
+  } finally {
+    await manager.close();
+  }
+});
+
+test('Jev bounds failed retries durably and successful consumption restores the allowance', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-jev-retries-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const stdout = new MemoryWriter();
+  let attempts = 0;
+  let decisions = 0;
+  let recover = false;
+  const runner: AgentProcessRunner = {
+    async run() {
+      attempts += 1;
+      return recover
+        ? { status: 'succeeded', exitCode: 0, nativeSessionId: 'thread-1', finalMessage: 'Recovered', error: null }
+        : { status: 'failed', exitCode: 1, nativeSessionId: 'thread-1', finalMessage: null, error: 'Provider unavailable' };
+    },
+  };
+  const createManager = () => new AgentManager({
+    workspaceRoot: directory, store: new SqliteAgentManagerStore(databasePath), runner,
+    logger: createLogger({ level: 'info', stdout, stderr: stdout }),
+    jevWakeDecision: async () => {
+      decisions += 1;
+      return recover ? { kind: 'wait' } : { kind: 'immediate' };
+    },
+  });
+  let manager = createManager();
+  try {
+    manager.updateConfiguration({ jevApiKey: 'secret' });
+    const requirement = manager.createRequirement({ title: 'Provider outage', description: 'Work', provider: 'codex' });
+    await manager.runRequirement(requirement.id, 'Preserve this input.');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(attempts, 3);
+    assert.equal(decisions, 2);
+    assert.equal(manager.listMessages(requirement.id).filter((message) => message.author === 'jev').length, 2);
+    assert.equal(manager.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, 0);
+    assert.equal(manager.getRequirement(requirement.id)?.session.pendingMessageCount, 3);
+    assert.equal(manager.getRequirement(requirement.id)?.session.state, 'failed');
+    assert.ok(stdout.lines.some((line) => {
+      const entry = JSON.parse(line) as Record<string, unknown>;
+      return entry.message === 'Jev wake decision skipped' && entry.skipReason === 'failure_retry_limit_reached';
+    }));
+
+    await manager.close();
+    manager = createManager();
+    manager.updateConfiguration({ jevApiKey: 'secret' });
+    // A restart and a manual attempt cannot turn the same unconsumed input into another retry loop.
+    await manager.runRequirement(requirement.id, 'Credentials repaired; retry.');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(attempts, 4);
+    assert.equal(decisions, 2);
+    assert.equal(manager.listMessages(requirement.id).filter((message) => message.author === 'jev').length, 2);
+    assert.equal(manager.getRequirement(requirement.id)?.session.pendingMessageCount, 4);
+
+    recover = true;
+    await manager.runRequirement(requirement.id);
+    assert.equal(manager.getRequirement(requirement.id)?.session.pendingMessageCount, 0);
+    const consumed = manager.getRequirement(requirement.id)?.session.lastConsumedMessageSequence;
+    assert.ok(consumed && consumed > 0);
+
+    recover = false;
+    await manager.runRequirement(requirement.id, 'Next task.');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(attempts, 8);
+    assert.equal(decisions, 5);
+    assert.equal(manager.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, consumed);
+    assert.equal(manager.getRequirement(requirement.id)?.session.pendingMessageCount, 3);
+  } finally {
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Jev does not schedule another delayed retry after two unconsumed continuations', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  let decisions = 0;
+  const manager = new AgentManager({
+    workspaceRoot: process.cwd(), store, logger: silentLogger,
+    runner: { async run() {
+      return { status: 'timed_out', exitCode: null, nativeSessionId: null,
+        finalMessage: null, error: 'Provider timed out' };
+    } },
+    jevWakeDecision: async () => { decisions += 1; return { kind: 'delayed', minutes: 5 }; },
+  });
+  try {
+    manager.updateConfiguration({ jevApiKey: 'secret' });
+    const requirement = manager.createRequirement({ title: 'Repeated timeout', description: 'Work', provider: 'codex' });
+    for (let index = 0; index < 2; index += 1) {
+      store.appendMessage({ id: `retry-${index}`, requirementId: requirement.id, sessionId: requirement.session.id,
+        author: 'jev', body: 'continue.', deliverToRd: true, now: new Date().toISOString() });
+    }
+    await manager.runRequirement(requirement.id);
+    assert.equal(decisions, 0);
+    assert.equal(manager.listAgentTimers(requirement.id).length, 0);
+    assert.equal(manager.getRequirement(requirement.id)?.session.pendingMessageCount, 2);
+    assert.equal(manager.getRequirement(requirement.id)?.session.state, 'failed');
   } finally {
     await manager.close();
   }

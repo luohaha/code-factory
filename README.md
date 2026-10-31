@@ -17,7 +17,7 @@ https://github.com/user-attachments/assets/80896c78-c804-4c3d-98df-75ccc68031f3
 
 Code Factory brings requirements, coding agents, and GitHub pull requests into one local dashboard. Organize work as a requirement tree and collaborate with **Codex**, **Claude Code**, or **Native Agent** through conversation.
 
-Each requirement has its own persistent agent context. Agents can split work into child requirements and work in parallel, while humans steer the work, request reviews, and confirm completion.
+Each requirement has its own persistent agent context. Automatic recovery from failed Runs is bounded; repeated failures wait for human intervention. Agents can split work into child requirements and work in parallel, while humans steer the work, request reviews, and confirm completion.
 
 Native Agents using E2B can check, pause, and resume their selected sandbox and transfer files between the host and sandbox, including conversation attachments. Pausing preserves remote state while the Agent continues on the host.
 
