@@ -14,7 +14,8 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-work
 import { CommandExitError, FileType } from 'e2b';
 import type { SandboxInfo, SandboxOpts } from 'e2b';
 
-import { E2BExecutionEnv, E2BSandboxService, type E2BClient, type E2BHandle } from '../src/runtime/e2b-execution-env.js';
+import { E2BExecutionEnv, E2BSandboxService, e2bResourceTemplateName, type E2BClient, type E2BHandle,
+  type E2BTemplateBuildRequest } from '../src/runtime/e2b-execution-env.js';
 import { NativeAgentService } from '../src/runtime/native-agent.js';
 import { AgentManager } from '../src/core/agent-manager.js';
 import { createAgentManagerServer } from '../src/http/server.js';
@@ -98,19 +99,24 @@ function fakeSdk(defaultDirectory = '/home/user', before: {
     },
   } as unknown as E2BHandle;
   let createOptions: SandboxOpts | undefined;
+  const templateBuilds: E2BTemplateBuildRequest[] = [];
   const client: E2BClient = {
     async create(options) { createOptions = options; return handle; },
+    async buildTemplate(request) {
+      templateBuilds.push(request);
+      return `derived-${request.cpuCount}cpu-${request.memoryMB}mb`;
+    },
     async connect(id, options) {
       assert.equal(id, 'e2b-test-123');
       assert.equal(options.apiKey, 'test-key');
       await before.connect?.(options.signal);
       return handle;
     },
-    async getInfo(id) { return { sandboxId: id, state: 'paused' } as SandboxInfo; },
+    async getInfo(id) { return { sandboxId: id, state: 'paused', cpuCount: 2, memoryMB: 512 } as SandboxInfo; },
     async pause() { return true; },
     async kill() { return true; },
   };
-  return { handle, client, data, commands, get createOptions() { return createOptions; } };
+  return { handle, client, data, commands, templateBuilds, get createOptions() { return createOptions; } };
 }
 
 for (const role of ['rd', 'reviewer'] as const) {
@@ -338,6 +344,38 @@ test('E2B service passes explicit credentials and durable lifecycle to SDK', asy
   assert.equal((await service.getInfo(created.sandboxId, credentials)).state, 'paused');
   assert.equal(await service.pause(created.sandboxId, credentials), true);
   assert.equal(await service.kill(created.sandboxId, credentials), true);
+});
+
+test('E2B service derives a resource template before creating a sandbox', async () => {
+  const sdk = fakeSdk();
+  const service = new E2BSandboxService(sdk.client);
+  const credentials = { domain: 'e2b.example', apiKey: 'test-key' };
+  await service.create('custom-template', credentials, { cpuCount: 4, memoryMB: 4096 });
+  assert.deepEqual(sdk.templateBuilds, [{ template: 'custom-template', cpuCount: 4, memoryMB: 4096, credentials }]);
+  assert.equal(sdk.createOptions?.template, 'derived-4cpu-4096mb');
+  assert.equal((await service.create('custom-template', credentials, { cpuCount: 4, memoryMB: 4096 })).sandboxId, 'e2b-test-123');
+  assert.equal(sdk.templateBuilds.length, 1, 'a repeated request reuses the built template');
+  await service.create('custom-template', credentials, { cpuCount: 8, memoryMB: 8192 });
+  assert.equal(sdk.templateBuilds.length, 2, 'different resources build a different template');
+});
+
+test('E2B service reports a template build failure without leaking the API key', async () => {
+  const sdk = fakeSdk();
+  const service = new E2BSandboxService({ ...sdk.client,
+    buildTemplate: async () => { throw new Error('provider rejected test-key'); },
+  });
+  await assert.rejects(service.create('base', { domain: 'e2b.example', apiKey: 'test-key' }, { cpuCount: 2, memoryMB: 1024 }),
+    (error: unknown) => error instanceof Error && error.message.includes('template build failed')
+      && !error.message.includes('test-key'));
+  assert.equal(sdk.createOptions, undefined, 'no sandbox is created when the template build fails');
+});
+
+test('E2B resource template names are stable and E2B-name-safe', () => {
+  assert.equal(e2bResourceTemplateName('base', { cpuCount: 2, memoryMB: 1024 }),
+    e2bResourceTemplateName('base', { cpuCount: 2, memoryMB: 1024 }));
+  assert.notEqual(e2bResourceTemplateName('base', { cpuCount: 2, memoryMB: 1024 }),
+    e2bResourceTemplateName('base', { cpuCount: 2, memoryMB: 2048 }));
+  assert.match(e2bResourceTemplateName('my/team:template', { cpuCount: 8, memoryMB: 8192 }), /^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$/);
 });
 
 test('E2B service does not expose provider error text containing an API key', async () => {

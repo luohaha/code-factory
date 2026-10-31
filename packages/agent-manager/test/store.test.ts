@@ -75,6 +75,7 @@ test('multiple native requirements can select one persisted sandbox', () => {
     const sandbox = store.createSandbox({ id: 'sbx-reused', name: 'Reusable E2B', kind: 'e2b', cwd: '/home/user/repo',
       providerSandboxId: 'provider-reused', credentialEnvVar: null, domain: 'e2b.example',
       credentialRef: 'e2b-test', repositoryUrl: 'https://github.com/example/repo.git', template: 'base',
+      cpuCount: 2, memoryMB: 512,
       status: 'running', checkedAt: now, createdAt: now });
     for (const number of [1, 2]) {
       const requirement = store.createRequirement({ requirementId: `req-native-${number}`, sessionId: `ses-native-${number}`,

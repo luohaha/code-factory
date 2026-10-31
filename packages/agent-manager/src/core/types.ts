@@ -14,6 +14,9 @@ export interface Sandbox {
   /** Legacy repository metadata; new E2B sandboxes are not bound to a repository. */
   repositoryUrl: string | null;
   template: string | null;
+  /** Last resources observed from E2B; null for local workspaces or before the first observation. */
+  cpuCount: number | null;
+  memoryMB: number | null;
   status: SandboxStatus;
   checkedAt: string | null;
   createdAt: string;

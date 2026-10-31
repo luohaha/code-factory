@@ -3589,6 +3589,8 @@ function Dashboard() {
           ...(Object.keys(environmentVariables).length ? { environmentVariables } : {}),
           ...(value('providerSandboxId') ? { providerSandboxId: value('providerSandboxId') } : {}),
           ...(value('template') ? { template: value('template') } : {}),
+          ...(value('cpuCount') ? { cpuCount: Number(value('cpuCount')) } : {}),
+          ...(value('memoryMB') ? { memoryMB: Number(value('memoryMB')) } : {}),
         });
       setSandboxes((current) => [...current, sandbox]);
       form.reset();
@@ -4007,6 +4009,13 @@ function Dashboard() {
                           <div className="mt-3 grid gap-3">
                             <Input name="providerSandboxId" aria-label={t('Existing E2B sandbox ID')} placeholder={t('Existing E2B sandbox ID (optional)')} />
                             <Input name="template" aria-label={t('E2B template')} placeholder={t('E2B template (default: base)')} />
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <Input name="cpuCount" type="number" min={1} max={8} step={1} inputMode="numeric"
+                                aria-label={t('vCPU count')} placeholder={t('vCPU count (1-8)')} />
+                              <Input name="memoryMB" type="number" min={512} max={8192} step={512} inputMode="numeric"
+                                aria-label={t('Memory (MiB)')} placeholder={t('Memory MiB (512-8192)')} />
+                            </div>
+                            <p className="text-xs text-muted-foreground">{t('Leave both blank to keep the template resources. E2B builds a derived template from the selected one when you set them.')}</p>
                             <WorkspaceEnvironmentVariables key={createPathOpen ? 'open' : 'closed'} />
                           </div>
                         </details>
@@ -4107,6 +4116,8 @@ function Dashboard() {
                       {selectedWorkspace.providerSandboxId ? <div className="min-w-0 sm:col-span-2"><dt className="text-muted-foreground">{t('Existing E2B sandbox ID')}</dt><dd className="mt-1 break-all font-mono">{selectedWorkspace.providerSandboxId}</dd></div> : null}
                       <div><dt className="text-muted-foreground">{t('E2B template')}</dt><dd className="mt-1 break-all">{selectedWorkspace.template}</dd></div>
                       <div><dt className="text-muted-foreground">{t('E2B domain')}</dt><dd className="mt-1 break-all">{selectedWorkspace.domain}</dd></div>
+                      <div><dt className="text-muted-foreground">{t('vCPU count')}</dt><dd className="mt-1">{selectedWorkspace.cpuCount ?? t('Unknown')}</dd></div>
+                      <div><dt className="text-muted-foreground">{t('Memory (MiB)')}</dt><dd className="mt-1">{selectedWorkspace.memoryMB ?? t('Unknown')}</dd></div>
                       {selectedWorkspace.environmentVariableNames?.length ? <div className="min-w-0 sm:col-span-2"><dt className="text-muted-foreground">{t('Environment variables')}</dt><dd className="mt-1 break-all font-mono">{selectedWorkspace.environmentVariableNames.join(', ')}</dd></div> : null}
                       <div className="min-w-0 sm:col-span-2"><dt className="text-muted-foreground">{t('Credential reference')}</dt><dd className="mt-1 break-all font-mono">{selectedWorkspace.credentialRef ?? selectedWorkspace.credentialEnvVar}</dd></div>
                       {selectedWorkspace.checkedAt ? <div className="sm:col-span-2"><dt className="text-muted-foreground">{t('Last checked')}</dt><dd className="mt-1">{new Date(selectedWorkspace.checkedAt).toLocaleString(locale)}</dd></div> : null}

@@ -45,7 +45,7 @@ import { HeadlessProcessRunner, type AgentProcessRunner, type ProcessRunRequest 
 import { NativeAgentService, type NativeSandboxAction, type NativeSandboxState } from '../runtime/native-agent.js';
 import { NativeAuthService } from '../runtime/native-auth-service.js';
 import { profileIdFromModel, profileModel, type NativeApiFormat, type NativeApiProfile } from '../runtime/native-auth.js';
-import { E2BProviderError, E2BSandboxService, type E2BCredentials, type E2BHandle } from '../runtime/e2b-execution-env.js';
+import { E2BProviderError, E2BSandboxService, parseE2BResources, type E2BCredentials, type E2BHandle } from '../runtime/e2b-execution-env.js';
 import { E2BCredentialStore, e2bCredentialsPath } from '../runtime/e2b-credentials.js';
 import { applyEnvironmentVariablePatch, type EnvironmentVariablePatch } from '../runtime/sandbox-environment.js';
 import { PullRequestReconciler } from '../triggers/github/pull-request-reconciler.js';
@@ -780,7 +780,7 @@ export class AgentManager extends EventEmitter {
   listSandboxes(): SandboxSummary[] {
     const sandboxes: Sandbox[] = [{ id: 'local', name: 'Default workspace', kind: 'local', cwd: this.workspaceRoot,
       providerSandboxId: null, credentialEnvVar: null, domain: null, credentialRef: null,
-      repositoryUrl: null, template: null,
+      repositoryUrl: null, template: null, cpuCount: null, memoryMB: null,
       status: 'running', checkedAt: null,
       createdAt: '1970-01-01T00:00:00.000Z' },
       ...this.#store.listSandboxes().filter((sandbox) => sandbox.kind !== 'local-sandbox')];
@@ -795,7 +795,8 @@ export class AgentManager extends EventEmitter {
     const now = new Date().toISOString();
     return this.#store.createSandbox({ id: `sbx_${randomUUID()}`, name, kind: 'local', cwd,
       providerSandboxId: null, credentialEnvVar: null, domain: null, credentialRef: null,
-      repositoryUrl: null, template: null, status: 'running', checkedAt: null, createdAt: now });
+      repositoryUrl: null, template: null, cpuCount: null, memoryMB: null,
+      status: 'running', checkedAt: null, createdAt: now });
   }
 
   private resolveLocalWorkspace(input: string): string {
@@ -851,6 +852,7 @@ export class AgentManager extends EventEmitter {
 
   async createE2BSandbox(input: { name: string; template?: string;
     providerSandboxId?: string; domain?: string; apiKey: string;
+    cpuCount?: number; memoryMB?: number;
     environmentVariables?: EnvironmentVariablePatch }): Promise<SandboxSummary> {
     const name = input.name.trim();
     if (!name || name.length > 80) throw new TypeError('sandbox name must contain 1 to 80 characters');
@@ -862,13 +864,18 @@ export class AgentManager extends EventEmitter {
     const environment = applyEnvironmentVariablePatch({}, input.environmentVariables ?? {});
     const template = input.template?.trim() || 'base';
     if (template.length > 100) throw new TypeError('template must contain at most 100 characters');
+    const resources = parseE2BResources(input.cpuCount, input.memoryMB);
     const providerId = input.providerSandboxId?.trim();
     const attached = !!providerId;
+    if (attached && resources) {
+      throw new TypeError('cpuCount and memoryMB cannot be requested when attaching an existing sandbox; its template already fixes them');
+    }
     if (attached && this.#store.listSandboxes().some((sandbox) =>
       sandbox.providerSandboxId === providerId && (sandbox.domain ?? 'e2b.app') === domain)) {
       throw new StoreConflictError('E2B sandbox is already attached');
     }
-    const handle = attached ? await this.#e2b.connect(providerId!, credentials) : await this.#e2b.create(template, credentials);
+    const handle = attached ? await this.#e2b.connect(providerId!, credentials)
+      : await this.#e2b.create(template, credentials, resources);
     const credentialRef = `e2b_${randomUUID()}`;
     try {
       const info = await this.#e2b.getInfo(handle.sandboxId, credentials);
@@ -878,6 +885,7 @@ export class AgentManager extends EventEmitter {
         providerSandboxId: handle.sandboxId, credentialEnvVar: null, domain, credentialRef,
         repositoryUrl: null,
         template: attached ? info.templateId : template,
+        cpuCount: info.cpuCount ?? null, memoryMB: info.memoryMB ?? null,
         status: info.state, checkedAt: now, createdAt: now }));
     } catch (error) {
       this.#e2bCredentials?.delete(credentialRef);
@@ -918,10 +926,15 @@ export class AgentManager extends EventEmitter {
     const previousApiKey = needsConnection ? this.e2bApiKey(current) : null;
     let status = current.status;
     let checkedAt = current.checkedAt;
+    let cpuCount = current.cpuCount;
+    let memoryMB = current.memoryMB;
     if (needsConnection) {
       const credentials = { domain, apiKey: apiKey ?? this.e2bCredentials(current).apiKey };
       await this.#e2b.connect(current.providerSandboxId, credentials);
-      status = (await this.#e2b.getInfo(current.providerSandboxId, credentials)).state;
+      const info = await this.#e2b.getInfo(current.providerSandboxId, credentials);
+      status = info.state;
+      cpuCount = info.cpuCount ?? null;
+      memoryMB = info.memoryMB ?? null;
       checkedAt = new Date().toISOString();
     }
     const latest = this.#store.getSandbox(id);
@@ -941,7 +954,7 @@ export class AgentManager extends EventEmitter {
     let updated: Sandbox;
     try {
       updated = this.#store.updateSandbox({ ...latest, name: input.name === undefined ? latest.name : name, domain,
-        credentialRef, credentialEnvVar: secretsChanged ? null : latest.credentialEnvVar, status, checkedAt });
+        credentialRef, credentialEnvVar: secretsChanged ? null : latest.credentialEnvVar, status, checkedAt, cpuCount, memoryMB });
     } catch (error) {
       if (secretsChanged && credentialRef) this.e2bCredentialStore().delete(credentialRef);
       throw error;
@@ -956,7 +969,12 @@ export class AgentManager extends EventEmitter {
     if (!sandbox) throw new StoreNotFoundError(`Sandbox ${id} not found`);
     if (sandbox.kind !== 'e2b' || !sandbox.providerSandboxId) return sandbox;
     let status: Sandbox['status'];
-    try { status = (await this.#e2b.getInfo(sandbox.providerSandboxId, this.e2bCredentials(sandbox), signal)).state; }
+    let resources: { cpuCount: number | null; memoryMB: number | null } | null = null;
+    try {
+      const info = await this.#e2b.getInfo(sandbox.providerSandboxId, this.e2bCredentials(sandbox), signal);
+      status = info.state;
+      resources = { cpuCount: info.cpuCount ?? null, memoryMB: info.memoryMB ?? null };
+    }
     catch (error) {
       signal?.throwIfAborted();
       status = error instanceof Error && error.name === 'SandboxNotFoundError' ? 'terminated' : 'unreachable';
@@ -965,7 +983,7 @@ export class AgentManager extends EventEmitter {
     // Settings and credential references may change while the provider lookup is pending.
     const current = this.#store.getSandbox(id);
     if (!current) throw new StoreNotFoundError(`Sandbox ${id} not found`);
-    return this.sandboxSummary(this.#store.updateSandbox({ ...current, status, checkedAt: new Date().toISOString() }));
+    return this.sandboxSummary(this.#store.updateSandbox({ ...current, ...(resources ?? {}), status, checkedAt: new Date().toISOString() }));
   }
 
   private requireE2BSandbox(id: string): Sandbox & { providerSandboxId: string } {

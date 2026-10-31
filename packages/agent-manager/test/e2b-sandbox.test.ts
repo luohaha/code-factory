@@ -8,13 +8,14 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import type { SandboxInfo } from 'e2b';
+import type { SandboxInfo, SandboxOpts } from 'e2b';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 
 import { AgentManager } from '../src/core/agent-manager.js';
 import { E2BCredentialStore, e2bCredentialsPath } from '../src/runtime/e2b-credentials.js';
-import { E2BSandboxService, type E2BClient, type E2BCredentials, type E2BHandle } from '../src/runtime/e2b-execution-env.js';
+import { E2BSandboxService, e2bResourceTemplateName, type E2BClient, type E2BCredentials, type E2BHandle,
+  type E2BTemplateBuildRequest } from '../src/runtime/e2b-execution-env.js';
 import { createLogger } from '../src/infrastructure/logger.js';
 import { NativeAgentService, type NativeRunInput } from '../src/runtime/native-agent.js';
 import { createAgentManagerServer } from '../src/http/server.js';
@@ -35,6 +36,9 @@ function fakeE2B(settings: { additionalCredentials?: E2BCredentials[]; home?: st
   let state: 'running' | 'paused' = 'running';
   let killed = false;
   const calls: string[] = [];
+  const createOptions: SandboxOpts[] = [];
+  const templateBuilds: E2BTemplateBuildRequest[] = [];
+  let creates = 0;
   const remoteCommands: Array<{ command: string; cwd: string | undefined; envs: Record<string, string> | undefined }> = [];
   const remoteFiles = new Map<string, string>();
   const remoteWrites: Array<{ path: string; content: string }> = [];
@@ -77,7 +81,14 @@ function fakeE2B(settings: { additionalCredentials?: E2BCredentials[]; home?: st
     async create(options) {
       calls.push(`create:${options.template}`);
       check(options);
-      return handle('created-e2b-id');
+      createOptions.push(options);
+      const created = creates++;
+      return handle(created === 0 ? 'created-e2b-id' : `created-e2b-id-${created}`);
+    },
+    async buildTemplate(request) {
+      check(request.credentials);
+      templateBuilds.push(request);
+      return `derived-${request.cpuCount}cpu-${request.memoryMB}mb`;
     },
     async connect(id, options) {
       check(options);
@@ -92,7 +103,7 @@ function fakeE2B(settings: { additionalCredentials?: E2BCredentials[]; home?: st
       await settings.before?.('status', options.signal);
       calls.push(`info:${id}`);
       await settings.beforeGetInfo?.();
-      return { sandboxId: id, templateId: 'base', state } as SandboxInfo;
+      return { sandboxId: id, templateId: 'base', state, cpuCount: 2, memoryMB: 512 } as SandboxInfo;
     },
     async pause(id, options) {
       check(options);
@@ -102,7 +113,7 @@ function fakeE2B(settings: { additionalCredentials?: E2BCredentials[]; home?: st
     async kill(id, options) { check(options); calls.push(`kill:${id}`); killed = true; return true; },
   };
   return { service: new E2BSandboxService(client), calls, remoteCommands,
-    remoteFiles, remoteWrites,
+    remoteFiles, remoteWrites, createOptions, templateBuilds,
     get killed() { return killed; } };
 }
 
@@ -831,7 +842,7 @@ test('legacy sandbox records survive E2B schema migration', () => {
     try {
       assert.deepEqual(store.getSandbox('old'), { id: 'old', name: 'Existing', kind: 'local-sandbox',
         cwd: '/tmp/existing', providerSandboxId: null, credentialEnvVar: null, domain: null,
-        credentialRef: null, repositoryUrl: null, template: null,
+        credentialRef: null, repositoryUrl: null, template: null, cpuCount: null, memoryMB: null,
         status: 'unknown', checkedAt: null, createdAt: '2026-01-01T00:00:00Z' });
     } finally { store.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
@@ -1275,6 +1286,103 @@ test('environment edits succeed while an RD Run is active and connection updates
   } finally {
     releaseConnection();
     await connection?.catch(() => undefined);
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('E2B workspace creation derives a template that allocates the requested vCPU and memory', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-resources-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const sdk = fakeE2B();
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    logger: createLogger({ level: 'silent' }) });
+  try {
+    const sandbox = await manager.createE2BSandbox({ name: 'Large sandbox', domain: 'e2b.example', apiKey: 'test-key',
+      template: 'custom-template', cpuCount: 4, memoryMB: 4096 });
+    assert.deepEqual(sdk.templateBuilds, [{ template: 'custom-template', cpuCount: 4, memoryMB: 4096,
+      credentials: { domain: 'e2b.example', apiKey: 'test-key' } }]);
+    assert.equal(sdk.createOptions[0]?.template, 'derived-4cpu-4096mb');
+    assert.equal(sandbox.template, 'custom-template', 'the workspace keeps the template the human asked for');
+    assert.equal(sandbox.cpuCount, 2, 'resources are recorded as E2B last reported them');
+    assert.equal(sandbox.memoryMB, 512);
+    assert.equal(manager.listSandboxes().find((item) => item.id === sandbox.id)?.cpuCount, 2);
+    const checked = await manager.checkSandboxHealth(sandbox.id);
+    assert.equal(checked.memoryMB, 512);
+
+    const defaultResources = await manager.createE2BSandbox({ name: 'Default sandbox', domain: 'e2b.example', apiKey: 'test-key' });
+    assert.equal(sdk.templateBuilds.length, 1, 'omitting cpuCount and memoryMB never builds a template');
+    assert.equal(sdk.createOptions[1]?.template, 'base');
+    assert.equal(defaultResources.template, 'base');
+
+    await manager.createE2BSandbox({ name: 'Large sandbox clone', domain: 'e2b.example', apiKey: 'test-key',
+      template: 'custom-template', cpuCount: 4, memoryMB: 4096 });
+    assert.equal(sdk.templateBuilds.length, 1, 'the same resource shape reuses the derived template');
+  } finally {
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('E2B workspace creation rejects incomplete, out-of-range, and attached resource requests', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-resource-validation-'));
+  const databasePath = join(directory, 'factory.sqlite');
+  const sdk = fakeE2B();
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath,
+    store: new SqliteAgentManagerStore(databasePath), e2bService: sdk.service,
+    logger: createLogger({ level: 'silent' }) });
+  try {
+    const base = { name: 'Invalid', domain: 'e2b.example', apiKey: 'test-key' };
+    await assert.rejects(manager.createE2BSandbox({ ...base, cpuCount: 2 }), /cpuCount and memoryMB must be provided together/);
+    await assert.rejects(manager.createE2BSandbox({ ...base, memoryMB: 1024 }), /cpuCount and memoryMB must be provided together/);
+    await assert.rejects(manager.createE2BSandbox({ ...base, cpuCount: 0, memoryMB: 1024 }), /cpuCount must be an integer between 1 and 8/);
+    await assert.rejects(manager.createE2BSandbox({ ...base, cpuCount: 9, memoryMB: 1024 }), /cpuCount must be an integer between 1 and 8/);
+    await assert.rejects(manager.createE2BSandbox({ ...base, cpuCount: 1.5, memoryMB: 1024 }), /cpuCount must be an integer between 1 and 8/);
+    await assert.rejects(manager.createE2BSandbox({ ...base, cpuCount: 2, memoryMB: 256 }), /memoryMB must be an integer between 512 and 8192/);
+    await assert.rejects(manager.createE2BSandbox({ ...base, cpuCount: 2, memoryMB: 8193 }), /memoryMB must be an integer between 512 and 8192/);
+    await assert.rejects(manager.createE2BSandbox({ ...base, providerSandboxId: 'existing-id', cpuCount: 2, memoryMB: 1024 }),
+      /cannot be requested when attaching an existing sandbox/);
+    assert.deepEqual(sdk.templateBuilds, []);
+    assert.deepEqual(sdk.calls, []);
+    assert.deepEqual(manager.listSandboxes().filter((item) => item.kind === 'e2b'), []);
+  } finally {
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('E2B resource HTTP requests forward cpuCount and memoryMB and surface validation errors', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-resource-http-'));
+  const sdk = fakeE2B();
+  const manager = new AgentManager({ workspaceRoot: directory, databasePath: ':memory:',
+    store: new SqliteAgentManagerStore(':memory:'), e2bService: sdk.service,
+    logger: createLogger({ level: 'silent' }) });
+  const server = createAgentManagerServer(manager, { logger: createLogger({ level: 'silent' }) });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  const post = (body: unknown) => fetch(`http://127.0.0.1:${port}/api/sandboxes`, { method: 'POST',
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  try {
+    const created = await post({ kind: 'e2b', name: 'HTTP resources', domain: 'e2b.example', apiKey: 'test-key',
+      template: 'custom-template', cpuCount: 8, memoryMB: 8192 });
+    assert.equal(created.status, 201);
+    const sandbox = await created.json() as Sandbox;
+    assert.equal(sandbox.cpuCount, 2);
+    assert.equal(sandbox.memoryMB, 512);
+    assert.deepEqual(sdk.templateBuilds.map((build) => [build.cpuCount, build.memoryMB]), [[8, 8192]]);
+
+    const partial = await post({ kind: 'e2b', name: 'Partial', domain: 'e2b.example', apiKey: 'test-key', cpuCount: 2 });
+    assert.equal(partial.status, 400);
+    assert.match(JSON.stringify(await partial.json()), /cpuCount and memoryMB must be provided together/);
+    const fractional = await post({ kind: 'e2b', name: 'Fractional', domain: 'e2b.example', apiKey: 'test-key',
+      cpuCount: 2.5, memoryMB: 1024 });
+    assert.equal(fractional.status, 400);
+    const text = await post({ kind: 'e2b', name: 'Text', domain: 'e2b.example', apiKey: 'test-key',
+      cpuCount: '2', memoryMB: 1024 });
+    assert.equal(text.status, 400);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();
     rmSync(directory, { recursive: true, force: true });
   }

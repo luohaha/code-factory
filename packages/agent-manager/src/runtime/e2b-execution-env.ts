@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { posix } from 'node:path';
 
 import type { Context } from '@earendil-works/chord';
@@ -7,12 +7,47 @@ import {
   type ExecutionEnv, type FileInfo, type FileKind, type Result,
   type ShellExecOptions, type ShellExecResult, type TextLine, type TextLineReader,
 } from '@earendil-works/pi-durable/env';
-import { CommandExitError, FileNotFoundError, FileType, Sandbox, SandboxNotFoundError, TimeoutError } from 'e2b';
+import { CommandExitError, FileNotFoundError, FileType, Sandbox, SandboxNotFoundError, Template, TimeoutError } from 'e2b';
 import type { CommandHandle, SandboxApiOpts, SandboxInfo, SandboxOpts } from 'e2b';
 
 export type E2BHandle = Pick<Sandbox, 'sandboxId' | 'files' | 'commands'>;
 export interface E2BCredentials { domain: string; apiKey: string }
 export class E2BProviderError extends Error {}
+
+/**
+ * E2B allocates CPU and memory per template, not per sandbox: `POST /sandboxes` only names a template.
+ * Requesting resources therefore derives a template from the selected one and creates the sandbox from it.
+ * The ranges are E2B's documented template build limits (8 vCPU and 8 GiB even on paid self-serve plans).
+ */
+export interface E2BResources { cpuCount: number; memoryMB: number }
+
+export const e2bResourceLimits = { minCpuCount: 1, maxCpuCount: 8, minMemoryMB: 512, maxMemoryMB: 8192 } as const;
+
+export function parseE2BResources(cpuCount: unknown, memoryMB: unknown): E2BResources | null {
+  if (cpuCount === undefined && memoryMB === undefined) return null;
+  if (cpuCount === undefined || memoryMB === undefined) {
+    throw new TypeError('cpuCount and memoryMB must be provided together');
+  }
+  const { minCpuCount, maxCpuCount, minMemoryMB, maxMemoryMB } = e2bResourceLimits;
+  if (typeof cpuCount !== 'number' || !Number.isInteger(cpuCount) || cpuCount < minCpuCount || cpuCount > maxCpuCount) {
+    throw new TypeError(`cpuCount must be an integer between ${minCpuCount} and ${maxCpuCount}`);
+  }
+  if (typeof memoryMB !== 'number' || !Number.isInteger(memoryMB) || memoryMB < minMemoryMB || memoryMB > maxMemoryMB) {
+    throw new TypeError(`memoryMB must be an integer between ${minMemoryMB} and ${maxMemoryMB}`);
+  }
+  return { cpuCount, memoryMB };
+}
+
+/** Stable, E2B-name-safe template name so a repeated request reuses one derived template instead of a new one. */
+export function e2bResourceTemplateName(template: string, resources: E2BResources): string {
+  const hash = createHash('sha256').update(`${template}\u0000${resources.cpuCount}\u0000${resources.memoryMB}`).digest('hex');
+  return `cf-${resources.cpuCount}cpu-${resources.memoryMB}mb-${hash.slice(0, 12)}`;
+}
+
+export interface E2BTemplateBuildRequest extends E2BResources {
+  template: string;
+  credentials: E2BCredentials;
+}
 
 export async function getE2BDefaultCwd(sandbox: E2BHandle, signal?: AbortSignal): Promise<string> {
   signal?.throwIfAborted();
@@ -33,6 +68,8 @@ export async function getE2BDefaultCwd(sandbox: E2BHandle, signal?: AbortSignal)
 /** Narrow SDK seam so the same adapter is exercised by deterministic provider tests. */
 export interface E2BClient {
   create(options: SandboxOpts): Promise<E2BHandle>;
+  /** Build a template that keeps `template`'s contents with the requested resources; returns its template ID. */
+  buildTemplate(request: E2BTemplateBuildRequest): Promise<string>;
   connect(id: string, options: SandboxApiOpts): Promise<E2BHandle>;
   getInfo(id: string, options: SandboxApiOpts): Promise<SandboxInfo>;
   pause(id: string, options: SandboxApiOpts): Promise<boolean>;
@@ -41,6 +78,11 @@ export interface E2BClient {
 
 export const e2bClient: E2BClient = {
   create: (options) => Sandbox.create(options),
+  buildTemplate: async ({ template, cpuCount, memoryMB, credentials }) => {
+    const build = await Template.build(Template().fromTemplate(template), e2bResourceTemplateName(template, { cpuCount, memoryMB }),
+      { ...credentials, cpuCount, memoryMB });
+    return build.templateId;
+  },
   connect: (id, options) => Sandbox.connect(id, options),
   getInfo: (id, options) => Sandbox.getInfo(id, options),
   pause: (id, options) => Sandbox.pause(id, options),
@@ -48,10 +90,32 @@ export const e2bClient: E2BClient = {
 };
 
 export class E2BSandboxService {
+  /** Derived templates are billed and slow to build, so one Manager process builds each resource shape once. */
+  readonly #resourceTemplates = new Map<string, Promise<string>>();
+
   constructor(readonly client: E2BClient = e2bClient) {}
 
-  async create(template: string, credentials: E2BCredentials): Promise<E2BHandle> {
-    try { return await this.client.create({ template, ...credentials, timeoutMs: 600_000,
+  private resourceTemplate(template: string, resources: E2BResources, credentials: E2BCredentials): Promise<string> {
+    const key = `${credentials.domain}\u0000${template}\u0000${resources.cpuCount}\u0000${resources.memoryMB}`;
+    const cached = this.#resourceTemplates.get(key);
+    if (cached) return cached;
+    const pending = this.client.buildTemplate({ template, ...resources, credentials }).catch((error: unknown) => {
+      this.#resourceTemplates.delete(key);
+      if (error instanceof E2BProviderError) throw error;
+      throw new E2BProviderError('E2B template build failed for the requested cpuCount and memoryMB; check the domain, API key, and template');
+    });
+    this.#resourceTemplates.set(key, pending);
+    return pending;
+  }
+
+  async create(template: string, credentials: E2BCredentials, resources?: E2BResources | null): Promise<E2BHandle> {
+    let target = template;
+    try { if (resources) target = await this.resourceTemplate(template, resources, credentials); }
+    catch (error) {
+      if (error instanceof E2BProviderError) throw error;
+      throw new E2BProviderError('E2B template build failed for the requested cpuCount and memoryMB; check the domain, API key, and template');
+    }
+    try { return await this.client.create({ template: target, ...credentials, timeoutMs: 600_000,
       lifecycle: { onTimeout: 'pause', autoResume: true } }); }
     catch { throw new E2BProviderError('E2B sandbox creation failed; check the domain, API key, and template'); }
   }

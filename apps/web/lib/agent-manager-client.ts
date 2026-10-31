@@ -91,6 +91,9 @@ export interface SandboxDto {
   repositoryUrl: string | null;
   environmentVariableNames?: string[];
   template: string | null;
+  /** Resources last observed from E2B; null for local workspaces or before the first observation. */
+  cpuCount: number | null;
+  memoryMB: number | null;
   status: 'running' | 'paused' | 'terminated' | 'unreachable' | 'unknown';
   checkedAt: string | null;
   createdAt: string;
@@ -444,7 +447,8 @@ export class AgentManagerClient {
   }
 
   createSandbox(input: { name: string; domain?: string; apiKey: string;
-    providerSandboxId?: string; template?: string; environmentVariables?: Record<string, string | null> }): Promise<SandboxDto> {
+    providerSandboxId?: string; template?: string; cpuCount?: number; memoryMB?: number;
+    environmentVariables?: Record<string, string | null> }): Promise<SandboxDto> {
     return this.request('/api/sandboxes', { method: 'POST', body: JSON.stringify({ kind: 'e2b', ...input }) });
   }
 
