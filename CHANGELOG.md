@@ -6,6 +6,16 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.2.10] - 2026-11-01
+
+### Added
+
+- Automatically reclaim expired conversation attachment files and metadata with a configurable retention period, defaulting to seven days. Preserve message text and defer expiry while a Requirement has a running RD or Reviewer Run.
+
+### Fixed
+
+- Stop further Jev continuations after two consecutive failed or timed-out RD Runs, preserving the limit across Manager restarts and allowing explicit human retries. Successful or cancelled RD Runs break the failure streak; Reviewer Runs do not affect it.
+
 ## [0.2.9] - 2026-10-27
 
 ### Added
