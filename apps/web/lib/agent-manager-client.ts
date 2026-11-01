@@ -332,8 +332,10 @@ export class AgentManagerClient {
     return this.request(`/api/native-auth/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
 
-  async listRequirements(): Promise<RequirementDto[]> {
-    const response = await this.request<{ items: RequirementDto[] }>('/api/requirements');
+  async listRequirements(options: { includeCancelled?: boolean } = {}): Promise<RequirementDto[]> {
+    const response = await this.request<{ items: RequirementDto[] }>(
+      options.includeCancelled ? '/api/requirements?includeCancelled=true' : '/api/requirements',
+    );
     return response.items;
   }
 

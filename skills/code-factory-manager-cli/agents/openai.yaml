@@ -1,0 +1,3 @@
+interface:
+  display_name: "Code Factory Manager"
+  short_description: "Manage requirements, human replies, reviews, and timers"

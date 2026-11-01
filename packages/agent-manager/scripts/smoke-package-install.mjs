@@ -57,6 +57,11 @@ try {
   assert.ok(existsSync(tarball), `Package tarball is missing: ${tarball}`);
   run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', installRoot, tarball], temporaryRoot);
 
+  const managerCli = join(installRoot, 'node_modules', '.bin', 'code-factory-manager-cli');
+  run(managerCli, ['--help'], temporaryRoot);
+  assert.ok(existsSync(join(installRoot, 'node_modules', '@luoyixin', 'code-factory',
+    'dist', 'skills', 'code-factory-manager-cli', 'SKILL.md')), 'Manager skill is missing from the package');
+
   const port = await availablePort();
   const output = [];
   manager = spawn(process.execPath, [
@@ -76,6 +81,11 @@ try {
   assert.equal(dashboard.status, 200, `GET / returned ${dashboard.status}: ${html}`);
   assert.match(dashboard.headers.get('content-type') ?? '', /^text\/html/);
   assert.match(html, /<html\b/i);
+  const listed = spawnSync(managerCli, ['requirement', 'list', '--range', 'all', '--api-url', url, '--json'], {
+    cwd: temporaryRoot, encoding: 'utf8', timeout: 10_000,
+  });
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.deepEqual(JSON.parse(listed.stdout), { items: [] });
   console.log(`Installed package HTTP smoke passed: ${version}, GET /api/health and GET /`);
 } finally {
   if (manager && manager.exitCode === null && manager.signalCode === null) {

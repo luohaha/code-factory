@@ -1099,8 +1099,8 @@ export class AgentManager extends EventEmitter {
     return this.#store.getRequirement(id);
   }
 
-  listRequirements(): RequirementWithSession[] {
-    return this.#store.listRequirements();
+  listRequirements(options: { includeCancelled?: boolean } = {}): RequirementWithSession[] {
+    return this.#store.listRequirements(options);
   }
 
   search(query: string, limit = 50) {

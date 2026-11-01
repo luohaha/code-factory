@@ -434,6 +434,11 @@ Success: 200 OK with `{"items": SearchResult[]}`. Direct ID matches are ordered 
 
 Returns every non-cancelled Requirement, including its AgentSession.
 
+Optional `includeCancelled=true` includes retained cancelled Requirements;
+omitting it or passing `false` preserves the default. Other values return 400.
+This lets human management clients inspect every status without changing
+dashboard defaults. Retention still determines which records exist.
+
 Success: 200 OK with {"items": Requirement[]}.
 
 ### GET /api/requirements/:id

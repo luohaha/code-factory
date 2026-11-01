@@ -516,7 +516,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     return { ...requirementFrom(row), session: sessionFrom(row, 's_') };
   }
 
-  listRequirements(): RequirementWithSession[] {
+  listRequirements(options: { includeCancelled?: boolean } = {}): RequirementWithSession[] {
     const rows = this.#db.prepare(`SELECT
       r.*, s.id AS s_id, s.requirement_id AS s_requirement_id, s.provider AS s_provider,
       s.native_session_id AS s_native_session_id, s.state AS s_state, s.last_error AS s_last_error,
@@ -526,7 +526,7 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       ${queuedMessageCountSql} AS s_queued_message_count,
       s.created_at AS s_created_at, s.updated_at AS s_updated_at
       FROM requirements r JOIN agent_sessions s ON s.requirement_id = r.id
-      WHERE r.status != 'cancelled' ORDER BY r.updated_at DESC`).all() as Row[];
+      WHERE (? = 1 OR r.status != 'cancelled') ORDER BY r.updated_at DESC`).all(options.includeCancelled ? 1 : 0) as Row[];
     return rows.map((row) => ({ ...requirementFrom(row), session: sessionFrom(row, 's_') }));
   }
 
