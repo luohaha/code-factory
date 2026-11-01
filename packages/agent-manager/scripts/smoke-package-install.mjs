@@ -57,6 +57,12 @@ try {
   assert.ok(existsSync(tarball), `Package tarball is missing: ${tarball}`);
   run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', installRoot, tarball], temporaryRoot);
 
+  // Dependency overrides only apply at the npm project root. Verify the actual
+  // published tree, so a clean install cannot silently restore vulnerable E2B dependencies.
+  run(process.execPath, [join(packageRoot, 'scripts', 'check-e2b-dependencies.mjs'),
+    join(installRoot, 'node_modules', '@luoyixin', 'code-factory')], temporaryRoot);
+  run('npm', ['audit', '--omit=dev', '--audit-level=moderate'], installRoot);
+
   const port = await availablePort();
   const output = [];
   manager = spawn(process.execPath, [
