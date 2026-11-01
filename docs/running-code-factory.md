@@ -31,6 +31,7 @@ operations as the dashboard. It is separate from the service launcher
 
 ~~~bash
 npx --package @luoyixin/code-factory code-factory-manager-cli --help
+npx --package @luoyixin/code-factory code-factory-manager-cli search --query 'deployment timeout' --limit 20
 npx --package @luoyixin/code-factory code-factory-manager-cli requirement list --range 7d --status todo,waiting_confirmation
 npx --package @luoyixin/code-factory code-factory-manager-cli requirement show --id req_...
 ~~~
@@ -57,6 +58,13 @@ deletion/start, completion confirmation, PR discovery and review, and timer
 creation/list/cancellation. API state guards remain authoritative. Replies can
 reopen done work, and review/start acceptance does not imply background completion.
 Inspect current state after a timed-out write before retrying.
+
+`search --query TEXT` (or `-q TEXT`) uses the dashboard's search across
+Requirements, conversation messages, and registered PRs. Requirement ID prefixes
+and registered GitHub PR URLs support direct lookup. Results expose their kind,
+Requirement ID, source ID, title, and excerpt; `--json` includes ranking metadata.
+Search excludes cancelled Requirements. Queries must contain 1–500 characters;
+`--limit` accepts 1–200 results and defaults to 50.
 
 ## Network and port
 

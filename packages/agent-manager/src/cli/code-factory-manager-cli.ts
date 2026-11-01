@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import type { AgentTimer, PullRequest, RequirementMessage, RequirementWithSession, ReviewRequest } from '../core/types.js';
+import type { AgentTimer, PullRequest, RequirementMessage, RequirementWithSession, ReviewRequest, SearchResult } from '../core/types.js';
 
 export interface ManagerCliRuntime {
   environment: Readonly<Record<string, string | undefined>>;
@@ -22,6 +22,7 @@ const GLOBAL_OPTIONS = {
 } as const;
 const stringOption = { type: 'string' } as const;
 const COMMANDS = {
+  search: { options: { query: { type: 'string', short: 'q' }, limit: stringOption }, usage: '--query TEXT [--limit 1-200] (requirements, conversations, and PRs)' },
   'requirement list': { options: { range: stringOption, status: stringOption }, usage: '[--range 7d|30d|90d|all] [--status STATUS[,STATUS...]]' },
   'requirement show': { options: { id: stringOption }, usage: '--id ID (title, body, session, and complete conversation)' },
   'requirement reply': { options: { id: stringOption, message: stringOption, 'message-file': stringOption }, usage: '--id ID (--message TEXT | --message-file PATH)' },
@@ -57,6 +58,8 @@ PR_ID means Code Factory's pr_<uuid>, obtained with pr list, not a GitHub number
 Timer delay: whole seconds from 60 to 31536000; description: 1-500 characters.
 Review reasoning levels: low, medium, high, xhigh, max. Native Requirements need
 a native-agent Reviewer; headless Requirements accept codex or claude-code.
+Search accepts keywords, Requirement ID prefixes, and registered PR URLs.
+Queries must be 1-500 characters; the default result limit is 50.
 
 Replies are authored by human and can start work or reopen a done Requirement.
 Mutations require the user's instruction; RD automation uses code-factory-cli.
@@ -144,12 +147,13 @@ export async function runManagerCli(args: readonly string[], overrides: Partial<
       runtime.writeOut(`${HELP}\n`);
       return 0;
     }
-    const command = args.slice(0, 2).join(' ');
+    const isSearch = args[0] === 'search';
+    const command = isSearch ? 'search' : args.slice(0, 2).join(' ');
     if (!isCommand(command)) throw new UsageError(`Unknown command: ${command}`);
     let values: Options;
     try {
       const config: NonNullable<Parameters<typeof parseArgs>[0]> = {
-        args: [...args.slice(2)], strict: true, allowPositionals: false,
+        args: [...args.slice(isSearch ? 1 : 2)], strict: true, allowPositionals: false,
         options: { ...GLOBAL_OPTIONS, ...COMMANDS[command].options },
       };
       values = parseArgs(config).values;
@@ -177,7 +181,15 @@ export async function runManagerCli(args: readonly string[], overrides: Partial<
     const requirementPath = () => `/requirements/${encodeURIComponent(required(values['requirement-id'] ?? values.id, '--requirement-id or --id'))}`;
     let result: unknown;
     let formatted: string | undefined;
-    if (command === 'requirement list') {
+    if (command === 'search') {
+      const query = required(values.query, '--query');
+      if (query.length > 500) throw new UsageError('--query must be 1-500 characters');
+      const limit = values.limit === undefined ? 50 : Number(required(values.limit, '--limit'));
+      if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new UsageError('--limit must be an integer from 1 to 200');
+      const collection = await request<Collection<SearchResult>>(`/search?${new URLSearchParams({ q: query, limit: String(limit) })}`);
+      formatted = table(items(collection), ['kind', 'requirementId', 'sourceId', 'title', 'excerpt']);
+      result = collection;
+    } else if (command === 'requirement list') {
       const range = option(values, 'range') ?? '7d';
       const days = Object.hasOwn(RANGES, range) ? RANGES[range] : undefined;
       if (days === undefined) throw new UsageError('--range must be 7d, 30d, 90d, or all');

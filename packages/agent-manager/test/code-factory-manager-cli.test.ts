@@ -56,6 +56,39 @@ test('lists creation-time ranges and dashboard statuses without RD credentials',
   assert.doesNotMatch(h.output.join(''), /Old/);
 });
 
+test('search encodes queries, preserves ranked result metadata, and supports readable and empty results', async () => {
+  const base = { requirementId: 'req_source', score: 0.9, fullTextScore: 1, vectorScore: 0.8, updatedAt: '2026-11-01' };
+  const rows = [
+    { ...base, kind: 'message', sourceId: 'msg_hit', title: 'Conversation', excerpt: '中文部署说明' },
+    { ...base, kind: 'requirement', sourceId: 'req_source', title: 'Requirement', excerpt: 'Body match' },
+    { ...base, kind: 'pull_request', sourceId: 'pr_hit', title: 'Pull request', excerpt: 'PR match' },
+  ];
+  let requested: URL | undefined;
+  const h = harness(async (input, init) => {
+    requested = new URL(String(input));
+    assert.equal(init?.method, 'GET');
+    assert.equal(requested.pathname, '/api/search');
+    return Response.json({ items: rows });
+  });
+  const query = '中文部署 & "a/b"? 100%';
+  assert.equal(await h.run(['search', '--query', query, '--limit', '3', '--json']), 0, h.errors.join(''));
+  assert.equal(requested?.searchParams.get('q'), query);
+  assert.equal(requested?.searchParams.get('limit'), '3');
+  assert.deepEqual(JSON.parse(h.output.join('')), { items: rows });
+  assert.equal(await h.run(['search', '-q', 'REQ-CCDB1125']), 0);
+  assert.equal(requested?.searchParams.get('q'), 'REQ-CCDB1125');
+  assert.equal(requested?.searchParams.get('limit'), '50');
+  assert.match(h.output.join(''), /message\treq_source\tmsg_hit\tConversation\t中文部署说明/);
+  assert.match(h.output.join(''), /pull_request\treq_source\tpr_hit/);
+  const prUrl = 'https://github.com/luohaha/code-factory/pull/180';
+  assert.equal(await h.run(['search', '-q', prUrl, '--limit', '200', '--json']), 0);
+  assert.equal(requested?.searchParams.get('q'), prUrl);
+  assert.equal(requested?.searchParams.get('limit'), '200');
+  h.runtime.fetch = async () => Response.json({ items: [] });
+  assert.equal(await h.run(['search', '-q', 'missing', '--limit', '1', '--json']), 0);
+  assert.deepEqual(JSON.parse(h.output.join('')), { items: [] });
+});
+
 test('shows full conversation and direct visible relationships', async () => {
   const h = harness(async (input) => {
     const path = new URL(String(input)).pathname;
@@ -121,6 +154,9 @@ test('validates arguments before requests, supports text files, and never retrie
   for (const args of [
     ['unknown'], ['requirement', 'list', '--range', '1d'], ['requirement', 'list', '--status', 'all,todo'],
     ['requirement', 'list', '--status', 'cancelled'],
+    ['search'], ['search', '--query', '   '], ['search', '-q', 'a'.repeat(501)],
+    ['search', '-q', 'a', '--limit', '0'], ['search', '-q', 'a', '--limit', '201'],
+    ['search', '-q', 'a', '--limit', '1.5'], ['search', '-q', 'a', '--limit', 'invalid'],
     ['requirement', 'show'], ['requirement', 'start', '--unknown'],
     ['requirement', 'reply', '--id', 'req_a', '--message', ''],
     ['requirement', 'reply', '--id', 'req_a', '--message', 'a', '--message-file', 'a.txt'],
@@ -135,6 +171,8 @@ test('validates arguments before requests, supports text files, and never retrie
   ]) assert.equal(await h.run(args), 2, args.join(' '));
   assert.equal(calls, 0);
   assert.equal(await h.run(['requirement', 'show', '--help']), 0);
+  assert.equal(await h.run(['search', '--help']), 0);
+  assert.equal(calls, 0);
   const root = mkdtempSync(join(tmpdir(), 'manager-cli-text-'));
   try {
     const file = join(root, 'message.txt');
@@ -192,6 +230,10 @@ test('real HTTP operations persist human identity, enforce lifecycle guards, and
     assert.equal(manager.getRequirement(requirement.id)?.status, 'waiting_confirmation');
     assert.equal(await cli(['requirement', 'confirm', '--id', requirement.id]), 0, h.errors.join(''));
     assert.equal(manager.getRequirement(requirement.id)?.status, 'done');
+    assert.equal(await cli(['search', '--query', requirement.id]), 0, h.errors.join(''));
+    assert.ok(JSON.parse(h.output.join('')).items.some((hit: { kind: string; requirementId: string }) => hit.kind === 'requirement' && hit.requirementId === requirement.id));
+    assert.equal(await cli(['search', '-q', 'Human instruction']), 0, h.errors.join(''));
+    assert.ok(JSON.parse(h.output.join('')).items.some((hit: { kind: string; requirementId: string }) => hit.kind === 'message' && hit.requirementId === requirement.id));
     assert.equal(await cli(['requirement', 'delete', '--id', requirement.id]), 1);
     const todo = manager.createRequirement({ title: 'Discard', description: 'Unused', provider: 'codex' });
     assert.equal(await cli(['requirement', 'confirm', '--id', todo.id]), 1);
@@ -206,6 +248,8 @@ test('real HTTP operations persist human identity, enforce lifecycle guards, and
     assert.equal(await cli(['requirement', 'list', '--range', 'all']), 0);
     assert.deepEqual(JSON.parse(h.output.join('')).items.map((r: { id: string }) => r.id), [requirement.id]);
     assert.equal(manager.listRequirements().length, 1);
+    assert.equal(await cli(['search', '-q', todo.id]), 0, h.errors.join(''));
+    assert.ok(JSON.parse(h.output.join('')).items.every((hit: { requirementId: string }) => hit.requirementId !== todo.id));
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();
@@ -249,6 +293,7 @@ test('npm CLI runs independently of the instruction-only skill through an execut
       process.platform === 'win32' ? [link, '--help'] : ['--help'], { cwd: tmpdir(), encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /requirement list/);
+    assert.match(result.stdout, /search --query/);
     assert.match(result.stdout, /timer cancel/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

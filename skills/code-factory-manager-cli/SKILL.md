@@ -1,6 +1,6 @@
 ---
 name: code-factory-manager-cli
-description: "Manage Code Factory on a human operator's behalf: inspect requirements and conversations, reply as human, manage lifecycle actions, request PR reviews, and manage timers. Use for operating a running Manager, not RD automation or starting the service."
+description: "Manage Code Factory on a human operator's behalf: search and inspect requirements, conversations, and PRs, reply as human, manage lifecycle actions, request reviews, and manage timers. Use for operating a running Manager, not RD automation or starting the service."
 ---
 
 # Code Factory Manager CLI
@@ -25,7 +25,19 @@ environment variables. Append `--json` for structured output.
 
 ## Inspect and act
 
-Use `requirement list` to find full IDs; avoid guessing IDs from titles.
+Use `search` to find requirements, conversation messages, and PRs by keywords,
+Requirement ID prefix (including displayed `REQ-...` IDs), or registered GitHub
+PR URL. Results include the match kind, Requirement ID, source ID, title, and
+excerpt in the server's result order. Search excludes cancelled Requirements,
+matching the dashboard. Queries are 1–500 characters; `--limit` is 1–200 and
+defaults to 50. Use `--json` for complete result metadata.
+
+```bash
+npx --yes --package @luoyixin/code-factory code-factory-manager-cli search --query '部署超时' --limit 20
+npx --yes --package @luoyixin/code-factory code-factory-manager-cli search -q REQ-CCDB1125 --json
+```
+
+Use search or `requirement list` to find full IDs; avoid guessing IDs from titles.
 Time ranges match the dashboard: creation time within the last 7, 30, or 90
 rolling days, or all retained history. The default is 7 days and all visible
 statuses: `todo`, `doing`, `waiting_confirmation`, and `done`. Cancelled
