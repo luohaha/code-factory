@@ -199,7 +199,7 @@ export interface AgentManagerStore {
   createRequirement(input: CreateRequirementRecord): RequirementWithSession;
   updateRequirement(input: UpdateRequirementRecord): RequirementWithSession;
   getRequirement(id: string): RequirementWithSession | null;
-  listRequirements(options?: { includeCancelled?: boolean }): RequirementWithSession[];
+  listRequirements(): RequirementWithSession[];
   listChildRequirements(parentRequirementId: string): RequirementWithSession[];
   search(query: string, limit?: number): SearchResult[];
   listSessions(): AgentSession[];

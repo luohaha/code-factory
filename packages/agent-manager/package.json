@@ -15,7 +15,7 @@
   "bin": {
     "code-factory-agent-manager": "dist/cli.js",
     "code-factory-cli": "dist/code-factory-cli-main.js",
-    "code-factory-manager-cli": "dist/skills/code-factory-manager-cli/scripts/code-factory-manager-cli.mjs"
+    "code-factory-manager-cli": "dist/code-factory-manager-cli-main.js"
   },
   "files": [
     "dist",

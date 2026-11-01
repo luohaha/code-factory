@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import ts from 'typescript';
 
-import { runManagerCli } from '../../../skills/code-factory-manager-cli/scripts/code-factory-manager-cli.mjs';
+import { runManagerCli } from '../src/cli/code-factory-manager-cli.ts';
 import { AgentManager } from '../src/core/agent-manager.ts';
 import { createAgentManagerServer } from '../src/http/server.ts';
 import { createLogger } from '../src/infrastructure/logger.ts';
@@ -26,13 +27,13 @@ function harness(fetcher: typeof fetch = async () => { throw new Error('Unexpect
   } };
 }
 
-test('lists creation-time ranges and every status without RD credentials', async () => {
+test('lists creation-time ranges and dashboard statuses without RD credentials', async () => {
   const rows = [
     { id: 'new', title: '新的需求', createdAt: '2026-10-31T00:00:00Z', status: 'doing' },
     { id: 'boundary', title: 'Seven days', createdAt: '2026-10-25T00:00:00Z', status: 'todo' },
     { id: 'month', title: 'Month', createdAt: '2026-10-02T00:00:00Z', status: 'waiting_confirmation' },
     { id: 'quarter', title: 'Quarter', createdAt: '2026-08-03T00:00:00Z', status: 'done' },
-    { id: 'old', title: 'Old', createdAt: '2020-01-01T00:00:00Z', updatedAt: '2026-11-01T00:00:00Z', status: 'cancelled' },
+    { id: 'old', title: 'Old', createdAt: '2020-01-01T00:00:00Z', updatedAt: '2026-11-01T00:00:00Z', status: 'done' },
   ];
   let lastUrl = '';
   const h = harness(async (input) => {
@@ -46,7 +47,7 @@ test('lists creation-time ranges and every status without RD credentials', async
     assert.equal(await h.run(['requirement', 'list', '--range', range, '--json']), 0, h.errors.join(''));
     assert.deepEqual(JSON.parse(h.output.join('')).items.map((r: { id: string }) => r.id), ids);
   }
-  assert.equal(lastUrl, 'http://127.0.0.1:4310/api/requirements?includeCancelled=true');
+  assert.equal(lastUrl, 'http://127.0.0.1:4310/api/requirements');
   assert.equal(await h.run(['requirement', 'list', '--range', 'all', '--status', 'todo,waiting_confirmation', '--json']), 0);
   assert.deepEqual(JSON.parse(h.output.join('')).items.map((r: { id: string }) => r.id), ['boundary', 'month']);
   assert.equal(lastUrl, 'http://127.0.0.1:4310/api/requirements');
@@ -55,7 +56,7 @@ test('lists creation-time ranges and every status without RD credentials', async
   assert.doesNotMatch(h.output.join(''), /Old/);
 });
 
-test('shows full conversation and direct relationships including cancelled children', async () => {
+test('shows full conversation and direct visible relationships', async () => {
   const h = harness(async (input) => {
     const path = new URL(String(input)).pathname;
     if (path.endsWith('/messages')) {
@@ -66,7 +67,7 @@ test('shows full conversation and direct relationships including cancelled child
       ] });
     }
     if (path === '/api/requirements') return Response.json({ items: [
-      { id: 'child', parentRequirementId: 'source', title: 'Child', status: 'cancelled' },
+      { id: 'child', parentRequirementId: 'source', title: 'Child', status: 'todo' },
       { id: 'unrelated', parentRequirementId: 'other' },
     ] });
     return Response.json(path.endsWith('/parent') ? { id: 'parent', title: 'Parent' }
@@ -119,6 +120,7 @@ test('validates arguments before requests, supports text files, and never retrie
   const h = harness(async () => { calls += 1; return Response.json({ accepted: true }); });
   for (const args of [
     ['unknown'], ['requirement', 'list', '--range', '1d'], ['requirement', 'list', '--status', 'all,todo'],
+    ['requirement', 'list', '--status', 'cancelled'],
     ['requirement', 'show'], ['requirement', 'start', '--unknown'],
     ['requirement', 'reply', '--id', 'req_a', '--message', ''],
     ['requirement', 'reply', '--id', 'req_a', '--message', 'a', '--message-file', 'a.txt'],
@@ -171,7 +173,7 @@ test('validates arguments before requests, supports text files, and never retrie
   }
 });
 
-test('real HTTP operations persist human identity, enforce lifecycle guards, and retain cancelled lists', async () => {
+test('real HTTP operations persist human identity, enforce lifecycle guards, and hide cancelled requirements', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const manager = new AgentManager({ workspaceRoot: process.cwd(), store, logger: createLogger({ level: 'silent' }),
     runner: { run: async () => ({ status: 'succeeded', exitCode: 0, nativeSessionId: 'native-test', finalMessage: 'Finished', error: null }) } });
@@ -201,20 +203,16 @@ test('real HTTP operations persist human identity, enforce lifecycle guards, and
     assert.deepEqual(JSON.parse(h.output.join('')), { ok: true });
     const defaults = await fetch(`${api}/api/requirements`);
     assert.equal((await defaults.json() as { items: unknown[] }).items.length, 1);
-    assert.equal(await cli(['requirement', 'list', '--range', 'all', '--status', 'cancelled']), 0);
-    assert.equal(JSON.parse(h.output.join('')).items[0].id, todo.id);
-    assert.equal(manager.listRequirements({ includeCancelled: true }).length, 2);
-    const invalid = await fetch(`${api}/api/requirements?includeCancelled=1`);
-    assert.equal(invalid.status, 400);
-    const explicitFalse = await fetch(`${api}/api/requirements?includeCancelled=false`);
-    assert.equal((await explicitFalse.json() as { items: unknown[] }).items.length, 1);
+    assert.equal(await cli(['requirement', 'list', '--range', 'all']), 0);
+    assert.deepEqual(JSON.parse(h.output.join('')).items.map((r: { id: string }) => r.id), [requirement.id]);
+    assert.equal(manager.listRequirements().length, 1);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();
   }
 });
 
-test('npm skill copy is self-contained and its CLI works through an executable symlink', () => {
+test('npm CLI runs independently of the instruction-only skill through an executable symlink', () => {
   const root = mkdtempSync(join(tmpdir(), 'manager-skill-package-'));
   try {
     const packageRoot = join(root, 'packages', 'agent-manager');
@@ -225,7 +223,17 @@ test('npm skill copy is self-contained and its CLI works through an executable s
     }
     const metadata = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { bin: Record<string, string> };
     const entrypoint = metadata.bin['code-factory-manager-cli']!;
-    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ bin: { 'code-factory-manager-cli': entrypoint } }));
+    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ type: 'module', bin: { 'code-factory-manager-cli': entrypoint } }));
+    mkdirSync(join(packageRoot, 'dist', 'cli'), { recursive: true });
+    for (const [source, target] of [
+      ['cli/code-factory-manager-cli.ts', 'dist/cli/code-factory-manager-cli.js'],
+      ['code-factory-manager-cli-main.ts', entrypoint],
+    ]) {
+      const compiled = ts.transpileModule(readFileSync(new URL(`../src/${source}`, import.meta.url), 'utf8'), {
+        compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+      });
+      writeFileSync(join(packageRoot, target!), compiled.outputText);
+    }
     for (const script of ['sync-manager-skill.mjs', 'prepare-cli.mjs']) {
       const prepared = spawnSync(process.execPath, [join(packageRoot, 'scripts', script)], { cwd: tmpdir(), encoding: 'utf8' });
       assert.equal(prepared.status, 0, prepared.stderr);
@@ -233,7 +241,8 @@ test('npm skill copy is self-contained and its CLI works through an executable s
     // Remove source to ensure distribution does not depend on the repository.
     rmSync(join(root, 'skills'), { recursive: true });
     const skill = join(packageRoot, 'dist', 'skills', 'code-factory-manager-cli');
-    assert.ok(readFileSync(join(skill, 'SKILL.md'), 'utf8').includes('name: code-factory-manager-cli'));
+    assert.deepEqual(readdirSync(skill), ['SKILL.md']);
+    rmSync(skill, { recursive: true });
     const link = join(root, 'code-factory-manager-cli');
     symlinkSync(join(packageRoot, entrypoint), link);
     const result = spawnSync(process.platform === 'win32' ? process.execPath : link,

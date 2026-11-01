@@ -38,17 +38,19 @@ npx --package @luoyixin/code-factory code-factory-manager-cli requirement show -
 The default URL is `http://127.0.0.1:4310`; `CODE_FACTORY_API_URL` selects another
 Manager and `--api-url URL` overrides it. Append `--json` for script output.
 Lists support `7d`, `30d`, `90d`, and `all`, measured from creation time like the
-dashboard, and one or more statuses including retained `cancelled` records.
-The default list selects 7 days and all statuses. All time means retained data;
+dashboard, and one or more visible statuses: `todo`, `doing`,
+`waiting_confirmation`, and `done`. Cancelled Requirements are excluded, matching
+the dashboard. The default list selects 7 days and all visible statuses.
+All time means retained data;
 it cannot restore records already removed by retention.
 
-The self-contained CLI and installable skill live in
-[`skills/code-factory-manager-cli/`](../skills/code-factory-manager-cli/SKILL.md).
-Copy that directory into your agent's skill directory to install it. The npm
-package contains the same folder under `dist/skills/code-factory-manager-cli/`.
-Without npm installation, run
-`node skills/code-factory-manager-cli/scripts/code-factory-manager-cli.mjs --help`
-from the repository. It requires no additional dependencies.
+The CLI ships in the `@luoyixin/code-factory` npm package. The companion
+[`skills/code-factory-manager-cli/SKILL.md`](../skills/code-factory-manager-cli/SKILL.md)
+contains npx usage instructions. Copy only that file into your agent's
+`skills/code-factory-manager-cli/` directory to install the skill. It requires no
+bundled scripts. The npm package also includes the skill under
+`dist/skills/code-factory-manager-cli/`. Use a published package version that
+provides the manager CLI.
 
 The skill documents replies as human, direct parent/child inspection, TODO
 deletion/start, completion confirmation, PR discovery and review, and timer

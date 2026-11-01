@@ -87,8 +87,9 @@ try {
   assert.equal(dashboard.status, 200, `GET / returned ${dashboard.status}: ${html}`);
   assert.match(dashboard.headers.get('content-type') ?? '', /^text\/html/);
   assert.match(html, /<html\b/i);
-  const listed = spawnSync(managerCli, ['requirement', 'list', '--range', 'all', '--api-url', url, '--json'], {
-    cwd: temporaryRoot, encoding: 'utf8', timeout: 10_000,
+  const listed = spawnSync('npx', ['--offline', '--yes', '--package', '@luoyixin/code-factory',
+    'code-factory-manager-cli', 'requirement', 'list', '--range', 'all', '--api-url', url, '--json'], {
+    cwd: installRoot, encoding: 'utf8', timeout: 10_000,
   });
   assert.equal(listed.status, 0, listed.stderr);
   assert.deepEqual(JSON.parse(listed.stdout), { items: [] });

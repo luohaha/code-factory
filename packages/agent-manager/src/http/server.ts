@@ -237,11 +237,7 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         return;
       }
       if (request.method === 'GET' && url.pathname === '/api/requirements') {
-        const includeCancelled = url.searchParams.get('includeCancelled');
-        if (includeCancelled !== null && includeCancelled !== 'true' && includeCancelled !== 'false') {
-          throw new TypeError('includeCancelled must be true or false');
-        }
-        sendJson(response, 200, { items: manager.listRequirements({ includeCancelled: includeCancelled === 'true' }) });
+        sendJson(response, 200, { items: manager.listRequirements() });
         return;
       }
       if (request.method === 'GET' && url.pathname === '/api/sessions') {
