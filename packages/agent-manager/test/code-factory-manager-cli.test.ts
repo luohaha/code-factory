@@ -146,16 +146,27 @@ test('validates arguments before requests, supports text files, and never retrie
   } finally { rmSync(root, { recursive: true, force: true }); }
   for (const response of [404, 409, 500, 'network', 'timeout', 'invalid-json']) {
     calls = 0;
+    let timedOut = false;
     h.runtime.fetch = async (_input, init) => {
       calls += 1;
       if (response === 'network') throw new Error('secret raw transport details');
-      if (response === 'timeout') return new Promise((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal?.reason)));
+      if (response === 'timeout') return new Promise((_resolve, reject) => {
+        // A real fetch keeps a socket alive. The fake needs a referenced handle
+        // while AbortSignal.timeout's unreferenced timer waits to fire.
+        const guard = setTimeout(() => reject(new Error('Request did not abort')), 1_000);
+        init?.signal?.addEventListener('abort', () => {
+          clearTimeout(guard);
+          timedOut = true;
+          reject(init.signal?.reason);
+        }, { once: true });
+      });
       if (response === 'invalid-json') return new Response('<html>proxy error</html>');
       return Response.json({ error: 'State conflict' }, { status: response });
     };
     const code = await runManagerCli(['requirement', 'start', '--id', 'req_a'], { ...h.runtime, requestTimeoutMs: 5 });
     assert.equal(code, 1);
     assert.equal(calls, 1);
+    if (response === 'timeout') assert.equal(timedOut, true);
     assert.doesNotMatch(h.errors.join(''), /secret raw/);
   }
 });
