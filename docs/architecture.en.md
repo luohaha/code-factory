@@ -96,8 +96,8 @@ Every local headless RD and Reviewer invocation skips interactive approval and C
 
 ### Requirement
 
-Human-directed terminal management uses `code-factory-manager-cli` from the
-Code Factory npm package. The companion `skills/code-factory-manager-cli/`
+Human-directed terminal management uses `code-factory-human-cli` from the
+Code Factory npm package. The companion `skills/code-factory-human-cli/`
 directory contains only `SKILL.md` with npx usage instructions.
 The CLI calls the dashboard's human APIs, including search across Requirements,
 messages, and PRs, without RD Session credentials;

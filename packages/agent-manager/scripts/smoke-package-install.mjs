@@ -57,10 +57,10 @@ try {
   assert.ok(existsSync(tarball), `Package tarball is missing: ${tarball}`);
   run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', installRoot, tarball], temporaryRoot);
 
-  const managerCli = join(installRoot, 'node_modules', '.bin', 'code-factory-manager-cli');
-  run(managerCli, ['--help'], temporaryRoot);
+  const humanCli = join(installRoot, 'node_modules', '.bin', 'code-factory-human-cli');
+  run(humanCli, ['--help'], temporaryRoot);
   assert.ok(existsSync(join(installRoot, 'node_modules', '@luoyixin', 'code-factory',
-    'dist', 'skills', 'code-factory-manager-cli', 'SKILL.md')), 'Manager skill is missing from the package');
+    'dist', 'skills', 'code-factory-human-cli', 'SKILL.md')), 'Human CLI skill is missing from the package');
 
   // Dependency overrides only apply at the npm project root. Verify the actual
   // published tree, so a clean install cannot silently restore vulnerable E2B dependencies.
@@ -89,7 +89,7 @@ try {
   assert.match(html, /<html\b/i);
   for (const args of [['requirement', 'list', '--range', 'all'], ['search', '--query', 'empty workspace']]) {
     const queried = spawnSync('npx', ['--offline', '--yes', '--package', '@luoyixin/code-factory',
-      'code-factory-manager-cli', ...args, '--api-url', url, '--json'], {
+      'code-factory-human-cli', ...args, '--api-url', url, '--json'], {
       cwd: installRoot, encoding: 'utf8', timeout: 10_000,
     });
     assert.equal(queried.status, 0, queried.stderr);

@@ -25,15 +25,15 @@ On first start, Agent Manager creates a workspace-scoped configuration file at `
 
 ## Human management CLI
 
-`code-factory-manager-cli` operates a running Manager using the same human
+`code-factory-human-cli` operates a running Manager using the same human
 operations as the dashboard. It is separate from the service launcher
 `code-factory-agent-manager` and the RD automation command `code-factory-cli`.
 
 ~~~bash
-npx --package @luoyixin/code-factory code-factory-manager-cli --help
-npx --package @luoyixin/code-factory code-factory-manager-cli search --query 'deployment timeout' --limit 20
-npx --package @luoyixin/code-factory code-factory-manager-cli requirement list --range 7d --status todo,waiting_confirmation
-npx --package @luoyixin/code-factory code-factory-manager-cli requirement show --id req_...
+npx --package @luoyixin/code-factory code-factory-human-cli --help
+npx --package @luoyixin/code-factory code-factory-human-cli search --query 'deployment timeout' --limit 20
+npx --package @luoyixin/code-factory code-factory-human-cli requirement list --range 7d --status todo,waiting_confirmation
+npx --package @luoyixin/code-factory code-factory-human-cli requirement show --id req_...
 ~~~
 
 The default URL is `http://127.0.0.1:4310`; `CODE_FACTORY_API_URL` selects another
@@ -46,12 +46,12 @@ All time means retained data;
 it cannot restore records already removed by retention.
 
 The CLI ships in the `@luoyixin/code-factory` npm package. The companion
-[`skills/code-factory-manager-cli/SKILL.md`](../skills/code-factory-manager-cli/SKILL.md)
+[`skills/code-factory-human-cli/SKILL.md`](../skills/code-factory-human-cli/SKILL.md)
 contains npx usage instructions. Copy only that file into your agent's
-`skills/code-factory-manager-cli/` directory to install the skill. It requires no
+`skills/code-factory-human-cli/` directory to install the skill. It requires no
 bundled scripts. The npm package also includes the skill under
-`dist/skills/code-factory-manager-cli/`. Use a published package version that
-provides the manager CLI.
+`dist/skills/code-factory-human-cli/`. Use a published package version that
+provides the human CLI.
 
 The skill documents replies as human, direct parent/child inspection, TODO
 deletion/start, completion confirmation, PR discovery and review, and timer

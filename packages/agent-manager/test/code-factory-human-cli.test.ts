@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import ts from 'typescript';
 
-import { runManagerCli } from '../src/cli/code-factory-manager-cli.ts';
+import { runHumanCli } from '../src/cli/code-factory-human-cli.ts';
 import { AgentManager } from '../src/core/agent-manager.ts';
 import { createAgentManagerServer } from '../src/http/server.ts';
 import { createLogger } from '../src/infrastructure/logger.ts';
@@ -23,7 +23,7 @@ function harness(fetcher: typeof fetch = async () => { throw new Error('Unexpect
   return { output, errors, runtime, async run(args: string[]) {
     output.length = 0;
     errors.length = 0;
-    return runManagerCli(args, runtime);
+    return runHumanCli(args, runtime);
   } };
 }
 
@@ -173,7 +173,7 @@ test('validates arguments before requests, supports text files, and never retrie
   assert.equal(await h.run(['requirement', 'show', '--help']), 0);
   assert.equal(await h.run(['search', '--help']), 0);
   assert.equal(calls, 0);
-  const root = mkdtempSync(join(tmpdir(), 'manager-cli-text-'));
+  const root = mkdtempSync(join(tmpdir(), 'human-cli-text-'));
   try {
     const file = join(root, 'message.txt');
     writeFileSync(file, 'line 1\n中文 `literal` $(literal)\n');
@@ -203,7 +203,7 @@ test('validates arguments before requests, supports text files, and never retrie
       if (response === 'invalid-json') return new Response('<html>proxy error</html>');
       return Response.json({ error: 'State conflict' }, { status: response });
     };
-    const code = await runManagerCli(['requirement', 'start', '--id', 'req_a'], { ...h.runtime, requestTimeoutMs: 5 });
+    const code = await runHumanCli(['requirement', 'start', '--id', 'req_a'], { ...h.runtime, requestTimeoutMs: 5 });
     assert.equal(code, 1);
     assert.equal(calls, 1);
     if (response === 'timeout') assert.equal(timedOut, true);
@@ -257,37 +257,37 @@ test('real HTTP operations persist human identity, enforce lifecycle guards, and
 });
 
 test('npm CLI runs independently of the instruction-only skill through an executable symlink', () => {
-  const root = mkdtempSync(join(tmpdir(), 'manager-skill-package-'));
+  const root = mkdtempSync(join(tmpdir(), 'human-skill-package-'));
   try {
     const packageRoot = join(root, 'packages', 'agent-manager');
     mkdirSync(join(packageRoot, 'scripts'), { recursive: true });
-    cpSync(new URL('../../../skills/code-factory-manager-cli', import.meta.url), join(root, 'skills', 'code-factory-manager-cli'), { recursive: true });
-    for (const script of ['sync-manager-skill.mjs', 'prepare-cli.mjs']) {
+    cpSync(new URL('../../../skills/code-factory-human-cli', import.meta.url), join(root, 'skills', 'code-factory-human-cli'), { recursive: true });
+    for (const script of ['sync-human-skill.mjs', 'prepare-cli.mjs']) {
       cpSync(new URL(`../scripts/${script}`, import.meta.url), join(packageRoot, 'scripts', script));
     }
     const metadata = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { bin: Record<string, string> };
-    const entrypoint = metadata.bin['code-factory-manager-cli']!;
-    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ type: 'module', bin: { 'code-factory-manager-cli': entrypoint } }));
+    const entrypoint = metadata.bin['code-factory-human-cli']!;
+    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ type: 'module', bin: { 'code-factory-human-cli': entrypoint } }));
     mkdirSync(join(packageRoot, 'dist', 'cli'), { recursive: true });
     for (const [source, target] of [
-      ['cli/code-factory-manager-cli.ts', 'dist/cli/code-factory-manager-cli.js'],
-      ['code-factory-manager-cli-main.ts', entrypoint],
+      ['cli/code-factory-human-cli.ts', 'dist/cli/code-factory-human-cli.js'],
+      ['code-factory-human-cli-main.ts', entrypoint],
     ]) {
       const compiled = ts.transpileModule(readFileSync(new URL(`../src/${source}`, import.meta.url), 'utf8'), {
         compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
       });
       writeFileSync(join(packageRoot, target!), compiled.outputText);
     }
-    for (const script of ['sync-manager-skill.mjs', 'prepare-cli.mjs']) {
+    for (const script of ['sync-human-skill.mjs', 'prepare-cli.mjs']) {
       const prepared = spawnSync(process.execPath, [join(packageRoot, 'scripts', script)], { cwd: tmpdir(), encoding: 'utf8' });
       assert.equal(prepared.status, 0, prepared.stderr);
     }
     // Remove source to ensure distribution does not depend on the repository.
     rmSync(join(root, 'skills'), { recursive: true });
-    const skill = join(packageRoot, 'dist', 'skills', 'code-factory-manager-cli');
+    const skill = join(packageRoot, 'dist', 'skills', 'code-factory-human-cli');
     assert.deepEqual(readdirSync(skill), ['SKILL.md']);
     rmSync(skill, { recursive: true });
-    const link = join(root, 'code-factory-manager-cli');
+    const link = join(root, 'code-factory-human-cli');
     symlinkSync(join(packageRoot, entrypoint), link);
     const result = spawnSync(process.platform === 'win32' ? process.execPath : link,
       process.platform === 'win32' ? [link, '--help'] : ['--help'], { cwd: tmpdir(), encoding: 'utf8' });

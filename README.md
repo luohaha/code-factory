@@ -44,7 +44,7 @@ Open [http://127.0.0.1:4310](http://127.0.0.1:4310), create a requirement, and s
 
 Unsent conversation text and attachments return when you reopen a requirement or reload the dashboard in the same browser.
 
-For human-directed terminal management, use `npx --package @luoyixin/code-factory code-factory-manager-cli --help`. The CLI and companion [skill](skills/code-factory-manager-cli/SKILL.md) support search, requirement inspection, human replies, lifecycle actions, PR reviews, and timers. See [CLI usage](docs/running-code-factory.md#human-management-cli).
+For human-directed terminal management, use `npx --package @luoyixin/code-factory code-factory-human-cli --help`. The CLI and companion [skill](skills/code-factory-human-cli/SKILL.md) support search, requirement inspection, human replies, lifecycle actions, PR reviews, and timers. See [CLI usage](docs/running-code-factory.md#human-management-cli).
 
 E2B sandbox creation defaults to the `e2b.app` domain when left blank and connects an execution environment without preparing a repository; the Native Agent chooses and clones the task repository when needed. Optional sandbox environment variables supply tokens and build settings to Native Agent commands. You can edit them during a Run; the next RD or Reviewer command uses the latest values, while running commands and background processes need a restart. See the [Native Agent guide](docs/native-agent.md).
 

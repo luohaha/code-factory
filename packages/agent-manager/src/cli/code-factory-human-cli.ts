@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import type { AgentTimer, PullRequest, RequirementMessage, RequirementWithSession, ReviewRequest, SearchResult } from '../core/types.js';
 
-export interface ManagerCliRuntime {
+export interface HumanCliRuntime {
   environment: Readonly<Record<string, string | undefined>>;
   fetch: typeof globalThis.fetch;
   now: () => number;
@@ -39,7 +39,7 @@ const COMMANDS = {
 } as const;
 const STATUSES: readonly string[] = ['todo', 'doing', 'waiting_confirmation', 'done'];
 const RANGES: Readonly<Record<string, number>> = { '7d': 7, '30d': 30, '90d': 90, all: Infinity };
-const HELP = `Usage: code-factory-manager-cli <command> [options]
+const HELP = `Usage: code-factory-human-cli <command> [options]
 
 Human operations for a running Code Factory Manager.
 
@@ -105,7 +105,7 @@ function option(values: Options, name: string): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-async function textOption(values: Options, name: string, readTextFile: ManagerCliRuntime['readTextFile'], mandatory = false): Promise<string | undefined> {
+async function textOption(values: Options, name: string, readTextFile: HumanCliRuntime['readTextFile'], mandatory = false): Promise<string | undefined> {
   const path = values[`${name}-file`];
   if (values[name] !== undefined && path !== undefined) throw new UsageError(`Use either --${name} or --${name}-file`);
   let value = option(values, name);
@@ -135,8 +135,8 @@ function isCommand(value: string): value is keyof typeof COMMANDS {
 }
 
 /** Run without RD Session credentials. Runtime injection keeps tests off live Managers. */
-export async function runManagerCli(args: readonly string[], overrides: Partial<ManagerCliRuntime> = {}): Promise<number> {
-  const runtime: ManagerCliRuntime = {
+export async function runHumanCli(args: readonly string[], overrides: Partial<HumanCliRuntime> = {}): Promise<number> {
+  const runtime: HumanCliRuntime = {
     environment: process.env, fetch: globalThis.fetch, now: Date.now,
     readTextFile: (path) => readFile(path, 'utf8'), requestTimeoutMs: 30_000,
     writeOut: (value) => process.stdout.write(value), writeError: (value) => process.stderr.write(value),
@@ -264,7 +264,7 @@ export async function runManagerCli(args: readonly string[], overrides: Partial<
     runtime.writeOut(`${values.json ? JSON.stringify(result) : formatted ?? JSON.stringify(result, null, 2)}\n`);
     return 0;
   } catch (error) {
-    runtime.writeError(`${error instanceof UsageError ? `${error.message}\nRun code-factory-manager-cli --help for usage.` : error instanceof RequestError ? error.message : 'Unable to process the Manager response.'}\n`);
+    runtime.writeError(`${error instanceof UsageError ? `${error.message}\nRun code-factory-human-cli --help for usage.` : error instanceof RequestError ? error.message : 'Unable to process the Manager response.'}\n`);
     return error instanceof UsageError ? 2 : 1;
   }
 }

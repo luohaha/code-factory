@@ -15,7 +15,7 @@
   "bin": {
     "code-factory-agent-manager": "dist/cli.js",
     "code-factory-cli": "dist/code-factory-cli-main.js",
-    "code-factory-manager-cli": "dist/code-factory-manager-cli-main.js"
+    "code-factory-human-cli": "dist/code-factory-human-cli-main.js"
   },
   "files": [
     "dist",
@@ -44,7 +44,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc -p tsconfig.json && node scripts/sync-manager-skill.mjs && node scripts/prepare-cli.mjs && npm run build:dashboard",
+    "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\" && tsc -p tsconfig.json && node scripts/sync-human-skill.mjs && node scripts/prepare-cli.mjs && npm run build:dashboard",
     "build:dashboard": "npm --prefix ../../apps/web run build && node scripts/sync-dashboard.mjs",
     "check:license": "node ../../scripts/check-license.mjs",
     "check:version": "node ../../scripts/check-version.mjs",

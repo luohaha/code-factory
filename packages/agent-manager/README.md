@@ -1,6 +1,6 @@
 # @luoyixin/code-factory
 
-Code Factory is a local control plane for requirement-driven development with Codex or Claude Code. This package contains the Agent Manager CLI, its HTTP/SSE service, the RD control-plane CLI, and the bundled Web dashboard.
+Code Factory is a local control plane for requirement-driven development with Codex or Claude Code. This package contains the Agent Manager CLI, its HTTP/SSE service, the human operations CLI, the RD control-plane CLI, and the bundled Web dashboard.
 
 ## Run
 
