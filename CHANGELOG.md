@@ -6,6 +6,10 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+### Security
+
+- Fix the E2B dependency chain's glob cancellation and minimatch pattern-amplification advisories with a scoped glob 14.0.3 override. Bundle the verified E2B subtree so clean npm package installations retain the fix, and verify installed dependencies during release smoke checks.
+
 ## [0.2.10] - 2026-11-01
 
 ### Added
