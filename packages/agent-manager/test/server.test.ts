@@ -270,6 +270,7 @@ test('HTTP API reports its version and reads, validates, persists, and applies c
         commitCoAuthorEnabled: boolean;
         cancelledRequirementRetentionDays: number;
         doneRequirementRetentionDays: number;
+        attachmentRetentionDays: number;
       };
       restartRequired: boolean;
     };
@@ -281,6 +282,7 @@ test('HTTP API reports its version and reads, validates, persists, and applies c
     assert.equal(initial.values.commitCoAuthorEnabled, true);
     assert.equal(initial.values.cancelledRequirementRetentionDays, 7);
     assert.equal(initial.values.doneRequirementRetentionDays, 365);
+    assert.equal(initial.values.attachmentRetentionDays, 7);
     assert.equal(initial.restartRequired, false);
 
     const updateResponse = await fetch(`${baseUrl}/api/configuration`, {
@@ -291,6 +293,7 @@ test('HTTP API reports its version and reads, validates, persists, and applies c
         commitCoAuthorEnabled: false,
         cancelledRequirementRetentionDays: 14,
         doneRequirementRetentionDays: 730,
+        attachmentRetentionDays: 45,
       }),
     });
     assert.equal(updateResponse.status, 200);
@@ -303,6 +306,7 @@ test('HTTP API reports its version and reads, validates, persists, and applies c
         commitCoAuthorEnabled: boolean;
         cancelledRequirementRetentionDays: number;
         doneRequirementRetentionDays: number;
+        attachmentRetentionDays: number;
         logLevel: string;
       };
       restartRequired: boolean;
@@ -315,6 +319,7 @@ test('HTTP API reports its version and reads, validates, persists, and applies c
     assert.equal(updated.values.commitCoAuthorEnabled, false);
     assert.equal(updated.values.cancelledRequirementRetentionDays, 14);
     assert.equal(updated.values.doneRequirementRetentionDays, 730);
+    assert.equal(updated.values.attachmentRetentionDays, 45);
     assert.equal(updated.values.logLevel, 'warn');
     assert.equal(updated.restartRequired, false);
     assert.deepEqual(updated.restartRequiredFields, []);

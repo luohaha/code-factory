@@ -138,7 +138,7 @@ const MAX_CONSECUTIVE_RD_FAILURES = 2;
 const HANDOFF_DECISION_PATTERN = /\b(decid(?:e|ed|ing)|decis(?:ion|ions)|agree(?:d|ment)?|approv(?:e|ed|al)|confirm(?:ed|ation)?|must|require(?:d|ment)?|scope|worktree|branch|pull request|pr #|commit|follow.up)\b|决定|确认|同意|必须|工作树|分支|拉取请求|待办/i;
 
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
-const REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS = DAY_MILLISECONDS;
+const RETENTION_SWEEP_INTERVAL_MS = DAY_MILLISECONDS;
 const AGENT_TRACE_TRUNCATION_SUFFIX = '\n… trace output truncated';
 
 type JevWakeSkipReason =
@@ -226,7 +226,7 @@ export class AgentManager extends EventEmitter {
   #configuration: AgentManagerConfiguration;
   readonly #initialPullRequestReconcileIntervalSeconds: number;
   #pullRequestReconcileIntervalSeconds: number | null = null;
-  #requirementRetentionTimer: NodeJS.Timeout | null = null;
+  #retentionTimer: NodeJS.Timeout | null = null;
   #apiBaseUrl = 'http://127.0.0.1:4310/api';
   #closed = false;
   #closePromise: Promise<void> | null = null;
@@ -385,8 +385,9 @@ export class AgentManager extends EventEmitter {
       this.logger.setLevel?.(next.logLevel);
     }
     if (appliedFields.includes('cancelledRequirementRetentionDays')
-      || appliedFields.includes('doneRequirementRetentionDays')) {
-      this.runRequirementRetentionSweep();
+      || appliedFields.includes('doneRequirementRetentionDays')
+      || appliedFields.includes('attachmentRetentionDays')) {
+      this.runRetentionSweep();
     }
     const snapshot = this.getConfiguration();
     this.publish({
@@ -429,7 +430,7 @@ export class AgentManager extends EventEmitter {
   startConfiguredServices(): void {
     this.startAgentTrigger(this.#timerAgentTrigger);
     this.configurePullRequestReconciler(this.#initialPullRequestReconcileIntervalSeconds);
-    this.startRequirementRetentionSweep();
+    this.startRetentionSweep();
     this.#modelCatalog.start();
   }
 
@@ -444,8 +445,8 @@ export class AgentManager extends EventEmitter {
     for (const controller of this.#pendingJevDecisions) controller.abort();
     this.#modelCatalog.stop();
     this.#pullRequestReconciler.stop();
-    if (this.#requirementRetentionTimer) clearInterval(this.#requirementRetentionTimer);
-    this.#requirementRetentionTimer = null;
+    if (this.#retentionTimer) clearInterval(this.#retentionTimer);
+    this.#retentionTimer = null;
     for (const trigger of this.#agentTriggers.values()) {
       try {
         trigger.stop();
@@ -514,22 +515,23 @@ export class AgentManager extends EventEmitter {
     if (intervalSeconds > 0) this.startPullRequestReconciler(intervalSeconds * 1_000);
   }
 
-  private startRequirementRetentionSweep(): void {
-    if (this.#requirementRetentionTimer) return;
-    this.runRequirementRetentionSweep();
-    this.#requirementRetentionTimer = setInterval(
-      () => this.runRequirementRetentionSweep(),
-      REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS,
+  private startRetentionSweep(): void {
+    if (this.#retentionTimer) return;
+    this.runRetentionSweep();
+    this.#retentionTimer = setInterval(
+      () => this.runRetentionSweep(),
+      RETENTION_SWEEP_INTERVAL_MS,
     );
-    this.#requirementRetentionTimer.unref();
-    this.logger.info('Requirement retention sweep started', {
-      intervalMs: REQUIREMENT_RETENTION_SWEEP_INTERVAL_MS,
+    this.#retentionTimer.unref();
+    this.logger.info('Retention sweep started', {
+      intervalMs: RETENTION_SWEEP_INTERVAL_MS,
       cancelledRetentionDays: this.#configuration.cancelledRequirementRetentionDays,
       doneRetentionDays: this.#configuration.doneRequirementRetentionDays,
+      attachmentRetentionDays: this.#configuration.attachmentRetentionDays,
     });
   }
 
-  private runRequirementRetentionSweep(): void {
+  private runRetentionSweep(): void {
     if (this.#closed) return;
     try {
       const now = Date.now();
@@ -543,6 +545,15 @@ export class AgentManager extends EventEmitter {
         now: new Date(now).toISOString(),
       });
 
+      const createdBefore = new Date(now - this.#configuration.attachmentRetentionDays * DAY_MILLISECONDS).toISOString();
+      const expiredAttachments = this.#store.purgeExpiredAttachments({
+        createdBefore,
+        now: new Date(now).toISOString(),
+      });
+      if (expiredAttachments.attachmentCount > 0) {
+        this.publish({ type: 'attachments.purged', payload: { ...expiredAttachments, createdBefore } });
+        this.logger.info('Expired attachments purged', { attachmentCount: expiredAttachments.attachmentCount });
+      }
       const pendingAttachmentPaths = this.#store.listPendingAttachmentDeletions();
       let attachmentCleanupFailureCount = 0;
       for (const path of pendingAttachmentPaths) {
@@ -584,12 +595,12 @@ export class AgentManager extends EventEmitter {
         });
       }
       if (attachmentCleanupFailureCount > 0) {
-        this.logger.warn('Some expired requirement attachments could not be deleted', {
+        this.logger.warn('Some expired attachments could not be deleted', {
           attachmentCleanupFailureCount,
         });
       }
     } catch (error) {
-      this.logger.error('Requirement retention sweep failed', { error });
+      this.logger.error('Retention sweep failed', { error });
     }
   }
 
@@ -597,7 +608,7 @@ export class AgentManager extends EventEmitter {
     const retentionDays = status === 'cancelled'
       ? this.#configuration.cancelledRequirementRetentionDays
       : this.#configuration.doneRequirementRetentionDays;
-    if (retentionDays === 0) this.runRequirementRetentionSweep();
+    if (retentionDays === 0) this.runRetentionSweep();
   }
 
   async reconcilePullRequests(): Promise<void> {

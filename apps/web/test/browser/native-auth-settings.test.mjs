@@ -49,7 +49,7 @@ async function fixture(t, locale) {
       host: '127.0.0.1', port: 4310, allowedOrigin: null, openDashboard: false,
       databasePath: null, commitCoAuthorEnabled: true, jevApiKey: null,
       pullRequestReconcileIntervalSeconds: 30, cancelledRequirementRetentionDays: 7,
-      doneRequirementRetentionDays: 365, logLevel: 'info', logFilePath: null,
+      doneRequirementRetentionDays: 365, attachmentRetentionDays: 7, logLevel: 'info', logFilePath: null,
       logMaxSize: '20m', logMaxFiles: '14d',
     },
     jevApiKeyConfigured: false, restartRequired: false, restartRequiredFields: [],
@@ -103,6 +103,18 @@ async function fixture(t, locale) {
 }
 
 for (const locale of ['en', 'zh-CN']) {
+  void test(`attachment retention defaults to 7 days and saves in settings (${locale})`, async (t) => {
+    const f = await fixture(t, locale);
+    const input = f.dialog.getByRole('spinbutton', { name: locale === 'zh-CN' ? '附件保留周期（天）' : 'Attachment retention (days)', exact: true });
+    assert.equal(await input.inputValue(), '7');
+    await input.fill('45');
+    const request = f.page.waitForRequest((request) => request.method() === 'PATCH'
+      && new URL(request.url()).pathname === '/api/configuration');
+    await f.managerSave();
+    assert.equal((await request).postDataJSON().attachmentRetentionDays, 45);
+    await f.dialog.waitFor({ state: 'hidden' });
+  });
+
   void test(`Native API profile saves stay inside the configuration dialog (${locale})`, async (t) => {
     const f = await fixture(t, locale);
     const { page, dialog } = f;

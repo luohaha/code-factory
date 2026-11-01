@@ -146,6 +146,7 @@ export interface AgentManagerConfiguration {
   pullRequestReconcileIntervalSeconds: number;
   cancelledRequirementRetentionDays: number;
   doneRequirementRetentionDays: number;
+  attachmentRetentionDays: number;
   logLevel: 'debug' | 'info' | 'warn' | 'error' | 'silent';
   logFilePath: string | null;
   logMaxSize: string | number;

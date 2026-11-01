@@ -43,7 +43,7 @@ export function detailFixture() {
       host: '127.0.0.1', port: 4310, allowedOrigin: null, openDashboard: false,
       databasePath: null, commitCoAuthorEnabled: true, jevApiKey: null,
       pullRequestReconcileIntervalSeconds: 30, cancelledRequirementRetentionDays: 7,
-      doneRequirementRetentionDays: 365, logLevel: 'info', logFilePath: null,
+      doneRequirementRetentionDays: 365, attachmentRetentionDays: 7, logLevel: 'info', logFilePath: null,
       logMaxSize: '20m', logMaxFiles: '14d',
     }, jevApiKeyConfigured: false, restartRequired: false, restartRequiredFields: [],
   };

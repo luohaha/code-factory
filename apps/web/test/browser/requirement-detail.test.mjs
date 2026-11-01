@@ -70,6 +70,37 @@ async function fixture(t, locale = 'en', colorScheme = 'light', mobile = false) 
 }
 
 for (const [locale, theme, mobile] of [['en', 'light', false], ['zh-CN', 'dark', true]]) {
+  void test(`attachment expiry hides links from an older in-flight message snapshot (${locale})`, async (t) => {
+    const { page, data, open, emit } = await fixture(t, locale, theme, mobile);
+    const attachment = (id, createdAt) => ({ id, fileName: `${id}.txt`, kind: 'file', mediaType: 'text/plain', byteSize: 4,
+      requirementId: data.requirement.id, messageId: 'msg_expiry', localPath: `/host/${id}`, createdAt });
+    const message = { id: 'msg_expiry', requirementId: data.requirement.id, sequence: 2, author: 'human', body: 'Keep the message text',
+      attachments: [attachment('old', '2026-10-01T12:00:00.000Z'), attachment('recent', '2026-10-30T12:00:00.000Z')],
+      createdAt: '2026-10-31T12:00:00.000Z' };
+    let release;
+    const pendingResponse = new Promise((resolve) => { release = resolve; });
+    await page.route(`**/api/requirements/${data.requirement.id}/messages*`, async (route) => {
+      await pendingResponse;
+      await route.fulfill({ json: { items: [message], hasMore: false } });
+    });
+    const requested = page.waitForRequest((request) => new URL(request.url()).pathname.endsWith('/messages'));
+    await open(false);
+    await requested;
+    const purge = (cutoff) => emit({ ...data.managerEvent('attachments.purged', {
+      attachmentCount: 1, requirementIds: [data.requirement.id], createdBefore: cutoff,
+    }), requirementId: null });
+    await purge('2026-10-01T12:00:00.000Z');
+    release();
+    await page.getByText(message.body, { exact: true }).waitFor();
+    const download = locale === 'zh-CN' ? '下载' : 'Download';
+    assert.equal(await page.getByRole('link', { name: `${download} old.txt`, exact: true }).count(), 0);
+    const recentLink = page.getByRole('link', { name: `${download} recent.txt`, exact: true });
+    await recentLink.waitFor();
+    await purge('2026-10-30T12:00:00.000Z');
+    await recentLink.waitFor({ state: 'hidden' });
+    assert.equal(await page.getByText(message.body, { exact: true }).isVisible(), true);
+  });
+
   void test(`RD artifacts provide working file and image download links (${locale})`, async (t) => {
     const { page, data, open } = await fixture(t, locale, theme, mobile);
     const attachment = (id, fileName, kind, mediaType) => ({ id, fileName, kind, mediaType, byteSize: 6,
