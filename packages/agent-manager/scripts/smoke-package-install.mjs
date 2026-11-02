@@ -57,6 +57,11 @@ try {
   assert.ok(existsSync(tarball), `Package tarball is missing: ${tarball}`);
   run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', installRoot, tarball], temporaryRoot);
 
+  const humanCli = join(installRoot, 'node_modules', '.bin', 'code-factory-human-cli');
+  run(humanCli, ['--help'], temporaryRoot);
+  assert.ok(existsSync(join(installRoot, 'node_modules', '@luoyixin', 'code-factory',
+    'dist', 'skills', 'code-factory-human-cli', 'SKILL.md')), 'Human CLI skill is missing from the package');
+
   // Dependency overrides only apply at the npm project root. Verify the actual
   // published tree, so a clean install cannot silently restore vulnerable E2B dependencies.
   run(process.execPath, [join(packageRoot, 'scripts', 'check-e2b-dependencies.mjs'),
@@ -82,6 +87,14 @@ try {
   assert.equal(dashboard.status, 200, `GET / returned ${dashboard.status}: ${html}`);
   assert.match(dashboard.headers.get('content-type') ?? '', /^text\/html/);
   assert.match(html, /<html\b/i);
+  for (const args of [['requirement', 'list', '--range', 'all'], ['search', '--query', 'empty workspace']]) {
+    const queried = spawnSync('npx', ['--offline', '--yes', '--package', '@luoyixin/code-factory',
+      'code-factory-human-cli', ...args, '--api-url', url, '--json'], {
+      cwd: installRoot, encoding: 'utf8', timeout: 10_000,
+    });
+    assert.equal(queried.status, 0, queried.stderr);
+    assert.deepEqual(JSON.parse(queried.stdout), { items: [] });
+  }
   console.log(`Installed package HTTP smoke passed: ${version}, GET /api/health and GET /`);
 } finally {
   if (manager && manager.exitCode === null && manager.signalCode === null) {

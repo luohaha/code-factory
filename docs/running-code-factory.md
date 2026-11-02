@@ -23,6 +23,49 @@ Code Factory allows only one Agent Manager process for the same canonical worksp
 
 On first start, Agent Manager creates a workspace-scoped configuration file at `~/.code-factory/workspaces/<workspace-hash>/config.json`. The dashboard settings dialog can edit it. PR reconciliation intervals, terminal Requirement and attachment retention periods, Jev API key, and log levels are applied immediately; network, storage, browser, and log-rotation changes are saved for the next restart.
 
+## Human management CLI
+
+`code-factory-human-cli` operates a running Manager using the same human
+operations as the dashboard. It is separate from the service launcher
+`code-factory-agent-manager` and the RD automation command `code-factory-cli`.
+
+~~~bash
+npx --package @luoyixin/code-factory code-factory-human-cli --help
+npx --package @luoyixin/code-factory code-factory-human-cli search --query 'deployment timeout' --limit 20
+npx --package @luoyixin/code-factory code-factory-human-cli requirement list --range 7d --status todo,waiting_confirmation
+npx --package @luoyixin/code-factory code-factory-human-cli requirement show --id req_...
+~~~
+
+The default URL is `http://127.0.0.1:4310`; `CODE_FACTORY_API_URL` selects another
+Manager and `--api-url URL` overrides it. Append `--json` for script output.
+Lists support `7d`, `30d`, `90d`, and `all`, measured from creation time like the
+dashboard, and one or more visible statuses: `todo`, `doing`,
+`waiting_confirmation`, and `done`. Cancelled Requirements are excluded, matching
+the dashboard. The default list selects 7 days and all visible statuses.
+All time means retained data;
+it cannot restore records already removed by retention.
+
+The CLI ships in the `@luoyixin/code-factory` npm package. The companion
+[`skills/code-factory-human-cli/SKILL.md`](../skills/code-factory-human-cli/SKILL.md)
+contains npx usage instructions. Copy only that file into your agent's
+`skills/code-factory-human-cli/` directory to install the skill. It requires no
+bundled scripts. The npm package also includes the skill under
+`dist/skills/code-factory-human-cli/`. Use a published package version that
+provides the human CLI.
+
+The skill documents replies as human, direct parent/child inspection, TODO
+deletion/start, completion confirmation, PR discovery and review, and timer
+creation/list/cancellation. API state guards remain authoritative. Replies can
+reopen done work, and review/start acceptance does not imply background completion.
+Inspect current state after a timed-out write before retrying.
+
+`search --query TEXT` (or `-q TEXT`) uses the dashboard's search across
+Requirements, conversation messages, and registered PRs. Requirement ID prefixes
+and registered GitHub PR URLs support direct lookup. Results expose their kind,
+Requirement ID, source ID, title, and excerpt; `--json` includes ranking metadata.
+Search excludes cancelled Requirements. Queries must contain 1–500 characters;
+`--limit` accepts 1–200 results and defaults to 50.
+
 ## Network and port
 
 For access from a laptop or phone, follow the [Tailscale remote access guide](tailscale.md). Tailscale Serve forwards a private HTTPS URL to the loopback listener, so the Manager can keep its default `127.0.0.1` binding.

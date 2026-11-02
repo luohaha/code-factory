@@ -96,6 +96,15 @@ Every local headless RD and Reviewer invocation skips interactive approval and C
 
 ### Requirement
 
+Human-directed terminal management uses `code-factory-human-cli` from the
+Code Factory npm package. The companion `skills/code-factory-human-cli/`
+directory contains only `SKILL.md` with npx usage instructions.
+The CLI calls the dashboard's human APIs, including search across Requirements,
+messages, and PRs, without RD Session credentials;
+replies are authored by human, reviews are human-requested, and completion
+remains a human decision. It does not replace the RD control-plane CLI.
+Requirement lists exclude cancelled records, matching the dashboard.
+
 - `status`: `todo | doing | waiting_confirmation | done | cancelled`;
 - `provider`: `codex | claude-code | native-agent`;
 - optional `model` and `reasoningEffort` select the model configuration for every RD Run in the Session;
