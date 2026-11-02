@@ -6,6 +6,12 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-11-02
+
+### Added
+
+- Ship `code-factory-human-cli` and a companion skill for human-directed terminal management, including dashboard search, Requirement inspection and replies, lifecycle actions, PR reviews, and timers. Include the skill instructions in the published npm package.
+
 ### Security
 
 - Fix the E2B dependency chain's glob cancellation and minimatch pattern-amplification advisories with a scoped glob 14.0.3 override. Bundle the verified E2B subtree so clean npm package installations retain the fix, and verify installed dependencies during release smoke checks.
