@@ -50,8 +50,25 @@ npx --yes --package @luoyixin/code-factory code-factory-human-cli requirement sh
 npx --yes --package @luoyixin/code-factory code-factory-human-cli requirement related --id req_...
 ```
 
-`show` includes title, description (body), Session state, and the entire visible
-conversation in sequence order, including authors and attachment metadata.
+`show` includes title, description (body), Session state, and the visible
+conversation in ascending sequence order, including authors and attachment
+metadata. Without paging options it returns the complete history. To read pages:
+
+```bash
+npx --yes --package @luoyixin/code-factory code-factory-human-cli requirement show --id req_... --limit 50 --json
+npx --yes --package @luoyixin/code-factory code-factory-human-cli requirement show --id req_... --limit 50 --before 123 --json
+npx --yes --package @luoyixin/code-factory code-factory-human-cli requirement show --id req_... --limit 50 --after 123 --json
+```
+
+`--limit` alone returns the latest messages. `--before` reads messages with lower
+sequence numbers; `--after` reads higher ones, with `--after 0` starting at the
+beginning. The cursors are exclusive and cannot be combined. Page size is 1–200;
+cursor-only requests default to 100 messages. `before` must be a positive safe
+integer and `after` a nonnegative safe integer. JSON pages include `hasMore` for
+the requested direction. Continue with the first message's sequence as `before`
+or the last message's sequence as `after` while `hasMore` is true. Text output
+also includes `hasMore` and the next cursor when available.
+
 `related` shows the direct parent and visible children.
 
 Perform mutations when the user's instruction authorizes them. Inspect relevant

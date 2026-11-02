@@ -53,6 +53,22 @@ bundled scripts. The npm package also includes the skill under
 `dist/skills/code-factory-human-cli/`. Use a published package version that
 provides the human CLI.
 
+`requirement show --id ID` returns the complete conversation by default. Add
+`--limit 1-200` to read the latest messages, `--before SEQUENCE` for older messages,
+or `--after SEQUENCE` for newer ones. Both bounds exclude the indicated message,
+and `--before` cannot be combined with `--after`. Without `--limit`, either
+cursor uses a page size of 100. `--after 0` reads from
+the beginning. `before` must be a positive safe integer and `after` a nonnegative
+safe integer. Each page is ordered by ascending message sequence. Paged JSON
+includes `hasMore`, and text output includes the next cursor when available.
+Use the first message's sequence for the next older page, or the last message's
+sequence for the next newer page.
+
+~~~bash
+npx --package @luoyixin/code-factory code-factory-human-cli requirement show --id req_... --limit 50 --json
+npx --package @luoyixin/code-factory code-factory-human-cli requirement show --id req_... --limit 50 --before 123 --json
+~~~
+
 The skill documents replies as human, direct parent/child inspection, TODO
 deletion/start, completion confirmation, PR discovery and review, and timer
 creation/list/cancellation. API state guards remain authoritative. Replies can
