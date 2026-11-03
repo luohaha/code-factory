@@ -15,7 +15,7 @@
 
 https://github.com/user-attachments/assets/80896c78-c804-4c3d-98df-75ccc68031f3
 
-Code Factory brings requirements, coding agents, and GitHub pull requests into one local dashboard. Organize work as a requirement tree and collaborate with **Codex**, **Claude Code**, or **Native Agent** through conversation.
+Code Factory brings requirements, coding agents, and GitHub pull requests into one control plane, accessible through the **Web dashboard** or **human CLI** (`code-factory-human-cli`). Organize work as a requirement tree and collaborate with **Codex**, **Claude Code**, or **Native Agent** through conversation.
 
 Each requirement has its own persistent agent context. Jev stops automatic recovery after two consecutive failed or timed-out RD Runs; a successful Run starts a fresh failure streak. Agents can split work into child requirements and work in parallel, while humans steer the work, request reviews, and confirm completion.
 
@@ -28,8 +28,12 @@ Requirement details include collapsible tool calls with arguments, results, and 
 ## How It Works
 
 <p align="center">
-  <img src="docs/assets/brand/code-factory-overview.png" alt="Code Factory connects a requirement tree, coding agents, humans, and GitHub pull requests." />
+  <img src="docs/assets/brand/code-factory-overview.png" alt="Humans and agents access Agent Manager through the Web dashboard or human CLI to work with persistent RD sessions, local or E2B workspaces, GitHub pull requests, and on-demand Reviewers." />
 </p>
+
+[Diagram source (Mermaid)](docs/assets/brand/code-factory-overview.mmd).
+
+Local workspaces support Codex, Claude Code, and Native Agent; E2B workspaces support Native Agent. Each requirement keeps one persistent RD session, and its on-demand Reviewer uses the same selected workspace.
 
 ## Quick Start
 

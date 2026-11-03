@@ -1,0 +1,52 @@
+%% Canonical Mermaid representation of the overview's relationships.
+%% The README uses a styled PNG illustration of this graph, edited with imagegen.
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"monospace","fontSize":"18px","primaryColor":"#ffffff","primaryTextColor":"#111827","primaryBorderColor":"#5b6478","lineColor":"#1681ff","edgeLabelBackground":"#ffffff","clusterBkg":"#fff8e8","clusterBorder":"#f4a000"},"flowchart":{"curve":"stepAfter","htmlLabels":true},"themeCSS":".node rect { rx: 9px; ry: 9px; stroke-width: 2px; } .cluster rect { rx: 10px; ry: 10px; stroke-dasharray: 9 6; }"}}%%
+flowchart LR
+  H["Human/Agent<br/>Web dashboard / code-factory-human-cli"]
+  M["Agent Manager<br/>Requirement conversation<br/>Run orchestration<br/>SQLite persistence"]
+
+  subgraph REQS["Related Requirements · one persistent RD each"]
+    direction TB
+    A["Requirement A<br/>Persistent RD A"]
+    B["Requirement B<br/>Persistent RD B"]
+    A -->|Create / manage child| B
+    A <-.->|Related-Agent messages| B
+  end
+
+  subgraph WS[Selected workspace]
+    direction TB
+    LOCAL["Local workspace<br/>Default / named · All providers"]
+    E2B["E2B workspace<br/>Native Agent only"]
+  end
+
+  H -->|Requirements / messages| M
+  M -->|Status / results| H
+  M -->|Start / resume + deliver messages| A
+  M -->|Start / resume + deliver messages| B
+  A -->|Select workspace| WS
+  B -->|Select workspace| WS
+  A -->|Create / update| PR[GitHub PR]
+  B -->|Create / update| PR
+  M -->|Launch reviewer| RV["On-demand Reviewer<br/>Short-lived · no session<br/>Same selected workspace"]
+  RV -.->|Read PR| PR
+  RV -.->|Post inline comments| PR
+  RV -.->|Review summary| M
+  T[Timer] -.->|Schedule triggers| M
+  G[GitHub events] -.->|Repository events| M
+
+  subgraph FUTURE["FUTURE TRIGGERS · planned"]
+    direction LR
+    SLACK[Slack]
+    JIRA[Jira]
+  end
+  FUTURE -.->|Planned| M
+
+  classDef manager fill:#e8f4ff,stroke:#1681ff,stroke-width:2px
+  classDef planned fill:#f5f5f5,color:#64748b,stroke:#9ca3af
+  class M manager
+  class SLACK,JIRA planned
+  style WS fill:#f4faff,stroke:#b4c5df,stroke-dasharray:0
+  style FUTURE fill:#fafafa,stroke:#9ca3af
+  linkStyle 1,11,12,13,14,15 stroke:#00acb0
+  linkStyle 6,7,8,9 stroke:#5b6478
+  linkStyle 16 stroke:#9ca3af
