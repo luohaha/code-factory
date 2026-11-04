@@ -108,6 +108,7 @@ test('shows full conversation and direct visible relationships', async () => {
   });
   assert.equal(await h.run(['requirement', 'show', '--id', 'source', '--json']), 0);
   const shown = JSON.parse(h.output.join(''));
+  assert.equal(Object.hasOwn(shown, 'hasMore'), false);
   assert.equal(shown.requirement.description, 'Full body\nsecond line');
   assert.deepEqual(shown.messages.map((m: { sequence: number }) => m.sequence), [1, 201]);
   assert.equal(await h.run(['requirement', 'show', '--id', 'source']), 0);
@@ -116,6 +117,44 @@ test('shows full conversation and direct visible relationships', async () => {
   const related = JSON.parse(h.output.join(''));
   assert.equal(related.parent.id, 'parent');
   assert.deepEqual(related.children.map((r: { id: string }) => r.id), ['child']);
+});
+
+test('conversation pages expose metadata and usable cursors in both output formats', async () => {
+  let requested: URL | undefined;
+  let hasMore: unknown = true;
+  let messages = [3, 2].map((sequence) => ({ sequence, author: 'human', body: `Message ${sequence}`, createdAt: '2026-11-02' }));
+  const h = harness(async (input) => {
+    const url = new URL(String(input));
+    if (!url.pathname.endsWith('/messages')) return Response.json({ id: 'source', title: 'Title', description: 'Body', status: 'todo' });
+    requested = url;
+    return Response.json({ items: messages, ...(hasMore === undefined ? {} : { hasMore }) });
+  });
+  assert.equal(await h.run(['requirement', 'show', '--id', 'source', '--limit', '2', '--json']), 0);
+  assert.equal(requested?.searchParams.get('limit'), '2');
+  const shown = JSON.parse(h.output.join(''));
+  assert.deepEqual(shown.messages.map((message: { sequence: number }) => message.sequence), [2, 3]);
+  assert.equal(shown.hasMore, true);
+  assert.equal(await h.run(['requirement', 'show', '--id', 'source', '--before', '4', '--json']), 0);
+  assert.equal(requested?.searchParams.get('limit'), '100');
+  assert.equal(requested?.searchParams.get('before'), '4');
+  assert.equal(await h.run(['requirement', 'show', '--id', 'source', '--after', '0']), 0);
+  assert.equal(requested?.searchParams.get('after'), '0');
+  assert.equal(requested?.searchParams.get('limit'), '100');
+  assert.match(h.output.join(''), /hasMore: true\nNext page: --after 3/);
+  assert.equal(await h.run(['requirement', 'show', '--id', 'source', '--limit', '200']), 0);
+  assert.match(h.output.join(''), /hasMore: true\nNext page: --before 2/);
+  hasMore = false;
+  messages = [];
+  assert.equal(await h.run(['requirement', 'show', '--id', 'source', '--limit', '1', '--json']), 0);
+  const empty = JSON.parse(h.output.join(''));
+  assert.deepEqual(empty.messages, []);
+  assert.equal(empty.hasMore, false);
+  for (const invalid of [undefined, 'false']) {
+    hasMore = invalid;
+    assert.equal(await h.run(['requirement', 'show', '--id', 'source', '--limit', '1']), 1);
+    assert.equal(h.output.join(''), '');
+    assert.match(h.errors.join(''), /invalid conversation page/);
+  }
 });
 
 test('human mutations and PR/timer queries use the expected API routes and payloads', async () => {
@@ -158,6 +197,18 @@ test('validates arguments before requests, supports text files, and never retrie
     ['search', '-q', 'a', '--limit', '0'], ['search', '-q', 'a', '--limit', '201'],
     ['search', '-q', 'a', '--limit', '1.5'], ['search', '-q', 'a', '--limit', 'invalid'],
     ['requirement', 'show'], ['requirement', 'start', '--unknown'],
+    ['requirement', 'show', '--id', 'req_a', '--limit', '0'],
+    ['requirement', 'show', '--id', 'req_a', '--limit', '201'],
+    ['requirement', 'show', '--id', 'req_a', '--limit', '1.5'],
+    ['requirement', 'show', '--id', 'req_a', '--limit', 'invalid'],
+    ['requirement', 'show', '--id', 'req_a', '--before', '0'],
+    ['requirement', 'show', '--id', 'req_a', '--before', '-1'],
+    ['requirement', 'show', '--id', 'req_a', '--before', '9007199254740992'],
+    ['requirement', 'show', '--id', 'req_a', '--before', '1.5'],
+    ['requirement', 'show', '--id', 'req_a', '--after', '-1'],
+    ['requirement', 'show', '--id', 'req_a', '--after', '9007199254740992'],
+    ['requirement', 'show', '--id', 'req_a', '--after', 'invalid'],
+    ['requirement', 'show', '--id', 'req_a', '--before', '5', '--after', '0'],
     ['requirement', 'reply', '--id', 'req_a', '--message', ''],
     ['requirement', 'reply', '--id', 'req_a', '--message', 'a', '--message-file', 'a.txt'],
     ['pr', 'review', '--id', 'pr_a', '--provider', 'invalid'],
@@ -208,6 +259,64 @@ test('validates arguments before requests, supports text files, and never retrie
     assert.equal(calls, 1);
     if (response === 'timeout') assert.equal(timedOut, true);
     assert.doesNotMatch(h.errors.join(''), /secret raw/);
+  }
+});
+
+test('HTTP conversation paging traverses complete history in either direction without gaps or duplicates', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, logger: createLogger({ level: 'silent' }) });
+  const requirement = manager.createRequirement({ title: 'Paged history', description: 'Read a long conversation', provider: 'codex' });
+  const history = Array.from({ length: 205 }, (_, index) => store.appendMessage({
+    id: `msg_page_${index}`, requirementId: requirement.id, sessionId: requirement.session.id,
+    author: 'human', body: `Message ${index + 1}`, deliverToRd: false, now: '2026-11-02T00:00:00.000Z',
+  }));
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const api = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const h = harness(fetch);
+  const show = async (flags: string[]) => {
+    assert.equal(await h.run(['requirement', 'show', '--id', requirement.id, ...flags, '--api-url', api, '--json']), 0, h.errors.join(''));
+    return JSON.parse(h.output.join('')) as { messages: Array<{ id: string; sequence: number }>; hasMore?: boolean };
+  };
+  try {
+    const complete = await show([]);
+    assert.deepEqual(complete.messages.map((message) => message.id), history.map((message) => message.id));
+    assert.equal(Object.hasOwn(complete, 'hasMore'), false);
+    const latest = await show(['--limit', '200']);
+    assert.equal(latest.messages.length, 200);
+    assert.equal(latest.messages[0]?.sequence, 6);
+    assert.equal(latest.hasMore, true);
+    const first = await show(['--after', '0']);
+    assert.equal(first.messages.length, 100);
+    assert.equal(first.messages[0]?.sequence, 1);
+    assert.equal(first.hasMore, true);
+    const older = await show(['--before', '205']);
+    assert.equal(older.messages.length, 100);
+    assert.equal(older.messages.at(-1)?.sequence, 204);
+    assert.equal(older.hasMore, true);
+    const empty = await show(['--after', '205', '--limit', '2']);
+    assert.deepEqual(empty.messages, []);
+    assert.equal(empty.hasMore, false);
+    for (const direction of ['before', 'after'] as const) {
+      let cursor: number | undefined = direction === 'after' ? 0 : undefined;
+      let hasMore = true;
+      const gathered: string[] = [];
+      for (let round = 0; hasMore && round < 10; round++) {
+        const page = await show(['--limit', '64', ...(cursor === undefined ? [] : [`--${direction}`, String(cursor)])]);
+        assert.equal(typeof page.hasMore, 'boolean');
+        assert.ok(page.messages.length > 0);
+        const ids = page.messages.map((message) => message.id);
+        if (direction === 'before') gathered.unshift(...ids);
+        else gathered.push(...ids);
+        hasMore = page.hasMore === true;
+        cursor = direction === 'before' ? page.messages[0]!.sequence : page.messages.at(-1)!.sequence;
+      }
+      assert.equal(hasMore, false);
+      assert.deepEqual(gathered, history.map((message) => message.id));
+    }
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
   }
 });
 

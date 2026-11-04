@@ -24,7 +24,7 @@ const stringOption = { type: 'string' } as const;
 const COMMANDS = {
   search: { options: { query: { type: 'string', short: 'q' }, limit: stringOption }, usage: '--query TEXT [--limit 1-200] (requirements, conversations, and PRs)' },
   'requirement list': { options: { range: stringOption, status: stringOption }, usage: '[--range 7d|30d|90d|all] [--status STATUS[,STATUS...]]' },
-  'requirement show': { options: { id: stringOption }, usage: '--id ID (title, body, session, and complete conversation)' },
+  'requirement show': { options: { id: stringOption, limit: stringOption, before: stringOption, after: stringOption }, usage: '--id ID [--limit 1-200] [--before SEQUENCE | --after SEQUENCE]' },
   'requirement reply': { options: { id: stringOption, message: stringOption, 'message-file': stringOption }, usage: '--id ID (--message TEXT | --message-file PATH)' },
   'requirement related': { options: { id: stringOption }, usage: '--id ID (direct parent and children)' },
   'requirement delete': { options: { id: stringOption }, usage: '--id ID (cancel a TODO Requirement)' },
@@ -60,6 +60,11 @@ Review reasoning levels: low, medium, high, xhigh, max. Native Requirements need
 a native-agent Reviewer; headless Requirements accept codex or claude-code.
 Search accepts keywords, Requirement ID prefixes, and registered PR URLs.
 Queries must be 1-500 characters; the default result limit is 50.
+Conversation paging: --limit returns the latest messages; --before reads older
+messages and --after reads newer ones. Cursor-only requests default to 100 items.
+Before must be a positive sequence; after may be zero. Paged output includes
+hasMore for the requested direction. Without paging options, show returns the
+complete conversation.
 
 Replies are authored by human and can start work or reopen a done Requirement.
 Mutations require the user's instruction; RD automation uses code-factory-cli.
@@ -103,6 +108,24 @@ function summary(requirement: RequirementWithSession) {
 function option(values: Options, name: string): string | undefined {
   const value = values[name];
   return typeof value === 'string' ? value : undefined;
+}
+
+function conversationParameters(values: Options): URLSearchParams | null {
+  if (values.limit === undefined && values.before === undefined && values.after === undefined) return null;
+  if (values.before !== undefined && values.after !== undefined) throw new UsageError('--before and --after cannot be combined');
+  const limit = values.limit === undefined ? 100 : Number(required(values.limit, '--limit'));
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new UsageError('--limit must be an integer from 1 to 200');
+  const parameters = new URLSearchParams({ limit: String(limit) });
+  for (const name of ['before', 'after'] as const) {
+    if (values[name] === undefined) continue;
+    const sequence = Number(required(values[name], `--${name}`));
+    const minimum = name === 'before' ? 1 : 0;
+    if (!Number.isSafeInteger(sequence) || sequence < minimum) {
+      throw new UsageError(`--${name} must be a ${name === 'before' ? 'positive' : 'nonnegative'} safe integer sequence`);
+    }
+    parameters.set(name, String(sequence));
+  }
+  return parameters;
 }
 
 async function textOption(values: Options, name: string, readTextFile: HumanCliRuntime['readTextFile'], mandatory = false): Promise<string | undefined> {
@@ -205,9 +228,25 @@ export async function runHumanCli(args: readonly string[], overrides: Partial<Hu
       formatted = table(rows, ['id', 'title', 'status']);
     } else if (command === 'requirement show') {
       const path = requirementPath();
-      const [requirement, messages] = await Promise.all([request<RequirementWithSession>(path), request<Collection<RequirementMessage>>(`${path}/messages`)]);
-      result = { requirement, messages: items(messages).sort((a, b) => a.sequence - b.sequence) };
-      formatted = readableShow(requirement, messages.items);
+      const parameters = conversationParameters(values);
+      const [requirement, response] = await Promise.all([
+        request<RequirementWithSession>(path),
+        request<Collection<RequirementMessage> & { hasMore?: boolean }>(`${path}/messages${parameters ? `?${parameters}` : ''}`),
+      ]);
+      const messages = items(response).sort((a, b) => a.sequence - b.sequence);
+      let hasMore: boolean | undefined;
+      if (parameters) {
+        if (typeof response.hasMore !== 'boolean') throw new RequestError('Manager returned an invalid conversation page');
+        hasMore = response.hasMore;
+      }
+      result = { requirement, messages, ...(hasMore === undefined ? {} : { hasMore }) };
+      formatted = readableShow(requirement, messages);
+      if (hasMore !== undefined) {
+        formatted += `\n\nhasMore: ${hasMore}`;
+        const forward = parameters?.has('after');
+        const cursor = forward ? messages.at(-1)?.sequence : messages[0]?.sequence;
+        if (hasMore && cursor !== undefined) formatted += `\nNext page: --${forward ? 'after' : 'before'} ${cursor}`;
+      }
     } else if (command === 'requirement related') {
       const requirement = await request<RequirementWithSession>(requirementPath());
       const [parent, collection] = await Promise.all([
