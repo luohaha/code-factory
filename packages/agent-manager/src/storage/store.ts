@@ -234,6 +234,7 @@ export interface AgentManagerStore {
   upsertPullRequest(input: UpsertPullRequestRecord): PullRequest;
   getPullRequest(id: string): PullRequest | null;
   listPullRequests(requirementId?: string): PullRequest[];
+  deletePullRequest(id: string): void;
   ensurePullRequestObservation(pullRequestId: string, now: string): { observation: PullRequestObservation; created: boolean };
   updatePullRequestObservation(observation: PullRequestObservation): PullRequestObservation;
   updatePullRequestCheckStates(pullRequestId: string, checkStates: Record<string, string>, now: string): PullRequestObservation;

@@ -81,6 +81,7 @@ The service listens only on the loopback interface by default and currently has 
 | GET | /api/review-requests | List Review Requests |
 | GET | /api/events | Subscribe to the resumable SSE stream |
 | POST | /api/agent/pull-requests | Register or update a PR from an RD Agent |
+| DELETE | /api/agent/pull-requests | Unregister a PR belonging to the current Requirement |
 | POST | /api/agent/requirements/:id/artifacts | Publish an RD output as a conversation attachment |
 | POST | /api/agent/requirements | Propose a follow-up Requirement from an RD Agent |
 | POST | /api/agent/requirements/:id/action | Apply a lifecycle action to a Requirement proposed by the current RD Agent |
@@ -830,6 +831,7 @@ These endpoints are the transport used by `code-factory-cli` and other trusted l
 
 ~~~bash
 code-factory-cli pr register --help
+code-factory-cli pr unregister --help
 code-factory-cli requirement propose --help
 code-factory-cli requirement action --help
 code-factory-cli requirement related --help
@@ -878,6 +880,22 @@ curl -X POST http://127.0.0.1:4310/api/agent/pull-requests \
 Success: 200 OK with the created or updated PullRequest. Returns 404 for an unknown Requirement and 400 for invalid fields.
 
 An Agent should register a PR after creating it and call this endpoint again only when its own push or edit changes metadata such as title, branch, or head SHA. After initial registration, the requested status is ignored and the stored state is preserved. The PR Reconciler synchronizes GitHub state events; an Agent receiving the corresponding System message must not call this endpoint merely to repeat that state transition.
+
+### DELETE /api/agent/pull-requests
+
+Removes a local PR registration. `code-factory-cli pr unregister --url https://github.com/OWNER/REPO/pull/123` or `pr unregister --repository OWNER/REPO --number 123` sends this request using the injected Requirement ID. URL mode also supports Enterprise hostnames and does not invoke `gh`.
+
+Required JSON body fields:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| requirementId | string | Requirement that owns the registration |
+| repository | string | Case-insensitive OWNER/REPO or HOST/OWNER/REPO |
+| number | positive integer | GitHub PR number |
+
+Success: 200 OK with the removed `PullRequest`. Returns 400 for invalid fields, 404 for an unknown Requirement or PR registration (including a repeated removal), and 409 if another Requirement owns the PR or a review is running.
+
+The operation deletes the PR, its observations, search document, and completed review records. Conversation messages and Runs remain. It never modifies or closes the GitHub PR. The persisted `pull_request.unregistered` event carries `{ "pullRequestId": "pr_..." }` and the owning Requirement/session IDs. Poll results already in flight are discarded for that registration. Explicitly registering the PR again creates a fresh ID and observation baseline, and can assign it to another Requirement.
 
 ### POST /api/agent/requirements
 

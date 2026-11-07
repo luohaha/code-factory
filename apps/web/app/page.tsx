@@ -2681,8 +2681,8 @@ function Dashboard() {
   const [runs, setRuns] = useState<AgentRunDto[]>([]);
   const [agentTraces, setAgentTraces] = useState<Record<string, AgentTraceEventDto[] | undefined>>({});
   const [loadedTraceRequirementIds, setLoadedTraceRequirementIds] = useState<Set<string>>(() => new Set());
-  const [pullRequests, setPullRequests] = useState<PullRequestDto[]>([]);
-  const [reviewRequests, setReviewRequests] = useState<ReviewRequestDto[]>([]);
+  const [pullRequests, setPullRequestsState] = useState<PullRequestDto[]>([]);
+  const [reviewRequests, setReviewRequestsState] = useState<ReviewRequestDto[]>([]);
   const [conversation, setConversation] = useState<{
     requirementId: string | null;
     items: RequirementMessageDto[];
@@ -2703,6 +2703,16 @@ function Dashboard() {
   const refreshTimerRef = useRef<number | null>(null);
   const eventRevisionRef = useRef(0);
   const removedRequirementIdsRef = useRef(new Set<string>());
+  const unregisteredPullRequestIdsRef = useRef(new Set<string>());
+  // Filter every update, including list requests started before an unregister event.
+  const setPullRequests = useCallback((update: (current: PullRequestDto[]) => PullRequestDto[]) => {
+    setPullRequestsState((current) => update(current)
+      .filter((pullRequest) => !unregisteredPullRequestIdsRef.current.has(pullRequest.id)));
+  }, []);
+  const setReviewRequests = useCallback((update: (current: ReviewRequestDto[]) => ReviewRequestDto[]) => {
+    setReviewRequestsState((current) => update(current)
+      .filter((review) => !unregisteredPullRequestIdsRef.current.has(review.pullRequestId)));
+  }, []);
   const [query, setQuery] = useState('');
   const [searchResponse, setSearchResponse] = useState<{ query: string; items: SearchResultDto[] }>({ query: '', items: [] });
   const [searchRevision, setSearchRevision] = useState(0);
@@ -2800,7 +2810,7 @@ function Dashboard() {
       return next;
     });
     if (selectedIdRef.current && removed.has(selectedIdRef.current)) setSelectedId(null);
-  }, []);
+  }, [setPullRequests]);
 
   const reload = useCallback(async (showLoading = false) => {
     const eventRevision = eventRevisionRef.current;
@@ -2870,7 +2880,7 @@ function Dashboard() {
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, [client, markSynced, t]);
+  }, [client, markSynced, setPullRequests, setReviewRequests, t]);
 
   const refreshTargets = useCallback(async (targets: readonly DashboardRefreshTarget[]) => {
     if (targets.some((target) => target.scope === 'workspace')) {
@@ -3036,7 +3046,7 @@ function Dashboard() {
       setConnection('offline');
       setError(caught instanceof Error ? caught.message : t('Unable to connect to Agent Manager'));
     }
-  }, [client, markSynced, reload, removeRequirementState, t]);
+  }, [client, markSynced, reload, removeRequirementState, setPullRequests, setReviewRequests, t]);
 
   const enqueueRefreshTargets = useCallback((targets: readonly DashboardRefreshTarget[]) => {
     if (targets.length === 0) return;
@@ -3075,6 +3085,12 @@ function Dashboard() {
       && (!event.requirementId || payload.requirement.id === event.requirementId)
       && !removedRequirementIdsRef.current.has(payload.requirement.id)) {
       setRequirements((current) => upsertRequirement(current, payload.requirement!));
+    }
+
+    if (event.type === 'pull_request.unregistered' && typeof payload.pullRequestId === 'string') {
+      unregisteredPullRequestIdsRef.current.add(payload.pullRequestId);
+      setPullRequests((current) => current.filter((pullRequest) => pullRequest.id !== payload.pullRequestId));
+      setReviewRequests((current) => current.filter((review) => review.pullRequestId !== payload.pullRequestId));
     }
 
     if (!removesRequirement
@@ -3149,7 +3165,7 @@ function Dashboard() {
     setConnection('online');
     setError(null);
     markSynced();
-  }, [enqueueRefreshTargets, markSynced, notifyForEvent, removeRequirementState]);
+  }, [enqueueRefreshTargets, markSynced, notifyForEvent, removeRequirementState, setPullRequests, setReviewRequests]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {

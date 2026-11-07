@@ -962,6 +962,19 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
     return (rows as Row[]).map(pullRequestFrom);
   }
 
+  deletePullRequest(id: string): void {
+    this.#db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = this.#db.prepare('DELETE FROM pull_requests WHERE id = ?').run(id);
+      if (result.changes === 0) throw new StoreNotFoundError(`Pull Request ${id} not found`);
+      this.#db.prepare("DELETE FROM search_documents WHERE kind = 'pull_request' AND source_id = ?").run(id);
+      this.#db.exec('COMMIT');
+    } catch (error) {
+      this.#db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   ensurePullRequestObservation(pullRequestId: string, now: string): { observation: PullRequestObservation; created: boolean } {
     const result = this.#db.prepare(`INSERT INTO pull_request_observations
       (pull_request_id, initialized_at, check_states_json, updated_at) VALUES (?, ?, '{}', ?)

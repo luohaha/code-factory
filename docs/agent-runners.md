@@ -62,6 +62,7 @@ RD Agents use self-describing commands instead of constructing Agent API request
 
 ```bash
 code-factory-cli pr register --help
+code-factory-cli pr unregister --help
 code-factory-cli requirement propose --help
 code-factory-cli requirement action --help
 code-factory-cli timer register --help
@@ -70,6 +71,15 @@ code-factory-cli timer cancel --help
 ```
 
 `pr register` registers a newly created PR or refreshes metadata changed by the RD Agent. `requirement propose` records separate follow-up work as a linked TODO Requirement; `requirement action` starts, stops, deletes, or completes that proposal through the normal Requirement state machine. `requirement related` lists direct parent and child Requirements; `requirement message` can address any other Requirement's RD Agent by known ID. `timer register` registers a one-time wake-up by default or a recurring one with `--repeat`; `timer show` recovers timer IDs and statuses for the current Requirement; `timer cancel` stops an active timer. The commands print the Agent API JSON response on stdout. Exit code `0` means success, `2` means invalid input or missing context, and `1` means an execution, network, HTTP, or response-format failure. Errors go to stderr. API requests and GitHub lookups time out after 30 seconds; writes are never automatically retried. A timeout or invalid response can occur after the server commits a write: inspect the Requirement before retrying, especially when proposing or managing follow-up work.
+
+To remove an incorrect PR registration from the current Requirement, use either form (no GitHub lookup is needed):
+
+```bash
+code-factory-cli pr unregister --url https://github.com/OWNER/REPO/pull/123
+code-factory-cli pr unregister --repository OWNER/REPO --number 123
+```
+
+Unregistration stops polling and removes local PR metadata, observations, search entries, and completed review records. Conversation messages and Runs remain, and the GitHub PR is unchanged. A running review must finish first. The CLI uses the injected Requirement ID; another Requirement's registration cannot be removed. An unknown or already removed registration fails with exit code `1`. A subsequent explicit `pr register` creates a fresh registration.
 
 All RD providers can publish a generated file to their Requirement conversation for remote browser download:
 

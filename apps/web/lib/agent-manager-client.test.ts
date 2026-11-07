@@ -7,6 +7,7 @@ import { AgentManagerClient } from './agent-manager-client.ts';
 void test('subscribes to live Agent trace events', () => {
   assert.ok(MANAGER_EVENT_TYPES.includes('run.trace.appended'));
   assert.ok(MANAGER_EVENT_TYPES.includes('requirement.updated'));
+  assert.ok(MANAGER_EVENT_TYPES.includes('pull_request.unregistered'));
 });
 
 void test('attachment download URLs retain the configured remote Manager origin', () => {

@@ -14,6 +14,7 @@ export const MANAGER_EVENT_TYPES = [
   'message.created',
   'pull_request.created',
   'pull_request.updated',
+  'pull_request.unregistered',
   'review_request.started',
   'timer.created',
   'timer.fired',

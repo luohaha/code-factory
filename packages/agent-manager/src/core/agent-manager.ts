@@ -81,6 +81,7 @@ import type {
   Sandbox,
   SandboxSummary,
   TrackPullRequestInput,
+  UnregisterPullRequestInput,
   UpdateRequirementAgentConfigurationInput,
   UpdateRequirementInput,
 } from './types.js';
@@ -1365,8 +1366,8 @@ export class AgentManager extends EventEmitter {
       .find((item) => normalizeRepositoryKey(item.repository) === input.repository && item.number === input.number);
     const now = new Date().toISOString();
     const pullRequest = this.#store.upsertPullRequest({
-      id: previous?.id ?? `pr_${randomUUID()}`,
       ...input,
+      id: previous?.id ?? `pr_${randomUUID()}`,
       now,
     });
     this.#store.ensurePullRequestObservation(pullRequest.id, now);
@@ -1400,6 +1401,33 @@ export class AgentManager extends EventEmitter {
     }
     const existing = matches[0];
     return this.trackPullRequest(existing ? { ...input, status: existing.status } : input);
+  }
+
+  unregisterAgentPullRequest(input: UnregisterPullRequestInput): PullRequest {
+    const requirement = this.requireRequirement(input.requirementId);
+    const repository = normalizeRepositoryKey(input.repository);
+    if (!repository.trim()) throw new TypeError('repository is required');
+    if (!Number.isSafeInteger(input.number) || input.number <= 0) throw new TypeError('number must be a positive integer');
+    const pullRequest = this.#store.listPullRequests()
+      .find((item) => normalizeRepositoryKey(item.repository) === repository && item.number === input.number);
+    if (!pullRequest) throw new StoreNotFoundError(`Pull request ${repository}#${input.number} not found`);
+    if (pullRequest.requirementId !== requirement.id) {
+      throw new StoreConflictError(`Pull request ${repository}#${input.number} belongs to another requirement`);
+    }
+    if (this.#store.listReviewRequests(pullRequest.id).some((review) => review.status === 'running')) {
+      throw new StoreConflictError(`Pull request ${repository}#${input.number} has an active review`);
+    }
+    this.#store.deletePullRequest(pullRequest.id);
+    this.publish({
+      type: 'pull_request.unregistered',
+      requirementId: requirement.id,
+      sessionId: requirement.session.id,
+      payload: { pullRequestId: pullRequest.id },
+    });
+    this.logger.info('Pull request unregistered', {
+      pullRequestId: pullRequest.id, requirementId: requirement.id, repository, number: input.number,
+    });
+    return pullRequest;
   }
 
   /** Starts a requirement or explicitly retries it. Human messages are persisted before any Run starts. */

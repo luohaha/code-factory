@@ -422,6 +422,10 @@ export class AgentManagerClient {
     return response.items;
   }
 
+  unregisterAgentPullRequest(input: { requirementId: string; repository: string; number: number }): Promise<PullRequestDto> {
+    return this.request('/api/agent/pull-requests', { method: 'DELETE', body: JSON.stringify(input) });
+  }
+
   async listReviewRequests(pullRequestId?: string): Promise<ReviewRequestDto[]> {
     const response = await this.request<{ items: ReviewRequestDto[] }>(
       pullRequestId

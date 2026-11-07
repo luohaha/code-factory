@@ -305,5 +305,6 @@ export function managerEventInvalidatesSearch(event: ManagerEventDto): boolean {
     'message.created',
     'pull_request.created',
     'pull_request.updated',
+    'pull_request.unregistered',
   ].includes(event.type);
 }
