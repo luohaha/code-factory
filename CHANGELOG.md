@@ -6,6 +6,17 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.2.12] - 2026-11-07
+
+### Added
+
+- Allow RD Agents to remove a local pull request registration through `code-factory-cli pr unregister` without changing the GitHub PR. Remove its observations and completed review records while preserving conversation messages and Runs.
+
+### Changed
+
+- Support paginated Requirement conversations in `code-factory-human-cli requirement show` with `--limit`, `--before`, and `--after`, including page metadata in JSON output.
+- Refresh the README overview and guidance for the human CLI and E2B workspaces.
+
 ## [0.2.11] - 2026-11-02
 
 ### Added
