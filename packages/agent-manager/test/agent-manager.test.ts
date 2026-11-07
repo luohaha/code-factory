@@ -2494,6 +2494,87 @@ test('scheduled PR triggers can be stopped independently while sharing one polle
   }
 });
 
+test('PR unregistration checks ownership, supports every lifecycle state, and permits explicit registration again', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, logger: silentLogger });
+  try {
+    const owner = manager.createRequirement({ title: 'Owner', description: 'Task', provider: 'codex' });
+    const other = manager.createRequirement({ title: 'Other', description: 'Task', provider: 'codex' });
+    const input = { requirementId: owner.id, repository: 'Acme/Widgets', number: 184 };
+    assert.throws(() => manager.unregisterAgentPullRequest(input), /not found/);
+    assert.throws(() => manager.unregisterAgentPullRequest({ ...input, requirementId: 'missing' }), /not found/);
+    assert.throws(() => manager.unregisterAgentPullRequest({ ...input, number: 0 }), /positive integer/);
+    assert.throws(() => manager.unregisterAgentPullRequest({ ...input, repository: ' ' }), /repository is required/);
+    for (const status of ['draft', 'open', 'closed', 'merged'] as const) {
+      const pr = manager.registerAgentPullRequest({ ...input,
+        url: 'https://github.com/acme/widgets/pull/184', title: 'Feature',
+        baseBranch: 'main', headBranch: 'feature', headSha: 'abc123', status });
+      assert.throws(() => manager.unregisterAgentPullRequest({ ...input, requirementId: other.id }), /another requirement/);
+      assert.deepEqual(manager.listPullRequests(), [pr]);
+      assert.deepEqual(manager.unregisterAgentPullRequest({ ...input, repository: 'ACME/WIDGETS' }), pr);
+      assert.deepEqual(manager.listPullRequests(), []);
+      assert.equal(store.getPullRequest(pr.id), null);
+      const event = manager.listEvents().at(-1);
+      assert.equal(event?.type, 'pull_request.unregistered');
+      assert.equal(event?.requirementId, owner.id);
+      assert.deepEqual(event?.payload, { pullRequestId: pr.id });
+      assert.throws(() => manager.unregisterAgentPullRequest(input), /not found/);
+      const newPr = manager.registerAgentPullRequest({ ...pr, requirementId: other.id });
+      assert.notEqual(newPr.id, pr.id);
+      manager.unregisterAgentPullRequest({ ...input, requirementId: other.id });
+    }
+  } finally {
+    await manager.close();
+  }
+});
+
+test('unregister waits for an active review and preserves its Run and conversation after completion', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-pr-unregister-'));
+  const databasePath = join(directory, 'store.sqlite');
+  const store = new SqliteAgentManagerStore(databasePath);
+  const runner = new DeferredRunner();
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
+  let pullRequestId = '';
+  try {
+    const requirement = manager.createRequirement({ title: 'Owner', description: 'Task', provider: 'codex' });
+    const pr = manager.registerAgentPullRequest({ requirementId: requirement.id, repository: 'acme/widgets', number: 184,
+      url: 'https://github.com/acme/widgets/pull/184', title: 'Unique PR search title',
+      baseBranch: 'main', headBranch: 'feature', headSha: 'abc123', status: 'open' });
+    pullRequestId = pr.id;
+    assert.ok(store.search('Unique PR search title').some((item) => item.sourceId === pr.id));
+    const review = manager.requestReview(pr.id, { provider: 'codex' });
+    assert.throws(() => manager.unregisterAgentPullRequest(pr), /active review/);
+    assert.equal(manager.listReviewRequests(pr.id)[0]?.status, 'running');
+    assert.equal(store.getPullRequest(pr.id)?.id, pr.id);
+    runner.resolvers[0]!({ status: 'failed', exitCode: 1, nativeSessionId: null, finalMessage: null, error: 'Review failed' });
+    await review;
+    const messages = manager.listMessages(requirement.id);
+    const runs = manager.listRuns();
+    manager.unregisterAgentPullRequest(pr);
+    assert.deepEqual(manager.listReviewRequests(pr.id), []);
+    assert.deepEqual(manager.listMessages(requirement.id), messages);
+    assert.deepEqual(manager.listRuns(), runs);
+    assert.equal(runs[0]?.status, 'failed');
+  } finally {
+    await manager.close();
+  }
+  const reopened = new SqliteAgentManagerStore(databasePath);
+  const database = new DatabaseSync(databasePath);
+  try {
+    assert.equal(reopened.getPullRequest(pullRequestId), null);
+    assert.equal(reopened.search('Unique PR search title').some((item) => item.kind === 'pull_request'), false);
+    assert.equal(reopened.listReviewRequests().length, 0);
+    assert.equal(reopened.listRuns().length, 1);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM pull_request_observations').get()?.count, 0);
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM search_documents WHERE kind = 'pull_request'").get()?.count, 0);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM requirement_messages').get()?.count, 1);
+  } finally {
+    database.close();
+    reopened.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('mixed-case PR registration preserves identity, lifecycle, and Requirement ownership', () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-pr-owner-'));
   const databasePath = join(directory, 'store.sqlite');

@@ -26,7 +26,7 @@ function testRuntime(requests: CapturedRequest[], output: string[], errors: stri
     const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url;
     const method = init?.method ?? 'GET';
     assert.ok(init?.signal, 'all control-plane requests have a timeout signal');
-    if (method === 'GET' || method === 'DELETE') assert.equal(init?.body, undefined);
+    if (method === 'GET') assert.equal(init?.body, undefined);
     const body = typeof init?.body === 'string'
       ? JSON.parse(init.body) as Record<string, unknown>
       : {};
@@ -62,6 +62,7 @@ test('code-factory-cli help discovers the supported RD commands', async () => {
 
   assert.equal(exitCode, 0);
   assert.match(output.join(''), /pr register/);
+  assert.match(output.join(''), /pr unregister/);
   assert.match(output.join(''), /artifact publish/);
   assert.match(output.join(''), /timer register/);
   assert.match(output.join(''), /timer show/);
@@ -161,6 +162,72 @@ test('code-factory-cli registers a PR using injected Requirement context', async
     status: 'open',
   });
   assert.equal(output.join(''), '{"ok":true}\n');
+});
+
+test('code-factory-cli unregisters PRs by URL or repository and number without gh or Session context', async () => {
+  for (const [args, repository] of [
+    [['--url', 'https://github.com/Acme/Widgets/pull/184/'], 'acme/widgets'],
+    [['--url', 'https://GitHub.example/Acme/Widgets/pull/184'], 'github.example/acme/widgets'],
+    [['--repository', 'Acme/Widgets', '--number', '184'], 'acme/widgets'],
+  ] as const) {
+    const requests: CapturedRequest[] = [];
+    const errors: string[] = [];
+    const output: string[] = [];
+    const runtime = testRuntime(requests, output, errors);
+    runtime.environment = { ...runtime.environment, [CODE_FACTORY_SESSION_ID]: undefined };
+    assert.equal(await runCodeFactoryCli(['pr', 'unregister', ...args], runtime), 0);
+    assert.deepEqual(requests, [{
+      url: 'http://127.0.0.1:4310/api/agent/pull-requests', method: 'DELETE',
+      body: { requirementId: 'req_cli', repository, number: 184 },
+    }]);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(JSON.parse(output.join('')), { ok: true });
+  }
+});
+
+test('PR unregister help and invalid targets never send requests', async () => {
+  const output: string[] = [];
+  assert.equal(await runCodeFactoryCli(['pr', 'unregister', '--help'], {
+    environment: {}, writeOut: (value) => output.push(value),
+  }), 0);
+  assert.match(output.join(''), /GitHub PR is unchanged/);
+  for (const args of [
+    [], ['--url', ''], ['--repository', 'acme/widgets'], ['--number', '184'],
+    ['--repository', 'acme/widgets', '--number', '0'],
+    ['--repository', 'acme/widgets', '--number', '1.5'],
+    ['--repository', 'acme/widgets', '--number', '9007199254740992'],
+    ['--url', 'http://github.com/acme/widgets/pull/184'],
+    ['--url', 'https://github.com/acme/widgets/issues/184'],
+    ['--url', 'https://github.com/acme/widgets/pull/184?x=1'],
+    ['--url', 'https://github.com/acme/widgets/pull/184', '--number', '184'],
+    ['--all'],
+  ]) {
+    const requests: CapturedRequest[] = [];
+    assert.equal(await runCodeFactoryCli(['pr', 'unregister', ...args], testRuntime(requests, [], [])), 2, args.join(' '));
+    assert.deepEqual(requests, []);
+  }
+  for (const key of [CODE_FACTORY_API_URL, CODE_FACTORY_REQUIREMENT_ID]) {
+    const requests: CapturedRequest[] = [];
+    const runtime = testRuntime(requests, [], []);
+    runtime.environment = { ...runtime.environment, [key]: undefined };
+    assert.equal(await runCodeFactoryCli(['pr', 'unregister', '--repository', 'acme/widgets', '--number', '184'], runtime), 2);
+    assert.deepEqual(requests, []);
+  }
+});
+
+test('PR unregister reports server errors without retrying', async () => {
+  for (const status of [404, 409]) {
+    const errors: string[] = [];
+    const runtime = testRuntime([], [], errors);
+    let calls = 0;
+    runtime.fetch = async () => {
+      calls += 1;
+      return Response.json({ error: 'Cannot unregister PR' }, { status });
+    };
+    assert.equal(await runCodeFactoryCli(['pr', 'unregister', '--repository', 'acme/widgets', '--number', '184'], runtime), 1);
+    assert.equal(calls, 1);
+    assert.match(errors.join(''), new RegExp(`${status}: Cannot unregister PR`));
+  }
 });
 
 test('code-factory-cli proposes a Requirement using injected Session context', async () => {

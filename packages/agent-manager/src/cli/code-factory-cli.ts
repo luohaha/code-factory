@@ -19,6 +19,7 @@ Code Factory control-plane commands for RD Agents.
 Commands:
   artifact publish        Publish a file as a conversation download attachment
   pr register             Register or refresh a pull request
+  pr unregister           Remove a pull request registration
   requirement propose     Propose a separately tracked TODO requirement
   requirement action      Manage a requirement proposed by this RD Agent
   requirement related     Show this Requirement's direct parent and children
@@ -61,6 +62,22 @@ For existing PRs, --status does not change the stored lifecycle state.
 
 Example:
   code-factory-cli pr register --from-github https://github.com/OWNER/REPO/pull/123
+
+Context: CODE_FACTORY_API_URL and CODE_FACTORY_REQUIREMENT_ID.`;
+
+const PR_UNREGISTER_HELP = `Usage: code-factory-cli pr unregister [options]
+
+Remove a PR registration belonging to this Requirement. Stops Code Factory polling
+and removes PR search metadata, observations, and completed review records.
+Conversation messages and Runs remain. The GitHub PR is unchanged.
+Wait for any active review to finish before unregistering.
+
+Identify the PR with exactly one of:
+  --url URL               Explicit HTTPS PR URL (no gh lookup required)
+  --repository OWNER/REPO or HOST/OWNER/REPO --number NUMBER
+
+Example:
+  code-factory-cli pr unregister --url https://github.com/OWNER/REPO/pull/123
 
 Context: CODE_FACTORY_API_URL and CODE_FACTORY_REQUIREMENT_ID.`;
 
@@ -276,17 +293,21 @@ function parseOptions(
   }
 }
 
-function pullRequestTarget(value: string): { repository: string; number: number } {
+function pullRequestTarget(
+  value: string,
+  option = '--from-github',
+  help = PR_REGISTER_HELP,
+): { repository: string; number: number } {
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    throw new CliUsageError('--from-github must be an absolute HTTPS PR URL', PR_REGISTER_HELP);
+    throw new CliUsageError(`${option} must be an absolute HTTPS PR URL`, help);
   }
   const match = url.pathname.match(/^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/([1-9][0-9]*)\/?$/);
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash ||
       url.port || !match || !Number.isSafeInteger(Number(match[3]))) {
-    throw new CliUsageError('--from-github must be https://HOST/OWNER/REPO/pull/NUMBER', PR_REGISTER_HELP);
+    throw new CliUsageError(`${option} must be https://HOST/OWNER/REPO/pull/NUMBER`, help);
   }
   const repository = `${match[1]}/${match[2]}`;
   return { repository: url.hostname === 'github.com' ? repository : `${url.hostname}/${repository}`, number: Number(match[3]) };
@@ -359,6 +380,31 @@ async function parsePullRequestPayload(args: readonly string[], runtime: CodeFac
     headBranch: required(values['head-branch'] as string | undefined, '--head-branch', PR_REGISTER_HELP),
     headSha: required(values['head-sha'] as string | undefined, '--head-sha', PR_REGISTER_HELP),
     status,
+  };
+}
+
+function parsePullRequestUnregistration(args: readonly string[], runtime: CodeFactoryCliRuntime): Record<string, unknown> {
+  const help = PR_UNREGISTER_HELP;
+  const values = parseOptions(args, help, {
+    url: { type: 'string' }, repository: { type: 'string' }, number: { type: 'string' },
+  });
+  let target: { repository: string; number: number };
+  if (values.url !== undefined) {
+    if (values.repository !== undefined || values.number !== undefined) {
+      throw new CliUsageError('--url cannot be combined with --repository or --number', help);
+    }
+    target = pullRequestTarget(required(values.url as string | undefined, '--url', help), '--url', help);
+  } else {
+    const number = Number(required(values.number as string | undefined, '--number', help));
+    if (!Number.isSafeInteger(number) || number <= 0) {
+      throw new CliUsageError('--number must be a positive integer', help);
+    }
+    target = { repository: required(values.repository as string | undefined, '--repository', help), number };
+  }
+  return {
+    requirementId: required(runtime.environment[CODE_FACTORY_REQUIREMENT_ID], CODE_FACTORY_REQUIREMENT_ID, help),
+    repository: normalizeRepositoryKey(target.repository),
+    number: target.number,
   };
 }
 
@@ -582,6 +628,16 @@ export async function runCodeFactoryCli(
       endpoint = '/agent/pull-requests';
       apiBaseUrl(runtime.environment);
       body = await parsePullRequestPayload(args.slice(2), runtime);
+    } else if (command === 'pr unregister') {
+      help = PR_UNREGISTER_HELP;
+      if (writesHelp(args.slice(2))) {
+        runtime.writeOut(`${help}\n`);
+        return 0;
+      }
+      apiBaseUrl(runtime.environment);
+      endpoint = '/agent/pull-requests';
+      method = 'DELETE';
+      body = parsePullRequestUnregistration(args.slice(2), runtime);
     } else if (command === 'requirement propose') {
       help = REQUIREMENT_PROPOSE_HELP;
       if (writesHelp(args.slice(2))) {

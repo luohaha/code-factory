@@ -116,6 +116,40 @@ const noOpTrigger: PullRequestSnapshotTrigger = {
   reconcileSnapshot: () => undefined,
 };
 
+test('unregistered PRs are skipped during in-flight reconciliation, including an explicit new registration', async () => {
+  for (const registerAgain of [false, true]) {
+    const store = createStore();
+    try {
+      const first = trackPullRequest(store, 1);
+      const queued = trackPullRequest(store, 2);
+      let finishInspection!: (value: GitHubPullRequestSnapshot) => void;
+      let inspections = 0;
+      let deliveries = 0;
+      const reconciler = createReconciler(store, {
+        inspectPullRequest: async () => {
+          inspections += 1;
+          return await new Promise<GitHubPullRequestSnapshot>((resolve) => { finishInspection = resolve; });
+        },
+      }, new MemoryWriter());
+      const trigger = { ...noOpTrigger, reconcileSnapshot: () => { deliveries += 1; } };
+      const pending = reconciler.reconcile(registration(trigger));
+      assert.equal(inspections, 1);
+      store.deletePullRequest(first.id);
+      store.deletePullRequest(queued.id);
+      const replacement = registerAgain
+        ? store.upsertPullRequest({ ...first, id: 'pr-new-registration', now: first.updatedAt })
+        : null;
+      finishInspection(snapshot(first, 'merged'));
+      await pending;
+      assert.equal(inspections, 1);
+      assert.equal(deliveries, 0);
+      assert.deepEqual(store.listPullRequests(), replacement ? [replacement] : []);
+    } finally {
+      store.close();
+    }
+  }
+});
+
 test('draft PRs only deliver lifecycle changes and resume activity with a fresh durable baseline when open', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-21T01:00:00.000Z') });
   const store = createStore();

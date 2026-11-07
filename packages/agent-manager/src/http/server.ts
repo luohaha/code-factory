@@ -623,6 +623,17 @@ export function createAgentManagerServer(manager: AgentManager, options: AgentMa
         return;
       }
 
+      if (request.method === 'DELETE' && url.pathname === '/api/agent/pull-requests') {
+        const body = await readJson(request);
+        const item = manager.unregisterAgentPullRequest({
+          requirementId: stringField(body, 'requirementId', true)!,
+          repository: stringField(body, 'repository', true)!,
+          number: positiveIntegerField(body, 'number'),
+        });
+        sendJson(response, 200, item);
+        return;
+      }
+
       const reviewRequest = url.pathname.match(/^\/api\/pull-requests\/([^/]+)\/review-requests$/);
       if (request.method === 'POST' && reviewRequest) {
         const pullRequestId = decodeURIComponent(reviewRequest[1]!);

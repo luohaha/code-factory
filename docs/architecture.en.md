@@ -228,6 +228,8 @@ Each `gh` subprocess is bounded by a 30-second timeout and force-terminated when
 
 GitHub and the PR reconciler exclusively advance PR lifecycle state. The RD Agent uses `code-factory-cli pr register` after creating a PR and may run it again when its own push or edit changes the head SHA, title, or branches, but the underlying Agent API cannot change `draft/open/closed/merged` for an existing PR. Reconciler status messages explicitly say that the state is already persisted, so the RD Agent must not mirror the event.
 
+The RD Agent can explicitly remove a PR registration from its own Requirement with `code-factory-cli pr unregister`. This deletes the local PR, its search document, observations, and completed review records, while preserving conversation messages, Runs, and GitHub state. An active review blocks unregistration. The Manager emits `pull_request.unregistered` with the removed PR ID so dashboards remove it and reject stale snapshots. The reconciler checks registration identity before inspection and after each asynchronous GitHub lookup; an unregistered PR cannot be recreated by a stale result. A later explicit registration creates a new PR ID and observation baseline and may belong to another Requirement.
+
 ## 6. State Machines
 
 Requirement:

@@ -17,6 +17,7 @@ import { createAgentManagerServer } from '../src/http/server.ts';
 import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.ts';
 import type { RunOutcome } from '../src/core/types.ts';
 import { CODE_FACTORY_VERSION } from '../src/infrastructure/version.ts';
+import { runCodeFactoryCli } from '../src/cli/code-factory-cli.ts';
 
 async function readServerSentEvent(response: Response): Promise<Record<string, unknown>> {
   assert.ok(response.body);
@@ -87,6 +88,58 @@ test('unsupported API paths and methods return JSON 404 without reaching the das
       assert.match(response.headers.get('content-type') ?? '', /^application\/json/);
       assert.deepEqual(await response.json(), { error: 'API route not found' });
     }
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
+
+test('PR unregister validates requests and CLI removes only its Requirement registration through HTTP', async () => {
+  const store = new SqliteAgentManagerStore(':memory:');
+  const manager = new AgentManager({ workspaceRoot: process.cwd(), store, logger: createLogger({ level: 'silent' }) });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const owner = manager.createRequirement({ title: 'Owner', description: 'Task', provider: 'codex' });
+    const other = manager.createRequirement({ title: 'Other', description: 'Task', provider: 'codex' });
+    const pr = manager.registerAgentPullRequest({ requirementId: owner.id, repository: 'acme/widgets', number: 184,
+      url: 'https://github.com/acme/widgets/pull/184', title: 'Feature',
+      baseBranch: 'main', headBranch: 'feature', headSha: 'abc123', status: 'open' });
+    const sibling = manager.registerAgentPullRequest({ ...pr, number: 185, url: 'https://github.com/acme/widgets/pull/185' });
+    for (const [body, status] of [
+      [{}, 400], [{ ...pr, repository: '' }, 400], [{ ...pr, number: 0 }, 400],
+      [{ ...pr, number: '184' }, 400], [{ ...pr, requirementId: 'missing' }, 404],
+      [{ ...pr, requirementId: other.id }, 409], [{ ...pr, number: 999 }, 404],
+    ] as const) {
+      const response = await fetch(`${baseUrl}/api/agent/pull-requests`, {
+        method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      assert.equal(response.status, status);
+      assert.equal(manager.listPullRequests().length, 2);
+    }
+    store.beginReviewRequest({ id: 'review-unregister', runId: 'run-unregister', pullRequestId: pr.id,
+      requirementId: owner.id, provider: 'codex', targetHeadSha: pr.headSha, taskSummary: 'Review', now: pr.createdAt });
+    const activeResponse = await fetch(`${baseUrl}/api/agent/pull-requests`, {
+      method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify(pr),
+    });
+    assert.equal(activeResponse.status, 409);
+    store.finishReviewRequest('review-unregister', { status: 'succeeded', exitCode: 0,
+      nativeSessionId: null, finalMessage: null, error: null }, pr.createdAt);
+    const output: string[] = [];
+    const errors: string[] = [];
+    const context = { environment: { CODE_FACTORY_API_URL: `${baseUrl}/api`, CODE_FACTORY_REQUIREMENT_ID: owner.id },
+      writeOut: (value: string) => output.push(value), writeError: (value: string) => errors.push(value) };
+    const args = ['pr', 'unregister', '--url', 'https://github.com/ACME/Widgets/pull/184'];
+    assert.equal(await runCodeFactoryCli(args, context), 0);
+    assert.deepEqual(JSON.parse(output.join('')), pr);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(manager.listPullRequests(), [sibling]);
+    assert.deepEqual(manager.listReviewRequests(), []);
+    assert.equal(store.search(pr.url).some((item) => item.sourceId === pr.id), false);
+    assert.equal(manager.listEvents().at(-1)?.type, 'pull_request.unregistered');
+    assert.equal(await runCodeFactoryCli(args, context), 1);
+    assert.match(errors.join(''), /404/);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();

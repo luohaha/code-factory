@@ -19,6 +19,8 @@ Code Factory brings requirements, coding agents, and GitHub pull requests into o
 
 Each requirement has its own persistent agent context. Jev stops automatic recovery after two consecutive failed or timed-out RD Runs; a successful Run starts a fresh failure streak. Agents can split work into child requirements and work in parallel, while humans steer the work, request reviews, and confirm completion.
 
+RD Agents can remove an incorrect PR registration with `code-factory-cli pr unregister --url https://github.com/OWNER/REPO/pull/123`. This stops Code Factory tracking for that PR and leaves the GitHub PR unchanged.
+
 Native Agents using E2B can check, pause, and resume their selected sandbox and transfer files between the host and sandbox, including conversation attachments. Pausing preserves remote state while the Agent continues on the host.
 
 Codex, Claude Code, and Native RD Agents can explicitly publish generated files as conversation attachments. Remote browser users can download them from the conversation; file bytes stay outside model context during publication. Human uploads and Agent-published attachments are reclaimed after 7 days by default; change the retention period in Settings without restarting. Message text remains available.

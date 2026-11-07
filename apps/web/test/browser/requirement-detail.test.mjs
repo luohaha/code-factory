@@ -70,6 +70,36 @@ async function fixture(t, locale = 'en', colorScheme = 'light', mobile = false) 
 }
 
 for (const [locale, theme, mobile] of [['en', 'light', false], ['zh-CN', 'dark', true]]) {
+  void test(`PR unregistration removes the card despite stale list and SSE updates (${locale})`, async (t) => {
+    const { page, data, emit } = await fixture(t, locale, theme, mobile);
+    const pr = { id: 'pr_removed', requirementId: data.requirement.id, repository: 'acme/widgets', number: 184,
+      url: 'https://github.com/acme/widgets/pull/184', title: 'Remove this PR registration',
+      baseBranch: 'main', headBranch: 'feature', headSha: 'abc123', status: 'open',
+      createdAt: data.requirement.createdAt, updatedAt: data.requirement.updatedAt };
+    await emit(data.managerEvent('pull_request.created', { pullRequest: pr }));
+    await page.getByRole('button', { name: 'PR', exact: true }).click();
+    await page.getByText(pr.title, { exact: true }).waitFor();
+    let release;
+    const pendingResponse = new Promise((resolve) => { release = resolve; });
+    await page.route('**/api/pull-requests*', async (route) => {
+      await pendingResponse;
+      await route.fulfill({ json: { items: [pr] } });
+    });
+    const requested = page.waitForRequest((request) => new URL(request.url()).pathname === '/api/pull-requests');
+    const response = page.waitForResponse((reply) => new URL(reply.url()).pathname === '/api/pull-requests');
+    await emit(data.managerEvent('pull_request.updated', {}));
+    await requested;
+    await emit(data.managerEvent('pull_request.unregistered', { pullRequestId: pr.id }));
+    await page.getByText(pr.title, { exact: true }).waitFor({ state: 'hidden' });
+    release();
+    await (await response).finished();
+    await emit(data.managerEvent('pull_request.updated', { pullRequest: pr }));
+    const replacement = { ...pr, id: 'pr_registered_again', title: 'Explicitly registered again' };
+    await emit(data.managerEvent('pull_request.created', { pullRequest: replacement }));
+    await page.getByText(replacement.title, { exact: true }).waitFor();
+    assert.equal(await page.getByText(pr.title, { exact: true }).count(), 0);
+  });
+
   void test(`attachment expiry hides links from an older in-flight message snapshot (${locale})`, async (t) => {
     const { page, data, open, emit } = await fixture(t, locale, theme, mobile);
     const attachment = (id, createdAt) => ({ id, fileName: `${id}.txt`, kind: 'file', mediaType: 'text/plain', byteSize: 4,

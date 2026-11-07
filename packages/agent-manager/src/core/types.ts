@@ -266,11 +266,14 @@ export interface UpdateRequirementInput extends UpdateRequirementAgentConfigurat
   description?: string;
 }
 
-export interface TrackPullRequestInput {
+export interface UnregisterPullRequestInput {
   requirementId: string;
   /** Case-insensitive GitHub repository key; normalized to lowercase on writes. */
   repository: string;
   number: number;
+}
+
+export interface TrackPullRequestInput extends UnregisterPullRequestInput {
   url: string;
   title: string;
   baseBranch: string;

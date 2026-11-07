@@ -118,6 +118,7 @@ export class PullRequestReconciler {
     const errors: Error[] = [];
     for (const pullRequest of this.#store.listPullRequests()
       .filter((item) => item.status === 'draft' || item.status === 'open')) {
+      if (!this.#store.getPullRequest(pullRequest.id)) continue;
       let snapshot: Awaited<ReturnType<GitHubClient['inspectPullRequest']>>;
       try {
         snapshot = await this.#githubClient.inspectPullRequest(pullRequest);
@@ -126,6 +127,9 @@ export class PullRequestReconciler {
         continue;
       }
       if (this.#isClosed()) return;
+      // An RD Agent may unregister this PR while the GitHub lookup is in flight.
+      // A new registration has a new ID and must not consume this old snapshot.
+      if (!this.#store.getPullRequest(pullRequest.id)) continue;
       try {
         this.reconcileSnapshot(registrations, pullRequest, snapshot);
       } catch (error) {
