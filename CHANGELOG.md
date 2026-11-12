@@ -6,6 +6,10 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+### Changed
+
+- Added an animated Code Factory banner to the README.
+
 ## [0.2.12] - 2026-11-07
 
 ### Added

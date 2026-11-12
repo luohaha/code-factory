@@ -1,10 +1,6 @@
 <p align="center">
-  <img src="docs/assets/brand/code-factory-logo.svg" alt="Code Factory logo" width="180" />
+  <img src="docs/assets/brand/code-factory-banner.svg" alt="Code Factory — a tree-based collaboration platform for requirements, coding-agent teams, and humans." width="100%" />
 </p>
-
-<h1 align="center">Code Factory</h1>
-
-<p align="center"><strong>A tree-based collaboration platform for requirements, coding-agent teams, and humans.</strong></p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue" alt="License: Apache 2.0" /></a>
