@@ -70,16 +70,16 @@
       <tspan x="216" y="210">requirements, coding-agent teams, and humans.</tspan>
     </text>
 
-    <!-- Provider chips -->
+    <!-- Feature chips -->
     <g font-size="14" font-weight="600" fill="#CFE0F7">
-      <rect x="72" y="252" width="76" height="32" rx="16" fill="#FFFFFF" fill-opacity="0.07" stroke="#FFFFFF" stroke-opacity="0.14"/>
-      <text x="110" y="273" text-anchor="middle">Codex</text>
-      <rect x="158" y="252" width="118" height="32" rx="16" fill="#FFFFFF" fill-opacity="0.07" stroke="#FFFFFF" stroke-opacity="0.14"/>
-      <text x="217" y="273" text-anchor="middle">Claude Code</text>
-      <rect x="286" y="252" width="122" height="32" rx="16" fill="#FFFFFF" fill-opacity="0.07" stroke="#FFFFFF" stroke-opacity="0.14"/>
-      <text x="347" y="273" text-anchor="middle">Native Agent</text>
-      <rect x="418" y="252" width="108" height="32" rx="16" fill="#FFFFFF" fill-opacity="0.07" stroke="#FFFFFF" stroke-opacity="0.14"/>
-      <text x="472" y="273" text-anchor="middle">GitHub PRs</text>
+      <rect x="72" y="252" width="156" height="32" rx="16" fill="#FFFFFF" fill-opacity="0.07" stroke="#FFFFFF" stroke-opacity="0.14"/>
+      <text x="150" y="273" text-anchor="middle">Requirement tree</text>
+      <rect x="238" y="252" width="178" height="32" rx="16" fill="#FFFFFF" fill-opacity="0.07" stroke="#FFFFFF" stroke-opacity="0.14"/>
+      <text x="327" y="273" text-anchor="middle">Persistent sessions</text>
+      <rect x="426" y="252" width="178" height="32" rx="16" fill="#FFFFFF" fill-opacity="0.07" stroke="#FFFFFF" stroke-opacity="0.14"/>
+      <text x="515" y="273" text-anchor="middle">On-demand AI review</text>
+      <rect x="614" y="252" width="163" height="32" rx="16" fill="#FFFFFF" fill-opacity="0.07" stroke="#FFFFFF" stroke-opacity="0.14"/>
+      <text x="695.5" y="273" text-anchor="middle">Human in the loop</text>
     </g>
 
     <!-- Requirement tree: connectors -->
