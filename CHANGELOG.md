@@ -8,7 +8,7 @@ breaking changes while the major version is `0`.
 
 ### Changed
 
-- Redesigned the Code Factory logo, dashboard header mark, and favicon, and added a README banner.
+- Added an animated Code Factory banner to the README.
 
 ## [0.2.12] - 2026-11-07
 

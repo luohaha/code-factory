@@ -8,11 +8,15 @@
       <stop stop-color="#20D7BA" stop-opacity="0.22"/>
       <stop offset="1" stop-color="#20D7BA" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="tile" x1="6" y1="2" x2="58" y2="62" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#1B4A99"/>
-      <stop offset="1" stop-color="#0A2350"/>
+    <linearGradient id="blue" x1="5" y1="23" x2="38" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#124B91"/>
+      <stop offset="1" stop-color="#061F48"/>
     </linearGradient>
-    <linearGradient id="factory" x1="13" y1="17" x2="52" y2="48" gradientUnits="userSpaceOnUse">
+    <linearGradient id="teal" x1="27" y1="9" x2="59" y2="42" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#20D7BA"/>
+      <stop offset="1" stop-color="#05AA91"/>
+    </linearGradient>
+    <linearGradient id="root" x1="768" y1="158" x2="908" y2="202" gradientUnits="userSpaceOnUse">
       <stop stop-color="#3BE8CC"/>
       <stop offset="1" stop-color="#0BB39A"/>
     </linearGradient>
@@ -22,26 +26,44 @@
     <clipPath id="frame">
       <rect width="1280" height="360" rx="24"/>
     </clipPath>
+    <path id="gear" d="M36.26 42.69L35.57 45.3L37.57 47.03L35.38 50.83L32.87 49.96L27.55 54.05L27.74 56.69L23.51 57.82L22.35 55.44L15.7 54.57L13.97 56.57L10.17 54.38L11.04 51.87L6.95 46.55L4.31 46.74L3.18 42.51L5.56 41.35L6.43 34.7L4.43 32.97L6.62 29.17L9.13 30.04L14.45 25.95L14.26 23.31L18.49 22.18L19.65 24.56L25.27 25.1C30.2 24.9 36.1 27.2 39 31.1C40.65 32.95 39.45 35.45 37.3 35.25C33.55 34.9 28.95 32.55 23.56 31.06A9.3 9.3 0 1 0 30.16 41.61Z" stroke-width="0.9" stroke-linejoin="round" stroke-linecap="round"/>
   </defs>
+
+  <style>
+    .glow { animation: glow 6s ease-in-out infinite; }
+    .root { opacity: 0; animation: rise 0.6s ease-out 0.2s forwards; }
+    .line { stroke-dasharray: 260; stroke-dashoffset: 260; animation: draw 0.9s ease-out forwards; }
+    .chip { opacity: 0; animation: rise 0.6s ease-out forwards; }
+    .d1 { animation-delay: 0.7s; }
+    .d2 { animation-delay: 0.9s; }
+    .d3 { animation-delay: 1.1s; }
+    .c1 { animation-delay: 1.4s; }
+    .c2 { animation-delay: 1.6s; }
+    .c3 { animation-delay: 1.8s; }
+    @keyframes glow { 0%, 100% { opacity: 0.65; } 50% { opacity: 1; } }
+    @keyframes draw { to { stroke-dashoffset: 0; } }
+    @keyframes rise { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
+    @media (prefers-reduced-motion: reduce) {
+      .glow, .root, .line, .chip { animation: none; opacity: 1; stroke-dashoffset: 0; }
+      .pulse { display: none; }
+    }
+  </style>
 
   <g clip-path="url(#frame)">
     <rect width="1280" height="360" fill="url(#bg)"/>
     <rect width="1280" height="360" fill="url(#dots)"/>
-    <rect width="1280" height="360" fill="url(#glow)"/>
+    <rect class="glow" width="1280" height="360" fill="url(#glow)"/>
   </g>
 
-  <!-- Mark -->
-  <g transform="translate(72 84) scale(1.75)">
-    <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#tile)" stroke="#FFFFFF" stroke-opacity="0.12"/>
-    <path d="M13 48V17L26 27V17L39 27V17L52 27V48Z" fill="url(#factory)" stroke="url(#factory)" stroke-width="2.4" stroke-linejoin="round"/>
-    <path d="M32.5 32.5V38M22 43V40.5Q22 38 24.5 38H40.5Q43 38 43 40.5V43" stroke="#071D45" stroke-width="2.2" stroke-linecap="round"/>
-    <circle cx="32.5" cy="32.5" r="3.1" fill="#071D45"/>
-    <circle cx="22" cy="43" r="3.1" fill="#071D45"/>
-    <circle cx="43" cy="43" r="3.1" fill="#071D45"/>
+  <!-- Logo -->
+  <rect x="72" y="84" width="112" height="112" rx="26" fill="#F4F8FF"/>
+  <g transform="translate(81.6 93.6) scale(1.45)">
+    <use href="#gear" transform="rotate(180 32 32)" fill="url(#teal)" stroke="url(#teal)"/>
+    <use href="#gear" fill="url(#blue)" stroke="url(#blue)"/>
   </g>
 
-  <!-- Wordmark -->
   <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <!-- Wordmark -->
     <text x="214" y="144" font-size="64" font-weight="700" letter-spacing="-1.5" fill="#FFFFFF">Code Factory</text>
     <text font-size="21" fill="#A9BEDF">
       <tspan x="216" y="182">A tree-based collaboration platform for</tspan>
@@ -60,26 +82,49 @@
       <text x="472" y="273" text-anchor="middle">GitHub PRs</text>
     </g>
 
-    <!-- Requirement tree -->
+    <!-- Requirement tree: connectors -->
     <g stroke="#3BE8CC" stroke-opacity="0.7" stroke-width="2" stroke-linecap="round">
-      <path d="M908 180H990"/>
-      <path d="M940 180Q950 180 950 170V110Q950 100 960 100H990"/>
-      <path d="M940 180Q950 180 950 190V250Q950 260 960 260H990"/>
+      <path class="line d1" d="M908 180H940Q950 180 950 170V110Q950 100 960 100H990"/>
+      <path class="line d2" d="M908 180H990"/>
+      <path class="line d3" d="M908 180H940Q950 180 950 190V250Q950 260 960 260H990"/>
     </g>
 
-    <rect x="768" y="158" width="140" height="44" rx="12" fill="url(#factory)"/>
-    <text x="838" y="186" text-anchor="middle" font-size="16" font-weight="700" fill="#06224A">Requirement</text>
+    <!-- Pulses travelling from the requirement to each child -->
+    <g class="pulse" fill="#B8FFF2">
+      <circle r="3.5" opacity="0">
+        <animateMotion dur="3.6s" begin="2.4s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;0.4;1" calcMode="linear" path="M908 180H940Q950 180 950 170V110Q950 100 960 100H990"/>
+        <animate attributeName="opacity" dur="3.6s" begin="2.4s" repeatCount="indefinite" values="0;1;1;0;0" keyTimes="0;0.05;0.35;0.4;1"/>
+      </circle>
+      <circle r="3.5" opacity="0">
+        <animateMotion dur="3.6s" begin="3.6s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;0.4;1" calcMode="linear" path="M908 180H990"/>
+        <animate attributeName="opacity" dur="3.6s" begin="3.6s" repeatCount="indefinite" values="0;1;1;0;0" keyTimes="0;0.05;0.35;0.4;1"/>
+      </circle>
+      <circle r="3.5" opacity="0">
+        <animateMotion dur="3.6s" begin="4.8s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;0.4;1" calcMode="linear" path="M908 180H940Q950 180 950 190V250Q950 260 960 260H990"/>
+        <animate attributeName="opacity" dur="3.6s" begin="4.8s" repeatCount="indefinite" values="0;1;1;0;0" keyTimes="0;0.05;0.35;0.4;1"/>
+      </circle>
+    </g>
 
-    <rect x="990" y="74" width="218" height="52" rx="12" fill="#0C2A5E" stroke="#FFFFFF" stroke-opacity="0.16"/>
-    <text x="1008" y="96" font-size="15" font-weight="600" fill="#FFFFFF">Child requirement</text>
-    <text x="1008" y="115" font-size="12.5" font-weight="500" fill="#9DB4D8">Agent · <tspan fill="#3BE8CC" font-weight="600">Codex</tspan></text>
+    <!-- Requirement tree: nodes -->
+    <g class="root">
+      <rect x="768" y="158" width="140" height="44" rx="12" fill="url(#root)"/>
+      <text x="838" y="186" text-anchor="middle" font-size="16" font-weight="700" fill="#06224A">Requirement</text>
+    </g>
 
-    <rect x="990" y="154" width="218" height="52" rx="12" fill="#0C2A5E" stroke="#FFFFFF" stroke-opacity="0.16"/>
-    <text x="1008" y="176" font-size="15" font-weight="600" fill="#FFFFFF">Child requirement</text>
-    <text x="1008" y="195" font-size="12.5" font-weight="500" fill="#9DB4D8">Agent · <tspan fill="#3BE8CC" font-weight="600">Claude Code</tspan></text>
-
-    <rect x="990" y="234" width="218" height="52" rx="12" fill="#0C2A5E" stroke="#FFFFFF" stroke-opacity="0.16"/>
-    <text x="1008" y="256" font-size="15" font-weight="600" fill="#FFFFFF">Child requirement</text>
-    <text x="1008" y="275" font-size="12.5" font-weight="500" fill="#9DB4D8">Agent · <tspan fill="#3BE8CC" font-weight="600">Native Agent</tspan></text>
+    <g class="chip c1">
+      <rect x="990" y="74" width="218" height="52" rx="12" fill="#0C2A5E" stroke="#FFFFFF" stroke-opacity="0.16"/>
+      <text x="1008" y="96" font-size="15" font-weight="600" fill="#FFFFFF">Child requirement</text>
+      <text x="1008" y="115" font-size="12.5" font-weight="500" fill="#9DB4D8">Agent · <tspan fill="#3BE8CC" font-weight="600">Codex</tspan></text>
+    </g>
+    <g class="chip c2">
+      <rect x="990" y="154" width="218" height="52" rx="12" fill="#0C2A5E" stroke="#FFFFFF" stroke-opacity="0.16"/>
+      <text x="1008" y="176" font-size="15" font-weight="600" fill="#FFFFFF">Child requirement</text>
+      <text x="1008" y="195" font-size="12.5" font-weight="500" fill="#9DB4D8">Agent · <tspan fill="#3BE8CC" font-weight="600">Claude Code</tspan></text>
+    </g>
+    <g class="chip c3">
+      <rect x="990" y="234" width="218" height="52" rx="12" fill="#0C2A5E" stroke="#FFFFFF" stroke-opacity="0.16"/>
+      <text x="1008" y="256" font-size="15" font-weight="600" fill="#FFFFFF">Child requirement</text>
+      <text x="1008" y="275" font-size="12.5" font-weight="500" fill="#9DB4D8">Agent · <tspan fill="#3BE8CC" font-weight="600">Native Agent</tspan></text>
+    </g>
   </g>
 </svg>

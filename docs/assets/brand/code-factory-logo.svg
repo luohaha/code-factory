@@ -1,19 +1,15 @@
 <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="tile" x1="6" y1="2" x2="58" y2="62" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#14397A"/>
-      <stop offset="1" stop-color="#061A3D"/>
+    <linearGradient id="blue" x1="5" y1="23" x2="38" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#124B91"/>
+      <stop offset="1" stop-color="#061F48"/>
     </linearGradient>
-    <linearGradient id="factory" x1="13" y1="17" x2="52" y2="48" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#3BE8CC"/>
-      <stop offset="1" stop-color="#0BB39A"/>
+    <linearGradient id="teal" x1="27" y1="9" x2="59" y2="42" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#20D7BA"/>
+      <stop offset="1" stop-color="#05AA91"/>
     </linearGradient>
   </defs>
 
-  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#tile)"/>
-  <path d="M13 48V17L26 27V17L39 27V17L52 27V48Z" fill="url(#factory)" stroke="url(#factory)" stroke-width="2.4" stroke-linejoin="round"/>
-  <path d="M32.5 32.5V38M22 43V40.5Q22 38 24.5 38H40.5Q43 38 43 40.5V43" stroke="#071D45" stroke-width="2.2" stroke-linecap="round"/>
-  <circle cx="32.5" cy="32.5" r="3.1" fill="#071D45"/>
-  <circle cx="22" cy="43" r="3.1" fill="#071D45"/>
-  <circle cx="43" cy="43" r="3.1" fill="#071D45"/>
+  <path d="M36.26 42.69L35.57 45.3L37.57 47.03L35.38 50.83L32.87 49.96L27.55 54.05L27.74 56.69L23.51 57.82L22.35 55.44L15.7 54.57L13.97 56.57L10.17 54.38L11.04 51.87L6.95 46.55L4.31 46.74L3.18 42.51L5.56 41.35L6.43 34.7L4.43 32.97L6.62 29.17L9.13 30.04L14.45 25.95L14.26 23.31L18.49 22.18L19.65 24.56L25.27 25.1C30.2 24.9 36.1 27.2 39 31.1C40.65 32.95 39.45 35.45 37.3 35.25C33.55 34.9 28.95 32.55 23.56 31.06A9.3 9.3 0 1 0 30.16 41.61Z" transform="rotate(180 32 32)" fill="url(#teal)" stroke="url(#teal)" stroke-width="0.9" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M36.26 42.69L35.57 45.3L37.57 47.03L35.38 50.83L32.87 49.96L27.55 54.05L27.74 56.69L23.51 57.82L22.35 55.44L15.7 54.57L13.97 56.57L10.17 54.38L11.04 51.87L6.95 46.55L4.31 46.74L3.18 42.51L5.56 41.35L6.43 34.7L4.43 32.97L6.62 29.17L9.13 30.04L14.45 25.95L14.26 23.31L18.49 22.18L19.65 24.56L25.27 25.1C30.2 24.9 36.1 27.2 39 31.1C40.65 32.95 39.45 35.45 37.3 35.25C33.55 34.9 28.95 32.55 23.56 31.06A9.3 9.3 0 1 0 30.16 41.61Z" fill="url(#blue)" stroke="url(#blue)" stroke-width="0.9" stroke-linejoin="round" stroke-linecap="round"/>
 </svg>
