@@ -74,12 +74,12 @@
     <g font-size="14" font-weight="600" fill="#CFE0F7">
       <rect x="72" y="252" width="156" height="32" rx="16" fill="#FFFFFF" fill-opacity="0.07" stroke="#FFFFFF" stroke-opacity="0.14"/>
       <text x="150" y="273" text-anchor="middle">Requirement tree</text>
-      <rect x="238" y="252" width="178" height="32" rx="16" fill="#FFFFFF" fill-opacity="0.07" stroke="#FFFFFF" stroke-opacity="0.14"/>
-      <text x="327" y="273" text-anchor="middle">Persistent sessions</text>
-      <rect x="426" y="252" width="178" height="32" rx="16" fill="#FFFFFF" fill-opacity="0.07" stroke="#FFFFFF" stroke-opacity="0.14"/>
-      <text x="515" y="273" text-anchor="middle">On-demand AI review</text>
-      <rect x="614" y="252" width="163" height="32" rx="16" fill="#FFFFFF" fill-opacity="0.07" stroke="#FFFFFF" stroke-opacity="0.14"/>
-      <text x="695.5" y="273" text-anchor="middle">Human in the loop</text>
+      <rect x="238" y="252" width="122" height="32" rx="16" fill="#FFFFFF" fill-opacity="0.07" stroke="#FFFFFF" stroke-opacity="0.14"/>
+      <text x="299" y="273" text-anchor="middle">Agent teams</text>
+      <rect x="370" y="252" width="140" height="32" rx="16" fill="#FFFFFF" fill-opacity="0.07" stroke="#FFFFFF" stroke-opacity="0.14"/>
+      <text x="440" y="273" text-anchor="middle">Event triggers</text>
+      <rect x="520" y="252" width="128" height="32" rx="16" fill="#FFFFFF" fill-opacity="0.07" stroke="#FFFFFF" stroke-opacity="0.14"/>
+      <text x="584" y="273" text-anchor="middle">Long-running</text>
     </g>
 
     <!-- Requirement tree: connectors -->
