@@ -154,6 +154,11 @@ Jev's rejection to the sender and exits 1. With no key or a failed check, messag
 are delivered normally without an extra notice. Do not resend a rejected message
 without new information or action the recipient needs.
 
+Lead with the decision, result, blocker, or request; prefer 1-3 short sentences
+or bullets. Keep only essential context and references; reference detailed logs
+or reports instead of pasting them. Add detail only when needed to act correctly.
+Skip courtesy acknowledgments, repeated status updates, and redundant exchanges.
+
 Required options:
   --requirement-id ID     Target Requirement ID
   --message TEXT          Message for the target Requirement's RD Agent

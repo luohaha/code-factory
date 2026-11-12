@@ -153,8 +153,8 @@ export class NativeAgentService {
     });
     const related = defineTool({ name: 'requirement_related', description: 'Show direct parent and child requirements and their RD session states.',
       parameters: Type.Object({}), execute: async (_args, api) => output(await invokeCli(['requirement', 'related'], api.conversationId)) });
-    const message = defineTool({ name: 'requirement_message', description: 'Send a necessary message to any other Requirement RD Agent by ID. Jev may reject an unnecessary message before delivery; unavailable checks allow normal delivery without an extra notice. Do not resend an unnecessary message without new information or action.',
-      parameters: Type.Object({ requirementId: Type.String(), message: Type.String() }),
+    const message = defineTool({ name: 'requirement_message', description: 'Send a concise, necessary message to any other Requirement RD Agent by ID. Skip courtesy acknowledgments, repeated status updates, and redundant exchanges. Jev may reject an unnecessary message before delivery; unavailable checks allow normal delivery without an extra notice. Do not resend an unnecessary message without new information or action.',
+      parameters: Type.Object({ requirementId: Type.String(), message: Type.String({ description: 'Lead with the decision, result, blocker, or request; prefer 1-3 short sentences or bullets. Keep only essential context and references; reference detailed logs or reports instead of pasting them. Add detail only when needed to act correctly.' }) }),
       execute: async ({ requirementId, message }, api) => output(await invokeCli(['requirement', 'message', '--requirement-id', requirementId, '--message', message], api.conversationId)) });
     const timerRegister = defineTool({ name: 'timer_register', description: 'Schedule one wake-up or recurring independent work.',
       parameters: Type.Object({ afterSeconds: Type.Integer({ minimum: 60 }), description: Type.String(), repeat: Type.Optional(Type.Boolean()) }),
