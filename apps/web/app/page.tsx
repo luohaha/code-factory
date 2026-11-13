@@ -2385,9 +2385,8 @@ function RequirementDetail({
   const Title = standalone ? 'h1' : SheetTitle;
   const Description = standalone ? 'p' : SheetDescription;
 
-  const content = (
-    <>
-        <SheetHeader className={`max-h-[40dvh] shrink-0 overflow-y-auto border-b border-border bg-card py-4 pl-5 sm:pl-6 ${standalone ? 'pr-5 sm:pr-6' : detailMode === 'conversation' ? 'pr-24' : 'pr-12'}`}>
+  const header = (
+        <SheetHeader className={`shrink-0 border-b border-border bg-card py-4 pl-5 sm:pl-6 ${standalone ? 'pr-5 sm:pr-6' : `max-h-[40dvh] overflow-y-auto ${detailMode === 'conversation' ? 'pr-24' : 'pr-12'}`}`}>
           <div className="mb-2.5 flex items-center gap-2">
             <Badge variant="outline" className="font-mono text-[10px]">REQ-{shortId(requirement.id)}</Badge>
             <Badge variant="secondary" className="text-[10px]">{t(statusLabel[requirement.status])}</Badge>
@@ -2427,6 +2426,11 @@ function RequirementDetail({
             </div>
           ) : null}
         </SheetHeader>
+  );
+
+  const content = (
+    <>
+        {!standalone ? header : null}
 
         <ScrollArea
           className="min-h-0 flex-1 bg-muted/15"
@@ -2475,6 +2479,7 @@ function RequirementDetail({
             </>
           )}
         >
+          {standalone ? header : null}
           <div className="px-5 py-5 sm:px-6">
             {detailMode === 'trace' ? (
               <AgentTracePanel
@@ -2653,7 +2658,7 @@ function RequirementDetail({
   );
 
   if (standalone) {
-    return <section className="flex min-h-0 flex-1 flex-col bg-popover text-sm">{content}</section>;
+    return <section className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col bg-popover text-sm">{content}</section>;
   }
 
   return (

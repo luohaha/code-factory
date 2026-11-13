@@ -23,6 +23,8 @@ Requirement details include collapsible tool calls with arguments, results, and 
 
 Use the top-right **Open conversation in a new page** control in a requirement's conversation to continue in a separate browser tab with the full page available. The page keeps the same requirement and Manager connection when refreshed.
 
+Standalone conversations use a centered column with space on both sides on wide screens. Requirement details scroll away with the history; **Back to top** brings them back, while the reply composer stays available below.
+
 ## How It Works
 
 <p align="center">
