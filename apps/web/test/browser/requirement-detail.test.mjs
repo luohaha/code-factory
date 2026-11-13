@@ -71,6 +71,88 @@ async function fixture(t, locale = 'en', colorScheme = 'light', mobile = false) 
 }
 
 for (const [locale, theme, mobile] of [['en', 'light', false], ['zh-CN', 'dark', true]]) {
+  void test(`standalone details scroll away and restore within a centered conversation (${locale})`, async (t) => {
+    const { page, data, open, emit } = await fixture(t, locale, theme, mobile);
+    data.stop();
+    const messages = Array.from({ length: 30 }, (_, index) => ({
+      id: `msg_history_${index}`, requirementId: data.requirement.id, sequence: index + 1,
+      author: index % 2 === 0 ? 'human' : 'rd_agent', attachments: [],
+      body: `Update ${index + 1}: ${'Conversation history stays readable while the details scroll out of the way. '.repeat(5)}`.trim(),
+      createdAt: data.requirement.createdAt,
+    }));
+    await page.route(`**/api/requirements/${data.requirement.id}/messages*`, (route) => route.fulfill({ json: { items: messages, hasMore: false } }));
+    await page.setViewportSize({ width: mobile ? 390 : 1920, height: mobile ? 844 : 1000 });
+    await page.goto(`${baseUrl}?conversation=${data.requirement.id}`);
+    const heading = page.getByRole('heading', { name: data.requirement.title, exact: true });
+    const input = page.getByRole('textbox', { name: locale === 'zh-CN' ? '回复 RD Agent' : 'Reply to RD Agent', exact: true });
+    const viewport = page.locator('[data-slot="scroll-area-viewport"]');
+    const backToTop = page.getByRole('button', { name: locale === 'zh-CN' ? '返回顶部' : 'Back to top', exact: true });
+    await page.getByText(messages.at(-1).body, { exact: true }).waitFor();
+    await page.waitForFunction(() => {
+      const viewport = document.querySelector('[data-slot="scroll-area-viewport"]');
+      return viewport.scrollTop > 0 && viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 2;
+    });
+    const viewportBounds = await viewport.boundingBox();
+    const inputBounds = await input.boundingBox();
+    assert.ok((await heading.boundingBox()).y < viewportBounds.y);
+    assert.ok(inputBounds.y + inputBounds.height <= (mobile ? 844 : 1000));
+    assert.ok(viewportBounds.width <= 1200);
+    if (!mobile) {
+      assert.ok(viewportBounds.x >= 300);
+      assert.ok(Math.abs(viewportBounds.x * 2 + viewportBounds.width - 1920) < 2);
+    }
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    const background = await page.locator('main').evaluate((element) => getComputedStyle(element).backgroundColor);
+    for (const selector of ['main > section', '[data-slot="sheet-header"]', '[data-slot="scroll-area"]']) {
+      assert.equal(await page.locator(selector).evaluate((element) => getComputedStyle(element).backgroundColor), background);
+    }
+    assert.equal(await input.evaluate((element) => getComputedStyle(element.closest('form').parentElement).backgroundColor), background);
+
+    await backToTop.click();
+    await page.waitForFunction(() => document.querySelector('[data-slot="scroll-area-viewport"]').scrollTop === 0);
+    assert.ok((await heading.boundingBox()).y >= viewportBounds.y);
+    await page.getByRole('button', { name: locale === 'zh-CN' ? '修改 Agent 配置' : 'Edit Agent configuration', exact: true }).waitFor();
+    const down = 500;
+    await viewport.hover();
+    await page.mouse.wheel(0, down);
+    await page.waitForFunction(() => document.querySelector('[data-slot="scroll-area-viewport"]').scrollTop >= 400);
+    const headerBounds = await heading.boundingBox();
+    assert.ok(headerBounds.y + headerBounds.height <= viewportBounds.y);
+    const scrolledViewportBounds = await viewport.boundingBox();
+    assert.deepEqual(scrolledViewportBounds, viewportBounds);
+    assert.deepEqual(await input.boundingBox(), inputBounds);
+
+    // Reading history must not jump when a live message arrives with the details hidden.
+    const previousTop = await viewport.evaluate((element) => element.scrollTop);
+    const message = { ...messages.at(-1), id: 'msg_after_scroll', sequence: 31, body: 'A new live update while reading history' };
+    await emit(data.managerEvent('message.created', { message }));
+    const newMessage = page.getByRole('button', { name: locale === 'zh-CN' ? '1 条新消息' : 'New message', exact: true });
+    await newMessage.waitFor();
+    assert.equal(await viewport.evaluate((element) => element.scrollTop), previousTop);
+    await newMessage.click();
+    await page.waitForFunction(() => {
+      const viewport = document.querySelector('[data-slot="scroll-area-viewport"]');
+      return viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 2;
+    });
+    await backToTop.click();
+    await page.waitForFunction(() => document.querySelector('[data-slot="scroll-area-viewport"]').scrollTop === 0);
+    assert.ok((await heading.boundingBox()).y >= viewportBounds.y);
+
+    // The dashboard drawer keeps its pinned header when its history is scrolled.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(baseUrl);
+    await page.getByRole('heading', { name: data.requirement.title, exact: true }).waitFor();
+    await open(false);
+    const drawer = page.getByRole('dialog');
+    const drawerHeading = drawer.getByRole('heading', { name: data.requirement.title, exact: true });
+    const drawerViewport = drawer.locator('[data-slot="scroll-area-viewport"]');
+    await drawer.getByText(messages.at(-1).body, { exact: true }).waitFor();
+    const pinnedTop = (await drawerHeading.boundingBox()).y;
+    await drawerViewport.evaluate((element) => { element.scrollTop = 0; });
+    assert.equal((await drawerHeading.boundingBox()).y, pinnedTop);
+    assert.notEqual(await drawer.locator('[data-slot="sheet-header"]').evaluate((element) => getComputedStyle(element).backgroundColor), background);
+  });
+
   void test(`conversation opens in a separate page with drafts, live messages and replies (${locale})`, async (t) => {
     const { page, context, data, open } = await fixture(t, locale, theme, mobile);
     await open(false);
