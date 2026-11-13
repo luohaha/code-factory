@@ -102,6 +102,11 @@ for (const [locale, theme, mobile] of [['en', 'light', false], ['zh-CN', 'dark',
       assert.ok(Math.abs(viewportBounds.x * 2 + viewportBounds.width - 1920) < 2);
     }
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    const background = await page.locator('main').evaluate((element) => getComputedStyle(element).backgroundColor);
+    for (const selector of ['main > section', '[data-slot="sheet-header"]', '[data-slot="scroll-area"]']) {
+      assert.equal(await page.locator(selector).evaluate((element) => getComputedStyle(element).backgroundColor), background);
+    }
+    assert.equal(await input.evaluate((element) => getComputedStyle(element.closest('form').parentElement).backgroundColor), background);
 
     await backToTop.click();
     await page.waitForFunction(() => document.querySelector('[data-slot="scroll-area-viewport"]').scrollTop === 0);
@@ -145,6 +150,7 @@ for (const [locale, theme, mobile] of [['en', 'light', false], ['zh-CN', 'dark',
     const pinnedTop = (await drawerHeading.boundingBox()).y;
     await drawerViewport.evaluate((element) => { element.scrollTop = 0; });
     assert.equal((await drawerHeading.boundingBox()).y, pinnedTop);
+    assert.notEqual(await drawer.locator('[data-slot="sheet-header"]').evaluate((element) => getComputedStyle(element).backgroundColor), background);
   });
 
   void test(`conversation opens in a separate page with drafts, live messages and replies (${locale})`, async (t) => {

@@ -1886,6 +1886,7 @@ function RequirementComposer({
   agentTimers,
   busy,
   inputRef,
+  standalone = false,
   onStart,
   onReply,
   onDelete,
@@ -1899,6 +1900,7 @@ function RequirementComposer({
   agentTimers: AgentTimerDto[];
   busy: boolean;
   inputRef: RefObject<HTMLTextAreaElement | null>;
+  standalone?: boolean;
   onStart: (message?: string, attachments?: File[]) => Promise<void>;
   onReply: (message: string, attachments?: File[]) => Promise<void>;
   onDelete: () => void;
@@ -1964,7 +1966,7 @@ function RequirementComposer({
   }
 
   return (
-    <div className="max-h-[60dvh] min-h-0 shrink-0 overflow-y-auto border-t border-border bg-card px-4 py-3 sm:px-6">
+    <div className={`max-h-[60dvh] min-h-0 shrink-0 overflow-y-auto border-t border-border px-4 py-3 sm:px-6 ${standalone ? 'bg-background' : 'bg-card'}`}>
       {requirement.status === 'waiting_confirmation' ? (
         <div className="mb-2.5 flex items-center justify-between gap-3 rounded-xl border border-violet-500/15 bg-violet-500/7 px-3 py-2 text-[10px] text-violet-700 dark:text-violet-300">
           <span>{t(requirement.session.state === 'failed'
@@ -2386,7 +2388,7 @@ function RequirementDetail({
   const Description = standalone ? 'p' : SheetDescription;
 
   const header = (
-        <SheetHeader className={`shrink-0 border-b border-border bg-card py-4 pl-5 sm:pl-6 ${standalone ? 'pr-5 sm:pr-6' : `max-h-[40dvh] overflow-y-auto ${detailMode === 'conversation' ? 'pr-24' : 'pr-12'}`}`}>
+        <SheetHeader className={`shrink-0 border-b border-border py-4 pl-5 sm:pl-6 ${standalone ? 'bg-background pr-5 sm:pr-6' : `max-h-[40dvh] overflow-y-auto bg-card ${detailMode === 'conversation' ? 'pr-24' : 'pr-12'}`}`}>
           <div className="mb-2.5 flex items-center gap-2">
             <Badge variant="outline" className="font-mono text-[10px]">REQ-{shortId(requirement.id)}</Badge>
             <Badge variant="secondary" className="text-[10px]">{t(statusLabel[requirement.status])}</Badge>
@@ -2433,7 +2435,7 @@ function RequirementDetail({
         {!standalone ? header : null}
 
         <ScrollArea
-          className="min-h-0 flex-1 bg-muted/15"
+          className={`min-h-0 flex-1 ${standalone ? 'bg-background' : 'bg-muted/15'}`}
           viewportRef={scrollViewportRef}
           onViewportScroll={(event) => updateScrollPosition(event.currentTarget)}
           overlay={(
@@ -2645,6 +2647,7 @@ function RequirementDetail({
             agentTimers={agentTimers}
             busy={busy}
             inputRef={messageInputRef}
+            standalone={standalone}
             onStart={onStart}
             onReply={onReply}
             onDelete={onDelete}
@@ -2658,7 +2661,7 @@ function RequirementDetail({
   );
 
   if (standalone) {
-    return <section className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col bg-popover text-sm">{content}</section>;
+    return <section className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col bg-background text-sm">{content}</section>;
   }
 
   return (
