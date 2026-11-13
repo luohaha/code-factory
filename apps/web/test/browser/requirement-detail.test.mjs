@@ -41,11 +41,12 @@ async function fixture(t, locale = 'en', colorScheme = 'light', mobile = false) 
     viewport: { width: 1280, height: 900 },
     reducedMotion: 'reduce',
   });
+  context.setDefaultTimeout(10_000);
   t.after(() => context.close());
   const page = await context.newPage();
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   page.setDefaultTimeout(10_000);
-  await page.addInitScript(() => {
+  await context.addInitScript(() => {
     window.EventSource = class extends EventTarget {
       constructor() {
         super();
@@ -55,7 +56,7 @@ async function fixture(t, locale = 'en', colorScheme = 'light', mobile = false) 
       close() {}
     };
   });
-  await page.route('**/api/**', (route) => route.fulfill({ json: data.reply(new URL(route.request().url()).pathname) }));
+  await context.route('**/api/**', (route) => route.fulfill({ json: data.reply(new URL(route.request().url()).pathname) }));
   await page.goto(baseUrl);
   await page.getByRole('heading', { name: data.requirement.title, exact: true }).waitFor();
   const open = async (sessions = true) => {
@@ -66,10 +67,83 @@ async function fixture(t, locale = 'en', colorScheme = 'light', mobile = false) 
     if (mobile) await page.setViewportSize({ width: 390, height: 844 });
   };
   const emit = (event) => page.evaluate((payload) => window.dispatchManagerEvent(payload), event);
-  return { page, data, open, emit };
+  return { page, context, data, open, emit };
 }
 
 for (const [locale, theme, mobile] of [['en', 'light', false], ['zh-CN', 'dark', true]]) {
+  void test(`conversation opens in a separate page with drafts, live messages and replies (${locale})`, async (t) => {
+    const { page, context, data, open } = await fixture(t, locale, theme, mobile);
+    await open(false);
+    const replyLabel = locale === 'zh-CN' ? '回复 RD Agent' : 'Reply to RD Agent';
+    const draft = 'Continue this conversation in its own page';
+    await page.getByRole('textbox', { name: replyLabel, exact: true }).fill(draft);
+    const link = page.getByRole('link', { name: locale === 'zh-CN' ? '在新页面打开对话' : 'Open conversation in a new page', exact: true });
+    const bounds = await link.boundingBox();
+    const sheetBounds = await page.getByRole('dialog').boundingBox();
+    assert.ok(bounds.x > sheetBounds.x + sheetBounds.width - 100);
+    assert.ok(bounds.y < sheetBounds.y + 50);
+    assert.equal(await link.getAttribute('target'), '_blank');
+    assert.match(await link.getAttribute('rel'), /noopener/);
+    // Pin the Manager even if another tab subsequently changes the saved connection.
+    await page.evaluate(() => localStorage.setItem('code-factory.agent-manager-url', 'http://127.0.0.1:1'));
+    const opened = page.waitForEvent('popup');
+    await link.click();
+    const popup = await opened;
+    if (mobile) await popup.setViewportSize({ width: 390, height: 844 });
+    const heading = popup.getByRole('heading', { name: data.requirement.title, exact: true });
+    await heading.waitFor();
+    const input = popup.getByRole('textbox', { name: replyLabel, exact: true });
+    await popup.waitForFunction((label) => !document.querySelector(`textarea[aria-label="${label}"]`)?.disabled, replyLabel);
+    assert.equal(await input.inputValue(), draft);
+    assert.equal(new URL(popup.url()).searchParams.get('conversation'), data.requirement.id);
+    assert.equal(new URL(popup.url()).searchParams.get('manager'), new URL(baseUrl).origin);
+    assert.equal(await popup.evaluate(() => window.opener === null), true);
+    assert.equal(await popup.title(), `${data.requirement.title} · Code Factory`);
+    assert.equal(await popup.getByRole('dialog').count(), 0);
+    assert.equal(await popup.getByRole('navigation').count(), 0);
+    assert.equal(await page.getByRole('dialog').isVisible(), true);
+    assert.equal(await popup.evaluate(() => document.documentElement.classList.contains('dark')), theme === 'dark');
+    assert.equal(await popup.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    const composerBounds = await input.boundingBox();
+    assert.ok(composerBounds.y + composerBounds.height <= (await popup.evaluate(() => innerHeight)));
+
+    await popup.reload();
+    await heading.waitFor();
+    await popup.waitForFunction((label) => document.querySelector(`textarea[aria-label="${label}"]`)?.value.length > 0, replyLabel);
+    assert.equal(await input.inputValue(), draft);
+    const message = { id: 'msg_live', requirementId: data.requirement.id, sequence: 2, author: 'rd_agent',
+      body: 'Live update in the standalone conversation', attachments: [], createdAt: new Date().toISOString() };
+    await popup.evaluate((event) => window.dispatchManagerEvent(event), data.managerEvent('message.created', { message }));
+    await popup.getByText(message.body, { exact: true }).waitFor();
+
+    let sent;
+    await context.route(`**/api/requirements/${data.requirement.id}/reply`, async (route) => {
+      sent = route.request().postDataJSON();
+      await route.fulfill({ json: { accepted: true, queued: true, requirement: data.requirement,
+        message: { ...message, id: 'msg_reply', sequence: 3, author: 'human', body: sent.message } } });
+    });
+    await popup.getByRole('button', { name: locale === 'zh-CN' ? '发送回复' : 'Send reply', exact: true }).click();
+    await popup.locator('section[aria-labelledby="requirement-conversation"]').getByText(draft, { exact: true }).waitFor();
+    assert.deepEqual(sent, { message: draft, attachmentIds: [] });
+    await popup.waitForFunction((label) => document.querySelector(`textarea[aria-label="${label}"]`)?.value === '', replyLabel);
+    // Escape belongs to dialogs; it must not dismiss a standalone conversation.
+    await popup.keyboard.press('Escape');
+    assert.equal(await heading.isVisible(), true);
+    await popup.getByRole('button', { name: locale === 'zh-CN' ? '返回看板' : 'Back to dashboard', exact: true }).click();
+    await popup.getByRole('navigation').waitFor({ state: 'attached' });
+    assert.equal(new URL(popup.url()).search, '');
+  });
+
+  void test(`missing standalone conversations show a recoverable empty state (${locale})`, async (t) => {
+    const { page } = await fixture(t, locale, theme, mobile);
+    if (mobile) await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${baseUrl}?conversation=req_missing`);
+    await page.getByText(locale === 'zh-CN' ? '需求不存在或已不可用。' : 'Requirement not found or no longer available.', { exact: true }).waitFor();
+    assert.equal(await page.getByRole('dialog').count(), 0);
+    await page.getByRole('button', { name: locale === 'zh-CN' ? '返回看板' : 'Back to dashboard', exact: true }).click();
+    await page.getByRole('navigation').waitFor({ state: 'attached' });
+  });
+
   void test(`PR unregistration removes the card despite stale list and SSE updates (${locale})`, async (t) => {
     const { page, data, emit } = await fixture(t, locale, theme, mobile);
     const pr = { id: 'pr_removed', requirementId: data.requirement.id, repository: 'acme/widgets', number: 184,

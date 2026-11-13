@@ -21,6 +21,8 @@ Codex, Claude Code, and Native RD Agents can explicitly publish generated files 
 
 Requirement details include collapsible tool calls with arguments, results, and execution status, plus a live working indicator. Both follow the dashboard's light/dark theme and English/Simplified Chinese language setting.
 
+Use the top-right **Open conversation in a new page** control in a requirement's conversation to continue in a separate browser tab with the full page available. The page keeps the same requirement and Manager connection when refreshed.
+
 ## How It Works
 
 <p align="center">
