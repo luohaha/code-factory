@@ -64,7 +64,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import {
   Dialog,
   DialogClose,
@@ -2180,6 +2180,7 @@ function RequirementDetail({
   busy,
   busyPullRequestId,
   detailMode,
+  standalone = false,
   onOpenChange,
   onStart,
   onUpdateDetails,
@@ -2214,6 +2215,7 @@ function RequirementDetail({
   busy: boolean;
   busyPullRequestId: string | null;
   detailMode: RequirementDetailMode;
+  standalone?: boolean;
   onOpenChange: (open: boolean) => void;
   onStart: (message?: string, attachments?: File[]) => Promise<void>;
   onUpdateDetails: (input: { title: string; description: string }) => Promise<void>;
@@ -2242,7 +2244,6 @@ function RequirementDetail({
   const loadedRequirementIdRef = useRef<string | undefined>(undefined);
   const previousLatestSequenceRef = useRef(0);
   const prependScrollRef = useRef<{ firstSequence: number; height: number; top: number } | null>(null);
-  const open = requirement !== null;
   const requirementId = requirement?.id;
   const activeRdRun = runs.find((run) => run.role === 'rd' && run.status === 'running');
   const queuedMessageCount = requirement?.session.queuedMessageCount ?? 0;
@@ -2376,20 +2377,17 @@ function RequirementDetail({
     }
   }, [detailMode, messageLoading, messages, requirementId, scrollToLatest]);
 
-  if (!requirement) return <Sheet open={false} onOpenChange={onOpenChange} />;
+  if (!requirement) return null;
 
   const workspaceName = requirement.sandboxId && requirement.sandboxId !== 'local'
     ? assignedWorkspace?.name ?? requirement.sandboxId
     : t('Default workspace');
+  const Title = standalone ? 'h1' : SheetTitle;
+  const Description = standalone ? 'p' : SheetDescription;
 
-  return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        className="data-[side=right]:w-full! data-[side=right]:max-w-none! gap-0 sm:data-[side=right]:w-[min(820px,calc(100vw-48px))]!"
-        side="right"
-        initialFocus={detailMode === 'conversation' && requirement.status === 'todo' ? messageInputRef : true}
-      >
-        <SheetHeader className="max-h-[40dvh] shrink-0 overflow-y-auto border-b border-border bg-card py-4 pr-12 pl-5 sm:pr-12 sm:pl-6">
+  const content = (
+    <>
+        <SheetHeader className={`max-h-[40dvh] shrink-0 overflow-y-auto border-b border-border bg-card py-4 pl-5 sm:pl-6 ${standalone ? 'pr-5 sm:pr-6' : detailMode === 'conversation' ? 'pr-24' : 'pr-12'}`}>
           <div className="mb-2.5 flex items-center gap-2">
             <Badge variant="outline" className="font-mono text-[10px]">REQ-{shortId(requirement.id)}</Badge>
             <Badge variant="secondary" className="text-[10px]">{t(statusLabel[requirement.status])}</Badge>
@@ -2398,8 +2396,8 @@ function RequirementDetail({
               {t(stateLabel[requirement.session.state])}
             </span>
           </div>
-          <SheetTitle className="text-xl leading-7 font-semibold tracking-[-0.025em]">{requirement.title}</SheetTitle>
-          <SheetDescription className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+          <Title className="text-xl leading-7 font-semibold tracking-[-0.025em]">{requirement.title}</Title>
+          <Description className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
             <span>{agentConfigurationLabel(requirement)}</span>
             <span aria-hidden="true">·</span>
             <span className="font-mono">ses-{shortId(requirement.session.id)}</span>
@@ -2407,7 +2405,7 @@ function RequirementDetail({
             <span className="max-w-full truncate" title={assignedWorkspace?.cwd ?? undefined}>
               {workspaceName}
             </span>
-          </SheetDescription>
+          </Description>
           {(requirement.status === 'todo' || requirement.status === 'waiting_confirmation')
             && requirement.session.state !== 'running' ? (
             <div className="mt-3 flex flex-wrap gap-2">
@@ -2651,6 +2649,33 @@ function RequirementDetail({
             onSent={scrollToLatest}
           />
         ) : null}
+    </>
+  );
+
+  if (standalone) {
+    return <section className="flex min-h-0 flex-1 flex-col bg-popover text-sm">{content}</section>;
+  }
+
+  return (
+    <Sheet open onOpenChange={onOpenChange}>
+      <SheetContent
+        className="data-[side=right]:w-full! data-[side=right]:max-w-none! gap-0 sm:data-[side=right]:w-[min(820px,calc(100vw-48px))]!"
+        side="right"
+        initialFocus={detailMode === 'conversation' && requirement.status === 'todo' ? messageInputRef : true}
+      >
+        {content}
+        {detailMode === 'conversation' ? (
+          <a
+            href={`?conversation=${encodeURIComponent(requirement.id)}&manager=${encodeURIComponent(apiUrl)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={buttonVariants({ variant: 'ghost', size: 'icon-sm', className: 'absolute top-3 right-12' })}
+            aria-label={t('Open conversation in a new page')}
+            title={t('Open conversation in a new page')}
+          >
+            <ExternalLink />
+          </a>
+        ) : null}
       </SheetContent>
     </Sheet>
   );
@@ -2694,6 +2719,7 @@ function Dashboard() {
   const [agentTimers, setAgentTimers] = useState<AgentTimerDto[]>([]);
   const [messageLoading, setMessageLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [standaloneId, setStandaloneId] = useState<string | null>(null);
   const [detailMode, setDetailMode] = useState<RequirementDetailMode>('conversation');
   const selectedIdRef = useRef<string | null>(null);
   const conversationRef = useRef(conversation);
@@ -2729,6 +2755,8 @@ function Dashboard() {
   const [filterReferenceTime, setFilterReferenceTime] = useState(0);
 
   const client = useMemo(() => new AgentManagerClient(apiUrl), [apiUrl]);
+  const selectedRequirement = requirements.find((item) => item.id === selectedId) ?? null;
+  const hasSelectedRequirement = selectedRequirement !== null;
 
   const openRequirementDetail = useCallback((
     requirementId: string,
@@ -3169,20 +3197,35 @@ function Dashboard() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      const params = new URLSearchParams(window.location.search);
+      const conversationId = params.get('conversation')?.trim();
+      const requestedManager = conversationId ? params.get('manager') : null;
       const saved = window.localStorage.getItem('code-factory.agent-manager-url');
       const defaultUrl = defaultManagerUrlForLocation(window.location);
       try {
-        setApiUrl(normalizeManagerUrl(saved || defaultUrl));
+        setApiUrl(normalizeManagerUrl(requestedManager || saved || defaultUrl));
       } catch {
-        if (saved) {
+        if (saved && !requestedManager) {
           window.localStorage.removeItem('code-factory.agent-manager-url');
         }
         setApiUrl(normalizeManagerUrl(defaultUrl));
       }
+      if (conversationId) {
+        setStandaloneId(conversationId);
+        openRequirementDetail(conversationId);
+      }
       setApiUrlReady(true);
     }, 0);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [openRequirementDetail]);
+
+  useEffect(() => {
+    if (!standaloneId || !selectedId || !apiUrlReady) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('conversation', selectedId);
+    url.searchParams.set('manager', apiUrl);
+    window.history.replaceState(null, '', url);
+  }, [apiUrl, apiUrlReady, selectedId, standaloneId]);
 
   useEffect(() => {
     const advanceFilterClock = () => setFilterReferenceTime(Date.now());
@@ -3214,7 +3257,7 @@ function Dashboard() {
   }, [apiUrlReady, applyManagerEvent, client, reload]);
 
   useEffect(() => {
-    if (!selectedId || detailMode !== 'conversation') return;
+    if (!selectedId || detailMode !== 'conversation' || !hasSelectedRequirement) return;
     let cancelled = false;
     const timer = window.setTimeout(() => {
       setMessageLoading(true);
@@ -3246,7 +3289,7 @@ function Dashboard() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [client, detailMode, enqueueRefreshTargets, selectedId, t]);
+  }, [client, detailMode, enqueueRefreshTargets, hasSelectedRequirement, selectedId, t]);
 
   const loadOlderMessages = useCallback(async () => {
     const requirementId = selectedIdRef.current;
@@ -3303,7 +3346,12 @@ function Dashboard() {
     };
   }, [client, query, searchRevision, t, view]);
 
-  const selectedRequirement = requirements.find((item) => item.id === selectedId) ?? null;
+  useEffect(() => {
+    if (!standaloneId) return;
+    const previousTitle = document.title;
+    document.title = `${selectedRequirement?.title ?? t('Activity and conversation')} · Code Factory`;
+    return () => { document.title = previousTitle; };
+  }, [selectedRequirement?.title, standaloneId, t]);
   const selectedRuns = runs.filter((run) => run.requirementId === selectedId);
   const selectedPullRequests = pullRequests.filter((pullRequest) => pullRequest.requirementId === selectedId);
   const selectedMessages = useMemo(() => {
@@ -3748,9 +3796,11 @@ function Dashboard() {
             ? 'Turn off desktop notifications'
             : 'Turn on desktop notifications';
 
+  if (!apiUrlReady) return <main className="grid min-h-dvh place-items-center bg-background text-foreground">{t('Loading…')}</main>;
+
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-30 border-b border-border/80 bg-background/92 backdrop-blur-xl">
+    <main className={`${standaloneId ? 'flex h-dvh flex-col overflow-hidden' : 'min-h-screen'} bg-background text-foreground`}>
+      <header className="sticky top-0 z-30 shrink-0 border-b border-border/80 bg-background/92 backdrop-blur-xl">
         <div className="flex h-14 items-center gap-3 px-4 lg:px-6">
           <div className="flex items-center gap-2.5">
             <Image src="/logo.svg" alt="" aria-hidden="true" width={32} height={32} className="size-8 shrink-0" />
@@ -3760,6 +3810,12 @@ function Dashboard() {
             </div>
           </div>
 
+          {standaloneId ? (
+            <Button variant="ghost" size="sm" onClick={() => window.location.assign(window.location.pathname)} aria-label={t('Back to dashboard')} title={t('Back to dashboard')}>
+              <ArrowLeft data-icon="inline-start" />
+              <span className="hidden sm:inline">{t('Back to dashboard')}</span>
+            </Button>
+          ) : (
           <nav className="ml-1 flex h-full min-w-0 flex-1 items-center gap-1 overflow-x-auto sm:ml-5" aria-label={t('Main navigation')}>
             <Button variant="ghost" size="sm" className={view === 'requirements' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('requirements')}><LayoutDashboard data-icon="inline-start" />{t('Requirements')}</Button>
             <Button variant="ghost" size="sm" className={view === 'relationships' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('relationships')}><Network data-icon="inline-start" />{t('Relationships')}</Button>
@@ -3768,13 +3824,14 @@ function Dashboard() {
             <Button variant="ghost" size="sm" className={view === 'sandboxes' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('sandboxes')}><FolderGit2 data-icon="inline-start" />{t('Workspaces')}</Button>
             <Button variant="ghost" size="sm" className={view === 'timers' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('timers')}><Clock3 data-icon="inline-start" />{t('Timers')}</Button>
           </nav>
+          )}
 
           <div className="ml-auto flex items-center gap-2">
             <div className="hidden max-w-80 items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[10px] lg:flex">
               <CircleDot className={`size-3 shrink-0 ${connection === 'online' ? 'text-emerald-500' : connection === 'reconnecting' ? 'text-amber-500' : 'text-rose-500'}`} />
               <span className="truncate font-mono">{workspaceLabel}</span>
             </div>
-            <Button
+            {!standaloneId ? <Button
               variant={notificationsEnabled && notificationAvailability === 'ready' ? 'secondary' : 'outline'}
               size="icon"
               aria-label={t(notificationButtonLabel)}
@@ -3783,7 +3840,7 @@ function Dashboard() {
               onClick={() => void toggleNotifications()}
             >
               {notificationsEnabled && notificationAvailability === 'ready' ? <BellRing /> : notificationAvailability === 'ready' || notificationAvailability === 'prompt' ? <Bell /> : <BellOff />}
-            </Button>
+            </Button> : null}
             <Button
               variant="outline"
               size="icon"
@@ -3795,7 +3852,7 @@ function Dashboard() {
             </Button>
             <Button variant="outline" size="sm" aria-label={t('Switch language')} onClick={() => setLocale(locale === 'en' ? 'zh-CN' : 'en')}><Languages data-icon="inline-start" />{locale === 'en' ? t('Chinese') : t('English')}</Button>
             <Button variant="outline" size="icon" aria-label={t('Refresh')} disabled={loading} onClick={() => void reload(true)}><RefreshCw className={loading ? 'animate-spin' : ''} /></Button>
-            <ManagerConfigurationDialog
+            {!standaloneId ? <ManagerConfigurationDialog
               client={client}
               configuration={configuration}
               disabled={connection !== 'online'}
@@ -3806,16 +3863,16 @@ function Dashboard() {
               onRequestNotificationPermission={requestNotificationPermission}
               onSave={saveConfiguration}
               workspace={workspace}
-            />
+            /> : null}
             <ConnectionDialog apiUrl={apiUrl} onConnect={connect} />
-            <NewRequirementDialog client={client} disabled={connection !== 'online'} modelCatalog={modelCatalog}
+            {!standaloneId ? <NewRequirementDialog client={client} disabled={connection !== 'online'} modelCatalog={modelCatalog}
               sandboxes={sandboxes.filter((sandbox) => sandbox.status !== 'terminated')}
-              onCreate={createRequirement} />
+              onCreate={createRequirement} /> : null}
           </div>
         </div>
       </header>
 
-      <section className="border-b border-border/70 px-4 py-4 lg:px-6" aria-labelledby="overview-title">
+      {!standaloneId ? <section className="border-b border-border/70 px-4 py-4 lg:px-6" aria-labelledby="overview-title">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
@@ -3860,7 +3917,7 @@ function Dashboard() {
             </div>
           </div>
         </div>
-      </section>
+      </section> : null}
 
       {error ? (
         <div className="px-4 pt-4 lg:px-6">
@@ -3882,6 +3939,7 @@ function Dashboard() {
         </div>
       ) : null}
 
+      {!standaloneId ? <>
       <div className="flex flex-wrap items-center gap-2 border-b border-border/70 px-4 py-2.5 lg:px-6">
         <Button variant="secondary" size="xs" title={workspace?.root}><FolderGit2 data-icon="inline-start" />{workspaceLabel}</Button>
         <Button variant={provider === 'all' ? 'ghost' : 'secondary'} size="xs" className={provider === 'all' ? 'text-muted-foreground' : ''} onClick={cycleProvider}>{provider === 'all' ? t('All Agents') : providerLabel(provider)}</Button>
@@ -4292,6 +4350,13 @@ function Dashboard() {
           </div>
         )}
       </section>
+      </> : null}
+
+      {standaloneId && !selectedRequirement ? (
+        <output className="grid min-h-0 flex-1 place-items-center p-6 text-sm text-muted-foreground">
+          {loading ? t('Loading…') : error ? t('Agent Manager not connected') : t('Requirement not found or no longer available.')}
+        </output>
+      ) : null}
 
       <RequirementDetail
         client={client}
@@ -4317,6 +4382,7 @@ function Dashboard() {
           : false}
         busyPullRequestId={busyPullRequestId}
         detailMode={detailMode}
+        standalone={standaloneId !== null}
         apiUrl={apiUrl}
         onOpenChange={(open) => { if (!open) setSelectedId(null); }}
         onStart={(message, attachments = []) => selectedRequirement ? runAction(
@@ -4386,11 +4452,11 @@ function Dashboard() {
         onLoadTrace={loadRequirementAgentTrace}
       />
 
-      <div className="fixed right-4 bottom-4 hidden items-center gap-2 rounded-lg border border-border bg-card/95 px-3 py-2 text-[10px] text-muted-foreground shadow-lg backdrop-blur sm:flex">
+      {!standaloneId ? <div className="fixed right-4 bottom-4 hidden items-center gap-2 rounded-lg border border-border bg-card/95 px-3 py-2 text-[10px] text-muted-foreground shadow-lg backdrop-blur sm:flex">
         <Terminal className="size-3.5" />
         <span>{connection === 'online' ? t('Agent Manager online') : connection === 'reconnecting' ? t('Reconnecting') : t('Agent Manager offline')}</span>
         <span className={`size-1.5 rounded-full ${connection === 'online' ? 'bg-emerald-500' : connection === 'reconnecting' ? 'bg-amber-500' : 'bg-rose-500'}`} />
-      </div>
+      </div> : null}
     </main>
   );
 }

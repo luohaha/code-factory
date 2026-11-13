@@ -1,4 +1,7 @@
 export const zhCN = {
+  'Open conversation in a new page': '在新页面打开对话',
+  'Back to dashboard': '返回看板',
+  'Requirement not found or no longer available.': '需求不存在或已不可用。',
   'Browser storage is unavailable. This draft is kept only until this tab closes or reloads.': '浏览器存储不可用。此草稿仅保留到当前标签页关闭或刷新前。',
   'Workspace': '工作区',
   'Workspaces': '工作区',
