@@ -3809,8 +3809,8 @@ function Dashboard() {
   return (
     <main className={`${standaloneId ? 'flex h-dvh flex-col overflow-hidden' : 'min-h-screen'} bg-background text-foreground`}>
       <header className="sticky top-0 z-30 shrink-0 border-b border-border/80 bg-background/92 backdrop-blur-xl">
-        <div className="flex h-14 items-center gap-3 px-4 lg:px-6">
-          <div className="flex items-center gap-2.5">
+        <div className={`flex items-center gap-3 px-4 lg:px-6 ${standaloneId ? 'h-14' : 'flex-wrap py-2 lg:h-14 lg:flex-nowrap lg:py-0'}`}>
+          <div className="flex shrink-0 items-center gap-2.5">
             <Image src="/logo.svg" alt="" aria-hidden="true" width={32} height={32} className="size-8 shrink-0" />
             <div className="hidden sm:block">
               <p className="text-sm leading-4 font-semibold tracking-[-0.02em]">Code Factory</p>
@@ -3824,7 +3824,7 @@ function Dashboard() {
               <span className="hidden sm:inline">{t('Back to dashboard')}</span>
             </Button>
           ) : (
-          <nav className="ml-1 flex h-full min-w-0 flex-1 items-center gap-1 overflow-x-auto sm:ml-5" aria-label={t('Main navigation')}>
+          <nav className="order-last flex w-full min-w-0 items-center gap-1 overflow-x-auto py-1 lg:order-none lg:ml-5 lg:h-full lg:w-auto lg:flex-1 lg:py-0" aria-label={t('Main navigation')}>
             <Button variant="ghost" size="sm" className={view === 'requirements' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('requirements')}><LayoutDashboard data-icon="inline-start" />{t('Requirements')}</Button>
             <Button variant="ghost" size="sm" className={view === 'relationships' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('relationships')}><Network data-icon="inline-start" />{t('Relationships')}</Button>
             <Button variant="ghost" size="sm" className={view === 'pull_requests' ? 'bg-muted' : 'text-muted-foreground'} onClick={() => setView('pull_requests')}><GitPullRequest data-icon="inline-start" />PR</Button>
@@ -3834,7 +3834,7 @@ function Dashboard() {
           </nav>
           )}
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className={`ml-auto flex items-center gap-2 ${standaloneId ? '' : 'min-w-0 flex-1 flex-wrap justify-end lg:flex-none lg:flex-nowrap'}`}>
             <div className="hidden max-w-80 items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[10px] lg:flex">
               <CircleDot className={`size-3 shrink-0 ${connection === 'online' ? 'text-emerald-500' : connection === 'reconnecting' ? 'text-amber-500' : 'text-rose-500'}`} />
               <span className="truncate font-mono">{workspaceLabel}</span>
