@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
@@ -13,6 +13,7 @@ import type {
 
 export const AGENT_MODEL_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 const DISCOVERY_TIMEOUT_MS = 15_000;
+const CODEX_CATALOG_MAX_BYTES = 8 * 1024 * 1024;
 
 export interface AgentModelDiscoverer {
   readonly provider: AgentProvider;
@@ -169,6 +170,7 @@ export interface CodexModelDiscovererOptions {
   workspaceRoot: string;
   command?: string;
   args?: readonly string[];
+  refreshArgs?: readonly string[];
   timeoutMs?: number;
 }
 
@@ -177,16 +179,56 @@ export class CodexModelDiscoverer implements AgentModelDiscoverer {
   readonly #workspaceRoot: string;
   readonly #command: string;
   readonly #args: readonly string[];
+  readonly #refreshArgs: readonly string[];
   readonly #timeoutMs: number;
 
   constructor(options: CodexModelDiscovererOptions) {
     this.#workspaceRoot = options.workspaceRoot;
     this.#command = options.command ?? 'codex';
     this.#args = options.args ?? ['app-server', '--stdio'];
+    this.#refreshArgs = options.refreshArgs ?? ['debug', 'models'];
     this.#timeoutMs = options.timeoutMs ?? DISCOVERY_TIMEOUT_MS;
   }
 
-  discover(signal?: AbortSignal): Promise<readonly AgentModel[]> {
+  async discover(signal?: AbortSignal): Promise<readonly AgentModel[]> {
+    const startedAt = performance.now();
+    // model/list may return the CLI's cached catalog. Refresh it before starting
+    // the app server so its picker snapshot includes newly available models.
+    await this.refreshCodexCatalog(signal);
+    return this.listModels(signal, Math.max(1, this.#timeoutMs - (performance.now() - startedAt)));
+  }
+
+  private refreshCodexCatalog(signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      execFile(this.#command, [...this.#refreshArgs], {
+        cwd: this.#workspaceRoot,
+        env: process.env,
+        shell: false,
+        encoding: 'utf8',
+        timeout: this.#timeoutMs,
+        maxBuffer: CODEX_CATALOG_MAX_BYTES,
+        ...(signal ? { signal } : {}),
+      }, (error, _stdout, stderr) => {
+        if (!error) {
+          resolve();
+        } else if (error.code === 2 && /unrecognized subcommand ['"](?:debug|models)['"]/.test(stderr)) {
+          // Older CLIs only support model/list. Keep their existing discovery
+          // behavior, without hiding failures from a supported refresh command.
+          resolve();
+        } else {
+          reject(new Error(signal?.aborted
+            ? 'Codex model discovery was cancelled'
+            : error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+              ? 'Codex model catalog refresh output exceeded the size limit'
+              : error.killed
+                ? `Codex model discovery timed out after ${this.#timeoutMs}ms`
+                : 'Codex model catalog refresh failed'));
+        }
+      });
+    });
+  }
+
+  private listModels(signal: AbortSignal | undefined, timeoutMs: number): Promise<readonly AgentModel[]> {
     return new Promise((resolve, reject) => {
       const child = spawn(this.#command, [...this.#args], {
         cwd: this.#workspaceRoot,
@@ -237,7 +279,7 @@ export class CodexModelDiscoverer implements AgentModelDiscoverer {
       };
       const timeout = setTimeout(
         () => fail(new Error(`Codex model discovery timed out after ${this.#timeoutMs}ms`)),
-        this.#timeoutMs,
+        timeoutMs,
       );
       timeout.unref();
       signal?.addEventListener('abort', abort, { once: true });
