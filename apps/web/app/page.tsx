@@ -1425,6 +1425,7 @@ function ManagerConfigurationDialog({
   client,
   configuration,
   disabled,
+  onModelsUpdated,
   notificationAvailability,
   notificationBusy,
   notificationsEnabled,
@@ -1436,6 +1437,7 @@ function ManagerConfigurationDialog({
   client: AgentManagerClient;
   configuration: AgentManagerConfigurationSnapshot | null;
   disabled: boolean;
+  onModelsUpdated: (catalog: AgentModelCatalogDto) => void;
   notificationAvailability: DesktopNotificationAvailability;
   notificationBusy: boolean;
   notificationsEnabled: boolean;
@@ -1450,11 +1452,37 @@ function ManagerConfigurationDialog({
   const [values, setValues] = useState<AgentManagerConfiguration | null>(configuration?.values ?? null);
   const [jevApiKey, setJevApiKey] = useState('');
   const [clearJevApiKey, setClearJevApiKey] = useState(false);
+  const [refreshingModels, setRefreshingModels] = useState(false);
+  const [modelRefreshResult, setModelRefreshResult] = useState<{ message: string; warning: boolean } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function update<K extends keyof AgentManagerConfiguration>(field: K, value: AgentManagerConfiguration[K]) {
     setValues((current) => current ? { ...current, [field]: value } : current);
+  }
+
+  async function refreshModels() {
+    if (refreshingModels || disabled) return;
+    setRefreshingModels(true);
+    setModelRefreshResult(null);
+    try {
+      const catalog = await client.refreshAgentModels();
+      onModelsUpdated(catalog);
+      const staleProviders = catalog.providers.filter((entry) => entry.stale).map((entry) => providerLabel(entry.provider));
+      setModelRefreshResult({
+        message: staleProviders.length > 0
+          ? t('Could not update models for {providers}. Previously available models are still usable.', { providers: staleProviders.join(', ') })
+          : t('Model list updated.'),
+        warning: staleProviders.length > 0,
+      });
+    } catch (caught) {
+      setModelRefreshResult({
+        message: `${t('Failed to update model list')}${caught instanceof Error ? `: ${caught.message}` : ''}`,
+        warning: true,
+      });
+    } finally {
+      setRefreshingModels(false);
+    }
   }
 
   async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
@@ -1489,6 +1517,7 @@ function ManagerConfigurationDialog({
           setValues(configuration?.values ?? null);
           setJevApiKey('');
           setClearJevApiKey(false);
+          setModelRefreshResult(null);
           setError(null);
         }
       }}
@@ -1553,6 +1582,23 @@ function ManagerConfigurationDialog({
               <div>
                 <p className="mb-3 text-xs font-semibold">{t('Runtime settings')}</p>
                 <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="rounded-lg border border-border p-3 sm:col-span-2">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-medium">{t('Model list')}</p>
+                        <p className="mt-1 text-[10px] text-muted-foreground">{t('Refresh available models now without restarting Agent Manager.')}</p>
+                      </div>
+                      <Button type="button" variant="outline" size="sm" disabled={disabled || refreshingModels} onClick={() => void refreshModels()}>
+                        <RefreshCw className={refreshingModels ? 'animate-spin' : ''} />
+                        {refreshingModels ? t('Updating models…') : t('Update model list')}
+                      </Button>
+                    </div>
+                    {modelRefreshResult ? (
+                      <p role={modelRefreshResult.warning ? 'alert' : 'status'} className={`mt-2 text-xs ${modelRefreshResult.warning ? 'text-destructive' : 'text-muted-foreground'}`}>
+                        {modelRefreshResult.message}
+                      </p>
+                    ) : null}
+                  </div>
                   {open ? <NativeAuthSettings client={client} /> : null}
                   <Field className="sm:col-span-2">
                     <FieldLabel htmlFor="configuration-jev-key">{t('Jev API key')}</FieldLabel>
@@ -3864,6 +3910,7 @@ function Dashboard() {
               client={client}
               configuration={configuration}
               disabled={connection !== 'online'}
+              onModelsUpdated={setModelCatalog}
               notificationAvailability={notificationAvailability}
               notificationBusy={notificationBusy}
               notificationsEnabled={notificationsEnabled}
