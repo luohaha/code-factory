@@ -22,6 +22,10 @@ breaking changes while the major version is `0`.
 - Keep mobile dashboard navigation clear of the toolbar.
 - Refresh the Codex model catalog before listing models so newly available models appear in the dashboard.
 
+### Security
+
+- Update the dashboard's React packages to 19.3.1 to address the React Server Components vulnerability CVE-2026-126187.
+
 ## [0.2.12] - 2026-11-07
 
 ### Added
