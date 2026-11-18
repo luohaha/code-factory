@@ -6,9 +6,21 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-11-18
+
+### Added
+
+- Open a Requirement conversation in a standalone dashboard tab with a centered conversation column, scrollable Requirement details, and a persistent reply composer.
+- Refresh the available agent models from Settings without restarting Agent Manager.
+
 ### Changed
 
 - Added an animated Code Factory banner to the README.
+
+### Fixed
+
+- Keep mobile dashboard navigation clear of the toolbar.
+- Refresh the Codex model catalog before listing models so newly available models appear in the dashboard.
 
 ## [0.2.12] - 2026-11-07
 
