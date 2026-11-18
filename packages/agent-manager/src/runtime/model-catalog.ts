@@ -7,6 +7,7 @@ import type { Logger } from '../infrastructure/logger.js';
 import type {
   AgentModel,
   AgentModelCatalogSnapshot,
+  AgentModelDiscoveryUnavailableReason,
   AgentModelProviderCatalog,
   AgentProvider,
 } from '../core/types.js';
@@ -18,6 +19,7 @@ const CODEX_CATALOG_MAX_BYTES = 8 * 1024 * 1024;
 export interface AgentModelDiscoverer {
   readonly provider: AgentProvider;
   readonly fallbackModels?: readonly AgentModel[];
+  readonly discoveryUnavailableReason?: AgentModelDiscoveryUnavailableReason | null;
   discover(signal?: AbortSignal): Promise<readonly AgentModel[]>;
 }
 
@@ -48,6 +50,7 @@ interface CatalogEntry {
   models: AgentModel[];
   refreshedAt: string | null;
   stale: boolean;
+  discoveryUnavailableReason: AgentModelDiscoveryUnavailableReason | null;
 }
 
 export class ModelCatalog implements AgentModelCatalogService {
@@ -72,6 +75,7 @@ export class ModelCatalog implements AgentModelCatalogService {
         models: normalizeModels(discoverer.fallbackModels ?? []),
         refreshedAt: null,
         stale: true,
+        discoveryUnavailableReason: discoverer.discoveryUnavailableReason ?? null,
       });
     }
   }
@@ -129,11 +133,14 @@ export class ModelCatalog implements AgentModelCatalogService {
       try {
         const models = normalizeModels(await discoverer.discover(signal));
         if (models.length === 0) throw new Error('Provider returned no models');
-        changed ||= current.refreshedAt !== refreshedAt || !sameModels(current.models, models) || current.stale;
-        this.#entries.set(discoverer.provider, { models, refreshedAt, stale: false });
+        const discoveryUnavailableReason = discoverer.discoveryUnavailableReason ?? null;
+        changed ||= current.refreshedAt !== refreshedAt || !sameModels(current.models, models) || current.stale
+          || current.discoveryUnavailableReason !== discoveryUnavailableReason;
+        this.#entries.set(discoverer.provider, { models, refreshedAt, stale: false, discoveryUnavailableReason });
         this.#logger.info('Agent model catalog refreshed', {
           provider: discoverer.provider,
           modelCount: models.length,
+          discoveryUnavailableReason,
         });
       } catch (error) {
         if (!signal.aborted) {
@@ -157,6 +164,7 @@ export class ModelCatalog implements AgentModelCatalogService {
         models: entry.models.map((model) => ({ ...model })),
         refreshedAt: entry.refreshedAt,
         stale: entry.stale,
+        ...(entry.discoveryUnavailableReason ? { discoveryUnavailableReason: entry.discoveryUnavailableReason } : {}),
       };
     });
     return {
@@ -363,18 +371,21 @@ export class ClaudeCodeModelDiscoverer implements AgentModelDiscoverer {
     ]);
   }
 
+  get discoveryUnavailableReason(): AgentModelDiscoveryUnavailableReason | null {
+    const configuredBaseUrl = this.#environment.ANTHROPIC_BASE_URL?.trim();
+    if (configuredBaseUrl && !isAnthropicApiUrl(configuredBaseUrl)) {
+      return this.#environment.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY === '1'
+        ? null : 'gateway_discovery_disabled';
+    }
+    return this.#environment.ANTHROPIC_API_KEY?.trim() ? null : 'api_key_missing';
+  }
+
   async discover(signal?: AbortSignal): Promise<readonly AgentModel[]> {
     const apiKey = this.#environment.ANTHROPIC_API_KEY?.trim();
     const authToken = this.#environment.ANTHROPIC_AUTH_TOKEN?.trim();
-    const discoverGateway = this.#environment.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY === '1';
     const configuredBaseUrl = this.#environment.ANTHROPIC_BASE_URL?.trim();
     const baseUrl = (configuredBaseUrl || 'https://api.anthropic.com').replace(/\/$/, '');
-    const gatewayDiscoveryEnabled = discoverGateway
-      && Boolean(configuredBaseUrl)
-      && !isAnthropicApiUrl(baseUrl);
-    const directApiDiscoveryEnabled = Boolean(apiKey)
-      && (!configuredBaseUrl || isAnthropicApiUrl(baseUrl));
-    if (!gatewayDiscoveryEnabled && !directApiDiscoveryEnabled) return this.fallbackModels;
+    if (this.discoveryUnavailableReason) return this.fallbackModels;
 
     const headers = claudeDiscoveryHeaders(this.#environment);
     if (authToken) headers.set('authorization', `Bearer ${authToken}`);

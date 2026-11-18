@@ -56,6 +56,8 @@ Agent Manager maintains a provider-specific model catalog for the dashboard. It 
 
 The configuration dialog's **Update model list** button also runs discovery immediately. Before opening the Codex app server, discovery awaits `codex debug models` to refresh the CLI's own catalog; `model/list` alone may return cached or bundled models. The app server then supplies its normal picker filtering and pagination. The two steps share a 15-second discovery deadline, support cancellation, and bound captured catalog output to 8 MiB without logging its contents. Refresh failures retain the previous Manager list and mark Codex stale instead of reporting a successful cached lookup. Older Codex versions that explicitly reject the `debug models` command retain their previous `model/list` behavior; their own cache freshness still depends on the CLI, so upgrade Codex when newly released models remain unavailable.
 
+Claude discovery requests the models endpoint on every refresh when enabled. Users signed in only through a Claude Code subscription can use built-in aliases and locally configured models. The dashboard identifies the missing API key or disabled gateway discovery when it loads local options.
+
 Discovery results are cached in memory. Provider failures retain the previous list and mark it stale instead of affecting Agent execution. The HTTP catalog continues to include the CLI-default choice separately, and the execution API remains compatible with explicit custom model strings supplied by non-dashboard clients.
 
 ### RD control-plane CLI

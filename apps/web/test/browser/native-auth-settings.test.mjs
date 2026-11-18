@@ -106,6 +106,43 @@ async function fixture(t, locale, mobile = false) {
 }
 
 for (const locale of ['en', 'zh-CN']) {
+  void test(`Claude alias-only refreshes explain configuration limits without claiming remote success (${locale})`, async (t) => {
+    const f = await fixture(t, locale, locale === 'zh-CN');
+    let reason = 'api_key_missing';
+    await f.page.route('**/api/agent-models/refresh', (route) => route.fulfill({ json: {
+      refreshIntervalSeconds: 86_400, providers: [
+        { provider: 'codex', models: [{ id: 'new-model', displayName: 'New model', description: null }],
+          stale: false, refreshedAt: '2026-11-18T00:00:00.000Z' },
+        { provider: 'claude-code', models: [{ id: reason ? 'sonnet' : 'claude-new', displayName: 'Claude', description: null }],
+          stale: false, refreshedAt: '2026-11-18T00:00:00.000Z', ...(reason ? { discoveryUnavailableReason: reason } : {}) },
+      ],
+    } }));
+    const refresh = f.dialog.getByRole('button', { name: locale === 'zh-CN' ? '更新模型列表' : 'Update model list', exact: true });
+    for (const unavailableReason of ['api_key_missing', 'gateway_discovery_disabled']) {
+      reason = unavailableReason;
+      const notice = locale === 'zh-CN'
+        ? reason === 'api_key_missing'
+          ? 'Claude Code 当前使用内置模型别名。配置 API Key 后，才能获取具体版本的模型列表。'
+          : 'Claude Code 当前使用内置模型别名。启用网关模型发现后，才能获取具体版本的模型列表。'
+        : reason === 'api_key_missing'
+          ? 'Claude Code is using built-in model aliases. Configure an API key to fetch versioned models.'
+          : 'Claude Code is using built-in model aliases. Enable gateway model discovery to fetch versioned models.';
+      await refresh.click();
+      await f.dialog.getByText(notice, { exact: false }).waitFor();
+      assert.equal(await f.dialog.getByRole('status').textContent(), `${locale === 'zh-CN' ? '已更新 Codex 的模型列表。' : 'Model list updated for Codex.'} ${notice}`);
+      assert.equal(await f.dialog.getByRole('alert').count(), 0);
+      assert.equal(await f.dialog.evaluate((element) => element.scrollWidth <= element.clientWidth), true);
+    }
+    reason = null;
+    await refresh.click();
+    await f.dialog.getByRole('status').getByText(locale === 'zh-CN' ? '模型列表已更新。' : 'Model list updated.', { exact: true }).waitFor();
+    assert.deepEqual(f.configurationWrites, []);
+    await f.dialog.getByRole('button', { name: locale === 'zh-CN' ? '取消' : 'Cancel', exact: true }).click();
+    await f.page.getByRole('button', { name: locale === 'zh-CN' ? '新建需求' : 'New requirement', exact: true }).click();
+    await f.page.locator('#requirement-provider').selectOption('claude-code');
+    assert.deepEqual(await f.page.locator('#requirement-model option').evaluateAll((options) => options.map((option) => option.value)), ['', 'claude-new']);
+  });
+
   void test(`model refresh applies new options immediately without saving settings (${locale})`, async (t) => {
     const f = await fixture(t, locale, locale === 'zh-CN');
     let complete;

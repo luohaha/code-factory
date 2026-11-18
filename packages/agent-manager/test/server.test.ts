@@ -11,7 +11,7 @@ import {
   MAX_PULL_REQUEST_RECONCILE_INTERVAL_SECONDS,
 } from '../src/infrastructure/configuration.ts';
 import { createLogger } from '../src/infrastructure/logger.ts';
-import { ModelCatalog, type AgentModelCatalogService } from '../src/runtime/model-catalog.ts';
+import { ClaudeCodeModelDiscoverer, ModelCatalog, type AgentModelCatalogService } from '../src/runtime/model-catalog.ts';
 import type { AgentProcessRunner, ProcessRunRequest } from '../src/runtime/process-runner.ts';
 import { createAgentManagerServer } from '../src/http/server.ts';
 import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.ts';
@@ -194,6 +194,31 @@ test('HTTP model refresh bypasses the cache and preserves models from failed pro
     const recovered = await (await fetch(`${baseUrl}/api/agent-models/refresh`, { method: 'POST' })).json() as AgentModelCatalogSnapshot;
     assert.equal(calls, 3);
     assert.equal(recovered.providers[1]?.stale, false);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
+
+test('HTTP model catalogs identify Claude aliases when remote discovery is unavailable', async () => {
+  const logger = createLogger({ level: 'silent' });
+  const catalog = new ModelCatalog({ logger, discoverers: [new ClaudeCodeModelDiscoverer({
+    environment: {}, fetch: async () => { throw new Error('Remote discovery must not run'); },
+  })] });
+  const manager = new AgentManager({ workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'), logger, modelCatalog: catalog });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    for (const request of [{ path: '/api/agent-models', method: 'GET' }, { path: '/api/agent-models/refresh', method: 'POST' }]) {
+      const response = await fetch(`${baseUrl}${request.path}`, { method: request.method });
+      assert.equal(response.status, 200);
+      const body = await response.json() as AgentModelCatalogSnapshot;
+      assert.equal(body.providers[0]?.discoveryUnavailableReason, 'api_key_missing');
+      assert.equal(body.providers[0]?.stale, false);
+      assert.ok(body.providers[0]?.models.some((model) => model.id === 'sonnet'));
+    }
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();

@@ -35,6 +35,7 @@ export interface AgentModelProviderCatalogDto {
   models: AgentModelDto[];
   refreshedAt: string | null;
   stale: boolean;
+  discoveryUnavailableReason?: 'api_key_missing' | 'gateway_discovery_disabled';
 }
 
 export interface AgentModelCatalogDto {

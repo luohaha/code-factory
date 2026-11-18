@@ -56,11 +56,14 @@ export interface AgentModel {
   description: string | null;
 }
 
+export type AgentModelDiscoveryUnavailableReason = 'api_key_missing' | 'gateway_discovery_disabled';
+
 export interface AgentModelProviderCatalog {
   provider: AgentProvider;
   models: AgentModel[];
   refreshedAt: string | null;
   stale: boolean;
+  discoveryUnavailableReason?: AgentModelDiscoveryUnavailableReason;
 }
 
 export interface AgentModelCatalogSnapshot {

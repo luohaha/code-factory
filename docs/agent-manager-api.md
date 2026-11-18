@@ -280,11 +280,14 @@ interface AgentModelCatalog {
     }>;
     refreshedAt: string | null;
     stale: boolean;
+    discoveryUnavailableReason?: 'api_key_missing' | 'gateway_discovery_disabled';
   }>;
 }
 ~~~
 
 `stale=true` means the latest provider refresh failed or has not completed. Previously discovered values, or provider-safe fallbacks, remain in `models`.
+
+Claude Code includes `discoveryUnavailableReason` when its catalog uses built-in aliases and locally configured overrides. The reason is `api_key_missing` for direct API access or `gateway_discovery_disabled` for a custom gateway with discovery turned off. In these cases, `stale=false` indicates the local options are ready and `refreshedAt` records when they were loaded.
 
 ### 3.9 AgentTimer
 
@@ -422,6 +425,8 @@ Success: 200 OK with `AgentModelCatalog`.
 Immediately refreshes all providers, bypassing the 24-hour cache interval, and returns the resulting `AgentModelCatalog` with HTTP 200. No request body is required. Concurrent refreshes share the in-flight discovery. Provider failures retain their last usable models and return `stale=true`; other providers still update. The existing `agent_models.updated` event broadcasts changed catalog snapshots to connected dashboards. The configuration dialog uses this endpoint and applies the returned options without saving configuration or restarting the Manager.
 
 For Codex, discovery refreshes the CLI catalog with `codex debug models` before reading the app-server picker list, since `model/list` can return cached models. A supported refresh command that fails does not fall back to a successful cached lookup. Older CLIs that explicitly lack this command retain their existing `model/list` behavior; upgrade Codex if that CLI's cache omits newly released models.
+
+For Claude Code, each refresh requests `/v1/models` when direct API-key discovery or gateway discovery is enabled. When discovery is unavailable, the dashboard uses `discoveryUnavailableReason` to explain how to enable it. Cached reads and catalog update events carry the same field.
 
 ### GET /api/search
 

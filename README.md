@@ -15,7 +15,7 @@ Code Factory brings requirements, coding agents, and GitHub pull requests into o
 
 Each requirement has its own persistent agent context. Jev stops automatic recovery after two consecutive failed or timed-out RD Runs; a successful Run starts a fresh failure streak. Agents can split work into child requirements and work in parallel, while humans steer the work, request reviews, and confirm completion.
 
-Use **Update model list** in Settings to refresh available model options immediately without restarting Agent Manager.
+Use **Update model list** in Settings to refresh available model options immediately without restarting Agent Manager. Settings indicates when Claude Code is limited to built-in aliases and locally configured models.
 
 Native Agents using E2B can check, pause, and resume their selected sandbox and transfer files between the host and sandbox, including conversation attachments. Pausing preserves remote state while the Agent continues on the host.
 

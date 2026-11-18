@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import type { AgentModelCatalogSnapshot, AgentModelDiscoveryUnavailableReason } from '../src/core/types.ts';
 import { createLogger } from '../src/infrastructure/logger.ts';
 import {
   AGENT_MODEL_REFRESH_INTERVAL_MS,
@@ -14,6 +15,67 @@ import {
 } from '../src/runtime/model-catalog.ts';
 
 const logger = createLogger({ level: 'silent' });
+
+test('Claude refresh explains alias-only catalogs and replaces remote models on every refresh', async () => {
+  const scenarios: Array<{ environment: NodeJS.ProcessEnv; reason?: AgentModelDiscoveryUnavailableReason }> = [
+    { environment: {}, reason: 'api_key_missing' },
+    { environment: { ANTHROPIC_AUTH_TOKEN: 'fixture-token' }, reason: 'api_key_missing' },
+    { environment: { ANTHROPIC_BASE_URL: 'https://gateway.example.test', ANTHROPIC_API_KEY: 'fixture-key' }, reason: 'gateway_discovery_disabled' },
+    { environment: { ANTHROPIC_API_KEY: 'fixture-key' } },
+    { environment: { ANTHROPIC_BASE_URL: 'https://gateway.example.test', ANTHROPIC_AUTH_TOKEN: 'fixture-token', CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1' } },
+  ];
+  for (const scenario of scenarios) {
+    let calls = 0;
+    const catalog = new ModelCatalog({ logger, discoverers: [new ClaudeCodeModelDiscoverer({
+      environment: scenario.environment,
+      fetch: async () => {
+        calls += 1;
+        return new Response(JSON.stringify({ data: [{ id: `claude-model-${calls}` }] }));
+      },
+    })] });
+    try {
+      await catalog.getModels();
+      await catalog.refresh();
+      const provider = (await catalog.getModels()).providers[0];
+      assert.ok(provider);
+      assert.equal(provider?.discoveryUnavailableReason, scenario.reason);
+      assert.equal(provider?.stale, false);
+      assert.ok(provider.models.some((model) => model.id === 'sonnet'));
+      assert.equal(calls, scenario.reason ? 0 : 2);
+      if (!scenario.reason) {
+        assert.ok(provider.models.some((model) => model.id === 'claude-model-2'));
+        assert.ok(!provider.models.some((model) => model.id === 'claude-model-1'));
+      }
+    } finally {
+      catalog.stop();
+    }
+  }
+});
+
+test('discovery availability changes publish an updated catalog even with identical models and timestamps', async () => {
+  let reason: AgentModelDiscoveryUnavailableReason | null = null;
+  const updates: AgentModelCatalogSnapshot[] = [];
+  const catalog = new ModelCatalog({ logger, now: () => new Date('2026-11-18T00:00:00Z'),
+    onUpdated: (snapshot) => updates.push(snapshot), discoverers: [{
+      provider: 'claude-code',
+      get discoveryUnavailableReason() { return reason; },
+      async discover() { return [{ id: 'sonnet', displayName: 'Sonnet', description: null }]; },
+    }],
+  });
+  try {
+    await catalog.getModels();
+    reason = 'api_key_missing';
+    await catalog.refresh();
+    assert.equal(updates.length, 2);
+    assert.equal(updates.at(-1)?.providers[0]?.discoveryUnavailableReason, 'api_key_missing');
+    reason = null;
+    await catalog.refresh();
+    assert.equal(updates.length, 3);
+    assert.equal(Object.hasOwn(updates.at(-1)!.providers[0]!, 'discoveryUnavailableReason'), false);
+  } finally {
+    catalog.stop();
+  }
+});
 
 test('concurrent manual refreshes and reads share in-flight discovery', async () => {
   let calls = 0;

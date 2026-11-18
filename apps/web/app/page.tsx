@@ -1469,10 +1469,22 @@ function ManagerConfigurationDialog({
       const catalog = await client.refreshAgentModels();
       onModelsUpdated(catalog);
       const staleProviders = catalog.providers.filter((entry) => entry.stale).map((entry) => providerLabel(entry.provider));
+      const claudeDiscoveryNotice = catalog.providers.find((entry) => entry.provider === 'claude-code' && !entry.stale)?.discoveryUnavailableReason;
+      const messages: string[] = [];
+      if (staleProviders.length > 0) {
+        messages.push(t('Could not update models for {providers}. Previously available models are still usable.', { providers: staleProviders.join(', ') }));
+      } else if (!claudeDiscoveryNotice) {
+        messages.push(t('Model list updated.'));
+      }
+      if (claudeDiscoveryNotice) {
+        const updatedProviders = catalog.providers.filter((entry) => !entry.stale && !entry.discoveryUnavailableReason).map((entry) => providerLabel(entry.provider));
+        if (updatedProviders.length > 0) messages.push(t('Model list updated for {providers}.', { providers: updatedProviders.join(', ') }));
+        messages.push(t(claudeDiscoveryNotice === 'gateway_discovery_disabled'
+          ? 'Claude Code is using built-in model aliases. Enable gateway model discovery to fetch versioned models.'
+          : 'Claude Code is using built-in model aliases. Configure an API key to fetch versioned models.'));
+      }
       setModelRefreshResult({
-        message: staleProviders.length > 0
-          ? t('Could not update models for {providers}. Previously available models are still usable.', { providers: staleProviders.join(', ') })
-          : t('Model list updated.'),
+        message: messages.join(' '),
         warning: staleProviders.length > 0,
       });
     } catch (caught) {
