@@ -48,6 +48,7 @@ The service listens only on the loopback interface by default and currently has 
 | PUT | /api/native-auth/profiles/:id | Replace a saved API profile |
 | DELETE | /api/native-auth/profiles/:id | Remove an unused API profile |
 | GET | /api/agent-models | Read cached Codex, Claude Code, and Native Agent model options |
+| POST | /api/agent-models/refresh | Refresh provider model options immediately |
 | GET | /api/sandboxes | List Default workspace, named local workspaces, and E2B sandboxes |
 | POST | /api/sandboxes | Create a named local workspace or provision/attach E2B |
 | PATCH | /api/sandboxes/:id | Update a named local workspace or E2B sandbox |
@@ -415,6 +416,10 @@ A Native Agent Requirement stores the selected item in `model` as `profile:<id>`
 Returns the in-memory provider model catalog. Agent Manager refreshes it at startup and every 24 hours. Codex discovery uses the authenticated local CLI. Claude discovery uses the configured API or gateway when possible and otherwise returns Claude Code rolling aliases and environment-configured model IDs. Native Agent lists pi-ai OpenAI and Anthropic models using `provider/model` IDs. Refresh failures do not fail this endpoint; the affected provider is returned with `stale=true` and its last usable models.
 
 Success: 200 OK with `AgentModelCatalog`.
+
+### POST /api/agent-models/refresh
+
+Immediately refreshes all providers, bypassing the 24-hour cache interval, and returns the resulting `AgentModelCatalog` with HTTP 200. No request body is required. Concurrent refreshes share the in-flight discovery. Provider failures retain their last usable models and return `stale=true`; other providers still update. The existing `agent_models.updated` event broadcasts changed catalog snapshots to connected dashboards. The configuration dialog uses this endpoint and applies the returned options without saving configuration or restarting the Manager.
 
 ### GET /api/search
 

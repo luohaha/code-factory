@@ -11,11 +11,11 @@ import {
   MAX_PULL_REQUEST_RECONCILE_INTERVAL_SECONDS,
 } from '../src/infrastructure/configuration.ts';
 import { createLogger } from '../src/infrastructure/logger.ts';
-import type { AgentModelCatalogService } from '../src/runtime/model-catalog.ts';
+import { ModelCatalog, type AgentModelCatalogService } from '../src/runtime/model-catalog.ts';
 import type { AgentProcessRunner, ProcessRunRequest } from '../src/runtime/process-runner.ts';
 import { createAgentManagerServer } from '../src/http/server.ts';
 import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.ts';
-import type { RunOutcome } from '../src/core/types.ts';
+import type { AgentModelCatalogSnapshot, RunOutcome } from '../src/core/types.ts';
 import { CODE_FACTORY_VERSION } from '../src/infrastructure/version.ts';
 import { runCodeFactoryCli } from '../src/cli/code-factory-cli.ts';
 
@@ -140,6 +140,60 @@ test('PR unregister validates requests and CLI removes only its Requirement regi
     assert.equal(manager.listEvents().at(-1)?.type, 'pull_request.unregistered');
     assert.equal(await runCodeFactoryCli(args, context), 1);
     assert.match(errors.join(''), /404/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await manager.close();
+  }
+});
+
+test('HTTP model refresh bypasses the cache and preserves models from failed providers', async () => {
+  const logger = createLogger({ level: 'silent' });
+  let calls = 0;
+  let failClaude = false;
+  let modelId = 'model-a';
+  const updates: AgentModelCatalogSnapshot[] = [];
+  const modelCatalog = new ModelCatalog({
+    logger,
+    now: () => new Date('2026-11-18T00:00:00.000Z'),
+    onUpdated: (snapshot) => updates.push(snapshot),
+    discoverers: [
+      { provider: 'codex', async discover() {
+        calls += 1;
+        return [{ id: modelId, displayName: modelId, description: null }];
+      } },
+      { provider: 'claude-code', async discover() {
+        if (failClaude) throw new Error('offline');
+        return [{ id: 'claude-model', displayName: 'Claude', description: null }];
+      } },
+    ],
+  });
+  const manager = new AgentManager({ workspaceRoot: process.cwd(),
+    store: new SqliteAgentManagerStore(':memory:'), logger, modelCatalog });
+  const server = createAgentManagerServer(manager);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    await (await fetch(`${baseUrl}/api/agent-models`)).json();
+    modelId = 'model-b';
+    const cached = await (await fetch(`${baseUrl}/api/agent-models`)).json() as AgentModelCatalogSnapshot;
+    assert.equal(cached.providers[0]?.models[0]?.id, 'model-a');
+    assert.equal(calls, 1);
+
+    failClaude = true;
+    const response = await fetch(`${baseUrl}/api/agent-models/refresh`, { method: 'POST' });
+    assert.equal(response.status, 200);
+    const refreshed = await response.json() as AgentModelCatalogSnapshot;
+    assert.equal(calls, 2);
+    assert.equal(refreshed.providers[0]?.models[0]?.id, 'model-b');
+    assert.equal(refreshed.providers[0]?.stale, false);
+    assert.equal(refreshed.providers[1]?.models[0]?.id, 'claude-model');
+    assert.equal(refreshed.providers[1]?.stale, true);
+    assert.deepEqual(updates.at(-1), refreshed);
+
+    failClaude = false;
+    const recovered = await (await fetch(`${baseUrl}/api/agent-models/refresh`, { method: 'POST' })).json() as AgentModelCatalogSnapshot;
+    assert.equal(calls, 3);
+    assert.equal(recovered.providers[1]?.stale, false);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await manager.close();

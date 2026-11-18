@@ -314,6 +314,10 @@ export class AgentManagerClient {
     return this.request('/api/agent-models');
   }
 
+  refreshAgentModels(): Promise<AgentModelCatalogDto> {
+    return this.request('/api/agent-models/refresh', { method: 'POST' });
+  }
+
   updateConfiguration(values: Partial<AgentManagerConfiguration>): Promise<AgentManagerConfigurationSnapshot> {
     return this.request('/api/configuration', { method: 'PATCH', body: JSON.stringify(values) });
   }

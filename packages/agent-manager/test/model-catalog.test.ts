@@ -15,6 +15,33 @@ import {
 
 const logger = createLogger({ level: 'silent' });
 
+test('concurrent manual refreshes and reads share in-flight discovery', async () => {
+  let calls = 0;
+  let complete!: () => void;
+  const pending = new Promise<void>((resolve) => { complete = resolve; });
+  const catalog = new ModelCatalog({ logger, discoverers: [{
+    provider: 'codex',
+    async discover() {
+      calls += 1;
+      await pending;
+      return [{ id: 'new-model', displayName: 'New model', description: null }];
+    },
+  }] });
+  try {
+    const first = catalog.refresh();
+    const second = catalog.refresh();
+    const read = catalog.getModels();
+    assert.equal(calls, 1);
+    complete();
+    await Promise.all([first, second]);
+    assert.equal((await read).providers[0]?.models[0]?.id, 'new-model');
+    assert.equal(calls, 1);
+  } finally {
+    complete();
+    catalog.stop();
+  }
+});
+
 test('Codex model discovery reads every model/list page from the app server', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-codex-models-'));
   const scriptPath = join(directory, 'fake-codex.cjs');

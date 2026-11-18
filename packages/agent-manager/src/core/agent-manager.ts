@@ -439,6 +439,11 @@ export class AgentManager extends EventEmitter {
     return this.#modelCatalog.getModels();
   }
 
+  async refreshAgentModels(): Promise<AgentModelCatalogSnapshot> {
+    await this.#modelCatalog.refresh();
+    return this.#modelCatalog.getModels();
+  }
+
   close(): Promise<void> {
     if (this.#closePromise) return this.#closePromise;
     if (this.#closed) return Promise.resolve();

@@ -24,8 +24,8 @@ after(async () => {
   await server?.close();
 });
 
-async function fixture(t, locale) {
-  const context = await browser.newContext({ locale });
+async function fixture(t, locale, mobile = false) {
+  const context = await browser.newContext({ locale, viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 } });
   t.after(() => context.close());
   const page = await context.newPage();
   page.setDefaultTimeout(10_000);
@@ -60,7 +60,10 @@ async function fixture(t, locale) {
     let body = { items: [] };
     let status = 200;
     if (path === '/api/workspace') body = { root: '/fixture', databasePath: '/fixture/data.sqlite', logFilePath: null };
-    if (path === '/api/agent-models') body = { providers: [], refreshIntervalSeconds: 86_400 };
+    if (path === '/api/agent-models') body = { providers: [{ provider: 'codex',
+      models: [{ id: 'old-model', displayName: 'Old model', description: null }],
+      refreshedAt: '2026-11-17T00:00:00.000Z', stale: false,
+    }], refreshIntervalSeconds: 86_400 };
     if (path === '/api/configuration') {
       if (request.method() === 'PATCH') {
         const patch = request.postDataJSON();
@@ -103,6 +106,39 @@ async function fixture(t, locale) {
 }
 
 for (const locale of ['en', 'zh-CN']) {
+  void test(`model refresh applies new options immediately without saving settings (${locale})`, async (t) => {
+    const f = await fixture(t, locale, locale === 'zh-CN');
+    let complete;
+    const pending = new Promise((resolve) => { complete = resolve; });
+    t.after(() => complete());
+    let requests = 0;
+    await f.page.route('**/api/agent-models/refresh', async (route) => {
+      requests += 1;
+      assert.equal(route.request().method(), 'POST');
+      await pending;
+      await route.fulfill({ json: { refreshIntervalSeconds: 86_400, providers: [{
+        provider: 'codex', models: [{ id: 'new-model', displayName: 'New model', description: null }],
+        stale: false, refreshedAt: '2026-11-18T00:00:00.000Z',
+      }] } });
+    });
+    // Refresh must work independently of an unsaved, invalid configuration form.
+    await f.page.locator('#configuration-port').fill('0');
+    await f.dialog.getByRole('button', { name: locale === 'zh-CN' ? '更新模型列表' : 'Update model list', exact: true }).click();
+    const updating = f.dialog.getByRole('button', { name: locale === 'zh-CN' ? '正在更新模型…' : 'Updating models…', exact: true });
+    await updating.waitFor();
+    assert.equal(await updating.isDisabled(), true);
+    complete();
+    await f.dialog.getByRole('status').getByText(locale === 'zh-CN' ? '模型列表已更新。' : 'Model list updated.', { exact: true }).waitFor();
+    assert.equal(requests, 1);
+    assert.deepEqual(f.configurationWrites, []);
+    assert.equal(await f.dialog.isVisible(), true);
+    assert.equal(await f.dialog.evaluate((element) => element.scrollWidth <= element.clientWidth), true);
+    await f.dialog.getByRole('button', { name: locale === 'zh-CN' ? '取消' : 'Cancel', exact: true }).click();
+    await f.page.getByRole('button', { name: locale === 'zh-CN' ? '新建需求' : 'New requirement', exact: true }).click();
+    const models = f.page.locator('#requirement-model option');
+    assert.deepEqual(await models.evaluateAll((options) => options.map((option) => option.value)), ['', 'new-model']);
+  });
+
   void test(`attachment retention defaults to 7 days and saves in settings (${locale})`, async (t) => {
     const f = await fixture(t, locale);
     const input = f.dialog.getByRole('spinbutton', { name: locale === 'zh-CN' ? '附件保留周期（天）' : 'Attachment retention (days)', exact: true });
@@ -159,6 +195,30 @@ for (const locale of ['en', 'zh-CN']) {
     assert.equal(f.profileWrites.length, 3);
   });
 }
+
+void test('model refresh reports request and provider failures and allows retry', async (t) => {
+  const f = await fixture(t, 'en');
+  let attempts = 0;
+  await f.page.route('**/api/agent-models/refresh', async (route) => {
+    attempts += 1;
+    if (attempts === 1) return route.fulfill({ status: 503, json: { error: 'Discovery unavailable' } });
+    return route.fulfill({ json: { refreshIntervalSeconds: 86_400, providers: [{
+      provider: 'claude-code', models: [{ id: 'cached-claude', displayName: 'Cached Claude', description: null }],
+      stale: attempts === 2, refreshedAt: '2026-11-18T00:00:00.000Z',
+    }] } });
+  });
+  const refresh = f.dialog.getByRole('button', { name: 'Update model list', exact: true });
+  await refresh.click();
+  await f.dialog.getByRole('alert').getByText('Failed to update model list: Discovery unavailable', { exact: true }).waitFor();
+  assert.equal(await refresh.isEnabled(), true);
+  await refresh.click();
+  await f.dialog.getByRole('alert').getByText('Could not update models for Claude Code. Previously available models are still usable.', { exact: true }).waitFor();
+  await refresh.click();
+  await f.dialog.getByRole('status').getByText('Model list updated.', { exact: true }).waitFor();
+  assert.equal(await f.dialog.getByRole('alert').count(), 0);
+  assert.equal(attempts, 3);
+  assert.deepEqual(f.configurationWrites, []);
+});
 
 void test('Native API profile errors remain visible and allow retry', async (t) => {
   const f = await fixture(t, 'en');
