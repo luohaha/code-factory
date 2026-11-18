@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -42,11 +42,23 @@ test('concurrent manual refreshes and reads share in-flight discovery', async ()
   }
 });
 
-test('Codex model discovery reads every model/list page from the app server', async () => {
+test('Codex discovery refreshes the CLI cache before reading every model/list page', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-codex-models-'));
   const scriptPath = join(directory, 'fake-codex.cjs');
+  const cachePath = join(directory, 'models.json');
+  writeFileSync(cachePath, JSON.stringify({ id: 'old-model', displayName: 'Old model' }));
   writeFileSync(scriptPath, `
+const fs = require('node:fs');
 const readline = require('node:readline');
+const cachePath = ${JSON.stringify(cachePath)};
+if (process.argv[2] === '--refresh') {
+  // A slow refresh must finish before app-server captures its picker snapshot.
+  setTimeout(() => {
+    fs.writeFileSync(cachePath, JSON.stringify({ id: 'gpt-6.2-sol', displayName: 'GPT-6.2 Sol' }));
+    process.stdout.write(JSON.stringify({ models: [] }));
+  }, 25);
+} else {
+const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
 const lines = readline.createInterface({ input: process.stdin });
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
 lines.on('line', (line) => {
@@ -60,10 +72,11 @@ lines.on('line', (line) => {
   }
   if (message.method === 'model/list' && message.params.cursor === 'page-2') {
     send({ id: message.id, result: { data: [
-      { id: 'model-b', model: 'model-b', displayName: 'Model B', description: '' }
+      { ...cached, model: cached.id, description: '' }
     ], nextCursor: null } });
   }
 });
+}
 `);
 
   try {
@@ -71,12 +84,89 @@ lines.on('line', (line) => {
       workspaceRoot: process.cwd(),
       command: process.execPath,
       args: [scriptPath],
+      refreshArgs: [scriptPath, '--refresh'],
       timeoutMs: 5_000,
     });
     assert.deepEqual(await discoverer.discover(), [
       { id: 'model-a', displayName: 'Model A', description: 'First' },
-      { id: 'model-b', displayName: 'Model B', description: null },
+      { id: 'gpt-6.2-sol', displayName: 'GPT-6.2 Sol', description: null },
     ]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Codex discovery keeps model/list compatibility when the refresh command is unsupported', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-codex-legacy-'));
+  const scriptPath = join(directory, 'fake-codex.cjs');
+  writeFileSync(scriptPath, `
+if (process.argv[2] === '--refresh') {
+  process.stderr.write("error: unrecognized subcommand 'models'\\n");
+  process.exit(2);
+}
+const lines = require('node:readline').createInterface({ input: process.stdin });
+const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
+lines.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.id === 1) send({ id: 1, result: {} });
+  if (message.method === 'model/list') send({ id: message.id, result: {
+    data: [{ model: 'legacy-model', displayName: 'Legacy model' }], nextCursor: null,
+  } });
+});
+`);
+  try {
+    const discoverer = new CodexModelDiscoverer({ workspaceRoot: directory,
+      command: process.execPath, args: [scriptPath], refreshArgs: [scriptPath, '--refresh'] });
+    assert.deepEqual(await discoverer.discover(), [{ id: 'legacy-model', displayName: 'Legacy model', description: null }]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Codex discovery rejects failed, cancelled, and oversized refreshes without accepting cached models', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-codex-failed-refresh-'));
+  const scriptPath = join(directory, 'fake-codex.cjs');
+  const listedPath = join(directory, 'listed');
+  writeFileSync(scriptPath, `
+if (process.argv[2] === '--refresh') {
+  process.stderr.write('remote refresh failed: private diagnostic');
+  process.exit(1);
+}
+require('node:fs').writeFileSync(${JSON.stringify(listedPath)}, 'listed');
+`);
+  try {
+    const discoverer = new CodexModelDiscoverer({ workspaceRoot: directory,
+      command: process.execPath, args: [scriptPath], refreshArgs: [scriptPath, '--refresh'] });
+    await assert.rejects(discoverer.discover(), { message: 'Codex model catalog refresh failed' });
+    assert.equal(existsSync(listedPath), false);
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(discoverer.discover(controller.signal), { message: 'Codex model discovery was cancelled' });
+    assert.equal(existsSync(listedPath), false);
+    writeFileSync(scriptPath, `
+if (process.argv[2] === '--refresh') process.stdout.write('x'.repeat(8 * 1024 * 1024 + 1));
+else require('node:fs').writeFileSync(${JSON.stringify(listedPath)}, 'listed');
+`);
+    await assert.rejects(discoverer.discover(), { message: 'Codex model catalog refresh output exceeded the size limit' });
+    assert.equal(existsSync(listedPath), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Codex discovery times out a stalled refresh without starting model/list', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-codex-refresh-timeout-'));
+  const scriptPath = join(directory, 'fake-codex.cjs');
+  const listedPath = join(directory, 'listed');
+  writeFileSync(scriptPath, `
+if (process.argv[2] === '--refresh') setInterval(() => {}, 1000);
+else require('node:fs').writeFileSync(${JSON.stringify(listedPath)}, 'listed');
+`);
+  try {
+    const discoverer = new CodexModelDiscoverer({ workspaceRoot: directory, timeoutMs: 200,
+      command: process.execPath, args: [scriptPath], refreshArgs: [scriptPath, '--refresh'] });
+    await assert.rejects(discoverer.discover(), { message: 'Codex model discovery timed out after 200ms' });
+    assert.equal(existsSync(listedPath), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
