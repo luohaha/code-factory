@@ -30,6 +30,7 @@ function gate() {
 
 function fakeE2B(settings: { additionalCredentials?: E2BCredentials[]; home?: string;
   beforeConnect?: () => Promise<void>; beforeGetInfo?: () => Promise<void>;
+  beforeWrite?: () => Promise<void>;
   waitForCommand?: (command: string) => Promise<void>;
   before?: (action: 'status' | 'pause' | 'resume', signal?: AbortSignal) => Promise<void> } = {}) {
   let state: 'running' | 'paused' = 'running';
@@ -49,6 +50,7 @@ function fakeE2B(settings: { additionalCredentials?: E2BCredentials[]; home?: st
     files: {
       exists: async (path: string) => path === home || remoteFiles.has(path),
       write: async (path: string, content: string) => {
+        await settings.beforeWrite?.();
         remoteFiles.set(path, content);
         remoteWrites.push({ path, content });
       },
@@ -772,6 +774,65 @@ test('large Native Agent input is available in E2B during the Run and removed af
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+for (const stopDuringUpload of [false, true]) {
+  test(`Native RD ${stopDuringUpload ? 'stops without submitting' : 'steers its first prompt'} during E2B upload`, { timeout: 8_000 }, async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'code-factory-e2b-startup-steering-'));
+    const writeStarted = gate();
+    const finishWrite = gate();
+    const sdk = fakeE2B({ beforeWrite: async () => {
+      writeStarted.release();
+      await finishWrite.wait;
+    } });
+    const faux = fauxProvider();
+    const models = createModels();
+    models.setProvider(faux.provider);
+    const prompts: string[] = [];
+    faux.setResponses([(context) => {
+      prompts.push(JSON.stringify(context.messages));
+      return fauxAssistantMessage('Finished with the correction');
+    }]);
+    const manager = new AgentManager({ workspaceRoot: directory, databasePath: ':memory:',
+      store: new SqliteAgentManagerStore(':memory:'), e2bService: sdk.service,
+      nativeService: new NativeAgentService(join(directory, 'native.sqlite'), models, sdk.service),
+      logger: createLogger({ level: 'silent' }) });
+    try {
+      const workspace = await manager.createE2BSandbox({ name: 'Startup steering', domain: 'e2b.example', apiKey: 'test-key' });
+      const requirement = manager.createRequirement({
+        title: 'Steer on upload', description: 'Long description. '.repeat(300),
+        provider: 'native-agent', model: 'faux/faux-1', sandboxId: workspace.id,
+      });
+      const execution = manager.runRequirement(requirement.id, 'First instruction');
+      await writeStarted.wait;
+      const reply = manager.postHumanMessage(requirement.id, 'Use the corrected approach');
+      const latestReply = manager.postHumanMessage(requirement.id, 'Keep the result concise');
+      assert.equal(reply.queued, true);
+      if (stopDuringUpload) manager.interruptRdRun(requirement.id);
+      finishWrite.release();
+      const result = await execution;
+      const runs = manager.listRuns(requirement.id);
+      assert.equal(runs.length, 1);
+      if (stopDuringUpload) {
+        assert.deepEqual(prompts, []);
+        assert.equal(runs[0]?.status, 'cancelled');
+        assert.equal(result.session.autoResumePaused, true);
+        assert.equal(result.session.lastConsumedMessageSequence, 0);
+        assert.equal(result.session.pendingMessageCount, 3);
+      } else {
+        assert.equal(runs[0]?.status, 'succeeded');
+        assert.equal(prompts.length, 1);
+        assert.match(prompts[0]!, /First instruction.*Use the corrected approach.*Keep the result concise/);
+        assert.equal(result.session.lastConsumedMessageSequence, latestReply.message.sequence);
+        assert.equal(result.session.pendingMessageCount, 0);
+      }
+      assert.equal(sdk.remoteFiles.size, 0);
+    } finally {
+      finishWrite.release();
+      await manager.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
 
 test('Native Agents clone repositories on demand and new sandboxes use remote GitHub authentication', async () => {
   const savedToken = process.env.GH_TOKEN;

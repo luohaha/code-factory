@@ -2062,7 +2062,7 @@ function RequirementComposer({
             : requirement.status === 'done'
               ? t('Reply to reactivate this completed requirement; paste or drop attachments…')
               : requirement.session.state === 'running'
-                ? t('Send a message or attachment; it will wait for the next Run by default…')
+                ? t('Send a message or attachment to steer the running Agent…')
                 : canWrite
                   ? t('Reply to the RD Agent; paste or drop attachments…')
                   : t('Replies are unavailable in the current state')}
@@ -2235,7 +2235,7 @@ function RequirementDetail({
   onUpdateAgentConfiguration,
   onReply,
   onDelete,
-  onInterrupt,
+  onStop,
   onConfirm,
   onReview,
   onCreateAgentTimer,
@@ -2270,7 +2270,7 @@ function RequirementDetail({
   onUpdateAgentConfiguration: (input: RequirementAgentConfigurationUpdate) => Promise<void>;
   onReply: (message: string, attachments?: File[]) => Promise<void>;
   onDelete: () => void;
-  onInterrupt: (mode: 'stop' | 'steer') => Promise<void>;
+  onStop: () => Promise<void>;
   onConfirm: () => Promise<void>;
   onReview: (pullRequestId: string, configuration: AgentConfiguration) => Promise<void>;
   onCreateAgentTimer: (
@@ -2295,7 +2295,6 @@ function RequirementDetail({
   const requirementId = requirement?.id;
   const activeRdRun = runs.find((run) => run.role === 'rd' && run.status === 'running');
   const queuedMessageCount = requirement?.session.queuedMessageCount ?? 0;
-  const hasNewerInput = activeRdRun !== undefined && queuedMessageCount > 0;
   const newMessageCount = newMessages && newMessages.requirementId === requirementId
     ? newMessages.count
     : 0;
@@ -2657,27 +2656,17 @@ function RequirementDetail({
             {requirement.session.state === 'running' ? (
               <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
                 <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-emerald-500/12 text-emerald-600"><Bot className="size-3.5" /></span>
-                <span className="flex min-w-0 flex-1 items-center gap-2"><LoaderCircle className="size-3.5 shrink-0 animate-spin" />{t('RD Agent is working; new messages are queued by default.')}</span>
+                <span className="flex min-w-0 flex-1 items-center gap-2"><LoaderCircle className="size-3.5 shrink-0 animate-spin" />{t('RD Agent is working. Reply to steer it.')}</span>
                 {activeRdRun && messagesReady ? (
-                  <div className="flex shrink-0 flex-wrap justify-end gap-1">
-                    {hasNewerInput ? (
-                      <Button type="button" variant="ghost" size="xs" className="text-amber-700 dark:text-amber-300" disabled={busy} onClick={() => void onInterrupt('steer').catch(() => undefined)}>
-                        <Square data-icon="inline-start" />{t('Steering')}
-                      </Button>
-                    ) : null}
-                    <Button type="button" variant="ghost" size="xs" className="text-amber-700 dark:text-amber-300" disabled={busy} onClick={() => void onInterrupt('stop').catch(() => undefined)}>
-                      <Square data-icon="inline-start" />{t('Stop Run')}
-                    </Button>
-                  </div>
+                  <Button type="button" variant="ghost" size="xs" className="shrink-0 text-amber-700 dark:text-amber-300" disabled={busy} onClick={() => void onStop().catch(() => undefined)}>
+                    <Square data-icon="inline-start" />{t('Stop Run')}
+                  </Button>
                 ) : null}
               </div>
             ) : null}
             {queuedMessageCount > 0 ? (
               <div className="mt-3 rounded-lg bg-amber-500/8 px-3 py-2 text-[10px] text-amber-700 dark:text-amber-300">
-                {t('{count} external messages will be processed by the RD Agent {when}.', {
-                  count: queuedMessageCount,
-                  when: t(requirement.session.state === 'running' ? 'after the current Run' : 'during the next Run'),
-                })}
+                {t('External messages pending delivery: {count}', { count: queuedMessageCount })}
               </div>
             ) : null}
             </section>
@@ -3677,10 +3666,10 @@ function Dashboard() {
     }
   }
 
-  async function interruptRequirement(requirementId: string, mode: 'stop' | 'steer'): Promise<void> {
+  async function stopRequirement(requirementId: string): Promise<void> {
     setInterruptingRequirementIds((current) => new Set(current).add(requirementId));
     try {
-      await runAction(requirementId, () => client.interruptRequirement(requirementId, mode));
+      await runAction(requirementId, () => client.stopRequirement(requirementId));
     } catch (caught) {
       setInterruptingRequirementIds((current) => {
         const next = new Set(current);
@@ -4488,8 +4477,8 @@ function Dashboard() {
             },
           ).catch(() => undefined);
         }}
-        onInterrupt={(mode) => selectedRequirement
-          ? interruptRequirement(selectedRequirement.id, mode)
+        onStop={() => selectedRequirement
+          ? stopRequirement(selectedRequirement.id)
           : Promise.resolve()}
         onConfirm={() => selectedRequirement ? runAction(
           selectedRequirement.id,

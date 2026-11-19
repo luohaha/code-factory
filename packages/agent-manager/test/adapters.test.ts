@@ -3,6 +3,128 @@ import test from 'node:test';
 
 import { ClaudeCodeAdapter } from '../src/runtime/adapters/claude-code.ts';
 import { CodexAdapter } from '../src/runtime/adapters/codex.ts';
+import type { NormalizedAgentEvent, StreamingAgentInvocation } from '../src/runtime/adapters/types.ts';
+
+function protocolFixture(invocation: StreamingAgentInvocation) {
+  const writes: Record<string, unknown>[] = [];
+  const events: NormalizedAgentEvent[] = [];
+  const failures: string[] = [];
+  let unsupported = false;
+  let closed = false;
+  const protocol = invocation.connect({
+    write: (message) => {
+      if (closed) return false;
+      writes.push(message);
+      return true;
+    },
+    emit: (event) => { events.push(event); },
+    endInput: () => { closed = true; },
+    complete: () => {},
+    fail: (message) => { failures.push(message); },
+    unsupported: () => { unsupported = true; },
+  });
+  protocol.start();
+  return { protocol, writes, events, failures, unsupported: () => unsupported, closed: () => closed,
+    receive: (message: Record<string, unknown>) => protocol.receive(JSON.stringify(message)) };
+}
+
+test('Codex negotiates metadata-only resume without requesting full history', () => {
+  const adapter = new CodexAdapter();
+  const input = { prompt: 'continue', nativeSessionId: 'saved-thread' };
+  const { receive, writes, events } = protocolFixture(adapter.buildStreamingRdInvocation(adapter.buildRdInvocation(input), input, '/workspace'));
+  assert.deepEqual((writes[0]?.params as Record<string, unknown>).capabilities, { experimentalApi: true });
+  receive({ id: writes[0]!.id, result: {} });
+  const resume = writes.at(-1)!;
+  assert.equal(resume.method, 'thread/resume');
+  assert.equal((resume.params as Record<string, unknown>).excludeTurns, true);
+  assert.equal((resume.params as Record<string, unknown>).threadId, 'saved-thread');
+  receive({ id: resume.id, result: { thread: { id: 'saved-thread' } } });
+  assert.equal(events[0]?.nativeSessionId, 'saved-thread');
+  assert.equal(writes.at(-1)?.method, 'turn/start');
+});
+
+test('Codex falls back rather than loading full history when metadata-only resume is gated', () => {
+  const adapter = new CodexAdapter();
+  const input = { prompt: 'continue', nativeSessionId: 'saved-thread' };
+  const legacy = adapter.buildRdInvocation(input);
+  const { receive, writes, unsupported } = protocolFixture(adapter.buildStreamingRdInvocation(legacy, input, '/workspace'));
+  receive({ id: writes[0]!.id, result: {} });
+  const resume = writes.at(-1)!;
+  receive({ id: resume.id, error: { code: -32600, message: 'thread/resume.excludeTurns requires experimentalApi capability' } });
+  assert.equal(unsupported(), true);
+  assert.equal(writes.at(-1), resume);
+  assert.deepEqual(legacy.args.slice(-3), ['resume', 'saved-thread', '-']);
+});
+
+test('Codex reports bounded startup categories without echoing raw provider errors', () => {
+  const adapter = new CodexAdapter();
+  const input = { prompt: 'private prompt', nativeSessionId: 'saved-thread' };
+  const invocation = adapter.buildStreamingRdInvocation(adapter.buildRdInvocation(input), input, '/workspace');
+  for (const [stage, message, reason] of [
+    ['initialize', 'not logged in: private token', 'check Codex authentication'],
+    ['thread/resume', 'no rollout found for thread id saved-thread', 'saved thread transcript not found'],
+    ['turn/start', 'bad configuration: ' + 'private prompt '.repeat(500), 'check Codex configuration'],
+  ]) {
+    const { receive, writes, failures } = protocolFixture(invocation);
+    if (stage !== 'initialize') receive({ id: writes[0]!.id, result: {} });
+    if (stage === 'turn/start') receive({ id: writes.at(-1)!.id, result: { thread: { id: 'saved-thread' } } });
+    const request = writes.at(-1)!;
+    assert.equal(request.method, stage);
+    receive({ id: request.id, error: { code: -32603, message, data: { token: 'private token' } } });
+    assert.equal(failures.length, 1);
+    assert.ok(failures[0]!.endsWith(`(RPC -32603: ${reason})`));
+  }
+});
+
+test('Codex sends startup replies in order when the turn notification precedes the response', () => {
+  const adapter = new CodexAdapter();
+  const input = { prompt: 'start', nativeSessionId: null };
+  const { protocol, receive, writes } = protocolFixture(adapter.buildStreamingRdInvocation(adapter.buildRdInvocation(input), input, '/workspace'));
+  receive({ id: writes[0]!.id, result: {} });
+  receive({ id: writes.at(-1)!.id, result: { thread: { id: 'thread' } } });
+  const startTurn = writes.at(-1)!;
+  assert.equal(startTurn.method, 'turn/start');
+  assert.equal(protocol.steer({ text: 'first', imagePaths: [] }, () => {}), 'submitted');
+  receive({ method: 'turn/started', params: { threadId: 'thread', turn: { id: 'turn' } } });
+  assert.equal(protocol.steer({ text: 'second', imagePaths: [] }, () => {}), 'submitted');
+  receive({ id: startTurn.id, result: { turn: { id: 'turn' } } });
+  const steers = writes.filter((frame) => frame.method === 'turn/steer')
+    .map((frame) => (frame.params as { input: Array<{ text: string }> }).input[0]?.text);
+  assert.deepEqual(steers, ['first', 'second']);
+});
+
+test('Claude closes stdin after a bounded wait if an unanswered reply never starts another turn', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const adapter = new ClaudeCodeAdapter();
+  const invocation = adapter.buildRdInvocation({ prompt: 'start', nativeSessionId: null });
+  const { protocol, receive, closed } = protocolFixture(adapter.buildStreamingRdInvocation(invocation));
+  assert.equal(protocol.steer({ text: 'try another direction', imagePaths: [] }, () => assert.fail('unanswered input')), 'submitted');
+  receive({ type: 'result', subtype: 'success', result: 'initial response', user_message_uuids: [] });
+  assert.equal(closed(), false);
+  t.mock.timers.tick(10_000);
+  assert.equal(closed(), true);
+  assert.equal(protocol.steer({ text: 'retry', imagePaths: [] }, () => {}), 'defer');
+  protocol.dispose?.();
+});
+
+test('Claude follow-up init keeps stdin open before the first slow assistant response', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const adapter = new ClaudeCodeAdapter();
+  const invocation = adapter.buildRdInvocation({ prompt: 'start', nativeSessionId: null });
+  const { protocol, receive, writes, closed } = protocolFixture(adapter.buildStreamingRdInvocation(invocation));
+  receive({ type: 'system', subtype: 'init', session_id: 'main' });
+  const delivered: string[] = [];
+  protocol.steer({ text: 'second', imagePaths: [] }, () => delivered.push('second'));
+  receive({ type: 'result', subtype: 'success', user_message_uuids: [] });
+  receive({ type: 'system', subtype: 'init', session_id: 'main' });
+  t.mock.timers.tick(12_000);
+  assert.equal(closed(), false);
+  assert.equal(protocol.steer({ text: 'third', imagePaths: [] }, () => delivered.push('third')), 'submitted');
+  receive({ type: 'result', subtype: 'success', user_message_uuids: writes.slice(1).map((message) => message.uuid) });
+  assert.deepEqual(delivered, ['second', 'third']);
+  assert.equal(closed(), true);
+  protocol.dispose?.();
+});
 
 test('Codex starts and resumes through stdin without disabling native context discovery', () => {
   const adapter = new CodexAdapter();

@@ -7,7 +7,10 @@ import type {
   NormalizedAgentTrace,
   RdInvocationInput,
   ReviewInvocationInput,
+  StreamingAgentInvocation,
 } from './types.js';
+
+const FOLLOW_UP_START_TIMEOUT_MS = 10_000;
 
 function assistantText(value: unknown): string | undefined {
   if (typeof value === 'string') return value;
@@ -104,6 +107,84 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     return { command: 'claude', args, input: input.prompt };
   }
 
+  buildStreamingRdInvocation(legacy: AgentInvocation): StreamingAgentInvocation {
+    return {
+      ...legacy,
+      args: [...legacy.args, '--input-format', 'stream-json', '--replay-user-messages'],
+      isUnsupported: (stderr) => /(?:unknown|unrecognized) option ['"]?--(?:input-format|replay-user-messages)\b/i.test(stderr),
+      connect: (io) => {
+        const pending = new Map<string, () => void>();
+        const replayed = new Set<string>();
+        let sessionId: string | undefined;
+        let closing = false;
+        let followUpTimer: NodeJS.Timeout | undefined;
+        const clearFollowUpTimer = () => {
+          if (followUpTimer) clearTimeout(followUpTimer);
+          followUpTimer = undefined;
+        };
+        const closeInput = () => {
+          clearFollowUpTimer();
+          if (closing) return;
+          closing = true;
+          io.endInput();
+        };
+        const send = (text: string, uuid = randomUUID()) => io.write({
+          type: 'user', message: { role: 'user', content: text }, uuid, parent_tool_use_id: null,
+        });
+        return {
+          dispose: clearFollowUpTimer,
+          start: () => { send(legacy.input); },
+          steer: (input, onDelivered) => {
+            if (closing) return 'defer';
+            const uuid = randomUUID();
+            if (!send(input.text, uuid)) return 'defer';
+            pending.set(uuid, onDelivered);
+            return 'submitted';
+          },
+          receive: (line) => {
+            const event = this.parseLine(line);
+            if (!event) return;
+            const raw = event.raw;
+            if (raw.type === 'system' && raw.subtype === 'init' && typeof raw.session_id === 'string' && raw.parent_tool_use_id == null) {
+              sessionId ??= raw.session_id;
+              if (raw.session_id === sessionId) clearFollowUpTimer();
+            }
+            if (raw.type === 'user' && raw.isReplay === true && typeof raw.uuid === 'string' && pending.has(raw.uuid)) {
+              replayed.add(raw.uuid);
+              clearFollowUpTimer();
+            }
+            if (raw.type !== 'result') {
+              if (raw.type === 'assistant' && raw.parent_tool_use_id == null) clearFollowUpTimer();
+              io.emit(event);
+              return;
+            }
+            clearFollowUpTimer();
+            if (event.kind === 'completed' && raw.subtype === 'success') {
+              const answered = Array.isArray(raw.user_message_uuids) ? raw.user_message_uuids
+                : typeof raw.user_message_uuid === 'string' ? [raw.user_message_uuid] : replayed;
+              for (const uuid of answered) {
+                if (typeof uuid !== 'string') continue;
+                pending.get(uuid)?.();
+                pending.delete(uuid);
+              }
+              io.complete();
+              if (!closing && pending.size > 0) {
+                followUpTimer = setTimeout(closeInput, FOLLOW_UP_START_TIMEOUT_MS);
+                followUpTimer.unref();
+              } else {
+                closeInput();
+              }
+            } else {
+              closeInput();
+            }
+            replayed.clear();
+            io.emit(event);
+          },
+        };
+      },
+    };
+  }
+
   buildReviewInvocation(input: ReviewInvocationInput): AgentInvocation {
     const configurationArgs = [
       ...(input.model ? ['--model', input.model] : []),
@@ -136,6 +217,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       return null;
     }
 
+    if (!raw || typeof raw !== 'object') return null;
     const type = typeof raw.type === 'string' ? raw.type : '';
     const nativeSessionId = typeof raw.session_id === 'string' ? raw.session_id : undefined;
     if (type === 'system' && raw.subtype === 'init') {
@@ -162,7 +244,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
     }
     if (type === 'result') {
       const message = typeof raw.result === 'string' ? raw.result : undefined;
-      const failed = raw.is_error === true;
+      const failed = raw.is_error === true || (typeof raw.subtype === 'string' && raw.subtype.startsWith('error'));
       return {
         kind: failed ? 'error' : 'completed',
         ...(nativeSessionId ? { nativeSessionId } : {}),

@@ -835,7 +835,7 @@ test('HTTP API deletes only TODO requirements', async () => {
   }
 });
 
-test('HTTP reply queues by default and the interrupt action resumes the RD Agent with that message', async () => {
+test('HTTP reply automatically steers a running RD Agent and explicit Stop still pauses it', async () => {
   const runner = new InterruptibleWaitingRunner();
   const manager = new AgentManager({
     workspaceRoot: process.cwd(),
@@ -882,7 +882,7 @@ test('HTTP reply queues by default and the interrupt action resumes the RD Agent
     assert.equal(body.requirement.id, created.id);
     assert.equal(body.requirement.session.state, 'running');
     assert.equal(body.requirement.session.pendingMessageCount, 1);
-    assert.equal(runner.requests[0]?.signal?.aborted, false);
+    assert.equal(runner.requests[0]?.signal?.aborted, true);
 
     const invalidModeResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/interrupt`, {
       method: 'POST',
@@ -896,15 +896,6 @@ test('HTTP reply queues by default and the interrupt action resumes the RD Agent
       body: JSON.stringify({ mode: '' }),
     });
     assert.equal(emptyModeResponse.status, 400);
-    assert.equal(runner.requests[0]?.signal?.aborted, false);
-
-    const interruptResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/interrupt`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ mode: 'steer' }),
-    });
-    assert.equal(interruptResponse.status, 202);
-    assert.equal(runner.requests[0]?.signal?.aborted, true);
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(runner.requests.length, 2);
     const staleSteerResponse = await fetch(`${baseUrl}/api/requirements/${created.id}/interrupt`, {

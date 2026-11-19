@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import type {
   AgentAdapter,
   AgentInvocation,
@@ -5,7 +7,25 @@ import type {
   NormalizedAgentTrace,
   RdInvocationInput,
   ReviewInvocationInput,
+  SteeringInput,
+  StreamingAgentInvocation,
 } from './types.js';
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  return undefined;
+}
+
+function textList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((part): part is string => typeof part === 'string') : [];
+}
+
+function codexInput(input: SteeringInput): Record<string, unknown>[] {
+  return [
+    { type: 'text', text: input.text, text_elements: [] },
+    ...input.imagePaths.map((path) => ({ type: 'localImage', path })),
+  ];
+}
 
 function textFromItem(value: unknown): string | undefined {
   if (!value || typeof value !== 'object') return undefined;
@@ -17,6 +37,19 @@ function textFromItem(value: unknown): string | undefined {
 
 function stringField(value: Record<string, unknown>, key: string): string | undefined {
   return typeof value[key] === 'string' ? value[key] : undefined;
+}
+
+function startupFailure(summary: string, error: Record<string, unknown> | undefined): string {
+  const message = error ? stringField(error, 'message') ?? '' : '';
+  const reason = /no rollout found|thread not found/i.test(message) ? 'saved thread transcript not found'
+    : /authentication|unauthorized|not logged in|invalid api key/i.test(message) ? 'check Codex authentication'
+    : record(error?.data)?.type === 'modelProviderMismatch' || /model provider mismatch/i.test(message)
+      ? 'saved thread uses a different model provider'
+    : /configuration|config\.toml/i.test(message) ? 'check Codex configuration'
+    : undefined;
+  const code = typeof error?.code === 'number' && Number.isSafeInteger(error.code) ? `RPC ${error.code}` : undefined;
+  const detail = [code, reason].filter(Boolean).join(': ');
+  return detail ? `${summary} (${detail})` : summary;
 }
 
 function jsonDetail(value: unknown): string | undefined {
@@ -155,6 +188,156 @@ export class CodexAdapter implements AgentAdapter {
       : { command: 'codex', args: ['exec', ...common, ...images, '-'], input: input.prompt };
   }
 
+  buildStreamingRdInvocation(legacy: AgentInvocation, input: RdInvocationInput, cwd: string): StreamingAgentInvocation {
+    return {
+      ...legacy,
+      args: ['app-server', '--stdio'],
+      isUnsupported: (stderr) => /(?:unrecognized subcommand ['"]app-server|unexpected argument ['"]--stdio)/i.test(stderr),
+      connect: (io) => {
+        let threadId: string | undefined;
+        let turnId: string | undefined;
+        let completed = false;
+        let canSteer = true;
+        let rpcId = 0;
+        const responses = new Map<number, (response: Record<string, unknown>) => void>();
+        const pending = new Map<string, () => void>();
+        const queued: Array<{ input: SteeringInput; delivered: () => void }> = [];
+        const rpc = (method: string, params: Record<string, unknown>, reply: (response: Record<string, unknown>) => void) => {
+          const id = ++rpcId;
+          if (io.write({ id, method, params })) responses.set(id, reply);
+        };
+        const emit = (raw: Record<string, unknown>) => {
+          const event = this.parseLine(JSON.stringify(raw));
+          if (event) io.emit(event);
+        };
+        const send = (steering: SteeringInput, delivered: () => void) => {
+          const clientUserMessageId = randomUUID();
+          rpc('turn/steer', { threadId, expectedTurnId: turnId, clientUserMessageId, input: codexInput(steering) }, (response) => {
+            const error = record(response.error);
+            if (!error) return;
+            pending.delete(clientUserMessageId);
+            if (error.code === -32601) canSteer = false;
+          });
+          pending.set(clientUserMessageId, delivered);
+        };
+        const setTurnReady = (id: string) => {
+          turnId = id;
+          for (const entry of queued.splice(0)) send(entry.input, entry.delivered);
+        };
+        const startTurn = () => {
+          rpc('turn/start', { threadId, input: codexInput({ text: input.prompt, imagePaths: input.imagePaths ?? [] }) }, (response) => {
+            if (completed) return;
+            const turn = record(record(response.result)?.turn);
+            if (response.error || typeof turn?.id !== 'string' || (turnId && turn.id !== turnId)) {
+              io.fail(startupFailure('Codex App Server could not start the RD turn', record(response.error)));
+              return;
+            }
+            setTurnReady(turn.id);
+          });
+        };
+        const openThread = () => {
+          const nativeSessionId = input.nativeSessionId;
+          rpc(nativeSessionId ? 'thread/resume' : 'thread/start', {
+            ...(nativeSessionId ? { threadId: nativeSessionId, excludeTurns: true } : {}),
+            cwd, approvalPolicy: 'never', sandbox: 'danger-full-access',
+            ...(input.model ? { model: input.model } : {}),
+            ...(input.reasoningEffort ? { config: { model_reasoning_effort: input.reasoningEffort } } : {}),
+            ...(input.developerInstructions ? { developerInstructions: input.developerInstructions } : {}),
+          }, (response) => {
+            const error = record(response.error);
+            if (nativeSessionId && error?.code === -32600
+              && /excludeTurns.*requires experimentalApi capability/.test(stringField(error, 'message') ?? '')) {
+              io.unsupported();
+              return;
+            }
+            const thread = record(record(response.result)?.thread);
+            if (response.error || typeof thread?.id !== 'string' || (nativeSessionId && thread.id !== nativeSessionId)) {
+              if (error?.code === -32601) io.unsupported();
+              else io.fail(startupFailure('Codex App Server could not open the RD thread', error));
+              return;
+            }
+            threadId = thread.id;
+            emit({ type: 'thread.started', thread_id: threadId });
+            startTurn();
+          });
+        };
+        return {
+          start: () => {
+            rpc('initialize', {
+              clientInfo: { name: 'code-factory', version: '0.1.0' },
+              ...(input.nativeSessionId ? { capabilities: { experimentalApi: true } } : {}),
+            }, (response) => {
+              if (response.error) {
+                if (record(response.error)?.code === -32601) io.unsupported();
+                else io.fail(startupFailure('Codex App Server initialization failed', record(response.error)));
+                return;
+              }
+              io.write({ method: 'initialized', params: {} });
+              openThread();
+            });
+          },
+          steer: (steering, delivered) => {
+            if (completed) return 'defer';
+            if (!canSteer) return 'unsupported';
+            if (turnId) send(steering, delivered);
+            else queued.push({ input: steering, delivered });
+            return 'submitted';
+          },
+          receive: (line) => {
+            let frame: Record<string, unknown> | undefined;
+            try { frame = record(JSON.parse(line)); } catch { return; }
+            if (!frame) return;
+            if (typeof frame.id === 'number' && typeof frame.method !== 'string') {
+              const reply = responses.get(frame.id);
+              responses.delete(frame.id);
+              reply?.(frame);
+              return;
+            }
+            if (typeof frame.method === 'string' && (typeof frame.id === 'number' || typeof frame.id === 'string')) {
+              io.write({ id: frame.id, error: { code: -32601, message: 'Unsupported server request' } });
+              return;
+            }
+            const params = record(frame.params);
+            if (completed || !threadId || params?.threadId !== threadId) return;
+            const turn = record(params.turn);
+            if (frame.method === 'turn/started' && typeof turn?.id === 'string' && (!turnId || turn.id === turnId)) {
+              setTurnReady(turn.id);
+              emit({ type: 'turn.started' });
+            } else if ((frame.method === 'item/started' || frame.method === 'item/completed') && turnId && params.turnId === turnId) {
+              const item = record(params.item);
+              if (!item || typeof item.type !== 'string') return;
+              if (item.type === 'userMessage') {
+                if (frame.method === 'item/completed' && typeof item.clientId === 'string') {
+                  pending.get(item.clientId)?.();
+                  pending.delete(item.clientId);
+                }
+                return;
+              }
+              emit({
+                type: frame.method.replace('/', '.'),
+                item: { ...item, type: item.type.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`),
+                  aggregated_output: item.aggregatedOutput, exit_code: item.exitCode,
+                  ...(item.type === 'reasoning' ? { text: [...textList(item.summary), ...textList(item.content)].join('\n') } : {}) },
+              });
+            } else if (frame.method === 'error' && params.turnId === turnId && params.willRetry !== true) {
+              emit({ type: 'error', error: params.error });
+            } else if (frame.method === 'turn/completed' && turnId && turn?.id === turnId) {
+              completed = true;
+              if (turn.status === 'completed') {
+                emit({ type: 'turn.completed' });
+                io.complete();
+              } else {
+                emit({ type: 'turn.failed', error: turn.error,
+                  ...(turn.status === 'interrupted' ? { message: 'Codex turn interrupted' } : {}) });
+              }
+              io.endInput();
+            }
+          },
+        };
+      },
+    };
+  }
+
   buildReviewInvocation(input: ReviewInvocationInput): AgentInvocation {
     const configurationArgs = [
       ...(input.model ? ['--model', input.model] : []),
@@ -188,6 +371,7 @@ export class CodexAdapter implements AgentAdapter {
       return null;
     }
 
+    if (!raw || typeof raw !== 'object') return null;
     const type = typeof raw.type === 'string' ? raw.type : '';
     const nativeSessionId = typeof raw.thread_id === 'string'
       ? raw.thread_id

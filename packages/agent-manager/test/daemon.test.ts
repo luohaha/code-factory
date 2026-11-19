@@ -210,7 +210,7 @@ test('daemon start reports an occupied port without entering a restart loop', { 
   }
 });
 
-test('Stop pauses an RD Run and Steering resumes with queued input without losing the daemon', { timeout: 55_000 }, async () => {
+test('Stop pauses an RD Run and a reply resumes a legacy CLI without losing the daemon', { timeout: 55_000 }, async () => {
   if (process.platform === 'win32') return;
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-daemon-steer-'));
   const workspace = join(directory, 'workspace');
@@ -223,7 +223,7 @@ test('Stop pauses an RD Run and Steering resumes with queued input without losin
     '#!/usr/bin/env node',
     "const { spawn } = require('node:child_process');",
     "const { writeFileSync } = require('node:fs');",
-    "if (!process.argv.includes('exec')) process.exit(1);",
+    "if (!process.argv.includes('exec')) { console.error(\"error: unrecognized subcommand 'app-server'\"); process.exit(1); }",
     "process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: '00000000-0000-4000-8000-000000000001' }) + '\\n');",
     "if (process.argv.includes('resume')) { process.stdout.write(JSON.stringify({ type: 'turn.completed' }) + '\\n'); process.exit(0); }",
     "const tool = spawn(process.execPath, ['-e', \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)\"],",
@@ -291,7 +291,6 @@ test('Stop pauses an RD Run and Steering resumes with queued input without losin
     }
     assert.ok(existsSync(toolPidFile), 'The detached tool started');
     assert.equal((await post(`/api/requirements/${created.id}/reply`, { message: 'New direction' })).status, 202);
-    assert.equal((await post(`/api/requirements/${created.id}/interrupt`, { mode: 'steer' })).status, 202);
 
     let runStatuses: string[] = [];
     for (let attempt = 0; attempt < 120; attempt++) {

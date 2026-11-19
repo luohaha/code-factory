@@ -20,7 +20,7 @@ Stop Run and Run timeouts propagate cancellation to lazy E2B connections, defaul
 
 A Native Agent Reviewer starts a fresh, short-lived pi-durable conversation and does not resume or steer the Requirement's RD conversation. It uses the Requirement's local `NodeExecutionEnv` or E2B `ExecutionEnv`, with `read` and `bash` tools but without the RD control-plane tools. Its selected API profile and reasoning effort default to the Requirement's choices and can be overridden for one review. The Reviewer has a total elapsed-time limit of at most 30 minutes. In E2B, only its tools run remotely; the model and Harness stay on the Manager host, so the sandbox does not need a Codex or Claude Code CLI.
 
-When a human requests Steering with newer input, Agent Manager queues it through native setup and submits an ordered prefix to the active pi-durable conversation with `whenBusy: "steer"`; the current tool round finishes and the model receives the new direction. Initial pending input and all accepted Steering share a 12,000-character Run budget. If the next message cannot fit, Steering interrupts the Run so unconsumed input is retried in a new Run; an individually oversized body uses a temporary file. Attachment-only replies include their paths and metadata. Stop Run aborts the conversation, or prevents the initial submission if setup is still in progress, and persists a pause on automatic resumption until an explicit start or human reply. The Requirement message cursor advances only after a successful Run, including Steering that pi-durable accepted. Input that could not be steered stays queued for a later Run. pi-durable commits its transcript and tool intent before model-visible output, so a reopened harness can continue its durable conversation.
+When a human replies during an active Run, Agent Manager queues it through native setup and submits an ordered prefix to the active pi-durable conversation with `whenBusy: "steer"`; the current tool round finishes and the model receives the new direction. Initial pending input and all accepted Steering share a 12,000-character Run budget. If the next message cannot fit, Steering interrupts the Run so unconsumed input is retried in a new Run; an individually oversized body uses a temporary file. Attachment-only replies include their paths and metadata. Stop Run aborts the conversation, or prevents the initial submission if setup is still in progress, and persists a pause on automatic resumption until an explicit start or human reply. The Requirement message cursor advances only after a successful Run, including Steering that pi-durable accepted. Input that could not be steered stays queued for a later Run. pi-durable commits its transcript and tool intent before model-visible output, so a reopened harness can continue its durable conversation.
 
 ## 1. Headless execution contract
 
@@ -35,10 +35,20 @@ Agent Manager supports the `codex` and `claude` CLIs. Local headless invocations
 - RD Runs time out after 60 minutes without stdout or stderr activity by default, so an actively progressing Run may continue for longer than one hour. Reviewer Runs retain a total elapsed-time limit of at most 30 minutes. A timeout terminates the CLI and its complete tool-process tree;
 - on POSIX systems, a human interrupt sends `SIGTERM` to the isolated process group and any descendants that started their own process group. It follows with `SIGKILL` after two seconds if needed, and closes inherited output pipes when the CLI has already exited. Windows uses `taskkill /T /F`. The Run becomes `cancelled` after cleanup finishes;
 - one RD AgentSession may have only one active Run, while Sessions for different Requirements may run concurrently;
-- Human or Reviewer messages received during an RD Run are appended to the Requirement conversation without interrupting it. Only an explicit human interrupt stops the current Run. Steering requires newer queued input and resumes with it; Stop Run persists a pause on automatic resumption even when new Reviewer, Timer, or other Agent messages arrive. An explicit start or human reply clears the pause and delivers queued messages in the same native Session;
+- Human replies during an RD Run request steering automatically. Reviewer and other automatic messages queue without triggering steering. Stop Run cancels execution and persists a pause on automatic resumption even when new Reviewer, Timer, or other Agent messages arrive. An explicit start or human reply clears the pause and delivers queued messages in the same native Session;
 - Agent Manager puts a private `code-factory-cli` launcher on the RD process's `PATH` and injects its connection context through the environment; project instructions and Skills are still loaded natively from the working directory.
 - Before changing code, RD Agents are instructed to create or reuse a Git worktree dedicated to the Requirement and leave pre-existing shared-workspace changes untouched. This is a behavioral instruction: each RD child starts in its selected directory, and Agent Manager does not provision or enforce the worktree.
 - each invocation may include an explicit model and reasoning effort (`low | medium | high | xhigh | max`); omitted values continue to use the CLI configuration.
+
+### In-flight steering
+
+Replying during an active Run automatically requests steering. Steering sends a bounded, ordered batch of queued messages to the live headless RD process. The initial pending messages and steering batches share a 12,000-character budget. Messages include attachment paths; Codex also receives image inputs. If the first new message cannot fit, Manager interrupts and retries the unconsumed input in a fresh Run. Reviewers do not accept Steering.
+
+- [Codex App Server](https://learn.chatgpt.com/docs/app-server#steer-an-active-turn) receives `turn/steer` for the active thread and turn. An RPC acknowledgment alone is not enough: Manager matches the completed user-message item to the sent input. Input that misses the turn or is not confirmed remains queued.
+- [Claude Code streaming input](https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode) sends JSONL user messages on the original stdin. New input can join after the current tool calls or receive its own result when the prior turn finishes first. Manager uses the result's message IDs when available, or the CLI's user-message replay acknowledgment followed by a successful result. It keeps stdin open while a submitted reply awaits a result, including while its follow-up turn is running. If there is no main-session initialization, reply acknowledgment, main-assistant output, or result within ten seconds of the previous result, Manager closes stdin and drains remaining output. Unconfirmed input stays queued.
+- A successful Run advances the message cursor only through the contiguous confirmed prefix. A failed, cancelled, or timed-out Run advances nothing. On successful completion, previously queued or unconfirmed input starts a new Run in the same session.
+- A CLI that explicitly rejects the streaming command, flags, or startup methods before starting work falls back to the one-shot invocation. If a reply arrived during startup, Manager cancels and resumes with the reply rather than launching the stale one-shot prompt. Steering on a one-shot Run retains the cancel-and-resume behavior. Upgrade the CLI if in-place steering is unavailable. The streaming paths were exercised with Codex CLI `0.150.0` and `0.166.0`, and Claude Code `2.1.150`, against local mock model endpoints.
+- Streaming protocol frames have a separate bounded parse limit from raw output capture. A frame over the protocol limit fails the Run promptly rather than waiting for the CLI to close stdin.
 
 ### Context and memory boundaries
 
@@ -116,22 +126,7 @@ Agent Manager injects `CODE_FACTORY_API_URL`, `CODE_FACTORY_REQUIREMENT_ID`, and
 
 ## 2. Codex
 
-Start a native RD session:
-
-```bash
-codex exec --json --color never --dangerously-bypass-approvals-and-sandbox \
-  --model <model> -c 'model_reasoning_effort="high"' \
-  -c 'developer_instructions="...code-factory-cli behavior..."' -
-```
-
-Resume a native RD session:
-
-```bash
-codex exec --json --color never --dangerously-bypass-approvals-and-sandbox \
-  --model <model> -c 'model_reasoning_effort="high"' \
-  -c 'developer_instructions="...code-factory-cli behavior..."' \
-  resume <thread-id> -
-```
+RD Runs start `codex app-server --stdio`, initialize the connection, call `thread/start` or `thread/resume` with the selected workspace and configuration, and submit the prompt with `turn/start`. The thread ID returned by App Server is persisted on the AgentSession and reused by later RD Runs. For resume, Manager negotiates experimental API support for older CLIs and requests `excludeTurns` so the full transcript is not sent over stdout. If that field is still rejected as gated, Manager falls back to one-shot resume rather than loading the full transcript. Startup failures surface an RPC code and a recognized diagnostic category without copying raw provider errors. The one-shot fallback uses `codex exec --json … -` or `codex exec --json … resume <thread-id> -`.
 
 Run a short-lived Reviewer:
 
@@ -142,7 +137,7 @@ codex exec --json --color never --ephemeral \
   -c 'developer_instructions="...GitHub review contract..."' -
 ```
 
-The `thread_id` from a `thread.started` event is stored on the AgentSession and reused by later RD Runs. Reviewers use `--ephemeral` and do not create resumable business Sessions.
+Reviewers use `--ephemeral` and do not create resumable business Sessions.
 
 When Codex reports a failed turn, the Run retains the provider's error message when available, including a preceding error event if the final `turn.failed` event has no detail.
 
@@ -150,10 +145,10 @@ Code Factory instructions are appended through Codex's supported `developer_inst
 
 ## 3. Claude Code
 
-Start a native RD session:
+Start a native RD session with bidirectional JSONL:
 
 ```bash
-claude --print --output-format stream-json --verbose \
+claude --print --input-format stream-json --output-format stream-json --replay-user-messages --verbose \
   --dangerously-skip-permissions --session-id <uuid> \
   --model <model> --effort high \
   --append-system-prompt "...code-factory-cli behavior..."
@@ -162,7 +157,7 @@ claude --print --output-format stream-json --verbose \
 Resume a native RD session:
 
 ```bash
-claude --print --output-format stream-json --verbose \
+claude --print --input-format stream-json --output-format stream-json --replay-user-messages --verbose \
   --dangerously-skip-permissions --model <model> --effort high \
   --append-system-prompt "...code-factory-cli behavior..." \
   --resume <session-id>

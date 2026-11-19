@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import type { AgentAdapter } from '../src/runtime/adapters/types.ts';
 import { CodexAdapter } from '../src/runtime/adapters/codex.ts';
+import { ClaudeCodeAdapter } from '../src/runtime/adapters/claude-code.ts';
 import { HeadlessProcessRunner } from '../src/runtime/process-runner.ts';
 
 const noOutputAdapter: AgentAdapter = {
@@ -23,6 +24,67 @@ function processExists(pid: number): boolean {
     return (error as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
+
+test('HeadlessProcessRunner falls back before execution when Claude rejects streaming input', async () => {
+  const refused = "error: unknown option '--input-format'";
+  const adapter = new ClaudeCodeAdapter();
+  const invocation = {
+    command: process.execPath,
+    args: ['-e', 'process.stdin.pipe(process.stdout)'],
+    input: '{"type":"result","subtype":"success","result":"one-shot response"}',
+  };
+  const streaming = adapter.buildStreamingRdInvocation(invocation);
+  let steeringAvailability: string | undefined;
+  const outcome = await new HeadlessProcessRunner().run({
+    invocation,
+    streamingInvocation: { ...streaming, args: ['-e', `console.error(${JSON.stringify(refused)}); process.exitCode = 1`] },
+    adapter,
+    workspaceRoot: process.cwd(),
+    timeoutMs: 3_000,
+    maxOutputBytes: 1024,
+    onSteeringReady: (send) => { steeringAvailability = send({ text: 'message', imagePaths: [] }, () => {}); },
+  });
+  assert.equal(outcome.status, 'succeeded');
+  assert.equal(outcome.finalMessage, 'one-shot response');
+  assert.equal(steeringAvailability, 'unsupported');
+});
+
+test('HeadlessProcessRunner completes a Claude result larger than the raw output cap', { timeout: 5_000 }, async () => {
+  const adapter = new ClaudeCodeAdapter();
+  const invocation = adapter.buildRdInvocation({ prompt: 'test', nativeSessionId: null });
+  const streaming = adapter.buildStreamingRdInvocation(invocation);
+  const output: string[] = [];
+  const outcome = await new HeadlessProcessRunner().run({
+    invocation,
+    streamingInvocation: { ...streaming, command: process.execPath, args: ['-e', `
+      require('node:readline').createInterface({ input: process.stdin }).once('line', () => {
+        console.log(JSON.stringify({ type: 'result', subtype: 'success', result: 'x'.repeat(6000) }));
+      });
+    `] },
+    adapter, workspaceRoot: process.cwd(), timeoutMs: 30_000, maxOutputBytes: 2 * 1024,
+    onOutput: (line) => { output.push(line); },
+  });
+  assert.equal(outcome.status, 'succeeded');
+  assert.equal(outcome.finalMessage?.length, 6_000);
+  assert.deepEqual(output, []);
+});
+
+test('HeadlessProcessRunner fails promptly when the protocol frame limit is exceeded', { timeout: 5_000 }, async () => {
+  const adapter = new ClaudeCodeAdapter();
+  const invocation = adapter.buildRdInvocation({ prompt: 'test', nativeSessionId: null });
+  const streaming = adapter.buildStreamingRdInvocation(invocation);
+  const outcome = await new HeadlessProcessRunner().run({
+    invocation,
+    streamingInvocation: { ...streaming, command: process.execPath, args: ['-e', `
+      require('node:readline').createInterface({ input: process.stdin }).once('line', () => {
+        process.stdout.write('x'.repeat(8 * 1024 * 1024 + 1));
+      });
+    `] },
+    adapter, workspaceRoot: process.cwd(), timeoutMs: 30_000, maxOutputBytes: 2 * 1024,
+  });
+  assert.equal(outcome.status, 'failed');
+  assert.match(outcome.error ?? '', /Agent protocol frame exceeds 8388608 bytes/);
+});
 
 test('HeadlessProcessRunner terminates an aborted child as a cancelled Run', async () => {
   const controller = new AbortController();
