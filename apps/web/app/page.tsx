@@ -841,8 +841,8 @@ function RequirementCard({
         </div>
         <p className="mt-1.5 truncate font-mono text-[9px] text-muted-foreground">ses-{shortId(requirement.session.id)}</p>
         {run ? <p className="mt-2 text-[10px] text-foreground/70">{run.taskSummary} · {t(runStatusLabel[run.status])}</p> : null}
-        {requirement.session.pendingMessageCount > 0 ? (
-          <p className="mt-2 text-[10px] font-medium text-amber-600">{t('{count} messages pending', { count: requirement.session.pendingMessageCount })}</p>
+        {requirement.session.queuedMessageCount > 0 ? (
+          <p className="mt-2 text-[10px] font-medium text-amber-600">{t('Messages awaiting delivery: {count}', { count: requirement.session.queuedMessageCount })}</p>
         ) : null}
       </div>
 
@@ -891,8 +891,8 @@ function SessionCard({ requirement, run, busy, onOpen, onRetry }: {
         <h3 className="mt-2.5 truncate text-xs font-semibold hover:underline">{requirement.title}</h3>
         <p className="mt-1.5 truncate font-mono text-[9px] text-muted-foreground">ses-{shortId(requirement.session.id)}</p>
         {run ? <p className="mt-2.5 text-[10px] leading-4 text-foreground/75">{run.taskSummary} · {t(runStatusLabel[run.status])}</p> : null}
-        {requirement.session.pendingMessageCount > 0 ? (
-          <p className="mt-2 text-[10px] font-medium text-amber-600">{t('{count} external messages pending', { count: requirement.session.pendingMessageCount })}</p>
+        {requirement.session.queuedMessageCount > 0 ? (
+          <p className="mt-2 text-[10px] font-medium text-amber-600">{t('Messages awaiting delivery: {count}', { count: requirement.session.queuedMessageCount })}</p>
         ) : null}
       </button>
       {requirement.session.lastError ? (
@@ -2294,7 +2294,6 @@ function RequirementDetail({
   const prependScrollRef = useRef<{ firstSequence: number; height: number; top: number } | null>(null);
   const requirementId = requirement?.id;
   const activeRdRun = runs.find((run) => run.role === 'rd' && run.status === 'running');
-  const queuedMessageCount = requirement?.session.queuedMessageCount ?? 0;
   const newMessageCount = newMessages && newMessages.requirementId === requirementId
     ? newMessages.count
     : 0;
@@ -2662,11 +2661,6 @@ function RequirementDetail({
                     <Square data-icon="inline-start" />{t('Stop Run')}
                   </Button>
                 ) : null}
-              </div>
-            ) : null}
-            {queuedMessageCount > 0 ? (
-              <div className="mt-3 rounded-lg bg-amber-500/8 px-3 py-2 text-[10px] text-amber-700 dark:text-amber-300">
-                {t('External messages pending delivery: {count}', { count: queuedMessageCount })}
               </div>
             ) : null}
             </section>

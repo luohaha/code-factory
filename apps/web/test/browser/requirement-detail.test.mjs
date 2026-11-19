@@ -381,7 +381,7 @@ void test('the conversation explains reply-to-steer alongside Stop Run', async (
   await page.getByRole('button', { name: 'Complete', exact: true }).waitFor();
 });
 
-void test('a running conversation sends replies directly and reserves interrupt for Stop Run', async (t) => {
+void test('a running conversation hides the queue notice and sends replies without interrupting', async (t) => {
   const { page, data, open, emit } = await fixture(t);
   const modes = [];
   await page.route(`**/api/requirements/${data.requirement.id}/reply`, (route) => {
@@ -401,15 +401,38 @@ void test('a running conversation sends replies directly and reserves interrupt 
   await emit(data.managerEvent('requirement.updated', { requirement: data.requirement }));
   const steer = page.getByRole('button', { name: 'Steering', exact: true });
   const stop = page.getByRole('button', { name: 'Stop Run', exact: true });
-  await page.getByText('External messages pending delivery: 1', { exact: true }).waitFor();
   assert.equal(await steer.count(), 0);
   await page.getByRole('textbox', { name: 'Reply to RD Agent', exact: true }).fill('Use this new direction.');
   await page.getByRole('button', { name: 'Send reply', exact: true }).click();
   await page.locator('section[aria-labelledby="requirement-conversation"]').getByText('Use this new direction.', { exact: true }).waitFor();
+  assert.equal(await page.getByText('External messages pending delivery: 1', { exact: true }).count(), 0);
   assert.deepEqual(modes, []);
   await Promise.all([
     page.waitForResponse((response) => response.url().endsWith('/interrupt') && response.status() === 202),
     stop.click(),
   ]);
   assert.deepEqual(modes, ['stop']);
+});
+
+void test('requirement and session cards count only messages not assigned to the active Run', async (t) => {
+  const { page, data, emit } = await fixture(t);
+  const queuedLabel = page.getByText('Messages awaiting delivery: 1', { exact: true });
+  const publishCounts = async (queuedMessageCount) => {
+    Object.assign(data.requirement.session, { pendingMessageCount: 2, queuedMessageCount });
+    await emit(data.managerEvent('requirement.updated', { requirement: data.requirement }));
+  };
+
+  await publishCounts(1);
+  await queuedLabel.waitFor();
+  await publishCounts(0);
+  await queuedLabel.waitFor({ state: 'hidden' });
+  assert.equal(await page.getByText('2 messages pending', { exact: true }).count(), 0);
+
+  await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+  await page.getByRole('heading', { name: 'RD Agent Sessions', exact: true }).waitFor();
+  await publishCounts(1);
+  await queuedLabel.waitFor();
+  await publishCounts(0);
+  await queuedLabel.waitFor({ state: 'hidden' });
+  assert.equal(await page.getByText('2 external messages pending', { exact: true }).count(), 0);
 });
