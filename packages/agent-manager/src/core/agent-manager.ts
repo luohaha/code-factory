@@ -159,6 +159,7 @@ interface ActiveRdRun {
   stopRequested: boolean;
   pendingInputChars: number;
   headlessSteer?: SendSteering;
+  streamingInputClosed?: boolean;
   offeredSteering: Array<{ sequence: number; delivered: boolean }>;
   remoteStartupSteerThrough?: number;
 }
@@ -1615,7 +1616,7 @@ export class AgentManager extends EventEmitter {
       .filter((message) => message.sequence > inputToSequence && message.sequence <= throughSequence);
     const lastMessage = newerMessages.at(-1);
     if (!lastMessage) return false;
-    if (active.controller.signal.aborted) return true;
+    if (active.controller.signal.aborted || active.streamingInputClosed) return true;
     if (requirement.provider === 'native-agent') {
       if (active.remoteStartupSteerThrough !== undefined) {
         active.remoteStartupSteerThrough = Math.max(active.remoteStartupSteerThrough, lastMessage.sequence);
@@ -2030,6 +2031,7 @@ export class AgentManager extends EventEmitter {
         signal: controller.signal,
         onNativeSession,
         onSteeringReady: (send) => { activeRun.headlessSteer = send; },
+        onStreamingInputClosed: () => { activeRun.streamingInputClosed = true; },
         onStreamingFallback: () => {
           if (activeRun.offeredSteering.length > 0) this.abortRdRun(requirement, activeRun);
         },

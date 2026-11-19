@@ -38,7 +38,11 @@ const codexFixture = String.raw`
     if (method === 'turn/start') {
       reply(id, { turn: { id: 'test-turn' } });
       notify('turn/started', { turn: { id: 'test-turn' } });
-      if (params.input[0].text.includes('LATE_CORRECTION')) complete();
+      const prompt = params.input[0].text;
+      if (prompt.includes('COMPLETE_BEFORE_REPLY')) {
+        complete();
+        setTimeout(() => {}, 400);
+      } else if (prompt.includes('LATE_CORRECTION') || prompt.includes('The complete body of this pending message')) complete();
       else item('started', { id: 'tool', type: 'commandExecution', command: 'sleep' });
     }
     if (method === 'turn/steer') {
@@ -74,7 +78,11 @@ const claudeFixture = String.raw`
     if (initial) {
       initial = false;
       emit({ type: 'system', subtype: 'init' });
-      if (frame.message.content.includes('LATE_CORRECTION')) result();
+      const prompt = frame.message.content;
+      if (prompt.includes('COMPLETE_BEFORE_REPLY')) {
+        result();
+        setTimeout(() => {}, 400);
+      } else if (prompt.includes('LATE_CORRECTION') || prompt.includes('The complete body of this pending message')) result();
       else tool('tool');
       return;
     }
@@ -99,7 +107,10 @@ const claudeFixture = String.raw`
   });
 `;
 
-function fixture(t: TestContext, provider: 'codex' | 'claude-code', script: string) {
+function fixture(t: TestContext, provider: 'codex' | 'claude-code', script: string,
+  { initialMessage, readyMarker = provider === 'codex' ? 'commandExecution' : 'tool_use' }: {
+    initialMessage?: string; readyMarker?: string;
+  } = {}) {
   const workspaceRoot = mkdtempSync(join(tmpdir(), 'headless-steer-test-'));
   const runner = new HeadlessProcessRunner();
   const requests: ProcessRunRequest[] = [];
@@ -124,10 +135,10 @@ function fixture(t: TestContext, provider: 'codex' | 'claude-code', script: stri
     model: 'test-model', reasoningEffort: 'high' });
   const ready = new Promise<void>((resolve) => {
     manager.on('output', ({ line }: { line: string }) => {
-      if (line.includes('commandExecution') || line.includes('tool_use')) resolve();
+      if (line.includes(readyMarker)) resolve();
     });
   });
-  const execution = manager.runRequirement(requirement.id);
+  const execution = manager.runRequirement(requirement.id, initialMessage);
   return { manager, requirement, ready, execution, requests };
 }
 
@@ -170,6 +181,26 @@ for (const provider of ['codex', 'claude-code'] as const) {
     }
     assert.equal(manager.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, late.message.sequence);
     assert.ok(manager.listRuns(requirement.id).every((run) => run.status === 'succeeded'));
+  });
+
+  test(`${provider} queues an oversized reply while the completed CLI is exiting`, { timeout: 8_000 }, async (t) => {
+    const { manager, requirement, ready, execution } = fixture(t, provider, provider === 'codex' ? codexFixture : claudeFixture, {
+      initialMessage: 'COMPLETE_BEFORE_REPLY',
+      readyMarker: provider === 'codex' ? '"method":"turn/completed"' : '"type":"result"',
+    });
+    const initialMessage = manager.listMessages(requirement.id).find((message) => message.author === 'human')!;
+    await ready;
+    assert.equal(manager.listRuns(requirement.id)[0]?.status, 'running');
+    const reply = manager.postHumanMessage(requirement.id, 'x'.repeat(13_000));
+    const first = await execution;
+    for (let attempt = 0; attempt < 100 && manager.getRequirement(requirement.id)?.session.pendingMessageCount; attempt++) {
+      await delay(25);
+    }
+    assert.equal(first.session.lastConsumedMessageSequence, initialMessage.sequence);
+    assert.equal(first.session.pendingMessageCount, 1);
+    assert.equal(manager.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, reply.message.sequence);
+    assert.deepEqual(manager.listRuns(requirement.id).map((run) => [run.status, run.inputFromSequence]),
+      [['succeeded', reply.message.sequence], ['succeeded', initialMessage.sequence]]);
   });
 }
 

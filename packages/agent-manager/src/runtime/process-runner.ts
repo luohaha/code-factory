@@ -19,6 +19,7 @@ export interface ProcessRunRequest {
   onOutput?: (line: string) => void;
   onEvent?: (event: NormalizedAgentEvent) => void;
   onSteeringReady?: (send: SendSteering) => void;
+  onStreamingInputClosed?: () => void;
   onStreamingFallback?: () => void;
 }
 
@@ -259,7 +260,10 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
           return true;
         },
         emit: emitEvent,
-        endInput: () => { if (child.stdin.writable) child.stdin.end(); },
+        endInput: () => {
+          request.onStreamingInputClosed?.();
+          if (child.stdin.writable) child.stdin.end();
+        },
         complete: () => { protocolCompleted = true; },
         fail: (message) => {
           protocolError = message;
