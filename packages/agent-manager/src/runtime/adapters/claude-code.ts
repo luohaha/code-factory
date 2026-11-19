@@ -10,6 +10,8 @@ import type {
   StreamingAgentInvocation,
 } from './types.js';
 
+const FOLLOW_UP_START_TIMEOUT_MS = 10_000;
+
 function assistantText(value: unknown): string | undefined {
   if (typeof value === 'string') return value;
   if (!value || typeof value !== 'object') return undefined;
@@ -114,10 +116,22 @@ export class ClaudeCodeAdapter implements AgentAdapter {
         const pending = new Map<string, () => void>();
         const replayed = new Set<string>();
         let closing = false;
+        let followUpTimer: NodeJS.Timeout | undefined;
+        const clearFollowUpTimer = () => {
+          if (followUpTimer) clearTimeout(followUpTimer);
+          followUpTimer = undefined;
+        };
+        const closeInput = () => {
+          clearFollowUpTimer();
+          if (closing) return;
+          closing = true;
+          io.endInput();
+        };
         const send = (text: string, uuid = randomUUID()) => io.write({
           type: 'user', message: { role: 'user', content: text }, uuid, parent_tool_use_id: null,
         });
         return {
+          dispose: clearFollowUpTimer,
           start: () => { send(legacy.input); },
           steer: (input, onDelivered) => {
             if (closing) return 'defer';
@@ -132,10 +146,14 @@ export class ClaudeCodeAdapter implements AgentAdapter {
             const raw = event.raw;
             if (raw.type === 'user' && raw.isReplay === true && typeof raw.uuid === 'string' && pending.has(raw.uuid)) {
               replayed.add(raw.uuid);
+              clearFollowUpTimer();
             }
-            if (raw.type === 'result') closing = true;
-            io.emit(event);
-            if (raw.type !== 'result') return;
+            if (raw.type !== 'result') {
+              if (raw.type === 'assistant' && raw.parent_tool_use_id == null) clearFollowUpTimer();
+              io.emit(event);
+              return;
+            }
+            clearFollowUpTimer();
             if (event.kind === 'completed' && raw.subtype === 'success') {
               const answered = Array.isArray(raw.user_message_uuids) ? raw.user_message_uuids
                 : typeof raw.user_message_uuid === 'string' ? [raw.user_message_uuid] : replayed;
@@ -145,9 +163,17 @@ export class ClaudeCodeAdapter implements AgentAdapter {
                 pending.delete(uuid);
               }
               io.complete();
+              if (!closing && pending.size > 0) {
+                followUpTimer = setTimeout(closeInput, FOLLOW_UP_START_TIMEOUT_MS);
+                followUpTimer.unref();
+              } else {
+                closeInput();
+              }
+            } else {
+              closeInput();
             }
             replayed.clear();
-            io.endInput();
+            io.emit(event);
           },
         };
       },

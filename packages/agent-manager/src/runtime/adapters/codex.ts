@@ -207,16 +207,45 @@ export class CodexAdapter implements AgentAdapter {
           });
           pending.set(clientUserMessageId, delivered);
         };
+        const setTurnReady = (id: string) => {
+          turnId = id;
+          for (const entry of queued.splice(0)) send(entry.input, entry.delivered);
+        };
         const startTurn = () => {
           rpc('turn/start', { threadId, input: codexInput({ text: input.prompt, imagePaths: input.imagePaths ?? [] }) }, (response) => {
             if (completed) return;
             const turn = record(record(response.result)?.turn);
-            if (response.error || typeof turn?.id !== 'string') {
+            if (response.error || typeof turn?.id !== 'string' || (turnId && turn.id !== turnId)) {
               io.fail('Codex App Server could not start the RD turn');
               return;
             }
-            turnId = turn.id;
-            for (const entry of queued.splice(0)) send(entry.input, entry.delivered);
+            setTurnReady(turn.id);
+          });
+        };
+        const openThread = (excludeTurns: boolean) => {
+          const nativeSessionId = input.nativeSessionId;
+          rpc(nativeSessionId ? 'thread/resume' : 'thread/start', {
+            ...(nativeSessionId ? { threadId: nativeSessionId, ...(excludeTurns ? { excludeTurns: true } : {}) } : {}),
+            cwd, approvalPolicy: 'never', sandbox: 'danger-full-access',
+            ...(input.model ? { model: input.model } : {}),
+            ...(input.reasoningEffort ? { config: { model_reasoning_effort: input.reasoningEffort } } : {}),
+            ...(input.developerInstructions ? { developerInstructions: input.developerInstructions } : {}),
+          }, (response) => {
+            const error = record(response.error);
+            if (nativeSessionId && excludeTurns && error?.code === -32600
+              && /excludeTurns.*requires experimentalApi capability/.test(stringField(error, 'message') ?? '')) {
+              openThread(false);
+              return;
+            }
+            const thread = record(record(response.result)?.thread);
+            if (response.error || typeof thread?.id !== 'string' || (nativeSessionId && thread.id !== nativeSessionId)) {
+              if (error?.code === -32601) io.unsupported();
+              else io.fail('Codex App Server could not open the RD thread');
+              return;
+            }
+            threadId = thread.id;
+            emit({ type: 'thread.started', thread_id: threadId });
+            startTurn();
           });
         };
         return {
@@ -228,23 +257,7 @@ export class CodexAdapter implements AgentAdapter {
                 return;
               }
               io.write({ method: 'initialized', params: {} });
-              rpc(input.nativeSessionId ? 'thread/resume' : 'thread/start', {
-                ...(input.nativeSessionId ? { threadId: input.nativeSessionId, excludeTurns: true } : {}),
-                cwd, approvalPolicy: 'never', sandbox: 'danger-full-access',
-                ...(input.model ? { model: input.model } : {}),
-                ...(input.reasoningEffort ? { config: { model_reasoning_effort: input.reasoningEffort } } : {}),
-                ...(input.developerInstructions ? { developerInstructions: input.developerInstructions } : {}),
-              }, (threadResponse) => {
-                const thread = record(record(threadResponse.result)?.thread);
-                if (threadResponse.error || typeof thread?.id !== 'string' || (input.nativeSessionId && thread.id !== input.nativeSessionId)) {
-                  if (record(threadResponse.error)?.code === -32601) io.unsupported();
-                  else io.fail('Codex App Server could not open the RD thread');
-                  return;
-                }
-                threadId = thread.id;
-                emit({ type: 'thread.started', thread_id: threadId });
-                startTurn();
-              });
+              openThread(true);
             });
           },
           steer: (steering, delivered) => {
@@ -272,7 +285,7 @@ export class CodexAdapter implements AgentAdapter {
             if (completed || !threadId || params?.threadId !== threadId) return;
             const turn = record(params.turn);
             if (frame.method === 'turn/started' && typeof turn?.id === 'string' && (!turnId || turn.id === turnId)) {
-              turnId = turn.id;
+              setTurnReady(turn.id);
               emit({ type: 'turn.started' });
             } else if ((frame.method === 'item/started' || frame.method === 'item/completed') && turnId && params.turnId === turnId) {
               const item = record(params.item);

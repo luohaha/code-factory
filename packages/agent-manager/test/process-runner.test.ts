@@ -49,6 +49,43 @@ test('HeadlessProcessRunner falls back before execution when Claude rejects stre
   assert.equal(steeringAvailability, 'unsupported');
 });
 
+test('HeadlessProcessRunner completes a Claude result larger than the raw output cap', { timeout: 5_000 }, async () => {
+  const adapter = new ClaudeCodeAdapter();
+  const invocation = adapter.buildRdInvocation({ prompt: 'test', nativeSessionId: null });
+  const streaming = adapter.buildStreamingRdInvocation(invocation);
+  const output: string[] = [];
+  const outcome = await new HeadlessProcessRunner().run({
+    invocation,
+    streamingInvocation: { ...streaming, command: process.execPath, args: ['-e', `
+      require('node:readline').createInterface({ input: process.stdin }).once('line', () => {
+        console.log(JSON.stringify({ type: 'result', subtype: 'success', result: 'x'.repeat(6000) }));
+      });
+    `] },
+    adapter, workspaceRoot: process.cwd(), timeoutMs: 30_000, maxOutputBytes: 2 * 1024,
+    onOutput: (line) => { output.push(line); },
+  });
+  assert.equal(outcome.status, 'succeeded');
+  assert.equal(outcome.finalMessage?.length, 6_000);
+  assert.deepEqual(output, []);
+});
+
+test('HeadlessProcessRunner fails promptly when the protocol frame limit is exceeded', { timeout: 5_000 }, async () => {
+  const adapter = new ClaudeCodeAdapter();
+  const invocation = adapter.buildRdInvocation({ prompt: 'test', nativeSessionId: null });
+  const streaming = adapter.buildStreamingRdInvocation(invocation);
+  const outcome = await new HeadlessProcessRunner().run({
+    invocation,
+    streamingInvocation: { ...streaming, command: process.execPath, args: ['-e', `
+      require('node:readline').createInterface({ input: process.stdin }).once('line', () => {
+        process.stdout.write('x'.repeat(8 * 1024 * 1024 + 1));
+      });
+    `] },
+    adapter, workspaceRoot: process.cwd(), timeoutMs: 30_000, maxOutputBytes: 2 * 1024,
+  });
+  assert.equal(outcome.status, 'failed');
+  assert.match(outcome.error ?? '', /Agent protocol frame exceeds 8388608 bytes/);
+});
+
 test('HeadlessProcessRunner terminates an aborted child as a cancelled Run', async () => {
   const controller = new AbortController();
   const outcomePromise = new HeadlessProcessRunner().run({

@@ -3,6 +3,8 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import type { AgentAdapter, AgentInvocation, NormalizedAgentEvent, SendSteering, StreamingAgentInvocation } from './adapters/types.js';
 import type { RunOutcome } from '../core/types.js';
 
+const MIN_STREAMING_FRAME_LIMIT_BYTES = 8 * 1024 * 1024;
+
 export interface ProcessRunRequest {
   invocation: AgentInvocation;
   streamingInvocation?: StreamingAgentInvocation;
@@ -17,6 +19,7 @@ export interface ProcessRunRequest {
   onOutput?: (line: string) => void;
   onEvent?: (event: NormalizedAgentEvent) => void;
   onSteeringReady?: (send: SendSteering) => void;
+  onStreamingFallback?: () => void;
 }
 
 export interface AgentProcessRunner {
@@ -124,6 +127,7 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
     if (request.streamingInvocation && !request.signal?.aborted) {
       const outcome = await this.runProcess(request, request.streamingInvocation);
       if (outcome) return outcome;
+      request.onStreamingFallback?.();
     }
     if (request.signal?.aborted) {
       return { status: 'cancelled', exitCode: null, nativeSessionId: null, finalMessage: null, error: 'Agent Run interrupted by human' };
@@ -158,6 +162,7 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
       let settled = false;
       let protocolCompleted = false;
       let discardingOversizedLine = false;
+      const maxFrameBytes = streaming ? Math.max(request.maxOutputBytes, MIN_STREAMING_FRAME_LIMIT_BYTES) : request.maxOutputBytes;
       const timeoutMode = request.timeoutMode ?? 'elapsed';
       const timeoutError = timeoutMode === 'inactivity'
         ? `Agent produced no output for ${formatDuration(request.timeoutMs)}`
@@ -166,6 +171,7 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
       const cleanup = () => {
         if (timeout) clearTimeout(timeout);
         if (forceKill) clearTimeout(forceKill);
+        protocol?.dispose?.();
         request.signal?.removeEventListener('abort', onAbort);
       };
 
@@ -184,7 +190,7 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
 
       const consumeLine = (line: string) => {
         if (!line.trim()) return;
-        request.onOutput?.(line);
+        if (Buffer.byteLength(line) <= request.maxOutputBytes) request.onOutput?.(line);
         if (protocol) protocol.receive(line);
         else {
           const event = request.adapter.parseLine(line);
@@ -262,21 +268,36 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         unsupported: () => terminate('unsupported'),
       });
 
+      const failOversizedFrame = () => {
+        stdoutBuffer = '';
+        if (!termination) {
+          protocolError = `Agent protocol frame exceeds ${maxFrameBytes} bytes`;
+          terminate('failed');
+        }
+      };
+      const processingEnded = () => termination === 'failed' || termination === 'unsupported';
+
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', (chunk: string) => {
+        if (processingEnded()) return;
         recordActivity();
         const lines = chunk.split('\n');
         const tail = lines.pop() ?? '';
         for (const line of lines) {
-          if (!discardingOversizedLine && Buffer.byteLength(stdoutBuffer) + Buffer.byteLength(line) <= request.maxOutputBytes) {
+          if (!discardingOversizedLine && Buffer.byteLength(stdoutBuffer) + Buffer.byteLength(line) <= maxFrameBytes) {
             consumeLine((stdoutBuffer + line).replace(/\r$/, ''));
+          } else if (protocol) {
+            failOversizedFrame();
+            return;
           }
           stdoutBuffer = '';
           discardingOversizedLine = false;
+          if (processingEnded()) return;
         }
         if (!discardingOversizedLine) {
-          discardingOversizedLine = Buffer.byteLength(stdoutBuffer) + Buffer.byteLength(tail) > request.maxOutputBytes;
+          discardingOversizedLine = Buffer.byteLength(stdoutBuffer) + Buffer.byteLength(tail) > maxFrameBytes;
           stdoutBuffer = discardingOversizedLine ? '' : stdoutBuffer + tail;
+          if (protocol && discardingOversizedLine) failOversizedFrame();
         }
       });
       child.stderr.setEncoding('utf8');

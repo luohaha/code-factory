@@ -2006,6 +2006,9 @@ export class AgentManager extends EventEmitter {
         signal: controller.signal,
         onNativeSession,
         onSteeringReady: (send) => { activeRun.headlessSteer = send; },
+        onStreamingFallback: () => {
+          if (activeRun.offeredSteering.length > 0) this.abortRdRun(requirement, activeRun);
+        },
         onOutput: (line) => this.emit('output', { runId, line }),
         onEvent,
       });

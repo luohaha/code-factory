@@ -31,6 +31,7 @@ export interface AgentProtocol {
   start(): void;
   receive(line: string): void;
   steer: SendSteering;
+  dispose?(): void;
 }
 
 export interface StreamingAgentInvocation extends AgentInvocation {

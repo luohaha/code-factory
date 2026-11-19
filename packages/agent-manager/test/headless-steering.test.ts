@@ -68,25 +68,34 @@ const claudeFixture = String.raw`
     subtype: success ? 'success' : 'error_during_execution', is_error: !success, result: success ? 'Finished' : 'Failed', ...extra });
   let initial = true;
   let late;
+  const tool = (id) => emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Bash' }] } });
   createInterface({ input: process.stdin }).on('line', (line) => {
     const frame = JSON.parse(line);
     if (initial) {
       initial = false;
       emit({ type: 'system', subtype: 'init' });
       if (frame.message.content.includes('LATE_CORRECTION')) result();
-      else emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool', name: 'Bash' }] } });
+      else tool('tool');
       return;
     }
     if (frame.message.content.includes('LATE_CORRECTION')) {
       emit({ ...frame, isReplay: true });
       result(true, { user_message_uuids: [] });
-      late = frame;
+      if (frame.message.content.includes('WAIT_FOR_THIRD')) {
+        late = frame;
+        tool('follow-up-tool');
+      } else {
+        result(!frame.message.content.includes('FAIL_AFTER_REPLAY'), { user_message_uuids: [frame.uuid] });
+      }
+      return;
+    }
+    if (late) {
+      emit({ ...frame, isReplay: true });
+      result(true, { user_message_uuids: [late.uuid, frame.uuid] });
       return;
     }
     emit({ ...frame, isReplay: true });
     result(!frame.message.content.includes('FAIL_AFTER_REPLAY'));
-  }).on('close', () => {
-    if (late) result(!late.message.content.includes('FAIL_AFTER_REPLAY'), { user_message_uuids: [late.uuid] });
   });
 `;
 
@@ -172,6 +181,65 @@ test('Claude Code automatically steers an ordinary reply into the active RD Run'
   assert.equal(current.session.lastConsumedMessageSequence, reply.message.sequence);
   assert.equal(manager.listRuns(requirement.id)[0]?.status, 'succeeded');
   assert.equal(requests.length, 1);
+});
+
+test('Claude Code accepts a third message while the follow-up turn runs a tool', { timeout: 8_000 }, async (t) => {
+  const { manager, requirement, ready, execution, requests } = fixture(t, 'claude-code', claudeFixture);
+  await ready;
+  const followUpReady = new Promise<void>((resolve) => {
+    manager.on('output', ({ line }: { line: string }) => {
+      if (line.includes('follow-up-tool')) resolve();
+    });
+  });
+  manager.postHumanMessage(requirement.id, 'LATE_CORRECTION WAIT_FOR_THIRD');
+  await followUpReady;
+  const third = manager.postHumanMessage(requirement.id, 'THIRD DIRECTION');
+  const current = await execution;
+  assert.equal(current.session.lastConsumedMessageSequence, third.message.sequence);
+  assert.equal(current.session.pendingMessageCount, 0);
+  assert.equal(requests.length, 1);
+});
+
+test('a reply offered before streaming rejection starts the replacement Run before one-shot work', { timeout: 8_000 }, async (t) => {
+  const workspaceRoot = mkdtempSync(join(tmpdir(), 'headless-fallback-test-'));
+  const runner = new HeadlessProcessRunner();
+  const oneShotPrompts: string[] = [];
+  const manager = new AgentManager({
+    workspaceRoot, store: new SqliteAgentManagerStore(':memory:'), logger: silentLogger, timeoutMs: 3_000,
+    runner: {
+      run: (request) => {
+        assert.ok(request.streamingInvocation);
+        return runner.run({
+          ...request,
+          invocation: {
+            ...request.invocation, command: process.execPath,
+            args: ['-e', "process.stdin.on('data', (chunk) => process.stdout.write(chunk));"],
+          },
+          streamingInvocation: {
+            ...request.streamingInvocation, command: process.execPath,
+            args: ['-e', `console.error("error: unknown option '--input-format'"); process.exitCode = 1;`],
+          },
+          onOutput: (line) => { oneShotPrompts.push(line); },
+        });
+      },
+    },
+  });
+  t.after(async () => {
+    await manager.close();
+    rmSync(workspaceRoot, { recursive: true, force: true });
+  });
+  const requirement = manager.createRequirement({ title: 'Fallback', description: 'Initial task', provider: 'claude-code' });
+  const initial = manager.runRequirement(requirement.id, 'Do the initial work');
+  manager.postHumanMessage(requirement.id, 'STARTUP_CORRECTION');
+  const first = await initial;
+  assert.equal(first.session.lastConsumedMessageSequence, 0);
+  for (let attempt = 0; attempt < 100 && manager.getRequirement(requirement.id)?.session.pendingMessageCount; attempt++) {
+    await delay(25);
+  }
+  assert.deepEqual(manager.listRuns(requirement.id).map((run) => run.status), ['succeeded', 'cancelled']);
+  assert.equal(oneShotPrompts.filter((line) => line.includes('Initial task')).length, 1);
+  assert.match(oneShotPrompts.join('\n'), /STARTUP_CORRECTION/);
+  assert.equal(manager.getRequirement(requirement.id)?.session.pendingMessageCount, 0);
 });
 
 test('Claude Code does not count a successful result for the wrong input before a later failure', { timeout: 8_000 }, async (t) => {

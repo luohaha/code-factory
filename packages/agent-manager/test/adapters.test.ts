@@ -3,6 +3,78 @@ import test from 'node:test';
 
 import { ClaudeCodeAdapter } from '../src/runtime/adapters/claude-code.ts';
 import { CodexAdapter } from '../src/runtime/adapters/codex.ts';
+import type { NormalizedAgentEvent, StreamingAgentInvocation } from '../src/runtime/adapters/types.ts';
+
+function protocolFixture(invocation: StreamingAgentInvocation) {
+  const writes: Record<string, unknown>[] = [];
+  const events: NormalizedAgentEvent[] = [];
+  let closed = false;
+  const protocol = invocation.connect({
+    write: (message) => {
+      if (closed) return false;
+      writes.push(message);
+      return true;
+    },
+    emit: (event) => { events.push(event); },
+    endInput: () => { closed = true; },
+    complete: () => {},
+    fail: (message) => assert.fail(message),
+    unsupported: () => assert.fail('unexpected protocol fallback'),
+  });
+  protocol.start();
+  return { protocol, writes, events, closed: () => closed,
+    receive: (message: Record<string, unknown>) => protocol.receive(JSON.stringify(message)) };
+}
+
+test('Codex retries a gated excludeTurns field without changing the native thread', () => {
+  const adapter = new CodexAdapter();
+  const input = { prompt: 'continue', nativeSessionId: 'saved-thread' };
+  const { receive, writes, events } = protocolFixture(adapter.buildStreamingRdInvocation(adapter.buildRdInvocation(input), input, '/workspace'));
+  receive({ id: writes[0]!.id, result: {} });
+  const resume = writes.at(-1)!;
+  assert.equal(resume.method, 'thread/resume');
+  assert.equal((resume.params as Record<string, unknown>).excludeTurns, true);
+  receive({ id: resume.id, error: { code: -32600, message: 'thread/resume.excludeTurns requires experimentalApi capability' } });
+  const retry = writes.at(-1)!;
+  assert.equal(retry.method, 'thread/resume');
+  const { excludeTurns, ...compatibleParams } = resume.params as Record<string, unknown>;
+  assert.equal(excludeTurns, true);
+  assert.deepEqual(retry.params, compatibleParams);
+  receive({ id: retry.id, result: { thread: { id: 'saved-thread' } } });
+  assert.equal(events[0]?.nativeSessionId, 'saved-thread');
+  assert.equal(writes.at(-1)?.method, 'turn/start');
+});
+
+test('Codex sends startup replies in order when the turn notification precedes the response', () => {
+  const adapter = new CodexAdapter();
+  const input = { prompt: 'start', nativeSessionId: null };
+  const { protocol, receive, writes } = protocolFixture(adapter.buildStreamingRdInvocation(adapter.buildRdInvocation(input), input, '/workspace'));
+  receive({ id: writes[0]!.id, result: {} });
+  receive({ id: writes.at(-1)!.id, result: { thread: { id: 'thread' } } });
+  const startTurn = writes.at(-1)!;
+  assert.equal(startTurn.method, 'turn/start');
+  assert.equal(protocol.steer({ text: 'first', imagePaths: [] }, () => {}), 'submitted');
+  receive({ method: 'turn/started', params: { threadId: 'thread', turn: { id: 'turn' } } });
+  assert.equal(protocol.steer({ text: 'second', imagePaths: [] }, () => {}), 'submitted');
+  receive({ id: startTurn.id, result: { turn: { id: 'turn' } } });
+  const steers = writes.filter((frame) => frame.method === 'turn/steer')
+    .map((frame) => (frame.params as { input: Array<{ text: string }> }).input[0]?.text);
+  assert.deepEqual(steers, ['first', 'second']);
+});
+
+test('Claude closes stdin after a bounded wait if an unanswered reply never starts another turn', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const adapter = new ClaudeCodeAdapter();
+  const invocation = adapter.buildRdInvocation({ prompt: 'start', nativeSessionId: null });
+  const { protocol, receive, closed } = protocolFixture(adapter.buildStreamingRdInvocation(invocation));
+  assert.equal(protocol.steer({ text: 'try another direction', imagePaths: [] }, () => assert.fail('unanswered input')), 'submitted');
+  receive({ type: 'result', subtype: 'success', result: 'initial response', user_message_uuids: [] });
+  assert.equal(closed(), false);
+  t.mock.timers.tick(10_000);
+  assert.equal(closed(), true);
+  assert.equal(protocol.steer({ text: 'retry', imagePaths: [] }, () => {}), 'defer');
+  protocol.dispose?.();
+});
 
 test('Codex starts and resumes through stdin without disabling native context discovery', () => {
   const adapter = new CodexAdapter();
