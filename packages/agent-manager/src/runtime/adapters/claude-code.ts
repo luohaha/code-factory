@@ -115,6 +115,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       connect: (io) => {
         const pending = new Map<string, () => void>();
         const replayed = new Set<string>();
+        let sessionId: string | undefined;
         let closing = false;
         let followUpTimer: NodeJS.Timeout | undefined;
         const clearFollowUpTimer = () => {
@@ -144,6 +145,10 @@ export class ClaudeCodeAdapter implements AgentAdapter {
             const event = this.parseLine(line);
             if (!event) return;
             const raw = event.raw;
+            if (raw.type === 'system' && raw.subtype === 'init' && typeof raw.session_id === 'string' && raw.parent_tool_use_id == null) {
+              sessionId ??= raw.session_id;
+              if (raw.session_id === sessionId) clearFollowUpTimer();
+            }
             if (raw.type === 'user' && raw.isReplay === true && typeof raw.uuid === 'string' && pending.has(raw.uuid)) {
               replayed.add(raw.uuid);
               clearFollowUpTimer();

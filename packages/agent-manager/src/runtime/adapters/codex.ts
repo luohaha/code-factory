@@ -39,6 +39,19 @@ function stringField(value: Record<string, unknown>, key: string): string | unde
   return typeof value[key] === 'string' ? value[key] : undefined;
 }
 
+function startupFailure(summary: string, error: Record<string, unknown> | undefined): string {
+  const message = error ? stringField(error, 'message') ?? '' : '';
+  const reason = /no rollout found|thread not found/i.test(message) ? 'saved thread transcript not found'
+    : /authentication|unauthorized|not logged in|invalid api key/i.test(message) ? 'check Codex authentication'
+    : record(error?.data)?.type === 'modelProviderMismatch' || /model provider mismatch/i.test(message)
+      ? 'saved thread uses a different model provider'
+    : /configuration|config\.toml/i.test(message) ? 'check Codex configuration'
+    : undefined;
+  const code = typeof error?.code === 'number' && Number.isSafeInteger(error.code) ? `RPC ${error.code}` : undefined;
+  const detail = [code, reason].filter(Boolean).join(': ');
+  return detail ? `${summary} (${detail})` : summary;
+}
+
 function jsonDetail(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value === 'string') return value;
@@ -216,31 +229,31 @@ export class CodexAdapter implements AgentAdapter {
             if (completed) return;
             const turn = record(record(response.result)?.turn);
             if (response.error || typeof turn?.id !== 'string' || (turnId && turn.id !== turnId)) {
-              io.fail('Codex App Server could not start the RD turn');
+              io.fail(startupFailure('Codex App Server could not start the RD turn', record(response.error)));
               return;
             }
             setTurnReady(turn.id);
           });
         };
-        const openThread = (excludeTurns: boolean) => {
+        const openThread = () => {
           const nativeSessionId = input.nativeSessionId;
           rpc(nativeSessionId ? 'thread/resume' : 'thread/start', {
-            ...(nativeSessionId ? { threadId: nativeSessionId, ...(excludeTurns ? { excludeTurns: true } : {}) } : {}),
+            ...(nativeSessionId ? { threadId: nativeSessionId, excludeTurns: true } : {}),
             cwd, approvalPolicy: 'never', sandbox: 'danger-full-access',
             ...(input.model ? { model: input.model } : {}),
             ...(input.reasoningEffort ? { config: { model_reasoning_effort: input.reasoningEffort } } : {}),
             ...(input.developerInstructions ? { developerInstructions: input.developerInstructions } : {}),
           }, (response) => {
             const error = record(response.error);
-            if (nativeSessionId && excludeTurns && error?.code === -32600
+            if (nativeSessionId && error?.code === -32600
               && /excludeTurns.*requires experimentalApi capability/.test(stringField(error, 'message') ?? '')) {
-              openThread(false);
+              io.unsupported();
               return;
             }
             const thread = record(record(response.result)?.thread);
             if (response.error || typeof thread?.id !== 'string' || (nativeSessionId && thread.id !== nativeSessionId)) {
               if (error?.code === -32601) io.unsupported();
-              else io.fail('Codex App Server could not open the RD thread');
+              else io.fail(startupFailure('Codex App Server could not open the RD thread', error));
               return;
             }
             threadId = thread.id;
@@ -250,14 +263,17 @@ export class CodexAdapter implements AgentAdapter {
         };
         return {
           start: () => {
-            rpc('initialize', { clientInfo: { name: 'code-factory', version: '0.1.0' } }, (response) => {
+            rpc('initialize', {
+              clientInfo: { name: 'code-factory', version: '0.1.0' },
+              ...(input.nativeSessionId ? { capabilities: { experimentalApi: true } } : {}),
+            }, (response) => {
               if (response.error) {
                 if (record(response.error)?.code === -32601) io.unsupported();
-                else io.fail('Codex App Server initialization failed');
+                else io.fail(startupFailure('Codex App Server initialization failed', record(response.error)));
                 return;
               }
               io.write({ method: 'initialized', params: {} });
-              openThread(true);
+              openThread();
             });
           },
           steer: (steering, delivered) => {

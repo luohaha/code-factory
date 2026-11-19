@@ -160,6 +160,7 @@ interface ActiveRdRun {
   pendingInputChars: number;
   headlessSteer?: SendSteering;
   offeredSteering: Array<{ sequence: number; delivered: boolean }>;
+  remoteStartupSteerThrough?: number;
 }
 
 function truncateAgentTraceDetail(detail: string): string {
@@ -1616,6 +1617,10 @@ export class AgentManager extends EventEmitter {
     if (!lastMessage) return false;
     if (active.controller.signal.aborted) return true;
     if (requirement.provider === 'native-agent') {
+      if (active.remoteStartupSteerThrough !== undefined) {
+        active.remoteStartupSteerThrough = Math.max(active.remoteStartupSteerThrough, lastMessage.sequence);
+        return true;
+      }
       active.steering = active.steering.then(async () => {
         if (active.controller.signal.aborted) return;
         const deliveredTo = this.#store.getRun(active.runId)?.inputToSequence ?? 0;
@@ -1917,8 +1922,10 @@ export class AgentManager extends EventEmitter {
       throw error;
     }
     const controller = new AbortController();
+    const uploadRemotePayloads = requirement.provider === 'native-agent' && remotePayloads && payloads.length > 0;
     const activeRun: ActiveRdRun = { runId, controller, steering: Promise.resolve(), stopRequested: false,
-      pendingInputChars: this.formatRdMessages(promptMessages).length, offeredSteering: [] };
+      pendingInputChars: this.formatRdMessages(promptMessages).length, offeredSteering: [],
+      ...(uploadRemotePayloads ? { remoteStartupSteerThrough: 0 } : {}) };
     this.#activeRdRuns.set(requirementId, activeRun);
     this.publish({
       type: 'run.started',
@@ -1963,8 +1970,8 @@ export class AgentManager extends EventEmitter {
       lastAgentMessage = body;
       this.appendMessage({ requirementId, sessionId: started.session.id, runId, author: 'rd_agent', body, deliverToRd: false });
     };
-    const runNative = () => this.#native.run({ requirementId, sessionId: started.session.id, nativeSessionId: requirement.session.nativeSessionId,
-          prompt, model: requirement.model, reasoningEffort: requirement.reasoningEffort,
+    const runNative = (nativePrompt: string) => this.#native.run({ requirementId, sessionId: started.session.id, nativeSessionId: requirement.session.nativeSessionId,
+          prompt: nativePrompt, model: requirement.model, reasoningEffort: requirement.reasoningEffort,
           cwd: selectedSandbox?.cwd ?? this.workspaceRoot,
           ...(selectedSandbox?.kind === 'e2b' && selectedSandbox.providerSandboxId && cloudCredentials
             ? { sandbox: { kind: 'e2b' as const, providerSandboxId: selectedSandbox.providerSandboxId, cwd: selectedSandbox.cwd,
@@ -1978,9 +1985,26 @@ export class AgentManager extends EventEmitter {
           signal: controller.signal, timeoutMs: this.#timeoutMs, onNativeSession, onEvent });
     let execution: Promise<RunOutcome>;
     if (requirement.provider === 'native-agent') {
-      execution = remotePayloads && payloads.length > 0 && selectedSandbox && cloudCredentials
-        ? this.runWithRemotePromptPayloads(selectedSandbox, cloudCredentials, payloads, runNative)
-        : runNative();
+      execution = uploadRemotePayloads && selectedSandbox && cloudCredentials
+        ? this.runWithRemotePromptPayloads(selectedSandbox, cloudCredentials, payloads, controller.signal, () => {
+          const steerThrough = activeRun.remoteStartupSteerThrough ?? 0;
+          delete activeRun.remoteStartupSteerThrough;
+          const pending = this.#store.listPendingRdMessages(requirementId)
+            .filter((message) => message.sequence > (inputToSequence ?? 0) && message.sequence <= steerThrough);
+          if (pending.length === 0) return runNative(prompt);
+          const separatorChars = activeRun.pendingInputChars > 0 ? 2 : 0;
+          const remainingChars = MAX_HANDOFF_PENDING_CHARS - activeRun.pendingInputChars - separatorChars;
+          const messages = this.selectRdMessages(pending, remainingChars);
+          const correction = this.formatRdMessages(messages);
+          if (correction.length > remainingChars) {
+            this.abortRdRun(requirement, activeRun);
+            controller.signal.throwIfAborted();
+          }
+          activeRun.pendingInputChars += separatorChars + correction.length;
+          this.#store.extendRunInputToSequence(runId, messages.at(-1)!.sequence);
+          return runNative(`${prompt}\n\nAdditional conversation messages received before model execution:\n\n${correction}`);
+        })
+        : runNative(prompt);
     } else {
       const adapter = this.#adapters[requirement.provider];
       const workspaceRoot = selectedSandbox?.cwd ?? this.workspaceRoot;
@@ -2049,22 +2073,25 @@ export class AgentManager extends EventEmitter {
     sandbox: Sandbox,
     credentials: E2BCredentials,
     payloads: ReadonlyArray<{ path: string; content: string }>,
+    signal: AbortSignal,
     run: () => Promise<RunOutcome>,
   ): Promise<RunOutcome> {
     let handle: E2BHandle | null = null;
     const uploaded: string[] = [];
     try {
       if (sandbox.kind !== 'e2b' || !sandbox.providerSandboxId) throw new Error('E2B sandbox is unavailable');
-      handle = await this.#e2b.connect(sandbox.providerSandboxId, credentials);
+      handle = await this.#e2b.connect(sandbox.providerSandboxId, credentials, signal);
       for (const payload of payloads) {
+        signal.throwIfAborted();
         uploaded.push(payload.path);
         await handle.files.write(payload.path, payload.content);
       }
+      signal.throwIfAborted();
       return await run();
     } catch {
       return {
-        status: 'failed', exitCode: null, nativeSessionId: null, finalMessage: null,
-        error: 'Could not deliver the complete Requirement input to the selected workspace',
+        status: signal.aborted ? 'cancelled' : 'failed', exitCode: null, nativeSessionId: null, finalMessage: null,
+        error: signal.aborted ? 'Agent Run interrupted by human' : 'Could not deliver the complete Requirement input to the selected workspace',
       };
     } finally {
       if (handle) {
