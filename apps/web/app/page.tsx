@@ -3678,6 +3678,10 @@ function Dashboard() {
   }
 
   async function interruptRequirement(requirementId: string, mode: 'stop' | 'steer'): Promise<void> {
+    if (mode === 'steer') {
+      await runAction(requirementId, () => client.interruptRequirement(requirementId, mode));
+      return;
+    }
     setInterruptingRequirementIds((current) => new Set(current).add(requirementId));
     try {
       await runAction(requirementId, () => client.interruptRequirement(requirementId, mode));

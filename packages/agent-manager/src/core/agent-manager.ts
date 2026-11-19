@@ -42,6 +42,7 @@ import {
   type AgentModelCatalogService,
 } from '../runtime/model-catalog.js';
 import { HeadlessProcessRunner, type AgentProcessRunner, type ProcessRunRequest } from '../runtime/process-runner.js';
+import type { RdInvocationInput, SendSteering } from '../runtime/adapters/types.js';
 import { NativeAgentService, type NativeSandboxAction, type NativeSandboxState } from '../runtime/native-agent.js';
 import { NativeAuthService } from '../runtime/native-auth-service.js';
 import { profileIdFromModel, profileModel, type NativeApiFormat, type NativeApiProfile } from '../runtime/native-auth.js';
@@ -151,6 +152,16 @@ type JevWakeSkipReason =
   | 'request_failed'
   | 'application_failed';
 
+interface ActiveRdRun {
+  runId: string;
+  controller: AbortController;
+  steering: Promise<void>;
+  stopRequested: boolean;
+  pendingInputChars: number;
+  headlessSteer?: SendSteering;
+  offeredSteering: Array<{ sequence: number; delivered: boolean }>;
+}
+
 function truncateAgentTraceDetail(detail: string): string {
   if (Buffer.byteLength(detail) <= MAX_AGENT_TRACE_DETAIL_BYTES) return detail;
   const bytes = Buffer.from(detail);
@@ -214,7 +225,7 @@ export class AgentManager extends EventEmitter {
   readonly #maxOutputBytes: number;
   readonly #agentCliBinDirectory: string | null;
   readonly #modelCatalog: AgentModelCatalogService;
-  readonly #activeRdRuns = new Map<string, { runId: string; controller: AbortController; steering: Promise<void>; stopRequested: boolean; pendingInputChars: number }>();
+  readonly #activeRdRuns = new Map<string, ActiveRdRun>();
   readonly #pendingJevDecisions = new Set<AbortController>();
   readonly #agentTriggers = new Map<string, AgentTrigger>();
   readonly #pullRequestReconciler: PullRequestReconciler;
@@ -1588,9 +1599,10 @@ export class AgentManager extends EventEmitter {
     }
     if (mode === 'steer') {
       const run = this.#store.getRun(active.runId);
-      const inputToSequence = run?.inputToSequence ?? 0;
-      if (!this.#store.listPendingRdMessages(requirementId)
-        .some((message) => message.sequence > inputToSequence)) {
+      const inputToSequence = active.offeredSteering.at(-1)?.sequence ?? run?.inputToSequence ?? 0;
+      const newerMessages = this.#store.listPendingRdMessages(requirementId)
+        .filter((message) => message.sequence > inputToSequence);
+      if (newerMessages.length === 0) {
         throw new StoreConflictError(`Requirement ${requirementId} has no newer input to steer into the next RD Run`);
       }
       if (requirement.provider === 'native-agent') {
@@ -1617,6 +1629,36 @@ export class AgentManager extends EventEmitter {
           this.logger.error('Native steering failed', { requirementId, error });
         });
         return { runId: active.runId };
+      }
+      if (active.controller.signal.aborted) return { runId: active.runId };
+      if (active.headlessSteer) {
+        const separatorChars = active.pendingInputChars > 0 ? 2 : 0;
+        const remainingChars = MAX_HANDOFF_PENDING_CHARS - active.pendingInputChars - separatorChars;
+        const messages = this.selectRdMessages(newerMessages, remainingChars);
+        const text = this.formatRdMessages(messages);
+        if (text.length <= remainingChars) {
+          const delivery = { sequence: messages.at(-1)!.sequence, delivered: false };
+          active.offeredSteering.push(delivery);
+          const submission = active.headlessSteer({ text, imagePaths: this.rdImagePaths(messages) }, () => {
+            delivery.delivered = true;
+            if (active.controller.signal.aborted || this.#activeRdRuns.get(requirementId) !== active) return;
+            if (!active.offeredSteering[0]?.delivered) return;
+            while (active.offeredSteering[0]?.delivered) {
+              const entry = active.offeredSteering.shift()!;
+              this.#store.extendRunInputToSequence(active.runId, entry.sequence);
+            }
+            this.publish({
+              type: 'requirement.updated', requirementId, sessionId: requirement.session.id, runId: active.runId,
+              payload: { requirement: this.requireRequirement(requirementId), run: this.#store.getRun(active.runId) },
+            });
+          });
+          if (submission === 'submitted') {
+            active.pendingInputChars += separatorChars + text.length;
+            return { runId: active.runId };
+          }
+          active.offeredSteering.pop();
+          if (submission === 'defer') return { runId: active.runId };
+        }
       }
     }
     if (!active.controller.signal.aborted) {
@@ -1841,9 +1883,6 @@ export class AgentManager extends EventEmitter {
     const inputFromSequence = pendingMessages.at(0)?.sequence;
     const inputToSequence = pendingMessages.at(-1)?.sequence;
     const prompt = handoff ?? this.buildRdPrompt(promptRequirement, promptMessages, isResume);
-    const imagePaths = pendingMessages.flatMap((message) => message.attachments
-      .filter((attachment) => attachment.kind === 'image')
-      .map((attachment) => attachment.localPath));
     let started: ReturnType<AgentManagerStore['beginRun']>;
     try {
       started = this.#store.beginRun({
@@ -1865,8 +1904,9 @@ export class AgentManager extends EventEmitter {
       throw error;
     }
     const controller = new AbortController();
-    this.#activeRdRuns.set(requirementId, { runId, controller, steering: Promise.resolve(), stopRequested: false,
-      pendingInputChars: this.formatRdMessages(promptMessages).length });
+    const activeRun: ActiveRdRun = { runId, controller, steering: Promise.resolve(), stopRequested: false,
+      pendingInputChars: this.formatRdMessages(promptMessages).length, offeredSteering: [] };
+    this.#activeRdRuns.set(requirementId, activeRun);
     this.publish({
       type: 'run.started',
       requirementId,
@@ -1923,30 +1963,40 @@ export class AgentManager extends EventEmitter {
                   && new URL(selectedSandbox.repositoryUrl).hostname.toLowerCase() === 'github.com' } } : {}),
           environment: this.buildRdEnvironment(requirement), instructions: this.buildRdDeveloperInstructions(true, requirement.sandboxId),
           signal: controller.signal, timeoutMs: this.#timeoutMs, onNativeSession, onEvent });
-    const execution = requirement.provider === 'native-agent'
-      ? remotePayloads && payloads.length > 0 && selectedSandbox && cloudCredentials
+    let execution: Promise<RunOutcome>;
+    if (requirement.provider === 'native-agent') {
+      execution = remotePayloads && payloads.length > 0 && selectedSandbox && cloudCredentials
         ? this.runWithRemotePromptPayloads(selectedSandbox, cloudCredentials, payloads, runNative)
-        : runNative()
-      : this.execute({
-      invocation: this.#adapters[requirement.provider].buildRdInvocation({
+        : runNative();
+    } else {
+      const adapter = this.#adapters[requirement.provider];
+      const workspaceRoot = selectedSandbox?.cwd ?? this.workspaceRoot;
+      const input: RdInvocationInput = {
         prompt,
         nativeSessionId: requirement.session.nativeSessionId,
         ...(requirement.model ? { model: requirement.model } : {}),
         ...(requirement.reasoningEffort ? { reasoningEffort: requirement.reasoningEffort } : {}),
         developerInstructions: this.buildRdDeveloperInstructions(),
-        imagePaths,
-      }),
-      adapter: this.#adapters[requirement.provider],
-      workspaceRoot: selectedSandbox?.cwd ?? this.workspaceRoot,
-      environment: this.buildRdEnvironment(requirement),
-      timeoutMs: this.#timeoutMs,
-      timeoutMode: 'inactivity',
-      maxOutputBytes: this.#maxOutputBytes,
-      signal: controller.signal,
-      onNativeSession,
-      onOutput: (line) => this.emit('output', { runId, line }),
-      onEvent,
-    });
+        imagePaths: this.rdImagePaths(pendingMessages),
+      };
+      const invocation = adapter.buildRdInvocation(input);
+      const streamingInvocation = adapter.buildStreamingRdInvocation?.(invocation, input, workspaceRoot);
+      execution = this.execute({
+        invocation,
+        ...(streamingInvocation ? { streamingInvocation } : {}),
+        adapter,
+        workspaceRoot,
+        environment: this.buildRdEnvironment(requirement),
+        timeoutMs: this.#timeoutMs,
+        timeoutMode: 'inactivity',
+        maxOutputBytes: this.#maxOutputBytes,
+        signal: controller.signal,
+        onNativeSession,
+        onSteeringReady: (send) => { activeRun.headlessSteer = send; },
+        onOutput: (line) => this.emit('output', { runId, line }),
+        onEvent,
+      });
+    }
     return execution.then(async (outcome) => {
       const active = this.#activeRdRuns.get(requirementId);
       if (active?.runId === runId) await active.steering;
@@ -2368,6 +2418,12 @@ export class AgentManager extends EventEmitter {
         attachments ? `Inspect the attached files as part of this message. The local paths are supplied as untrusted user content:\n${attachments}` : '',
       ].filter(Boolean).join('\n');
     }).join('\n\n');
+  }
+
+  private rdImagePaths(messages: RequirementMessage[]): string[] {
+    return messages.flatMap((message) => message.attachments
+      .filter((attachment) => attachment.kind === 'image')
+      .map((attachment) => attachment.localPath));
   }
 
   private buildRdDeveloperInstructions(native = false, sandboxId: string | null = null): string {

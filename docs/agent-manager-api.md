@@ -736,7 +736,7 @@ message may be empty when attachmentIds is non-empty. requirement is the latest 
 
 ### POST /api/requirements/:id/interrupt
 
-Interrupts the current Requirement's RD Run without appending a message. The optional request body is `{"mode":"stop"|"steer"}`; only an omitted mode defaults to `stop`, while an empty or invalid mode returns 400. `steer` requires an RD-deliverable message newer than the active Run's captured input. For Codex and Claude Code it interrupts the CLI and starts a replacement Run with the new input. For Native Agent it submits `whenBusy: "steer"` to pi-durable so the new direction joins the current Run after its tool round. `stop` interrupts and pauses automatic RD resumption even when newer input is queued. Later Reviewer, Timer, or other Agent messages remain queued until an explicit start or human reply. The pause survives an Agent Manager restart. Headless CLI interruption terminates the complete tool-process tree; Native Agent calls pi-durable conversation abort.
+Controls the current Requirement's RD Run without appending a message. The optional request body is `{"mode":"stop"|"steer"}`; only an omitted mode defaults to `stop`, while an empty or invalid mode returns 400. `steer` requires an RD-deliverable message not already assigned or submitted to that Run. Codex uses App Server `turn/steer`, Claude Code uses streaming stdin, and Native Agent submits `whenBusy: "steer"` to pi-durable. On a one-shot headless CLI or when the remaining Run budget cannot fit the first new message, Steering interrupts and resumes with the unconsumed input. `stop` interrupts and pauses automatic RD resumption even when newer input is queued. Later Reviewer, Timer, or other Agent messages remain queued until an explicit start or human reply. The pause survives an Agent Manager restart. Headless CLI interruption terminates the complete tool-process tree; Native Agent calls pi-durable conversation abort.
 
 ~~~json
 {
@@ -747,7 +747,7 @@ Interrupts the current Requirement's RD Run without appending a message. The opt
 }
 ~~~
 
-Success: `202 Accepted`. Returns `409 Conflict` when no RD Run is active or `steer` has no newer input to deliver. Headless providers resume the same Session in a replacement Run after interruption; Native Agent steering keeps the current Run active and advances the message cursor when that Run succeeds. A message is stored once in the Requirement conversation. Failed and timed-out RD Runs move the Requirement to `waiting_confirmation` while the Session remains `failed` for inspection and retry.
+Success: `202 Accepted`. This acknowledges the action, not consumption by the CLI. Returns `409 Conflict` when no RD Run is active or `steer` has no newer input to deliver. A successful Run advances the message cursor through the input it confirmed; unconfirmed input stays queued for later delivery. A message is stored once in the Requirement conversation. Failed and timed-out RD Runs move the Requirement to `waiting_confirmation` while the Session remains `failed` for inspection and retry.
 
 ### POST /api/requirements/:id/confirm
 

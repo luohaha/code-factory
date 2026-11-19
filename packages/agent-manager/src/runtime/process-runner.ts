@@ -1,10 +1,11 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 
-import type { AgentAdapter, AgentInvocation, NormalizedAgentEvent } from './adapters/types.js';
+import type { AgentAdapter, AgentInvocation, NormalizedAgentEvent, SendSteering, StreamingAgentInvocation } from './adapters/types.js';
 import type { RunOutcome } from '../core/types.js';
 
 export interface ProcessRunRequest {
   invocation: AgentInvocation;
+  streamingInvocation?: StreamingAgentInvocation;
   adapter: AgentAdapter;
   workspaceRoot: string;
   environment?: Readonly<Record<string, string>>;
@@ -15,6 +16,7 @@ export interface ProcessRunRequest {
   onNativeSession?: (nativeSessionId: string) => void;
   onOutput?: (line: string) => void;
   onEvent?: (event: NormalizedAgentEvent) => void;
+  onSteeringReady?: (send: SendSteering) => void;
 }
 
 export interface AgentProcessRunner {
@@ -119,8 +121,21 @@ function isProcessTreeAlive(child: ChildProcess, descendants: readonly ProcessSn
 
 export class HeadlessProcessRunner implements AgentProcessRunner {
   async run(request: ProcessRunRequest): Promise<RunOutcome> {
-    return await new Promise<RunOutcome>((resolve) => {
-      const child = spawn(request.invocation.command, request.invocation.args, {
+    if (request.streamingInvocation && !request.signal?.aborted) {
+      const outcome = await this.runProcess(request, request.streamingInvocation);
+      if (outcome) return outcome;
+    }
+    if (request.signal?.aborted) {
+      return { status: 'cancelled', exitCode: null, nativeSessionId: null, finalMessage: null, error: 'Agent Run interrupted by human' };
+    }
+    request.onSteeringReady?.(() => 'unsupported');
+    return (await this.runProcess(request))!;
+  }
+
+  private runProcess(request: ProcessRunRequest, streaming?: StreamingAgentInvocation): Promise<RunOutcome | null> {
+    return new Promise((resolve) => {
+      const invocation = streaming ?? request.invocation;
+      const child = spawn(invocation.command, invocation.args, {
         cwd: request.workspaceRoot,
         detached: process.platform !== 'win32',
         shell: false,
@@ -133,7 +148,7 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
       let nativeSessionId: string | null = null;
       let finalMessage: string | null = null;
       let protocolError: string | null = null;
-      let termination: 'cancelled' | 'timed_out' | null = null;
+      let termination: 'cancelled' | 'timed_out' | 'failed' | 'unsupported' | null = null;
       let forceKill: NodeJS.Timeout | null = null;
       let timeout: NodeJS.Timeout | null = null;
       let rootClose: { code: number | null; signal: NodeJS.Signals | null } | null = null;
@@ -141,6 +156,8 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
       let descendants: ProcessSnapshot[] = [];
       let forceSent = false;
       let settled = false;
+      let protocolCompleted = false;
+      let discardingOversizedLine = false;
       const timeoutMode = request.timeoutMode ?? 'elapsed';
       const timeoutError = timeoutMode === 'inactivity'
         ? `Agent produced no output for ${formatDuration(request.timeoutMs)}`
@@ -152,11 +169,7 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         request.signal?.removeEventListener('abort', onAbort);
       };
 
-      const consumeLine = (line: string) => {
-        if (!line.trim()) return;
-        request.onOutput?.(line);
-        const event = request.adapter.parseLine(line);
-        if (!event) return;
+      const emitEvent = (event: NormalizedAgentEvent) => {
         request.onEvent?.(event);
         if (event.kind === 'error') {
           const message = event.message ?? 'Agent reported an error';
@@ -169,11 +182,21 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         if (event.message) finalMessage = event.message;
       };
 
+      const consumeLine = (line: string) => {
+        if (!line.trim()) return;
+        request.onOutput?.(line);
+        if (protocol) protocol.receive(line);
+        else {
+          const event = request.adapter.parseLine(line);
+          if (event) emitEvent(event);
+        }
+      };
+
       const finishClose = (code: number | null, signal: NodeJS.Signals | null) => {
         if (settled) return;
         settled = true;
         cleanup();
-        if (termination === 'cancelled') {
+        if (termination === 'cancelled' || (termination === 'unsupported' && request.signal?.aborted)) {
           resolve({ status: 'cancelled', exitCode: code, nativeSessionId, finalMessage, error: 'Agent Run interrupted by human' });
           return;
         }
@@ -181,15 +204,21 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
           resolve({ status: 'timed_out', exitCode: code, nativeSessionId, finalMessage, error: timeoutError });
           return;
         }
-        if (code === 0 && !protocolError) {
+        if (termination === 'unsupported' || (streaming && !nativeSessionId && !protocolCompleted && !protocolError
+          && code !== 0 && streaming.isUnsupported(stderr))) {
+          resolve(null);
+          return;
+        }
+        if (code === 0 && !protocolError && (!streaming || protocolCompleted)) {
           resolve({ status: 'succeeded', exitCode: 0, nativeSessionId, finalMessage, error: null });
           return;
         }
-        const detail = protocolError || stderr.trim() || `terminated by ${signal ?? 'unknown signal'}`;
+        const detail = protocolError || stderr.trim()
+          || (code === 0 && streaming ? 'Agent stream closed before a final result' : `terminated by ${signal ?? 'unknown signal'}`);
         resolve({ status: 'failed', exitCode: code, nativeSessionId, finalMessage, error: detail });
       };
 
-      const terminate = (reason: 'cancelled' | 'timed_out') => {
+      const terminate = (reason: NonNullable<typeof termination>) => {
         if (termination || settled) return;
         termination = reason;
         descendants = child.pid === undefined || process.platform === 'win32' ? [] : descendantsOf(child.pid);
@@ -217,13 +246,38 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         if (timeoutMode === 'inactivity') armTimeout();
       };
 
+      const protocol = streaming?.connect({
+        write: (message) => {
+          if (termination || rootExit || settled || !child.stdin.writable) return false;
+          child.stdin.write(`${JSON.stringify(message)}\n`);
+          return true;
+        },
+        emit: emitEvent,
+        endInput: () => { if (child.stdin.writable) child.stdin.end(); },
+        complete: () => { protocolCompleted = true; },
+        fail: (message) => {
+          protocolError = message;
+          terminate('failed');
+        },
+        unsupported: () => terminate('unsupported'),
+      });
+
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', (chunk: string) => {
         recordActivity();
-        stdoutBuffer = appendCapped(stdoutBuffer, chunk, request.maxOutputBytes);
-        const lines = stdoutBuffer.split(/\r?\n/);
-        stdoutBuffer = lines.pop() ?? '';
-        for (const line of lines) consumeLine(line);
+        const lines = chunk.split('\n');
+        const tail = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!discardingOversizedLine && Buffer.byteLength(stdoutBuffer) + Buffer.byteLength(line) <= request.maxOutputBytes) {
+            consumeLine((stdoutBuffer + line).replace(/\r$/, ''));
+          }
+          stdoutBuffer = '';
+          discardingOversizedLine = false;
+        }
+        if (!discardingOversizedLine) {
+          discardingOversizedLine = Buffer.byteLength(stdoutBuffer) + Buffer.byteLength(tail) > request.maxOutputBytes;
+          stdoutBuffer = discardingOversizedLine ? '' : stdoutBuffer + tail;
+        }
       });
       child.stderr.setEncoding('utf8');
       child.stderr.on('data', (chunk: string) => {
@@ -266,7 +320,18 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         finishClose(code, signal);
       });
 
-      child.stdin.end(request.invocation.input);
+      if (!termination) {
+        if (protocol) {
+          protocol.start();
+          request.onSteeringReady?.((input, onDelivered) => {
+            if (termination === 'unsupported') return 'unsupported';
+            if (termination || rootExit || settled) return 'defer';
+            return protocol.steer(input, onDelivered);
+          });
+        } else {
+          child.stdin.end(invocation.input);
+        }
+      }
     });
   }
 }

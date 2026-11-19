@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import type { AgentAdapter } from '../src/runtime/adapters/types.ts';
 import { CodexAdapter } from '../src/runtime/adapters/codex.ts';
+import { ClaudeCodeAdapter } from '../src/runtime/adapters/claude-code.ts';
 import { HeadlessProcessRunner } from '../src/runtime/process-runner.ts';
 
 const noOutputAdapter: AgentAdapter = {
@@ -23,6 +24,30 @@ function processExists(pid: number): boolean {
     return (error as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
+
+test('HeadlessProcessRunner falls back before execution when Claude rejects streaming input', async () => {
+  const refused = "error: unknown option '--input-format'";
+  const adapter = new ClaudeCodeAdapter();
+  const invocation = {
+    command: process.execPath,
+    args: ['-e', 'process.stdin.pipe(process.stdout)'],
+    input: '{"type":"result","subtype":"success","result":"one-shot response"}',
+  };
+  const streaming = adapter.buildStreamingRdInvocation(invocation);
+  let steeringAvailability: string | undefined;
+  const outcome = await new HeadlessProcessRunner().run({
+    invocation,
+    streamingInvocation: { ...streaming, args: ['-e', `console.error(${JSON.stringify(refused)}); process.exitCode = 1`] },
+    adapter,
+    workspaceRoot: process.cwd(),
+    timeoutMs: 3_000,
+    maxOutputBytes: 1024,
+    onSteeringReady: (send) => { steeringAvailability = send({ text: 'message', imagePaths: [] }, () => {}); },
+  });
+  assert.equal(outcome.status, 'succeeded');
+  assert.equal(outcome.finalMessage, 'one-shot response');
+  assert.equal(steeringAvailability, 'unsupported');
+});
 
 test('HeadlessProcessRunner terminates an aborted child as a cancelled Run', async () => {
   const controller = new AbortController();

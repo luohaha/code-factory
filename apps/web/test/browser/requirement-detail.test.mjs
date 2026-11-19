@@ -381,3 +381,29 @@ void test('the conversation shows the original RD working status alongside Stop 
   await workingStatus.waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: 'Complete', exact: true }).waitFor();
 });
+
+void test('in-place Steering leaves Stop Run and subsequent Steering available', async (t) => {
+  const { page, data, open, emit } = await fixture(t);
+  const modes = [];
+  await page.route(`**/api/requirements/${data.requirement.id}/interrupt`, (route) => {
+    modes.push(route.request().postDataJSON().mode);
+    return route.fulfill({ status: 202, json: { accepted: true, runId: data.run.id } });
+  });
+  data.requirement.session.queuedMessageCount = 1;
+  await open(false);
+  await emit(data.managerEvent('requirement.updated', { requirement: data.requirement }));
+  const steer = page.getByRole('button', { name: 'Steering', exact: true });
+  const stop = page.getByRole('button', { name: 'Stop Run', exact: true });
+  await steer.click();
+  await stop.click({ trial: true });
+  data.requirement.session.queuedMessageCount = 0;
+  await emit(data.managerEvent('requirement.updated', { requirement: data.requirement }));
+  await steer.waitFor({ state: 'hidden' });
+  data.requirement.session.queuedMessageCount = 1;
+  await emit(data.managerEvent('requirement.updated', { requirement: data.requirement }));
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith('/interrupt') && response.status() === 202),
+    steer.click(),
+  ]);
+  assert.deepEqual(modes, ['steer', 'steer']);
+});
