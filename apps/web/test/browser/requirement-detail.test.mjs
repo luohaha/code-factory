@@ -414,25 +414,20 @@ void test('a running conversation hides the queue notice and sends replies witho
   assert.deepEqual(modes, ['stop']);
 });
 
-void test('requirement and session cards count only messages not assigned to the active Run', async (t) => {
+void test('requirement and session cards hide Run summaries and transient message counts', async (t) => {
   const { page, data, emit } = await fixture(t);
-  const queuedLabel = page.getByText('Messages awaiting delivery: 1', { exact: true });
-  const publishCounts = async (queuedMessageCount) => {
-    Object.assign(data.requirement.session, { pendingMessageCount: 2, queuedMessageCount });
-    await emit(data.managerEvent('requirement.updated', { requirement: data.requirement }));
+  data.run.taskSummary = 'Process 1 new conversation message';
+  Object.assign(data.requirement.session, { pendingMessageCount: 2, queuedMessageCount: 1 });
+  await emit(data.managerEvent('requirement.updated', { requirement: data.requirement, run: data.run }));
+  const card = page.locator('article').filter({ has: page.getByRole('heading', { name: data.requirement.title, exact: true }) });
+  const assertCleanCard = async () => {
+    await card.waitFor();
+    assert.doesNotMatch(await card.innerText(), /Process 1 new conversation message|Messages awaiting delivery|messages pending/);
   };
-
-  await publishCounts(1);
-  await queuedLabel.waitFor();
-  await publishCounts(0);
-  await queuedLabel.waitFor({ state: 'hidden' });
-  assert.equal(await page.getByText('2 messages pending', { exact: true }).count(), 0);
+  await page.getByRole('button', { name: 'Requirements', exact: true }).click();
+  await assertCleanCard();
 
   await page.getByRole('button', { name: 'Sessions', exact: true }).click();
   await page.getByRole('heading', { name: 'RD Agent Sessions', exact: true }).waitFor();
-  await publishCounts(1);
-  await queuedLabel.waitFor();
-  await publishCounts(0);
-  await queuedLabel.waitFor({ state: 'hidden' });
-  assert.equal(await page.getByText('2 external messages pending', { exact: true }).count(), 0);
+  await assertCleanCard();
 });
