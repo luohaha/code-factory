@@ -112,7 +112,7 @@ Requirement lists exclude cancelled records, matching the dashboard.
 - an agent-proposed Requirement records `parentRequirementId` and `sourceSessionId`;
 - a human may edit a TODO Requirement's title and description before its first Run; the updated content is indexed for search;
 - a human may change its provider, model, and reasoning effort while it is TODO or WAITING_CONFIRMATION, with no active RD Run; after execution starts, the workspace remains fixed except that switching from Native Agent on E2B to a headless provider selects Default; a provider change updates its bound Session, clears its provider-specific native session ID, and resets omitted model and reasoning effort fields to defaults;
-- the source RD Session may apply the normal lifecycle actions to that proposed child: start or retry active work, stop a running RD Run with Steering semantics, delete TODO work, or confirm successfully executed work as DONE;
+- the source RD Session may apply the normal lifecycle actions to that proposed child: start or retry active work, stop a running RD Run, delete TODO work, or confirm successfully executed work as DONE;
 - an agent proposal is created as TODO by default, preventing uncontrolled recursive work; an explicit CLI `--start` opt-in starts its RD Session immediately, while `requirement action --start` can start it later.
 - the proposing Requirement and its direct child can discover each other and exchange explicit, durable RD messages without sharing native agent-session context.
 
@@ -123,7 +123,7 @@ Requirement lists exclude cancelled records, matching the dashboard.
 - `state`: `idle | running | waiting_human | failed | completed`;
 - `lastConsumedMessageSequence` is the conversation boundary successfully consumed by the RD Agent;
 - `pendingMessageCount` is the number of external messages not yet consumed.
-- `queuedMessageCount` excludes input already assigned to an active RD Run and is used for Steering availability, independently of which conversation messages the dashboard has loaded.
+- `queuedMessageCount` excludes input already assigned to an active RD Run independently of which conversation messages the dashboard has loaded.
 - `autoResumePaused` records an explicit Stop across Manager restarts; automatic message sources still queue input but cannot start another RD Run until an explicit start or human reply.
 
 ### PullRequest
@@ -162,7 +162,7 @@ The system does not maintain a separate RD message-queue table. `requirement_mes
 
 Each message has a monotonically increasing `sequence` and a `deliverToRd` flag. When an RD Run starts, it captures the pending external-message range as `inputFromSequence..inputToSequence`:
 
-1. If the Session is already running, new messages are only appended and never interrupt it; a human may then explicitly click **Steering** to deliver newer input. Native Agent, Codex App Server, and Claude Code streaming input can steer a bounded prefix within the current Run. One-shot headless invocations and messages that cannot fit the remaining budget use cancel-and-resume. The server rejects steering when there is no newer input to submit. **Stop Run** persists a pause even when newer input is queued, leaving it for a human start or reply. Later Reviewer, Timer, and other Agent messages keep queuing without waking RD.
+1. A human reply to an active Session is appended first, then automatically requests steering through that reply in sequence order. Reviewer, Timer, and other Agent messages do not trigger steering on their own. Native Agent, Codex App Server, and Claude Code streaming input can steer a bounded prefix within the current Run. One-shot headless invocations and messages that cannot fit the remaining budget use cancel-and-resume. API clients may still explicitly steer pending input; that action is rejected if there is no newer input to submit. **Stop Run** persists a pause even when newer input is queued, leaving it for a human start or reply. Later Reviewer, Timer, and other Agent messages keep queuing without waking RD.
 2. After a successful Run, the consumption cursor advances only to that Run's recorded `inputToSequence`. Steering may extend that boundary through the contiguous confirmed input; sending a message to a headless process is not itself confirmation.
 3. If external messages remain, Agent Manager automatically resumes the same RD Session.
 4. Multiple messages are delivered together in order during the next Run.

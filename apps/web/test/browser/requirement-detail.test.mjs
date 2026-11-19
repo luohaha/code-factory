@@ -369,22 +369,29 @@ void test('live results update one card, and stopped Runs clear working indicato
   await page.locator('.cf-thinking-loader').waitFor({ state: 'hidden' });
 });
 
-void test('the conversation shows the original RD working status alongside Stop Run', async (t) => {
+void test('the conversation explains reply-to-steer alongside Stop Run', async (t) => {
   const { page, data, open, emit } = await fixture(t);
   await open(false);
-  const workingStatus = page.getByText('RD Agent is working; new messages are queued by default.', { exact: true });
+  const workingStatus = page.getByText('RD Agent is working. Reply to steer it.', { exact: true });
   await workingStatus.waitFor();
   assert.equal(await page.getByRole('button', { name: 'Stop Run', exact: true }).isVisible(), true);
   assert.equal(await page.locator('.cf-thinking-loader').count(), 0);
-  assert.equal(await page.getByText('New messages are queued by default.', { exact: true }).count(), 0);
   await emit(data.stop());
   await workingStatus.waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: 'Complete', exact: true }).waitFor();
 });
 
-void test('in-place Steering leaves Stop Run and subsequent Steering available', async (t) => {
+void test('a running conversation sends replies directly and reserves interrupt for Stop Run', async (t) => {
   const { page, data, open, emit } = await fixture(t);
   const modes = [];
+  await page.route(`**/api/requirements/${data.requirement.id}/reply`, (route) => {
+    const body = route.request().postDataJSON();
+    return route.fulfill({ status: 202, json: {
+      accepted: true, queued: true, requirement: data.requirement,
+      message: { id: 'msg_direction', requirementId: data.requirement.id, sequence: 2,
+        author: 'human', body: body.message, attachments: [], createdAt: data.requirement.updatedAt },
+    } });
+  });
   await page.route(`**/api/requirements/${data.requirement.id}/interrupt`, (route) => {
     modes.push(route.request().postDataJSON().mode);
     return route.fulfill({ status: 202, json: { accepted: true, runId: data.run.id } });
@@ -394,16 +401,15 @@ void test('in-place Steering leaves Stop Run and subsequent Steering available',
   await emit(data.managerEvent('requirement.updated', { requirement: data.requirement }));
   const steer = page.getByRole('button', { name: 'Steering', exact: true });
   const stop = page.getByRole('button', { name: 'Stop Run', exact: true });
-  await steer.click();
-  await stop.click({ trial: true });
-  data.requirement.session.queuedMessageCount = 0;
-  await emit(data.managerEvent('requirement.updated', { requirement: data.requirement }));
-  await steer.waitFor({ state: 'hidden' });
-  data.requirement.session.queuedMessageCount = 1;
-  await emit(data.managerEvent('requirement.updated', { requirement: data.requirement }));
+  await page.getByText('External messages pending delivery: 1', { exact: true }).waitFor();
+  assert.equal(await steer.count(), 0);
+  await page.getByRole('textbox', { name: 'Reply to RD Agent', exact: true }).fill('Use this new direction.');
+  await page.getByRole('button', { name: 'Send reply', exact: true }).click();
+  await page.locator('section[aria-labelledby="requirement-conversation"]').getByText('Use this new direction.', { exact: true }).waitFor();
+  assert.deepEqual(modes, []);
   await Promise.all([
     page.waitForResponse((response) => response.url().endsWith('/interrupt') && response.status() === 202),
-    steer.click(),
+    stop.click(),
   ]);
-  assert.deepEqual(modes, ['steer', 'steer']);
+  assert.deepEqual(modes, ['stop']);
 });

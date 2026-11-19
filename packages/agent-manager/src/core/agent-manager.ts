@@ -1495,7 +1495,10 @@ export class AgentManager extends EventEmitter {
       });
     }
     const queued = current.session.state === 'running';
-    if (!queued) {
+    if (queued) {
+      const active = this.#activeRdRuns.get(requirementId);
+      if (active && !active.controller.signal.aborted) this.steerRdRun(current, active, message.sequence);
+    } else {
       void this.startRdRun(requirementId).catch((error: unknown) => {
         this.logger.error('RD run failed unexpectedly', { requirementId, error });
       });
@@ -1596,80 +1599,90 @@ export class AgentManager extends EventEmitter {
     if (mode === 'stop') {
       this.#store.pauseRdAutoResume(requirementId, new Date().toISOString());
       active.stopRequested = true;
+      this.abortRdRun(requirement, active);
+    } else if (!this.steerRdRun(requirement, active)) {
+      throw new StoreConflictError(`Requirement ${requirementId} has no newer input to steer into the RD Run`);
     }
-    if (mode === 'steer') {
-      const run = this.#store.getRun(active.runId);
-      const inputToSequence = active.offeredSteering.at(-1)?.sequence ?? run?.inputToSequence ?? 0;
-      const newerMessages = this.#store.listPendingRdMessages(requirementId)
-        .filter((message) => message.sequence > inputToSequence);
-      if (newerMessages.length === 0) {
-        throw new StoreConflictError(`Requirement ${requirementId} has no newer input to steer into the next RD Run`);
-      }
-      if (requirement.provider === 'native-agent') {
-        active.steering = active.steering.then(async () => {
-          const deliveredTo = this.#store.getRun(active.runId)?.inputToSequence ?? 0;
-          const pending = this.#store.listPendingRdMessages(requirementId)
-            .filter((message) => message.sequence > deliveredTo);
-          if (pending.length === 0) return;
-          const separatorChars = active.pendingInputChars > 0 ? 2 : 0;
-          const remainingChars = Math.max(0, MAX_HANDOFF_PENDING_CHARS - active.pendingInputChars - separatorChars);
-          const messages = this.selectRdMessages(pending, remainingChars);
-          const input = this.formatRdMessages(messages);
-          if (input.length > remainingChars) {
-            // The next Run can deliver an oversized message by file or use a fresh message budget.
-            if (!active.controller.signal.aborted) active.controller.abort();
-            return;
-          }
-          const accepted = await this.#native.steer(requirementId, input);
-          if (accepted) {
-            active.pendingInputChars += separatorChars + input.length;
-            this.#store.extendRunInputToSequence(active.runId, messages.at(-1)!.sequence);
-          }
-        }).catch((error: unknown) => {
-          this.logger.error('Native steering failed', { requirementId, error });
-        });
-        return { runId: active.runId };
-      }
-      if (active.controller.signal.aborted) return { runId: active.runId };
-      if (active.headlessSteer) {
+    return { runId: active.runId };
+  }
+
+  private steerRdRun(requirement: RequirementWithSession, active: ActiveRdRun, throughSequence = Infinity): boolean {
+    const requirementId = requirement.id;
+    const run = this.#store.getRun(active.runId);
+    const inputToSequence = active.offeredSteering.at(-1)?.sequence ?? run?.inputToSequence ?? 0;
+    const newerMessages = this.#store.listPendingRdMessages(requirementId)
+      .filter((message) => message.sequence > inputToSequence && message.sequence <= throughSequence);
+    const lastMessage = newerMessages.at(-1);
+    if (!lastMessage) return false;
+    if (active.controller.signal.aborted) return true;
+    if (requirement.provider === 'native-agent') {
+      active.steering = active.steering.then(async () => {
+        if (active.controller.signal.aborted) return;
+        const deliveredTo = this.#store.getRun(active.runId)?.inputToSequence ?? 0;
+        const pending = this.#store.listPendingRdMessages(requirementId)
+          .filter((message) => message.sequence > deliveredTo && message.sequence <= lastMessage.sequence);
+        if (pending.length === 0) return;
         const separatorChars = active.pendingInputChars > 0 ? 2 : 0;
-        const remainingChars = MAX_HANDOFF_PENDING_CHARS - active.pendingInputChars - separatorChars;
-        const messages = this.selectRdMessages(newerMessages, remainingChars);
-        const text = this.formatRdMessages(messages);
-        if (text.length <= remainingChars) {
-          const delivery = { sequence: messages.at(-1)!.sequence, delivered: false };
-          active.offeredSteering.push(delivery);
-          const submission = active.headlessSteer({ text, imagePaths: this.rdImagePaths(messages) }, () => {
-            delivery.delivered = true;
-            if (active.controller.signal.aborted || this.#activeRdRuns.get(requirementId) !== active) return;
-            if (!active.offeredSteering[0]?.delivered) return;
-            while (active.offeredSteering[0]?.delivered) {
-              const entry = active.offeredSteering.shift()!;
-              this.#store.extendRunInputToSequence(active.runId, entry.sequence);
-            }
-            this.publish({
-              type: 'requirement.updated', requirementId, sessionId: requirement.session.id, runId: active.runId,
-              payload: { requirement: this.requireRequirement(requirementId), run: this.#store.getRun(active.runId) },
-            });
-          });
-          if (submission === 'submitted') {
-            active.pendingInputChars += separatorChars + text.length;
-            return { runId: active.runId };
-          }
-          active.offeredSteering.pop();
-          if (submission === 'defer') return { runId: active.runId };
+        const remainingChars = Math.max(0, MAX_HANDOFF_PENDING_CHARS - active.pendingInputChars - separatorChars);
+        const messages = this.selectRdMessages(pending, remainingChars);
+        const input = this.formatRdMessages(messages);
+        if (input.length > remainingChars) {
+          // The next Run can deliver an oversized message by file or use a fresh message budget.
+          this.abortRdRun(requirement, active);
+          return;
         }
+        const accepted = await this.#native.steer(requirementId, input);
+        if (accepted) {
+          active.pendingInputChars += separatorChars + input.length;
+          this.#store.extendRunInputToSequence(active.runId, messages.at(-1)!.sequence);
+        }
+      }).catch((error: unknown) => {
+        this.logger.error('Native steering failed', { requirementId, error });
+      });
+      return true;
+    }
+    if (active.headlessSteer) {
+      const separatorChars = active.pendingInputChars > 0 ? 2 : 0;
+      const remainingChars = MAX_HANDOFF_PENDING_CHARS - active.pendingInputChars - separatorChars;
+      const messages = this.selectRdMessages(newerMessages, remainingChars);
+      const text = this.formatRdMessages(messages);
+      if (text.length <= remainingChars) {
+        const delivery = { sequence: messages.at(-1)!.sequence, delivered: false };
+        active.offeredSteering.push(delivery);
+        const submission = active.headlessSteer({ text, imagePaths: this.rdImagePaths(messages) }, () => {
+          delivery.delivered = true;
+          if (active.controller.signal.aborted || this.#activeRdRuns.get(requirementId) !== active) return;
+          if (!active.offeredSteering[0]?.delivered) return;
+          while (active.offeredSteering[0]?.delivered) {
+            const entry = active.offeredSteering.shift()!;
+            this.#store.extendRunInputToSequence(active.runId, entry.sequence);
+          }
+          this.publish({
+            type: 'requirement.updated', requirementId, sessionId: requirement.session.id, runId: active.runId,
+            payload: { requirement: this.requireRequirement(requirementId), run: this.#store.getRun(active.runId) },
+          });
+        });
+        if (submission === 'submitted') {
+          active.pendingInputChars += separatorChars + text.length;
+          return true;
+        }
+        active.offeredSteering.pop();
+        if (submission === 'defer') return true;
       }
     }
+    this.abortRdRun(requirement, active);
+    return true;
+  }
+
+  private abortRdRun(requirement: RequirementWithSession, active: ActiveRdRun): void {
     if (!active.controller.signal.aborted) {
       active.controller.abort();
       this.logger.info('RD run interruption requested', {
-        requirementId,
+        requirementId: requirement.id,
         sessionId: requirement.session.id,
         runId: active.runId,
       });
     }
-    return { runId: active.runId };
   }
 
   requestReview(

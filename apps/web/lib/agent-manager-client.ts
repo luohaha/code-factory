@@ -516,8 +516,8 @@ export class AgentManagerClient {
     return this.action(id, 'reply', { message, attachmentIds });
   }
 
-  interruptRequirement(id: string, mode: 'stop' | 'steer'): Promise<{ accepted: true; runId: string }> {
-    return this.action(id, 'interrupt', { mode });
+  stopRequirement(id: string): Promise<{ accepted: true; runId: string }> {
+    return this.action(id, 'interrupt', { mode: 'stop' });
   }
 
   async uploadMessageAttachment(requirementId: string, file: File): Promise<MessageAttachmentDto> {

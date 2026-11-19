@@ -691,7 +691,7 @@ Returns 404 for an unknown Requirement and 409 Conflict for a done or cancelled 
 
 ### POST /api/requirements/:id/reply
 
-Appends a human message to the Requirement conversation. An idle Session automatically starts an RD Run. A running Session always queues the message without interruption. Replying to a done Requirement changes it back to doing, clears completedAt, and starts a new Run in the original RD Session. Call the interrupt endpoint separately to stop the current Run.
+Appends a human message to the Requirement conversation. An idle Session automatically starts an RD Run. If a Run is active, the reply automatically requests steering and delivers pending input in order, up to the reply. When in-place steering is unsupported or the next message cannot fit the remaining Run budget, the active Run is cancelled and the unconsumed input is retried in a new Run in the same Session. Input that races completion and is not confirmed stays pending. Replying to a done Requirement changes it back to doing, clears completedAt, and starts a new Run in the original RD Session. Call the interrupt endpoint separately to stop and pause.
 
 Request body:
 
@@ -732,11 +732,11 @@ Success: 202 Accepted
 }
 ~~~
 
-message may be empty when attachmentIds is non-empty. requirement is the latest Requirement and RD Session snapshot after accepting the reply. queued reports whether the RD Session was running when the message arrived. A reply that reactivates a done Requirement reports queued=false because it starts a new Run immediately. The reply endpoint never interrupts a Run. Empty text and attachments return 400. An unknown Requirement returns 404. A cancelled Requirement returns 409.
+message may be empty when attachmentIds is non-empty. requirement is the latest Requirement and RD Session snapshot after accepting the reply. queued reports whether the RD Session was running when the message arrived; it does not distinguish in-place delivery from a later Run. A reply that reactivates a done Requirement reports queued=false because it starts a new Run immediately. Empty text and attachments return 400. An unknown Requirement returns 404. A cancelled Requirement returns 409.
 
 ### POST /api/requirements/:id/interrupt
 
-Controls the current Requirement's RD Run without appending a message. The optional request body is `{"mode":"stop"|"steer"}`; only an omitted mode defaults to `stop`, while an empty or invalid mode returns 400. `steer` requires an RD-deliverable message not already assigned or submitted to that Run. Codex uses App Server `turn/steer`, Claude Code uses streaming stdin, and Native Agent submits `whenBusy: "steer"` to pi-durable. On a one-shot headless CLI or when the remaining Run budget cannot fit the first new message, Steering interrupts and resumes with the unconsumed input. `stop` interrupts and pauses automatic RD resumption even when newer input is queued. Later Reviewer, Timer, or other Agent messages remain queued until an explicit start or human reply. The pause survives an Agent Manager restart. Headless CLI interruption terminates the complete tool-process tree; Native Agent calls pi-durable conversation abort.
+Controls the current Requirement's RD Run without appending a message. The optional request body is `{"mode":"stop"|"steer"}`; only an omitted mode defaults to `stop`, while an empty or invalid mode returns 400. The dashboard uses `stop` only; replies request steering automatically. The explicit `steer` mode remains available to API clients for RD-deliverable input not already assigned or submitted to the Run. Codex uses App Server `turn/steer`, Claude Code uses streaming stdin, and Native Agent submits `whenBusy: "steer"` to pi-durable. On a one-shot headless CLI or when the remaining Run budget cannot fit the first new message, steering interrupts and resumes with the unconsumed input. `stop` interrupts and pauses automatic RD resumption even when newer input is queued. Later Reviewer, Timer, or other Agent messages remain queued until an explicit start or human reply. The pause survives an Agent Manager restart. Headless CLI interruption terminates the complete tool-process tree; Native Agent calls pi-durable conversation abort.
 
 ~~~json
 {
@@ -1092,24 +1092,12 @@ API=http://127.0.0.1:4310/api
 curl -N "$API/events?after=0"
 ~~~
 
-Messages may be appended while execution is in progress. queued reports whether the message is waiting for the next Run or triggered a new one:
+Reply to steer the active Run or start a new one when idle. The response's `queued` field reports whether RD was running when the reply arrived:
 
 ~~~bash
 curl -sS -X POST "$API/requirements/$requirement_id/reply" \
   -H 'Content-Type: application/json' \
   -d '{"message":"Also verify that the child process exits after a timeout."}'
-~~~
-
-When a message requires immediate course correction, append it normally and request steering. If the reply already started a new Run, steering returns 409 and that Run continues with the reply:
-
-~~~bash
-curl -sS -X POST "$API/requirements/$requirement_id/reply" \
-  -H 'Content-Type: application/json' \
-  -d '{"message":"Stop here. Do not change the API; add only the regression test."}'
-
-curl -sS -X POST "$API/requirements/$requirement_id/interrupt" \
-  -H 'Content-Type: application/json' \
-  -d '{"mode":"steer"}'
 ~~~
 
 When /api/requirements reports waiting_confirmation, inspect the result and confirm completion:

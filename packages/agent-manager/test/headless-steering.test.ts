@@ -122,7 +122,7 @@ function fixture(t: TestContext, provider: 'codex' | 'claude-code', script: stri
   return { manager, requirement, ready, execution, requests };
 }
 
-test('Codex steers attachment-only and repeated input into one RD Run', { timeout: 8_000 }, async (t) => {
+test('Codex automatically steers attachment-only and repeated replies into one RD Run', { timeout: 8_000 }, async (t) => {
   const { manager, requirement, ready, execution, requests } = fixture(t, 'codex', codexFixture);
   await ready;
   const image = manager.uploadMessageAttachment(requirement.id, {
@@ -131,15 +131,14 @@ test('Codex steers attachment-only and repeated input into one RD Run', { timeou
   });
   const first = manager.postHumanMessage(requirement.id, '', [image.id]);
   const runId = manager.listRuns(requirement.id)[0]!.id;
-  assert.equal(manager.interruptRdRun(requirement.id, 'steer').runId, runId);
   assert.throws(() => manager.interruptRdRun(requirement.id, 'steer'), /no newer input/);
   assert.ok(manager.getRequirement(requirement.id)!.session.lastConsumedMessageSequence < first.message.sequence);
   const second = manager.postHumanMessage(requirement.id, 'Second correction');
-  assert.equal(manager.interruptRdRun(requirement.id, 'steer').runId, runId);
   const current = await execution;
   assert.equal(current.session.pendingMessageCount, 0);
   assert.equal(current.session.lastConsumedMessageSequence, second.message.sequence);
   assert.equal(manager.listRuns(requirement.id)[0]?.status, 'succeeded');
+  assert.equal(manager.listRuns(requirement.id)[0]?.id, runId);
   assert.equal(requests.length, 1);
 });
 
@@ -148,7 +147,6 @@ for (const provider of ['codex', 'claude-code'] as const) {
     const { manager, requirement, ready, execution, requests } = fixture(t, provider, provider === 'codex' ? codexFixture : claudeFixture);
     await ready;
     const late = manager.postHumanMessage(requirement.id, 'LATE_CORRECTION');
-    manager.interruptRdRun(requirement.id, 'steer');
     const first = await execution;
     assert.equal(first.session.state, 'waiting_human');
     if (provider === 'codex') {
@@ -166,11 +164,20 @@ for (const provider of ['codex', 'claude-code'] as const) {
   });
 }
 
+test('Claude Code automatically steers an ordinary reply into the active RD Run', { timeout: 8_000 }, async (t) => {
+  const { manager, requirement, ready, execution, requests } = fixture(t, 'claude-code', claudeFixture);
+  await ready;
+  const reply = manager.postHumanMessage(requirement.id, 'Change the approach');
+  const current = await execution;
+  assert.equal(current.session.lastConsumedMessageSequence, reply.message.sequence);
+  assert.equal(manager.listRuns(requirement.id)[0]?.status, 'succeeded');
+  assert.equal(requests.length, 1);
+});
+
 test('Claude Code does not count a successful result for the wrong input before a later failure', { timeout: 8_000 }, async (t) => {
   const { manager, requirement, ready, execution, requests } = fixture(t, 'claude-code', claudeFixture);
   await ready;
   const reply = manager.postHumanMessage(requirement.id, 'LATE_CORRECTION FAIL_AFTER_REPLAY');
-  manager.interruptRdRun(requirement.id, 'steer');
   const current = await execution;
   assert.equal(current.session.state, 'failed');
   assert.equal(current.session.pendingMessageCount, 1);
@@ -179,10 +186,10 @@ test('Claude Code does not count a successful result for the wrong input before 
   assert.equal(requests.length, 1);
 });
 
-test('Stop still pauses a live headless Run with a queued reply', { timeout: 8_000 }, async (t) => {
+test('Stop still pauses a live headless Run with an unconfirmed reply', { timeout: 8_000 }, async (t) => {
   const { manager, requirement, ready, execution, requests } = fixture(t, 'codex', codexFixture);
   await ready;
-  const reply = manager.postHumanMessage(requirement.id, 'Do not consume without Steering');
+  const reply = manager.postHumanMessage(requirement.id, 'Change direction before Stop');
   manager.interruptRdRun(requirement.id, 'stop');
   const current = await execution;
   assert.equal(current.session.autoResumePaused, true);

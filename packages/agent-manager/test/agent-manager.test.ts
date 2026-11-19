@@ -1004,6 +1004,40 @@ test('native Steering delivers a bounded prefix and later Runs consume the remai
   }
 });
 
+test('a human reply steers the ordered prefix without pulling later automatic messages into the active Run', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'code-factory-native-reply-'));
+  const nativeService = new DeferredNativeService(join(directory, 'native.sqlite'));
+  const manager = new AgentManager({ workspaceRoot: directory, store: new SqliteAgentManagerStore(':memory:'),
+    nativeService, logger: silentLogger });
+  const trigger = new TestAgentTrigger();
+  const succeeded: RunOutcome = { status: 'succeeded', exitCode: 0, nativeSessionId: 'native-test-session',
+    finalMessage: 'done', error: null };
+  try {
+    const requirement = manager.createRequirement({ title: 'Reply to steer', description: 'Run the task', provider: 'native-agent' });
+    const first = manager.runRequirement(requirement.id);
+    manager.startAgentTrigger(trigger);
+    trigger.deliver({ requirementId: requirement.id, idempotencyKey: 'first', author: 'system', body: 'Earlier trigger update' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(nativeService.steeredMessages.length, 0);
+
+    const reply = manager.postHumanMessage(requirement.id, 'Human correction');
+    trigger.deliver({ requirementId: requirement.id, idempotencyKey: 'later', author: 'system', body: 'Later trigger update' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(nativeService.steeredMessages.length, 1);
+    assert.match(nativeService.steeredMessages[0]!, /Earlier trigger update[\s\S]*Human correction/);
+    assert.doesNotMatch(nativeService.steeredMessages[0]!, /Later trigger update/);
+    nativeService.resolvers[0]?.(succeeded);
+    assert.equal((await first).session.lastConsumedMessageSequence, reply.message.sequence);
+    assert.match(nativeService.requests[1]?.prompt ?? '', /Later trigger update/);
+    nativeService.resolvers[1]?.(succeeded);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(manager.getRequirement(requirement.id)?.session.pendingMessageCount, 0);
+  } finally {
+    await manager.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('native Steering resumes an oversized message through a complete temporary file', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-native-steer-large-'));
   const store = new SqliteAgentManagerStore(':memory:');
@@ -1014,7 +1048,6 @@ test('native Steering resumes an oversized message through a complete temporary 
     const requirement = manager.createRequirement({ title: 'Native large reply', description: 'Start work', provider: 'native-agent' });
     const first = manager.runRequirement(requirement.id);
     const queued = manager.postHumanMessage(requirement.id, oversized);
-    manager.interruptRdRun(requirement.id, 'steer');
     await first;
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(manager.listRuns(requirement.id).find((run) => run.status === 'cancelled')?.status, 'cancelled');
@@ -1049,13 +1082,11 @@ test('repeated native Steering respects the same Run budget and replays on inter
     const requirement = manager.createRequirement({ title: 'Repeated steering', description: 'Start work', provider: 'native-agent' });
     const first = manager.runRequirement(requirement.id);
     const firstMessage = manager.postHumanMessage(requirement.id, `First direction: ${'alpha '.repeat(1_200)}`);
-    manager.interruptRdRun(requirement.id, 'steer');
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(nativeService.steeredMessages.length, 1);
     assert.equal(manager.listRuns(requirement.id)[0]?.inputToSequence, firstMessage.message.sequence);
 
     const secondMessage = manager.postHumanMessage(requirement.id, `Second direction: ${'beta '.repeat(1_200)}`);
-    manager.interruptRdRun(requirement.id, 'steer');
     await first;
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(nativeService.steeredMessages.length, 1);
@@ -1567,7 +1598,7 @@ test('RD Agent messages queue on done work until a human replies and reject a ca
   }
 });
 
-test('Agent Manager queues conversation messages during a Run and resumes without replaying RD output', async () => {
+test('Agent Manager resumes deferred replies without replaying RD output', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new DeferredRunner();
   const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
@@ -1613,6 +1644,7 @@ test('Agent Manager queues conversation messages during a Run and resumes withou
     assert.equal(manager.listRuns(first.id)[0]?.reasoningEffort, 'max');
     const secondExecution = manager.runRequirement(second.id);
     assert.equal(runner.requests[1]?.workspaceRoot, manager.workspaceRoot);
+    runner.requests[0]?.onSteeringReady?.(() => 'defer');
     const queued = manager.postHumanMessage(first.id, 'add another test');
     assert.equal(queued.queued, true);
     assert.equal(queued.requirement.session.state, 'running');
@@ -1870,7 +1902,7 @@ test('a pluggable Agent Trigger delivers, deduplicates, and wakes the target RD 
   }
 });
 
-test('a queued correction does not interrupt until a human explicitly steers the running RD Agent', async () => {
+test('a human reply automatically cancels and resumes a one-shot RD Agent', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
   const runner = new InterruptibleRunner();
   const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger });
@@ -1882,9 +1914,6 @@ test('a queued correction does not interrupt until a human explicitly steers the
 
     const reply = manager.postHumanMessage(requirement.id, 'Stop and use the new approach.');
     assert.equal(reply.queued, true);
-    assert.equal(runner.requests[0]?.signal?.aborted, false);
-
-    manager.interruptRdRun(requirement.id, 'steer');
     assert.equal(runner.requests[0]?.signal?.aborted, true);
 
     const interrupted = await firstExecution;
@@ -1924,7 +1953,6 @@ test('steering does not cancel a Run that already received the latest human repl
     assert.equal(runner.requests[0]?.signal?.aborted, false);
 
     manager.postHumanMessage(requirement.id, 'New direction');
-    manager.interruptRdRun(requirement.id, 'steer');
     assert.equal(runner.requests[0]?.signal?.aborted, true);
     await firstExecution;
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -1951,7 +1979,6 @@ test('steering replays interrupted input and delivers later replies once the rep
     runner.requests[0]?.onNativeSession?.('native-thread-1');
     manager.postHumanMessage(requirement.id, 'Second instruction');
     manager.postHumanMessage(requirement.id, 'Third instruction');
-    manager.interruptRdRun(requirement.id, 'steer');
     await firstExecution;
     await new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -1973,6 +2000,7 @@ test('steering replays interrupted input and delivers later replies once the rep
       assert.equal(replayPrompt.split(body).length - 1, 1);
     }
 
+    runner.requests[1]?.onSteeringReady?.(() => 'defer');
     manager.postHumanMessage(requirement.id, 'Fourth instruction');
     runner.resolvers[1]?.({
       status: 'succeeded', exitCode: 0, nativeSessionId: 'native-thread-1', finalMessage: 'replayed', error: null,

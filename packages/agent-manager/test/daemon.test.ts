@@ -210,7 +210,7 @@ test('daemon start reports an occupied port without entering a restart loop', { 
   }
 });
 
-test('Stop pauses an RD Run and legacy Steering resumes without losing the daemon', { timeout: 55_000 }, async () => {
+test('Stop pauses an RD Run and a reply resumes a legacy CLI without losing the daemon', { timeout: 55_000 }, async () => {
   if (process.platform === 'win32') return;
   const directory = mkdtempSync(join(tmpdir(), 'code-factory-daemon-steer-'));
   const workspace = join(directory, 'workspace');
@@ -291,7 +291,6 @@ test('Stop pauses an RD Run and legacy Steering resumes without losing the daemo
     }
     assert.ok(existsSync(toolPidFile), 'The detached tool started');
     assert.equal((await post(`/api/requirements/${created.id}/reply`, { message: 'New direction' })).status, 202);
-    assert.equal((await post(`/api/requirements/${created.id}/interrupt`, { mode: 'steer' })).status, 202);
 
     let runStatuses: string[] = [];
     for (let attempt = 0; attempt < 120; attempt++) {
