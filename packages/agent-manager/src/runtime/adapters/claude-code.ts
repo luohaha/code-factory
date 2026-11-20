@@ -115,6 +115,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
       connect: (io) => {
         const pending = new Map<string, () => void>();
         const replayed = new Set<string>();
+        const initialMessageId = randomUUID();
         let sessionId: string | undefined;
         let closing = false;
         let followUpTimer: NodeJS.Timeout | undefined;
@@ -128,12 +129,12 @@ export class ClaudeCodeAdapter implements AgentAdapter {
           closing = true;
           io.endInput();
         };
-        const send = (text: string, uuid = randomUUID()) => io.write({
+        const send = (text: string, uuid: string) => io.write({
           type: 'user', message: { role: 'user', content: text }, uuid, parent_tool_use_id: null,
         });
         return {
           dispose: clearFollowUpTimer,
-          start: () => { send(legacy.input); },
+          start: () => { send(legacy.input, initialMessageId); },
           steer: (input, onDelivered) => {
             if (closing) return 'defer';
             const uuid = randomUUID();
@@ -158,11 +159,17 @@ export class ClaudeCodeAdapter implements AgentAdapter {
               io.emit(event);
               return;
             }
+            const answered = Array.isArray(raw.user_message_uuids) ? raw.user_message_uuids
+              : typeof raw.user_message_uuid === 'string' ? [raw.user_message_uuid] : undefined;
+            const origin = raw.origin;
+            // A background task can emit its own result before Claude handles the resumed prompt.
+            if (origin && typeof origin === 'object' && 'kind' in origin && origin.kind === 'task-notification'
+              && !answered?.some((uuid: unknown) => uuid === initialMessageId || (typeof uuid === 'string' && pending.has(uuid)))) {
+              return;
+            }
             clearFollowUpTimer();
             if (event.kind === 'completed' && raw.subtype === 'success') {
-              const answered = Array.isArray(raw.user_message_uuids) ? raw.user_message_uuids
-                : typeof raw.user_message_uuid === 'string' ? [raw.user_message_uuid] : replayed;
-              for (const uuid of answered) {
+              for (const uuid of answered ?? replayed) {
                 if (typeof uuid !== 'string') continue;
                 pending.get(uuid)?.();
                 pending.delete(uuid);
