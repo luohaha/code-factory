@@ -35,6 +35,7 @@ test('HeadlessProcessRunner falls back before execution when Claude rejects stre
   };
   const streaming = adapter.buildStreamingRdInvocation(invocation);
   let steeringAvailability: string | undefined;
+  let streamingInputCloseCount = 0;
   const outcome = await new HeadlessProcessRunner().run({
     invocation,
     streamingInvocation: { ...streaming, args: ['-e', `console.error(${JSON.stringify(refused)}); process.exitCode = 1`] },
@@ -43,10 +44,12 @@ test('HeadlessProcessRunner falls back before execution when Claude rejects stre
     timeoutMs: 3_000,
     maxOutputBytes: 1024,
     onSteeringReady: (send) => { steeringAvailability = send({ text: 'message', imagePaths: [] }, () => {}); },
+    onStreamingInputClosed: () => { streamingInputCloseCount++; },
   });
   assert.equal(outcome.status, 'succeeded');
   assert.equal(outcome.finalMessage, 'one-shot response');
   assert.equal(steeringAvailability, 'unsupported');
+  assert.equal(streamingInputCloseCount, 1);
 });
 
 test('HeadlessProcessRunner completes a Claude result larger than the raw output cap', { timeout: 5_000 }, async () => {

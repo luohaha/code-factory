@@ -50,3 +50,19 @@ jobs:
       - name: Verify release build and package
         run: npm run release:check
         working-directory: packages/agent-manager
+
+  steering-windows:
+    runs-on: windows-2025
+    defaults:
+      run:
+        working-directory: packages/agent-manager
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.19.0
+          cache: npm
+          cache-dependency-path: packages/agent-manager/package-lock.json
+      - run: npm ci
+      - name: Verify headless steering and stop/resume
+        run: npx tsx --test test/headless-steering.test.ts
