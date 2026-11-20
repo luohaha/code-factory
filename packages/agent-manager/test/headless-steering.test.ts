@@ -336,11 +336,19 @@ for (const outcome of ['failed', 'timed_out', 'cancelled'] as const) {
 }
 
 for (const scenario of [
-  { name: 'after abrupt provider exit', script: claudeAbruptExitFixture, marker: 'transport-exit-marker', exitCode: 1 },
-  { name: 'after the provider closes only stdin', script: claudeStdinFixture(true), marker: 'stdin-marker', exitCode: 17 },
+  {
+    name: 'after abrupt provider exit', script: claudeAbruptExitFixture, marker: 'transport-exit-marker', exitCode: 1,
+    skip: false,
+  },
+  {
+    name: 'after the provider closes only stdin', script: claudeStdinFixture(true), marker: 'stdin-marker', exitCode: 17,
+    skip: process.platform === 'win32' && 'Node fs.closeSync(0) does not close the underlying Windows stdio handle',
+  },
 ]) {
   for (const body of ['SHORT_LATE_REPLY', 'x'.repeat(13_000)]) {
-    test(`headless steering queues a ${body.length > 100 ? 'large' : 'short'} reply ${scenario.name}`, { timeout: 8_000 }, async (t) => {
+    test(`headless steering queues a ${body.length > 100 ? 'large' : 'short'} reply ${scenario.name}`, {
+      timeout: 8_000, skip: scenario.skip,
+    }, async (t) => {
       const { manager, requirement, ready, execution, workspaceRoot } = fixture(t, 'claude-code', scenario.script, {
         initialMessage: 'Initial task', readyMarker: scenario.marker,
       });
