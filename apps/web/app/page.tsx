@@ -265,14 +265,6 @@ const statusLabel: Record<RequirementStatus, TranslationKey> = {
   cancelled: 'Cancelled',
 };
 
-const runStatusLabel: Record<AgentRunDto['status'], TranslationKey> = {
-  running: 'Running',
-  succeeded: 'Succeeded',
-  failed: 'Failed',
-  timed_out: 'Timed out',
-  cancelled: 'Cancelled',
-};
-
 const authorLabel: Record<RequirementMessageDto['author'], TranslationKey> = {
   human: 'Human',
   rd_agent: 'RD Agent',
@@ -494,10 +486,6 @@ function MessageAttachments({ attachments, apiUrl }: { attachments: MessageAttac
 const previewableImageTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const maxAttachmentBytes = 20 * 1024 * 1024;
 const maxAttachmentsPerMessage = 6;
-
-function latestRun(requirementId: string, runs: AgentRunDto[]): AgentRunDto | undefined {
-  return runs.find((run) => run.requirementId === requirementId);
-}
 
 function DeleteRequirementDialog({
   requirement,
@@ -782,7 +770,6 @@ function EditRequirementAgentConfigurationDialog({
 
 function RequirementCard({
   requirement,
-  run,
   searchMatch,
   busy,
   onOpen,
@@ -791,7 +778,6 @@ function RequirementCard({
   onConfirm,
 }: {
   requirement: RequirementDto;
-  run?: AgentRunDto;
   searchMatch?: SearchResultDto;
   busy: boolean;
   onOpen: () => void;
@@ -840,10 +826,6 @@ function RequirementCard({
           <span className="max-w-32 shrink-0 truncate font-mono text-[9px] text-muted-foreground" title={agentConfigurationLabel(requirement)}>{agentConfigurationLabel(requirement)}</span>
         </div>
         <p className="mt-1.5 truncate font-mono text-[9px] text-muted-foreground">ses-{shortId(requirement.session.id)}</p>
-        {run ? <p className="mt-2 text-[10px] text-foreground/70">{run.taskSummary} · {t(runStatusLabel[run.status])}</p> : null}
-        {requirement.session.queuedMessageCount > 0 ? (
-          <p className="mt-2 text-[10px] font-medium text-amber-600">{t('Messages awaiting delivery: {count}', { count: requirement.session.queuedMessageCount })}</p>
-        ) : null}
       </div>
 
       {requirement.status === 'todo' ? (
@@ -870,9 +852,8 @@ function RequirementCard({
   );
 }
 
-function SessionCard({ requirement, run, busy, onOpen, onRetry }: {
+function SessionCard({ requirement, busy, onOpen, onRetry }: {
   requirement: RequirementDto;
-  run?: AgentRunDto;
   busy: boolean;
   onOpen: () => void;
   onRetry: () => void;
@@ -890,10 +871,6 @@ function SessionCard({ requirement, run, busy, onOpen, onRetry }: {
         </div>
         <h3 className="mt-2.5 truncate text-xs font-semibold hover:underline">{requirement.title}</h3>
         <p className="mt-1.5 truncate font-mono text-[9px] text-muted-foreground">ses-{shortId(requirement.session.id)}</p>
-        {run ? <p className="mt-2.5 text-[10px] leading-4 text-foreground/75">{run.taskSummary} · {t(runStatusLabel[run.status])}</p> : null}
-        {requirement.session.queuedMessageCount > 0 ? (
-          <p className="mt-2 text-[10px] font-medium text-amber-600">{t('Messages awaiting delivery: {count}', { count: requirement.session.queuedMessageCount })}</p>
-        ) : null}
       </button>
       {requirement.session.lastError ? (
         <Button size="xs" variant="destructive" className="mt-3 w-full" disabled={busy} onClick={onRetry}>
@@ -4014,7 +3991,6 @@ function Dashboard() {
                       <RequirementCard
                         key={item.id}
                         requirement={item}
-                        run={latestRun(item.id, runs)}
                         searchMatch={normalizedQuery ? searchMatchByRequirement.get(item.id) : undefined}
                         busy={busyId === item.id}
                         onOpen={() => openRequirementDetail(item.id)}
@@ -4370,7 +4346,6 @@ function Dashboard() {
                       <SessionCard
                         key={item.session.id}
                         requirement={item}
-                        run={latestRun(item.id, runs)}
                         busy={busyId === item.id}
                         onOpen={() => openRequirementDetail(item.id, 'sessions')}
                         onRetry={() => void runAction(
