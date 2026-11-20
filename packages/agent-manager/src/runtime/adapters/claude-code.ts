@@ -119,6 +119,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
         let sessionId: string | undefined;
         let closing = false;
         let completedRdTurn = false;
+        let betweenTurns = false;
         let hasBackgroundWork = false;
         let followUpTimer: NodeJS.Timeout | undefined;
         const clearFollowUpTimer = () => {
@@ -134,6 +135,14 @@ export class ClaudeCodeAdapter implements AgentAdapter {
         const closeWhenIdle = () => {
           if (completedRdTurn && !hasBackgroundWork && pending.size === 0) closeInput();
         };
+        const waitForFollowUpStart = () => {
+          followUpTimer ??= setTimeout(closeInput, FOLLOW_UP_START_TIMEOUT_MS);
+          followUpTimer.unref();
+        };
+        const followUpStarted = () => {
+          betweenTurns = false;
+          clearFollowUpTimer();
+        };
         const send = (text: string, uuid: string) => io.write({
           type: 'user', message: { role: 'user', content: text }, uuid, parent_tool_use_id: null,
         });
@@ -145,6 +154,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
             const uuid = randomUUID();
             if (!send(input.text, uuid)) return 'defer';
             pending.set(uuid, onDelivered);
+            if (betweenTurns) waitForFollowUpStart();
             return 'submitted';
           },
           receive: (line) => {
@@ -153,7 +163,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
             const raw = event.raw;
             if (raw.type === 'system' && raw.subtype === 'init' && typeof raw.session_id === 'string' && raw.parent_tool_use_id == null) {
               sessionId ??= raw.session_id;
-              if (raw.session_id === sessionId) clearFollowUpTimer();
+              if (raw.session_id === sessionId) followUpStarted();
             }
             if (raw.type === 'system' && raw.subtype === 'background_tasks_changed' && Array.isArray(raw.tasks)) {
               hasBackgroundWork = raw.tasks.some((task: unknown) => task && typeof task === 'object'
@@ -163,10 +173,10 @@ export class ClaudeCodeAdapter implements AgentAdapter {
             }
             if (raw.type === 'user' && raw.isReplay === true && typeof raw.uuid === 'string' && pending.has(raw.uuid)) {
               replayed.add(raw.uuid);
-              clearFollowUpTimer();
+              followUpStarted();
             }
             if (raw.type !== 'result') {
-              if (raw.type === 'assistant' && raw.parent_tool_use_id == null) clearFollowUpTimer();
+              if (raw.type === 'assistant' && raw.parent_tool_use_id == null) followUpStarted();
               io.emit(event);
               return;
             }
@@ -186,10 +196,10 @@ export class ClaudeCodeAdapter implements AgentAdapter {
                 pending.delete(uuid);
               }
               completedRdTurn = true;
+              betweenTurns = true;
               io.complete();
               if (!closing && pending.size > 0) {
-                followUpTimer = setTimeout(closeInput, FOLLOW_UP_START_TIMEOUT_MS);
-                followUpTimer.unref();
+                waitForFollowUpStart();
               } else {
                 closeWhenIdle();
               }
