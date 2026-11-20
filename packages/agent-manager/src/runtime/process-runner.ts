@@ -18,8 +18,9 @@ export interface ProcessRunRequest {
   onNativeSession?: (nativeSessionId: string) => void;
   onOutput?: (line: string) => void;
   onEvent?: (event: NormalizedAgentEvent) => void;
-  onSteeringReady?: (send: SendSteering) => void;
+  onSteeringReady?: (send: SendSteering, checkInput?: () => Promise<boolean>) => void;
   onStreamingInputClosed?: () => void;
+  onStreamingWriteFailed?: () => void;
   onStreamingFallback?: () => void;
 }
 
@@ -232,6 +233,16 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         request.onStreamingInputClosed?.();
       };
 
+      const canWriteInput = () => !termination && !rootExit && !settled && !streamingInputClosed && child.stdin.writable;
+      const checkInput = () => new Promise<boolean>((resolve) => {
+        if (!canWriteInput()) {
+          resolve(false);
+          return;
+        }
+        const jsonWhitespace = ' ';
+        child.stdin.write(jsonWhitespace, (error) => resolve(!error && canWriteInput()));
+      });
+
       const terminate = (reason: NonNullable<typeof termination>) => {
         if (termination || settled) return;
         termination = reason;
@@ -263,7 +274,7 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
 
       const protocol = streaming?.connect({
         write: (message) => {
-          if (termination || rootExit || settled || !child.stdin.writable) return false;
+          if (!canWriteInput()) return false;
           child.stdin.write(`${JSON.stringify(message)}\n`);
           return true;
         },
@@ -318,7 +329,8 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         stderr = appendCapped(stderr, chunk, request.maxOutputBytes);
       });
       child.stdin.on('error', () => {
-        // The process-level error/close handlers produce the canonical outcome.
+        notifyStreamingInputClosed();
+        if (streaming && !settled) request.onStreamingWriteFailed?.();
       });
       child.stdin.once('close', notifyStreamingInputClosed);
 
@@ -362,9 +374,9 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
           protocol.start();
           request.onSteeringReady?.((input, onDelivered) => {
             if (termination === 'unsupported') return 'unsupported';
-            if (termination || rootExit || settled) return 'defer';
+            if (!canWriteInput()) return 'defer';
             return protocol.steer(input, onDelivered);
-          });
+          }, checkInput);
         } else {
           child.stdin.end(invocation.input);
         }

@@ -159,6 +159,8 @@ interface ActiveRdRun {
   stopRequested: boolean;
   pendingInputChars: number;
   headlessSteer?: SendSteering;
+  checkHeadlessInput?: () => Promise<boolean>;
+  checkingHeadlessInput?: boolean;
   streamingInputClosed?: boolean;
   resumeAfterInputClosed?: boolean;
   offeredSteering: Array<{ sequence: number; delivered: boolean }>;
@@ -1682,6 +1684,20 @@ export class AgentManager extends EventEmitter {
           active.resumeAfterInputClosed = true;
           return true;
         }
+      } else if (active.checkHeadlessInput) {
+        if (!active.checkingHeadlessInput) {
+          active.checkingHeadlessInput = true;
+          active.steering = active.checkHeadlessInput().then((writable) => {
+            active.checkingHeadlessInput = false;
+            if (active.controller.signal.aborted) return;
+            if (!writable || active.streamingInputClosed) {
+              active.resumeAfterInputClosed = true;
+              return;
+            }
+            this.abortRdRun(requirement, active);
+          });
+        }
+        return true;
       }
     }
     this.abortRdRun(requirement, active);
@@ -2038,11 +2054,18 @@ export class AgentManager extends EventEmitter {
         maxOutputBytes: this.#maxOutputBytes,
         signal: controller.signal,
         onNativeSession,
-        onSteeringReady: (send) => { activeRun.headlessSteer = send; },
+        onSteeringReady: (send, checkInput) => {
+          activeRun.headlessSteer = send;
+          if (checkInput) activeRun.checkHeadlessInput = checkInput;
+          else delete activeRun.checkHeadlessInput;
+        },
         onStreamingInputClosed: () => { activeRun.streamingInputClosed = true; },
+        onStreamingWriteFailed: () => {
+          if (activeRun.offeredSteering.length > 0) activeRun.resumeAfterInputClosed = true;
+        },
         onStreamingFallback: () => {
           activeRun.streamingInputClosed = false;
-          if (activeRun.offeredSteering.length > 0 || activeRun.resumeAfterInputClosed) {
+          if (activeRun.offeredSteering.length > 0 || activeRun.resumeAfterInputClosed || activeRun.checkingHeadlessInput) {
             this.abortRdRun(requirement, activeRun);
           }
         },
