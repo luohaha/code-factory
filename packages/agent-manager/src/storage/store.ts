@@ -88,6 +88,8 @@ export interface AppendMessageRecord {
   /** Create and bind these attachments in the same transaction as the message. */
   newAttachments?: CreateMessageAttachmentRecord[];
   deliverToRd: boolean;
+  /** Clear a running Session's Stop pause in the same transaction as the human reply. */
+  clearRdAutoResumePause?: boolean;
   now: string;
 }
 

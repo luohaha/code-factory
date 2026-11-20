@@ -15,7 +15,7 @@ import { ModelCatalog, type AgentModelCatalogService } from '../src/runtime/mode
 import type { AgentProcessRunner, ProcessRunRequest } from '../src/runtime/process-runner.ts';
 import { createAgentManagerServer } from '../src/http/server.ts';
 import { SqliteAgentManagerStore } from '../src/storage/sqlite-store.ts';
-import type { AgentModelCatalogSnapshot, RunOutcome } from '../src/core/types.ts';
+import type { AgentModelCatalogSnapshot, RequirementWithSession, RunOutcome } from '../src/core/types.ts';
 import { CODE_FACTORY_VERSION } from '../src/infrastructure/version.ts';
 import { runCodeFactoryCli } from '../src/cli/code-factory-cli.ts';
 
@@ -63,6 +63,16 @@ class InterruptibleWaitingRunner implements AgentProcessRunner {
         error: 'Agent Run interrupted by human',
       }), { once: true });
     });
+  }
+}
+
+class DeferredRunner implements AgentProcessRunner {
+  requests: ProcessRunRequest[] = [];
+  resolvers: Array<(outcome: RunOutcome) => void> = [];
+
+  run(request: ProcessRunRequest): Promise<RunOutcome> {
+    this.requests.push(request);
+    return new Promise((resolve) => this.resolvers.push(resolve));
   }
 }
 
@@ -931,6 +941,96 @@ test('HTTP reply automatically steers a running RD Agent and explicit Stop still
     manager.close();
   }
 });
+
+for (const [provider, resumeArg] of [['codex', 'resume'], ['claude-code', '--resume']] as const) {
+  for (const scenario of ['resume', 'stop again', 'timeout settles first'] as const) {
+    test(`HTTP Stop and reply during ${provider} settlement: ${scenario}`, async () => {
+      const runner = new DeferredRunner();
+      const manager = new AgentManager({ workspaceRoot: process.cwd(),
+        store: new SqliteAgentManagerStore(':memory:'), runner, logger: createLogger({ level: 'silent' }) });
+      const server = createAgentManagerServer(manager);
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      try {
+        const requirement = manager.createRequirement({ title: 'Reply while stopping', description: 'Initial task', provider });
+        const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/requirements/${requirement.id}`;
+        const post = (action: 'interrupt' | 'reply', body: Record<string, string>) => fetch(`${baseUrl}/${action}`, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+        });
+        const initial = 'First instruction';
+        const replies = ['Second instruction', 'Third instruction'];
+        const nativeSessionId = `${provider}-session`;
+        const first = manager.runRequirement(requirement.id, initial);
+        const oldRunId = manager.listRuns(requirement.id)[0]?.id;
+        runner.requests[0]?.onNativeSession?.(nativeSessionId);
+        const stop = await post('interrupt', { mode: 'stop' });
+        assert.equal(stop.status, 202);
+        assert.equal((await stop.json() as { runId: string }).runId, oldRunId);
+        assert.equal(runner.requests[0]?.signal?.aborted, true);
+        assert.equal(manager.getRequirement(requirement.id)?.session.autoResumePaused, true);
+
+        const invalidReply = await post('reply', { message: '' });
+        assert.equal(invalidReply.status, 400);
+        assert.equal(manager.getRequirement(requirement.id)?.session.autoResumePaused, true);
+        for (const message of replies) {
+          const reply = await post('reply', { message });
+          assert.equal(reply.status, 202);
+          const accepted = await reply.json() as { queued: boolean; requirement: RequirementWithSession };
+          assert.equal(accepted.queued, true);
+          assert.equal(accepted.requirement.session.state, 'running');
+          assert.equal(accepted.requirement.session.autoResumePaused, false);
+          assert.equal(accepted.requirement.session.lastConsumedMessageSequence, 0);
+        }
+        assert.equal(runner.requests.length, 1);
+        assert.equal(manager.listRuns(requirement.id)[0]?.status, 'running');
+        if (scenario === 'stop again') {
+          const stopAgain = await post('interrupt', { mode: 'stop' });
+          assert.equal(stopAgain.status, 202);
+          assert.equal((await stopAgain.json() as { runId: string }).runId, oldRunId);
+        }
+
+        const status = scenario === 'timeout settles first' ? 'timed_out' : 'cancelled';
+        runner.resolvers[0]?.({ status, exitCode: null, nativeSessionId: null, finalMessage: null, error: 'Run ended' });
+        await first;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        const current = manager.getRequirement(requirement.id);
+        assert.equal(manager.listRuns(requirement.id).find((run) => run.id === oldRunId)?.status, status);
+        assert.equal(current?.session.id, requirement.session.id);
+        assert.equal(current?.session.nativeSessionId, nativeSessionId);
+        assert.equal(current?.session.lastConsumedMessageSequence, 0);
+        assert.equal(current?.session.pendingMessageCount, 3);
+        assert.deepEqual(manager.listMessages(requirement.id).filter((message) => message.author === 'human')
+          .map((message) => [message.sequence, message.body]), [[1, initial], [2, replies[0]], [3, replies[1]]]);
+
+        if (scenario === 'stop again') {
+          assert.equal(current?.status, 'waiting_confirmation');
+          assert.equal(current?.session.state, 'waiting_human');
+          assert.equal(current?.session.autoResumePaused, true);
+          assert.equal(runner.requests.length, 1);
+        } else {
+          assert.equal(current?.session.autoResumePaused, false);
+          assert.equal(runner.requests.length, 2);
+          const resumed = runner.requests[1]!;
+          const resumeIndex = resumed.invocation.args.indexOf(resumeArg);
+          assert.notEqual(resumeIndex, -1);
+          assert.equal(resumed.invocation.args[resumeIndex + 1], nativeSessionId);
+          assert.match(resumed.invocation.input, /\[Human #1\]\nFirst instruction[\s\S]*\[Human #2\]\nSecond instruction[\s\S]*\[Human #3\]\nThird instruction/);
+          const active = manager.listRuns(requirement.id).filter((run) => run.status === 'running');
+          assert.deepEqual(active.map((run) => [run.sessionId, run.inputFromSequence, run.inputToSequence]),
+            [[requirement.session.id, 1, 3]]);
+
+          runner.resolvers[1]?.({ status: 'succeeded', exitCode: 0, nativeSessionId, finalMessage: 'Done', error: null });
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          assert.equal(runner.requests.length, 2);
+          assert.equal(manager.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, 3);
+          assert.equal(manager.getRequirement(requirement.id)?.session.pendingMessageCount, 0);
+        }
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await manager.close();
+      }
+    });
+  }
+}
 
 test('HTTP reply reactivates a completed requirement', async () => {
   const store = new SqliteAgentManagerStore(':memory:');

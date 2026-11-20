@@ -1135,9 +1135,9 @@ test('Agent configuration remains locked until a stopped RD Run reaches waiting 
   }
 });
 
-test('Stop keeps reviewer, trigger, and other Agent messages queued until a human resumes', async () => {
+test('Stop keeps reviewer, trigger, and other Agent messages queued during settlement until a human resumes', async () => {
   const store = new SqliteAgentManagerStore(':memory:');
-  const runner = new InterruptibleRunner();
+  const runner = new DeferredRunner();
   const manager = new AgentManager({ workspaceRoot: process.cwd(), store, runner, logger: silentLogger,
     configuration: { ...DEFAULT_AGENT_MANAGER_CONFIGURATION, jevApiKey: 'test-key' },
     jevMessageDecision: async () => 'deliver', jevWakeDecision: async () => ({ kind: 'wait' }),
@@ -1147,10 +1147,10 @@ test('Stop keeps reviewer, trigger, and other Agent messages queued until a huma
     const requirement = manager.createRequirement({ title: 'Switch safely', description: 'Pause before editing', provider: 'codex' });
     const source = manager.createRequirement({ title: 'Source Agent', description: 'Send a later update', provider: 'codex' });
     const first = manager.runRequirement(requirement.id, 'Original instruction');
+    runner.requests[0]?.onSteeringReady?.(() => 'defer');
     manager.postHumanMessage(requirement.id, 'Queued before Stop');
     manager.interruptRdRun(requirement.id, 'stop');
-    await first;
-    assert.equal(store.getRequirement(requirement.id)?.session.autoResumePaused, true);
+    assert.equal(runner.requests[0]?.signal?.aborted, true);
 
     const pullRequest = manager.trackPullRequest({ requirementId: requirement.id, repository: 'acme/repo',
       number: 17, url: 'https://github.com/acme/repo/pull/17', title: 'Switch safely', baseBranch: 'main',
@@ -1165,9 +1165,14 @@ test('Stop keeps reviewer, trigger, and other Agent messages queued until a huma
       author: 'system', body: 'Timer follow-up' }));
     const related = await manager.postRequirementAgentMessage(source.id, source.session.id, requirement.id, 'Related Agent follow-up');
     assert.equal(related.queued, true);
+    assert.equal(related.requirement.session.autoResumePaused, true);
+    assert.equal(related.requirement.session.state, 'running');
+    runner.resolvers[0]?.({ status: 'cancelled', exitCode: null, nativeSessionId: null, finalMessage: null, error: 'Stopped' });
+    await first;
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(runner.requests.length, 2);
     assert.equal(store.getRequirement(requirement.id)?.status, 'waiting_confirmation');
+    assert.equal(store.getRequirement(requirement.id)?.session.autoResumePaused, true);
     assert.equal(store.getRequirement(requirement.id)?.session.pendingMessageCount, 5);
 
     manager.updateRequirementAgentConfiguration(requirement.id, { provider: 'claude-code' });

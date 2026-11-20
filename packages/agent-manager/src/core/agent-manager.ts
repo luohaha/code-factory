@@ -1487,6 +1487,7 @@ export class AgentManager extends EventEmitter {
       body,
       attachmentIds,
       deliverToRd: true,
+      clearRdAutoResumePause: requirement.session.state === 'running' && requirement.session.autoResumePaused,
     });
     const current = requirement.status === 'done'
       ? this.#store.transitionRequirement(requirementId, ['done'], 'doing', new Date().toISOString())
@@ -2047,8 +2048,11 @@ export class AgentManager extends EventEmitter {
     return execution.then(async (outcome) => {
       const active = this.#activeRdRuns.get(requirementId);
       if (active?.runId === runId) await active.steering;
-      const pauseOnCancel = outcome.status === 'cancelled' && active?.runId === runId && active.stopRequested;
-      const resumeAfterInputClosed = active?.runId === runId && active.resumeAfterInputClosed && !active.stopRequested;
+      const stopRequested = active?.runId === runId && active.stopRequested;
+      const pauseOnCancel = stopRequested && this.requireRequirement(requirementId).session.autoResumePaused;
+      const resumeAfterSettlement = stopRequested
+        ? !pauseOnCancel
+        : active?.runId === runId && active.resumeAfterInputClosed;
       if (active?.runId === runId) this.#activeRdRuns.delete(requirementId);
       const current = this.#store.finishRdRun(runId, outcome, new Date().toISOString(), pauseOnCancel);
       if (outcome.status !== 'succeeded') {
@@ -2066,7 +2070,7 @@ export class AgentManager extends EventEmitter {
       if (outcome.status !== 'cancelled') {
         await this.considerJevWake(requirementId, runId, outcome.status,
           outcome.status === 'succeeded' ? lastAgentMessage || outcome.finalMessage || '' : '');
-        if (outcome.status === 'succeeded' || resumeAfterInputClosed) {
+        if (outcome.status === 'succeeded' || resumeAfterSettlement) {
           this.schedulePendingRdMessages(requirementId);
         }
       } else if (!pauseOnCancel) {
@@ -2616,6 +2620,7 @@ export class AgentManager extends EventEmitter {
     body: string;
     attachmentIds?: string[];
     deliverToRd: boolean;
+    clearRdAutoResumePause?: boolean;
   }): RequirementMessage {
     const message = this.#store.appendMessage({
       id: `msg_${randomUUID()}`,

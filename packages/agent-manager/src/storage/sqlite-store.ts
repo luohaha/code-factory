@@ -736,6 +736,10 @@ export class SqliteAgentManagerStore implements AgentManagerStore {
       for (const attachmentId of attachmentIds) {
         this.#db.prepare('UPDATE message_attachments SET message_id = ? WHERE id = ?').run(input.id, attachmentId);
       }
+      if (input.clearRdAutoResumePause) {
+        this.#db.prepare(`UPDATE agent_sessions SET auto_resume_paused = 0, updated_at = ?
+          WHERE id = ? AND state = 'running' AND auto_resume_paused = 1`).run(input.now, input.sessionId);
+      }
       this.#db.exec('COMMIT');
     } catch (error) {
       this.#db.exec('ROLLBACK');
