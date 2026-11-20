@@ -133,6 +133,42 @@ test('Claude keeps resumed stdin open when a background task reports a result be
   assert.equal(events.at(-1)?.message, 'Here is the plan');
 });
 
+test('Claude accepts a reply after a result while background work keeps the process alive', () => {
+  const adapter = new ClaudeCodeAdapter();
+  const invocation = adapter.buildRdInvocation({ prompt: 'start the build', nativeSessionId: null });
+  const { protocol, receive, writes, closed } = protocolFixture(adapter.buildStreamingRdInvocation(invocation));
+  const ambient = { task_id: 'watcher', task_type: 'local_bash', ambient: true };
+  const build = { task_id: 'build', task_type: 'local_bash' };
+  receive({ type: 'system', subtype: 'background_tasks_changed', tasks: [ambient, build] });
+  receive({ type: 'result', subtype: 'success', user_message_uuids: [writes[0]!.uuid] });
+  assert.equal(closed(), false);
+
+  let delivered = false;
+  assert.equal(protocol.steer({ text: 'what changed?', imagePaths: [] }, () => { delivered = true; }), 'submitted');
+  receive({ type: 'result', subtype: 'success', user_message_uuids: [writes[1]!.uuid] });
+  assert.equal(delivered, true);
+  assert.equal(closed(), false);
+
+  receive({ type: 'system', subtype: 'background_tasks_changed', tasks: [ambient] });
+  assert.equal(closed(), true);
+});
+
+test('Claude keeps waiting for a submitted reply when the last background task ends', () => {
+  const adapter = new ClaudeCodeAdapter();
+  const invocation = adapter.buildRdInvocation({ prompt: 'start the build', nativeSessionId: null });
+  const { protocol, receive, writes, closed } = protocolFixture(adapter.buildStreamingRdInvocation(invocation));
+  receive({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'build', task_type: 'local_bash' }] });
+  receive({ type: 'result', subtype: 'success', user_message_uuids: [writes[0]!.uuid] });
+  let delivered = false;
+  assert.equal(protocol.steer({ text: 'summarize the build', imagePaths: [] }, () => { delivered = true; }), 'submitted');
+
+  receive({ type: 'system', subtype: 'background_tasks_changed', tasks: [] });
+  assert.equal(closed(), false);
+  receive({ type: 'result', subtype: 'success', user_message_uuids: [writes[1]!.uuid] });
+  assert.equal(delivered, true);
+  assert.equal(closed(), true);
+});
+
 test('Claude follow-up init keeps stdin open before the first slow assistant response', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const adapter = new ClaudeCodeAdapter();

@@ -118,6 +118,8 @@ export class ClaudeCodeAdapter implements AgentAdapter {
         const initialMessageId = randomUUID();
         let sessionId: string | undefined;
         let closing = false;
+        let completedRdTurn = false;
+        let hasBackgroundWork = false;
         let followUpTimer: NodeJS.Timeout | undefined;
         const clearFollowUpTimer = () => {
           if (followUpTimer) clearTimeout(followUpTimer);
@@ -128,6 +130,9 @@ export class ClaudeCodeAdapter implements AgentAdapter {
           if (closing) return;
           closing = true;
           io.endInput();
+        };
+        const closeWhenIdle = () => {
+          if (completedRdTurn && !hasBackgroundWork && pending.size === 0) closeInput();
         };
         const send = (text: string, uuid: string) => io.write({
           type: 'user', message: { role: 'user', content: text }, uuid, parent_tool_use_id: null,
@@ -149,6 +154,12 @@ export class ClaudeCodeAdapter implements AgentAdapter {
             if (raw.type === 'system' && raw.subtype === 'init' && typeof raw.session_id === 'string' && raw.parent_tool_use_id == null) {
               sessionId ??= raw.session_id;
               if (raw.session_id === sessionId) clearFollowUpTimer();
+            }
+            if (raw.type === 'system' && raw.subtype === 'background_tasks_changed' && Array.isArray(raw.tasks)) {
+              hasBackgroundWork = raw.tasks.some((task: unknown) => task && typeof task === 'object'
+                && 'task_id' in task && typeof task.task_id === 'string'
+                && (!('ambient' in task) || task.ambient !== true));
+              closeWhenIdle();
             }
             if (raw.type === 'user' && raw.isReplay === true && typeof raw.uuid === 'string' && pending.has(raw.uuid)) {
               replayed.add(raw.uuid);
@@ -174,12 +185,13 @@ export class ClaudeCodeAdapter implements AgentAdapter {
                 pending.get(uuid)?.();
                 pending.delete(uuid);
               }
+              completedRdTurn = true;
               io.complete();
               if (!closing && pending.size > 0) {
                 followUpTimer = setTimeout(closeInput, FOLLOW_UP_START_TIMEOUT_MS);
                 followUpTimer.unref();
               } else {
-                closeInput();
+                closeWhenIdle();
               }
             } else {
               closeInput();
