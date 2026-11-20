@@ -125,6 +125,36 @@ const claudeClosingAfterErrorFixture = String.raw`
   });
 `;
 
+const holdExitedProviderOutput = String.raw`
+  const { existsSync } = require('node:fs');
+  const parentPid = Number(process.argv[1]);
+  const wait = setInterval(() => {
+    if (process.ppid === parentPid) return;
+    clearInterval(wait);
+    setTimeout(() => console.log('transport-exit-marker'), 100);
+  }, 10);
+  setInterval(() => { if (existsSync('release-process')) process.exit(0); }, 10);
+  setTimeout(() => process.exit(1), 3_000).unref();
+`;
+
+const claudeAbruptExitFixture = String.raw`
+  const { spawn } = require('node:child_process');
+  const { existsSync, writeFileSync } = require('node:fs');
+  const { createInterface } = require('node:readline');
+  const emit = (frame) => console.log(JSON.stringify({ session_id: 'test-session', ...frame }));
+  createInterface({ input: process.stdin }).once('line', () => {
+    emit({ type: 'system', subtype: 'init' });
+    if (existsSync('abrupt-exit')) {
+      emit({ type: 'result', subtype: 'success', result: 'Finished' });
+      return;
+    }
+    writeFileSync('abrupt-exit', '');
+    const drain = spawn(process.execPath, ['-e', ${JSON.stringify(holdExitedProviderOutput)}, String(process.pid)],
+      { stdio: ['ignore', 'inherit', 'inherit'] });
+    drain.once('spawn', () => process.exit(1));
+  });
+`;
+
 function fixture(t: TestContext, provider: 'codex' | 'claude-code', script: string,
   { initialMessage, readyMarker = provider === 'codex' ? 'commandExecution' : 'tool_use', timeoutMs = 3_000 }: {
     initialMessage?: string; readyMarker?: string; timeoutMs?: number;
@@ -258,6 +288,32 @@ for (const outcome of ['failed', 'timed_out', 'cancelled'] as const) {
       ? [[outcome, initial.sequence, initial.sequence], ['succeeded', initial.sequence, initial.sequence], ['succeeded', reply.message.sequence, reply.message.sequence]]
       : [[outcome, initial.sequence, initial.sequence], ['succeeded', initial.sequence, lastReply.message.sequence]];
     assert.deepEqual(runs.map((run) => [run.status, run.inputFromSequence, run.inputToSequence]), expectedRanges);
+  });
+}
+
+for (const body of ['AFTER_ABRUPT_EXIT', 'x'.repeat(13_000)]) {
+  test(`headless steering queues a ${body.length > 100 ? 'large' : 'short'} reply after abrupt provider exit`, { timeout: 8_000 }, async (t) => {
+    const { manager, requirement, ready, execution, workspaceRoot } = fixture(t, 'claude-code', claudeAbruptExitFixture, {
+      initialMessage: 'Initial task', readyMarker: 'transport-exit-marker',
+    });
+    await ready;
+    assert.equal(manager.listRuns(requirement.id)[0]?.status, 'running');
+    const reply = manager.postHumanMessage(requirement.id, body);
+    writeFileSync(join(workspaceRoot, 'release-process'), '');
+    const first = await execution;
+    assert.equal(first.session.lastConsumedMessageSequence, 0);
+    assert.equal(first.session.pendingMessageCount, 2);
+    for (let attempt = 0; attempt < 60 && manager.getRequirement(requirement.id)?.session.pendingMessageCount; attempt++) {
+      await delay(25);
+    }
+    const initial = manager.listMessages(requirement.id).find((message) => message.author === 'human')!;
+    const ranges = manager.listRuns(requirement.id).reverse().map((run) => [run.status, run.inputFromSequence, run.inputToSequence]);
+    const expected = body.length > 100
+      ? [['failed', initial.sequence, initial.sequence], ['succeeded', initial.sequence, initial.sequence], ['succeeded', reply.message.sequence, reply.message.sequence]]
+      : [['failed', initial.sequence, initial.sequence], ['succeeded', initial.sequence, reply.message.sequence]];
+    assert.deepEqual(ranges, expected);
+    assert.equal(manager.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, reply.message.sequence);
+    assert.equal(manager.getRequirement(requirement.id)?.session.pendingMessageCount, 0);
   });
 }
 

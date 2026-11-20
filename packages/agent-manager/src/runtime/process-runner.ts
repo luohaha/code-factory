@@ -162,6 +162,7 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
       let forceSent = false;
       let settled = false;
       let protocolCompleted = false;
+      let streamingInputClosed = false;
       let discardingOversizedLine = false;
       const maxFrameBytes = streaming ? Math.max(request.maxOutputBytes, MIN_STREAMING_FRAME_LIMIT_BYTES) : request.maxOutputBytes;
       const timeoutMode = request.timeoutMode ?? 'elapsed';
@@ -225,9 +226,16 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         resolve({ status: 'failed', exitCode: code, nativeSessionId, finalMessage, error: detail });
       };
 
+      const notifyStreamingInputClosed = () => {
+        if (!streaming || streamingInputClosed) return;
+        streamingInputClosed = true;
+        request.onStreamingInputClosed?.();
+      };
+
       const terminate = (reason: NonNullable<typeof termination>) => {
         if (termination || settled) return;
         termination = reason;
+        notifyStreamingInputClosed();
         descendants = child.pid === undefined || process.platform === 'win32' ? [] : descendantsOf(child.pid);
         signalProcessTree(child, 'SIGTERM', descendants);
         forceKill = setTimeout(() => {
@@ -261,7 +269,7 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         },
         emit: emitEvent,
         endInput: () => {
-          request.onStreamingInputClosed?.();
+          notifyStreamingInputClosed();
           if (child.stdin.writable) child.stdin.end();
         },
         complete: () => { protocolCompleted = true; },
@@ -312,6 +320,7 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
       child.stdin.on('error', () => {
         // The process-level error/close handlers produce the canonical outcome.
       });
+      child.stdin.once('close', notifyStreamingInputClosed);
 
       armTimeout();
       request.signal?.addEventListener('abort', onAbort, { once: true });
@@ -331,7 +340,10 @@ export class HeadlessProcessRunner implements AgentProcessRunner {
         }
         resolve({ status: 'failed', exitCode: null, nativeSessionId, finalMessage, error: error.message });
       });
-      child.once('exit', (code, signal) => { rootExit = { code, signal }; });
+      child.once('exit', (code, signal) => {
+        rootExit = { code, signal };
+        notifyStreamingInputClosed();
+      });
       child.once('close', (code, signal) => {
         if (settled) return;
         if (stdoutBuffer) {

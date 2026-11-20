@@ -1678,7 +1678,10 @@ export class AgentManager extends EventEmitter {
           return true;
         }
         active.offeredSteering.pop();
-        if (submission === 'defer') return true;
+        if (submission === 'defer') {
+          active.resumeAfterInputClosed = true;
+          return true;
+        }
       }
     }
     this.abortRdRun(requirement, active);
@@ -2038,7 +2041,10 @@ export class AgentManager extends EventEmitter {
         onSteeringReady: (send) => { activeRun.headlessSteer = send; },
         onStreamingInputClosed: () => { activeRun.streamingInputClosed = true; },
         onStreamingFallback: () => {
-          if (activeRun.offeredSteering.length > 0) this.abortRdRun(requirement, activeRun);
+          activeRun.streamingInputClosed = false;
+          if (activeRun.offeredSteering.length > 0 || activeRun.resumeAfterInputClosed) {
+            this.abortRdRun(requirement, activeRun);
+          }
         },
         onOutput: (line) => this.emit('output', { runId, line }),
         onEvent,
