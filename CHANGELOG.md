@@ -6,6 +6,20 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.2.14] - 2026-11-20
+
+### Added
+
+- Human replies automatically steer active Codex and Claude Code RD Runs when the CLI supports streaming. Replies that arrive after streaming input closes trigger a follow-up in the same session once the current Run settles.
+
+### Changed
+
+- Simplify dashboard Requirement cards by removing transient Run details and counting only messages still awaiting delivery.
+
+### Fixed
+
+- Preserve pending replies across CLI startup, input closure, and failed Runs. Explicitly stopping a Run pauses automatic resumption until a human starts it or replies.
+
 ## [0.2.13] - 2026-11-18
 
 ### Added
