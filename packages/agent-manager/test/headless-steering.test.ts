@@ -22,10 +22,12 @@ const codexFixture = String.raw`
     notify('turn/completed', { turn: { id: 'test-turn', status: 'completed' } });
   };
   const steering = [];
+  let resumed = false;
   createInterface({ input: process.stdin }).on('line', (line) => {
     const { id, method, params } = JSON.parse(line);
     if (method === 'initialize') reply(id, {});
     if (method === 'thread/start' || method === 'thread/resume') {
+      resumed = method === 'thread/resume';
       if (method === 'thread/resume') assert.equal(params.threadId, 'test-thread');
       assert.equal(params.approvalPolicy, 'never');
       assert.equal(params.sandbox, 'danger-full-access');
@@ -39,7 +41,11 @@ const codexFixture = String.raw`
       reply(id, { turn: { id: 'test-turn' } });
       notify('turn/started', { turn: { id: 'test-turn' } });
       const prompt = params.input[0].text;
-      if (prompt.includes('COMPLETE_BEFORE_REPLY')) {
+      if (prompt.includes('RESUME_AFTER_STOP')) {
+        assert.ok(resumed);
+        assert.match(prompt, /START_BEFORE_STOP[\s\S]*CHANGE_BEFORE_STOP[\s\S]*RESUME_AFTER_STOP/);
+        complete();
+      } else if (prompt.includes('COMPLETE_BEFORE_REPLY')) {
         complete();
         setTimeout(() => {}, 400);
       } else if (prompt.includes('LATE_CORRECTION') || prompt.includes('The complete body of this pending message')) complete();
@@ -47,6 +53,10 @@ const codexFixture = String.raw`
     }
     if (method === 'turn/steer') {
       assert.equal(params.expectedTurnId, 'test-turn');
+      if (params.input[0].text.includes('CHANGE_BEFORE_STOP')) {
+        reply(id, { turnId: 'test-turn' });
+        return;
+      }
       if (params.input[0].text.includes('LATE_CORRECTION')) {
         complete();
         emit({ id, error: { code: -32602, message: 'No active turn' } });
@@ -67,6 +77,7 @@ const codexFixture = String.raw`
 
 const claudeFixture = String.raw`
   const { createInterface } = require('node:readline');
+  const assert = require('node:assert/strict');
   const emit = (frame) => console.log(JSON.stringify({ session_id: 'test-session', ...frame }));
   const result = (success = true, extra = {}) => emit({ type: 'result',
     subtype: success ? 'success' : 'error_during_execution', is_error: !success, result: success ? 'Finished' : 'Failed', ...extra });
@@ -79,11 +90,18 @@ const claudeFixture = String.raw`
       initial = false;
       emit({ type: 'system', subtype: 'init' });
       const prompt = frame.message.content;
-      if (prompt.includes('COMPLETE_BEFORE_REPLY')) {
+      if (prompt.includes('RESUME_AFTER_STOP')) {
+        assert.match(prompt, /START_BEFORE_STOP[\s\S]*CHANGE_BEFORE_STOP[\s\S]*RESUME_AFTER_STOP/);
+        result();
+      } else if (prompt.includes('COMPLETE_BEFORE_REPLY')) {
         result();
         setTimeout(() => {}, 400);
       } else if (prompt.includes('LATE_CORRECTION') || prompt.includes('The complete body of this pending message')) result();
       else tool('tool');
+      return;
+    }
+    if (frame.message.content.includes('CHANGE_BEFORE_STOP')) {
+      emit({ ...frame, isReplay: true });
       return;
     }
     if (frame.message.content.includes('LATE_CORRECTION')) {
@@ -398,14 +416,44 @@ test('Claude Code does not count a successful result for the wrong input before 
   assert.equal(requests.length, 1);
 });
 
-test('Stop still pauses a live headless Run with an unconfirmed reply', { timeout: 8_000 }, async (t) => {
-  const { manager, requirement, ready, execution, requests } = fixture(t, 'codex', codexFixture);
-  await ready;
-  const reply = manager.postHumanMessage(requirement.id, 'Change direction before Stop');
-  manager.interruptRdRun(requirement.id, 'stop');
-  const current = await execution;
-  assert.equal(current.session.autoResumePaused, true);
-  assert.equal(current.session.pendingMessageCount, 1);
-  assert.ok(current.session.lastConsumedMessageSequence < reply.message.sequence);
-  assert.equal(requests.length, 1);
-});
+for (const provider of ['codex', 'claude-code'] as const) {
+  test(`${provider} stops with pending input and resumes the same conversation on a human reply`, { timeout: 8_000 }, async (t) => {
+    const { manager, requirement, ready, execution, requests } = fixture(t, provider,
+      provider === 'codex' ? codexFixture : claudeFixture, { initialMessage: 'START_BEFORE_STOP' });
+    await ready;
+    const original = manager.listMessages(requirement.id).find((message) => message.author === 'human')!;
+    const beforeStop = manager.postHumanMessage(requirement.id, 'CHANGE_BEFORE_STOP');
+    assert.equal(beforeStop.queued, true);
+    manager.interruptRdRun(requirement.id, 'stop');
+    const stopped = await execution;
+    assert.equal(stopped.status, 'waiting_confirmation');
+    assert.equal(stopped.session.state, 'waiting_human');
+    assert.equal(stopped.session.autoResumePaused, true);
+    assert.equal(stopped.session.pendingMessageCount, 2);
+    assert.equal(stopped.session.lastConsumedMessageSequence, 0);
+    assert.ok(stopped.session.nativeSessionId);
+    assert.deepEqual(manager.listRuns(requirement.id).map((run) => run.status), ['cancelled']);
+
+    const resumed = manager.postHumanMessage(requirement.id, 'RESUME_AFTER_STOP');
+    assert.equal(resumed.queued, false);
+    assert.equal(resumed.requirement.session.autoResumePaused, false);
+    if (provider === 'claude-code') {
+      const args = requests[1]?.streamingInvocation?.args ?? [];
+      assert.ok(args.includes('--resume'));
+      assert.equal(args[args.indexOf('--resume') + 1], stopped.session.nativeSessionId);
+    }
+    for (let attempt = 0; attempt < 60 && manager.getRequirement(requirement.id)?.session.state === 'running'; attempt++) {
+      await delay(25);
+    }
+    const final = manager.getRequirement(requirement.id)!;
+    assert.equal(final.session.id, stopped.session.id);
+    assert.equal(final.session.nativeSessionId, stopped.session.nativeSessionId);
+    assert.equal(final.session.lastConsumedMessageSequence, resumed.message.sequence);
+    assert.equal(final.session.pendingMessageCount, 0);
+    assert.equal(requests.length, 2);
+    assert.deepEqual(manager.listRuns(requirement.id).map((run) => [run.status, run.inputFromSequence, run.inputToSequence]),
+      [['succeeded', original.sequence, resumed.message.sequence], ['cancelled', original.sequence, original.sequence]]);
+    assert.deepEqual(manager.listMessages(requirement.id).filter((message) => message.author === 'human').map((message) => message.sequence),
+      [original.sequence, beforeStop.message.sequence, resumed.message.sequence]);
+  });
+}
