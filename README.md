@@ -15,7 +15,7 @@ Code Factory brings requirements, coding agents, and GitHub pull requests into o
 
 Each requirement has its own persistent agent context. Jev stops automatic recovery after two consecutive failed or timed-out RD Runs; a successful Run starts a fresh failure streak. Agents can split work into child requirements and work in parallel, while humans steer the work, request reviews, and confirm completion.
 
-Reply to steer a running Codex, Claude Code, or Native Agent. The reply is delivered in the current Run when supported. **Stop Run** cancels the current work and pauses automatic resumption.
+Reply to steer a running Codex, Claude Code, or Native Agent. The reply is delivered in the current Run when supported. Replies sent after headless streaming input closes queue a follow-up in the same session, including when the current Run fails or times out. **Stop Run** cancels the current work and pauses automatic resumption.
 
 Use **Update model list** in Settings to refresh available model options immediately without restarting Agent Manager.
 

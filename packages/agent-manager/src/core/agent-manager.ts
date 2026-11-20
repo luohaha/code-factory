@@ -159,6 +159,8 @@ interface ActiveRdRun {
   stopRequested: boolean;
   pendingInputChars: number;
   headlessSteer?: SendSteering;
+  streamingInputClosed?: boolean;
+  resumeAfterInputClosed?: boolean;
   offeredSteering: Array<{ sequence: number; delivered: boolean }>;
   remoteStartupSteerThrough?: number;
 }
@@ -1616,6 +1618,10 @@ export class AgentManager extends EventEmitter {
     const lastMessage = newerMessages.at(-1);
     if (!lastMessage) return false;
     if (active.controller.signal.aborted) return true;
+    if (active.streamingInputClosed) {
+      active.resumeAfterInputClosed = true;
+      return true;
+    }
     if (requirement.provider === 'native-agent') {
       if (active.remoteStartupSteerThrough !== undefined) {
         active.remoteStartupSteerThrough = Math.max(active.remoteStartupSteerThrough, lastMessage.sequence);
@@ -2030,6 +2036,7 @@ export class AgentManager extends EventEmitter {
         signal: controller.signal,
         onNativeSession,
         onSteeringReady: (send) => { activeRun.headlessSteer = send; },
+        onStreamingInputClosed: () => { activeRun.streamingInputClosed = true; },
         onStreamingFallback: () => {
           if (activeRun.offeredSteering.length > 0) this.abortRdRun(requirement, activeRun);
         },
@@ -2041,6 +2048,7 @@ export class AgentManager extends EventEmitter {
       const active = this.#activeRdRuns.get(requirementId);
       if (active?.runId === runId) await active.steering;
       const pauseOnCancel = outcome.status === 'cancelled' && active?.runId === runId && active.stopRequested;
+      const resumeAfterInputClosed = active?.runId === runId && active.resumeAfterInputClosed && !active.stopRequested;
       if (active?.runId === runId) this.#activeRdRuns.delete(requirementId);
       const current = this.#store.finishRdRun(runId, outcome, new Date().toISOString(), pauseOnCancel);
       if (outcome.status !== 'succeeded') {
@@ -2058,9 +2066,10 @@ export class AgentManager extends EventEmitter {
       if (outcome.status !== 'cancelled') {
         await this.considerJevWake(requirementId, runId, outcome.status,
           outcome.status === 'succeeded' ? lastAgentMessage || outcome.finalMessage || '' : '');
-      }
-      if (outcome.status === 'succeeded') this.schedulePendingRdMessages(requirementId);
-      if (outcome.status === 'cancelled' && !pauseOnCancel) {
+        if (outcome.status === 'succeeded' || resumeAfterInputClosed) {
+          this.schedulePendingRdMessages(requirementId);
+        }
+      } else if (!pauseOnCancel) {
         this.schedulePendingRdMessages(requirementId, inputToSequence ?? 0);
       }
       return current;
