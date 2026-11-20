@@ -107,6 +107,32 @@ test('Claude closes stdin after a bounded wait if an unanswered reply never star
   protocol.dispose?.();
 });
 
+test('Claude keeps resumed stdin open when a background task reports a result before the RD turn', () => {
+  const adapter = new ClaudeCodeAdapter();
+  const invocation = adapter.buildRdInvocation({ prompt: 'resume work', nativeSessionId: 'saved-session' });
+  const { protocol, receive, writes, events, closed } = protocolFixture(adapter.buildStreamingRdInvocation(invocation));
+  receive({ type: 'system', subtype: 'init', session_id: 'saved-session' });
+  receive({ type: 'result', subtype: 'success', origin: { kind: 'task-notification' }, result: '' });
+  assert.equal(closed(), false);
+  assert.equal(events.some((event) => event.kind === 'completed'), false);
+
+  let delivered = false;
+  assert.equal(protocol.steer({ text: 'what is the plan?', imagePaths: [] }, () => { delivered = true; }), 'submitted');
+  const reply = writes[1]!;
+  receive({ ...reply, isReplay: true });
+  receive({ type: 'result', subtype: 'success', origin: { kind: 'task-notification' }, result: '' });
+  assert.equal(delivered, false);
+  assert.equal(closed(), false);
+
+  receive({
+    type: 'result', subtype: 'success', origin: { kind: 'task-notification' }, result: 'Here is the plan',
+    user_message_uuids: [writes[0]!.uuid, reply.uuid],
+  });
+  assert.equal(delivered, true);
+  assert.equal(closed(), true);
+  assert.equal(events.at(-1)?.message, 'Here is the plan');
+});
+
 test('Claude follow-up init keeps stdin open before the first slow assistant response', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const adapter = new ClaudeCodeAdapter();
