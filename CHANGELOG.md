@@ -6,6 +6,12 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.2.15] - 2026-11-20
+
+### Fixed
+
+- Keep Claude Code's streaming input open when a restored background task reports a result before the pending RD prompt is handled. Unrelated background results no longer acknowledge steering replies or end the Run.
+
 ## [0.2.14] - 2026-11-20
 
 ### Added
