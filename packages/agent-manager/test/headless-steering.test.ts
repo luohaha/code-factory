@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
@@ -107,15 +107,33 @@ const claudeFixture = String.raw`
   });
 `;
 
+const claudeClosingAfterErrorFixture = String.raw`
+  const { existsSync, writeFileSync } = require('node:fs');
+  const { createInterface } = require('node:readline');
+  const emit = (frame) => console.log(JSON.stringify({ session_id: 'test-session', ...frame }));
+  createInterface({ input: process.stdin }).once('line', () => {
+    emit({ type: 'system', subtype: 'init' });
+    if (existsSync('error-emitted')) {
+      emit({ type: 'result', subtype: 'success', result: 'Finished' });
+      return;
+    }
+    writeFileSync('error-emitted', '');
+    emit({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'Failed' });
+    const hold = setInterval(() => {
+      if (existsSync('release-process')) clearInterval(hold);
+    }, 20);
+  });
+`;
+
 function fixture(t: TestContext, provider: 'codex' | 'claude-code', script: string,
-  { initialMessage, readyMarker = provider === 'codex' ? 'commandExecution' : 'tool_use' }: {
-    initialMessage?: string; readyMarker?: string;
+  { initialMessage, readyMarker = provider === 'codex' ? 'commandExecution' : 'tool_use', timeoutMs = 3_000 }: {
+    initialMessage?: string; readyMarker?: string; timeoutMs?: number;
   } = {}) {
   const workspaceRoot = mkdtempSync(join(tmpdir(), 'headless-steer-test-'));
   const runner = new HeadlessProcessRunner();
   const requests: ProcessRunRequest[] = [];
   const manager = new AgentManager({
-    workspaceRoot, store: new SqliteAgentManagerStore(':memory:'), logger: silentLogger, timeoutMs: 3_000,
+    workspaceRoot, store: new SqliteAgentManagerStore(':memory:'), logger: silentLogger, timeoutMs,
     runner: {
       run: (request) => {
         requests.push(request);
@@ -139,7 +157,7 @@ function fixture(t: TestContext, provider: 'codex' | 'claude-code', script: stri
     });
   });
   const execution = manager.runRequirement(requirement.id, initialMessage);
-  return { manager, requirement, ready, execution, requests };
+  return { manager, requirement, ready, execution, requests, workspaceRoot };
 }
 
 test('Codex automatically steers attachment-only and repeated replies into one RD Run', { timeout: 8_000 }, async (t) => {
@@ -201,6 +219,45 @@ for (const provider of ['codex', 'claude-code'] as const) {
     assert.equal(manager.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, reply.message.sequence);
     assert.deepEqual(manager.listRuns(requirement.id).map((run) => [run.status, run.inputFromSequence]),
       [['succeeded', reply.message.sequence], ['succeeded', initialMessage.sequence]]);
+  });
+}
+
+for (const outcome of ['failed', 'timed_out', 'cancelled'] as const) {
+  test(`Claude Code handles queued replies after input closes and the process settles as ${outcome}`, { timeout: 8_000 }, async (t) => {
+    const { manager, requirement, ready, execution, requests, workspaceRoot } = fixture(t, 'claude-code', claudeClosingAfterErrorFixture, {
+      initialMessage: 'Initial task',
+      readyMarker: 'error_during_execution',
+      timeoutMs: outcome === 'timed_out' ? 1_000 : 3_000,
+    });
+    const initial = manager.listMessages(requirement.id).find((message) => message.author === 'human')!;
+    await ready;
+    const firstRun = manager.listRuns(requirement.id)[0]!;
+    assert.equal(firstRun.status, 'running');
+    const reply = manager.postHumanMessage(requirement.id, outcome === 'failed' ? 'x'.repeat(13_000) : 'Change direction');
+    assert.equal(reply.queued, true);
+    const lastReply = outcome === 'timed_out' ? manager.postHumanMessage(requirement.id, 'One more detail') : reply;
+    if (outcome === 'failed') writeFileSync(join(workspaceRoot, 'release-process'), '');
+    if (outcome === 'cancelled') manager.interruptRdRun(requirement.id, 'stop');
+
+    const settled = await execution;
+    assert.equal(settled.session.lastConsumedMessageSequence, 0);
+    assert.equal(settled.session.pendingMessageCount, outcome === 'timed_out' ? 3 : 2);
+    assert.equal(manager.listRuns(requirement.id).find((run) => run.id === firstRun.id)?.status, outcome);
+    if (outcome === 'cancelled') {
+      assert.equal(settled.session.autoResumePaused, true);
+      assert.equal(requests.length, 1);
+      return;
+    }
+
+    for (let attempt = 0; attempt < 100 && manager.getRequirement(requirement.id)?.session.pendingMessageCount; attempt++) {
+      await delay(25);
+    }
+    assert.equal(manager.getRequirement(requirement.id)?.session.lastConsumedMessageSequence, lastReply.message.sequence);
+    const runs = manager.listRuns(requirement.id).reverse();
+    const expectedRanges = outcome === 'failed'
+      ? [[outcome, initial.sequence, initial.sequence], ['succeeded', initial.sequence, initial.sequence], ['succeeded', reply.message.sequence, reply.message.sequence]]
+      : [[outcome, initial.sequence, initial.sequence], ['succeeded', initial.sequence, lastReply.message.sequence]];
+    assert.deepEqual(runs.map((run) => [run.status, run.inputFromSequence, run.inputToSequence]), expectedRanges);
   });
 }
 
