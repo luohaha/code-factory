@@ -107,7 +107,8 @@ test('Claude closes stdin after a bounded wait if an unanswered reply never star
   protocol.dispose?.();
 });
 
-test('Claude keeps resumed stdin open when a background task reports a result before the RD turn', () => {
+test('Claude keeps resumed stdin open when a background task reports a result before the RD turn', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const adapter = new ClaudeCodeAdapter();
   const invocation = adapter.buildRdInvocation({ prompt: 'resume work', nativeSessionId: 'saved-session' });
   const { protocol, receive, writes, events, closed } = protocolFixture(adapter.buildStreamingRdInvocation(invocation));
@@ -118,6 +119,8 @@ test('Claude keeps resumed stdin open when a background task reports a result be
 
   let delivered = false;
   assert.equal(protocol.steer({ text: 'what is the plan?', imagePaths: [] }, () => { delivered = true; }), 'submitted');
+  t.mock.timers.tick(12_000);
+  assert.equal(closed(), false);
   const reply = writes[1]!;
   receive({ ...reply, isReplay: true });
   receive({ type: 'result', subtype: 'success', origin: { kind: 'task-notification' }, result: '' });
@@ -132,6 +135,117 @@ test('Claude keeps resumed stdin open when a background task reports a result be
   assert.equal(closed(), true);
   assert.equal(events.at(-1)?.message, 'Here is the plan');
 });
+
+test('Claude accepts a reply after a result while background work keeps the process alive', () => {
+  const adapter = new ClaudeCodeAdapter();
+  const invocation = adapter.buildRdInvocation({ prompt: 'start the build', nativeSessionId: null });
+  const { protocol, receive, writes, closed } = protocolFixture(adapter.buildStreamingRdInvocation(invocation));
+  const ambient = { task_id: 'watcher', task_type: 'local_bash', ambient: true };
+  const build = { task_id: 'build', task_type: 'local_bash' };
+  receive({ type: 'system', subtype: 'background_tasks_changed', tasks: [ambient, build] });
+  receive({ type: 'result', subtype: 'success', user_message_uuids: [writes[0]!.uuid] });
+  assert.equal(closed(), false);
+
+  let delivered = false;
+  assert.equal(protocol.steer({ text: 'what changed?', imagePaths: [] }, () => { delivered = true; }), 'submitted');
+  receive({ type: 'result', subtype: 'success', user_message_uuids: [writes[1]!.uuid] });
+  assert.equal(delivered, true);
+  assert.equal(closed(), false);
+
+  receive({ type: 'system', subtype: 'background_tasks_changed', tasks: [ambient] });
+  assert.equal(closed(), true);
+});
+
+test('Claude keeps waiting for a submitted reply when the last background task ends', () => {
+  const adapter = new ClaudeCodeAdapter();
+  const invocation = adapter.buildRdInvocation({ prompt: 'start the build', nativeSessionId: null });
+  const { protocol, receive, writes, closed } = protocolFixture(adapter.buildStreamingRdInvocation(invocation));
+  receive({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'build', task_type: 'local_bash' }] });
+  receive({ type: 'result', subtype: 'success', user_message_uuids: [writes[0]!.uuid] });
+  let delivered = false;
+  assert.equal(protocol.steer({ text: 'summarize the build', imagePaths: [] }, () => { delivered = true; }), 'submitted');
+
+  receive({ type: 'system', subtype: 'background_tasks_changed', tasks: [] });
+  assert.equal(closed(), false);
+  receive({ type: 'result', subtype: 'success', user_message_uuids: [writes[1]!.uuid] });
+  assert.equal(delivered, true);
+  assert.equal(closed(), true);
+});
+
+test('Claude times out a late reply that never starts after a result with background work', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const adapter = new ClaudeCodeAdapter();
+  const invocation = adapter.buildRdInvocation({ prompt: 'start the build', nativeSessionId: null });
+  const { protocol, receive, writes, closed } = protocolFixture(adapter.buildStreamingRdInvocation(invocation));
+  receive({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'build', task_type: 'local_bash' }] });
+  receive({ type: 'result', subtype: 'success', user_message_uuids: [writes[0]!.uuid] });
+  t.mock.timers.tick(12_000);
+  assert.equal(closed(), false);
+
+  const unacknowledged = () => assert.fail('Claude never answered the reply');
+  assert.equal(protocol.steer({ text: 'what changed?', imagePaths: [] }, unacknowledged), 'submitted');
+  receive({ type: 'system', subtype: 'background_tasks_changed', tasks: [] });
+  t.mock.timers.tick(9_999);
+  assert.equal(closed(), false);
+  assert.equal(protocol.steer({ text: 'is it done?', imagePaths: [] }, unacknowledged), 'submitted');
+  t.mock.timers.tick(1);
+  assert.equal(closed(), true);
+  assert.equal(protocol.steer({ text: 'retry', imagePaths: [] }, unacknowledged), 'defer');
+});
+
+test('Claude leaves stdin open once a late follow-up starts while background work is active', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const adapter = new ClaudeCodeAdapter();
+  const invocation = adapter.buildRdInvocation({ prompt: 'start the build', nativeSessionId: null });
+  const { protocol, receive, writes, closed } = protocolFixture(adapter.buildStreamingRdInvocation(invocation));
+  const init = { type: 'system', subtype: 'init', session_id: 'main' };
+  receive(init);
+  receive({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'build', task_type: 'local_bash' }] });
+  receive({ type: 'result', subtype: 'success', user_message_uuids: [writes[0]!.uuid] });
+  let delivered = false;
+  assert.equal(protocol.steer({ text: 'summarize the build', imagePaths: [] }, () => { delivered = true; }), 'submitted');
+  receive(init);
+  receive({ type: 'system', subtype: 'background_tasks_changed', tasks: [] });
+  t.mock.timers.tick(12_000);
+  assert.equal(closed(), false);
+
+  receive({ type: 'result', subtype: 'success', user_message_uuids: [writes[1]!.uuid] });
+  assert.equal(delivered, true);
+  assert.equal(closed(), true);
+});
+
+for (const replyTiming of ['during', 'after']) {
+  test(`Claude bounds the wait for a reply submitted ${replyTiming} a background notification turn`, (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const adapter = new ClaudeCodeAdapter();
+    const invocation = adapter.buildRdInvocation({ prompt: 'start the builds', nativeSessionId: null });
+    const { protocol, receive, writes, closed, events } = protocolFixture(adapter.buildStreamingRdInvocation(invocation));
+    const init = { type: 'system', subtype: 'init', session_id: 'main' };
+    const builds = ['first', 'second'].map((task_id) => ({ task_id, task_type: 'local_bash' }));
+    const sendReply = () => {
+      assert.equal(protocol.steer({ text: 'how did the builds go?', imagePaths: [] },
+        () => assert.fail('Claude never answered the reply')), 'submitted');
+    };
+    receive(init);
+    receive({ type: 'system', subtype: 'background_tasks_changed', tasks: builds });
+    receive({ type: 'result', subtype: 'success', user_message_uuids: [writes[0]!.uuid] });
+    receive({ type: 'system', subtype: 'background_tasks_changed', tasks: builds.slice(1) });
+    receive(init);
+    receive({ type: 'assistant', message: { content: [{ type: 'text', text: 'The first build finished.' }] } });
+    if (replyTiming === 'during') sendReply();
+    t.mock.timers.tick(12_000);
+    assert.equal(closed(), false);
+
+    receive({ type: 'result', subtype: 'success', origin: { kind: 'task-notification' }, result: 'First build done' });
+    assert.equal(events.filter((event) => event.kind === 'completed').length, 1);
+    if (replyTiming === 'after') sendReply();
+    receive({ type: 'system', subtype: 'background_tasks_changed', tasks: [] });
+    t.mock.timers.tick(9_999);
+    assert.equal(closed(), false);
+    t.mock.timers.tick(1);
+    assert.equal(closed(), true);
+  });
+}
 
 test('Claude follow-up init keeps stdin open before the first slow assistant response', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
