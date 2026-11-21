@@ -139,6 +139,10 @@ export class ClaudeCodeAdapter implements AgentAdapter {
           followUpTimer ??= setTimeout(closeInput, FOLLOW_UP_START_TIMEOUT_MS);
           followUpTimer.unref();
         };
+        const enterBetweenTurns = () => {
+          betweenTurns = true;
+          if (!closing && pending.size > 0) waitForFollowUpStart();
+        };
         const followUpStarted = () => {
           betweenTurns = false;
           clearFollowUpTimer();
@@ -183,9 +187,10 @@ export class ClaudeCodeAdapter implements AgentAdapter {
             const answered = Array.isArray(raw.user_message_uuids) ? raw.user_message_uuids
               : typeof raw.user_message_uuid === 'string' ? [raw.user_message_uuid] : undefined;
             const origin = raw.origin;
-            // A background task can emit its own result before Claude handles the resumed prompt.
+            // A task notification can finish its own turn without answering an RD prompt or reply.
             if (origin && typeof origin === 'object' && 'kind' in origin && origin.kind === 'task-notification'
               && !answered?.some((uuid: unknown) => uuid === initialMessageId || (typeof uuid === 'string' && pending.has(uuid)))) {
+              if (completedRdTurn) enterBetweenTurns();
               return;
             }
             clearFollowUpTimer();
@@ -196,13 +201,9 @@ export class ClaudeCodeAdapter implements AgentAdapter {
                 pending.delete(uuid);
               }
               completedRdTurn = true;
-              betweenTurns = true;
+              enterBetweenTurns();
               io.complete();
-              if (!closing && pending.size > 0) {
-                waitForFollowUpStart();
-              } else {
-                closeWhenIdle();
-              }
+              closeWhenIdle();
             } else {
               closeInput();
             }
