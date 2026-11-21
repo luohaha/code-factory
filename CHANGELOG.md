@@ -6,6 +6,12 @@ breaking changes while the major version is `0`.
 
 ## [Unreleased]
 
+## [0.2.16] - 2026-11-21
+
+### Fixed
+
+- Keep Claude Code's streaming input open while background work is active so new replies can steer the same Run. If a pending reply receives no acknowledgment or output within the follow-up deadline, it stays queued for the next Run.
+
 ## [0.2.15] - 2026-11-20
 
 ### Fixed
