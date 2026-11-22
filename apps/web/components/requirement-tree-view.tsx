@@ -196,19 +196,13 @@ export function RequirementTreeView({
 
   return (
     <div className="min-w-max p-4 lg:p-5">
-      <div className="mb-4 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-          <Network className="size-3.5" />
-          <span>{t(filtered ? 'Matches are shown with their ancestors for context.' : 'Roots are ordered by recent activity; children follow creation order.')}</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <Button variant="ghost" size="xs" onClick={() => setCollapsedIds(new Set(parentIds))}>
-            <ChevronsDownUp data-icon="inline-start" />{t('Collapse all')}
-          </Button>
-          <Button variant="ghost" size="xs" onClick={() => setCollapsedIds(new Set())}>
-            <ChevronsUpDown data-icon="inline-start" />{t('Expand all')}
-          </Button>
-        </div>
+      <div className="mb-4 flex items-center justify-end gap-1.5">
+        <Button variant="ghost" size="xs" onClick={() => setCollapsedIds(new Set(parentIds))}>
+          <ChevronsDownUp data-icon="inline-start" />{t('Collapse all')}
+        </Button>
+        <Button variant="ghost" size="xs" onClick={() => setCollapsedIds(new Set())}>
+          <ChevronsUpDown data-icon="inline-start" />{t('Expand all')}
+        </Button>
       </div>
       <ul className="requirement-tree-roots" role="tree" aria-label={t('Requirement relationship tree')}>
         {forest.map((root) => (

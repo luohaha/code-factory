@@ -36,6 +36,15 @@ const views = [
   ['Requirements', '需求', 'Requirement workflow', '需求工作流'],
 ];
 
+const removedCopy = {
+  Requirements: [/Session assigned, not started|Working or awaiting PR events/, /会话已绑定，尚未开始|正在执行任务或等待 PR 事件/],
+  Sessions: [/Session assigned, no Run yet/, /会话已绑定，尚无运行记录/],
+  Relationships: [/Matches are shown with their ancestors for context/, /匹配项会连同祖先需求一起显示/],
+  PR: [/Closed without being merged/, /已关闭且未合并/],
+  Workspaces: [/No Requirements are doing/, /没有进行中的需求/],
+  Timers: [/Waiting for the next scheduled wake-up/, /等待下一次定时唤醒/],
+};
+
 for (const locale of ['en', 'zh-CN']) {
   for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 568 }, { width: 768, height: 1024 }, { width: 1280, height: 900 }]) {
     void test(`dashboard navigation and tools remain clickable (${locale}, ${viewport.width}px)`, async (t) => {
@@ -63,6 +72,7 @@ for (const locale of ['en', 'zh-CN']) {
       for (const [englishButton, chineseButton, englishTitle, chineseTitle] of views) {
         await navigation.getByRole('button', { name: chinese ? chineseButton : englishButton, exact: true }).click();
         await page.getByRole('heading', { name: chinese ? chineseTitle : englishTitle, exact: true }).waitFor();
+        assert.equal(await page.getByText(removedCopy[englishButton][chinese ? 1 : 0]).count(), 0, englishButton);
       }
 
       const header = page.locator('main > header');
@@ -87,7 +97,7 @@ for (const locale of ['en', 'zh-CN']) {
       await page.keyboard.press('Escape');
       await page.getByRole('dialog').waitFor({ state: 'hidden' });
       await header.getByRole('button', { name: chinese ? '新建需求' : 'New requirement', exact: true }).click();
-      await page.getByRole('dialog').waitFor();
+      await page.getByRole('dialog').getByRole('heading', { name: chinese ? '新建需求' : 'New requirement', exact: true }).waitFor();
       await page.keyboard.press('Escape');
       await page.getByRole('dialog').waitFor({ state: 'hidden' });
 
