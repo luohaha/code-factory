@@ -88,6 +88,7 @@ for (const [locale, theme, mobile] of [['en', 'light', false], ['zh-CN', 'dark',
     const viewport = page.locator('[data-slot="scroll-area-viewport"]');
     const backToTop = page.getByRole('button', { name: locale === 'zh-CN' ? '返回顶部' : 'Back to top', exact: true });
     await page.getByText(messages.at(-1).body, { exact: true }).waitFor();
+    await page.getByText(locale === 'zh-CN' ? '30 条消息' : '30 messages', { exact: true }).waitFor();
     await page.waitForFunction(() => {
       const viewport = document.querySelector('[data-slot="scroll-area-viewport"]');
       return viewport.scrollTop > 0 && viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 2;

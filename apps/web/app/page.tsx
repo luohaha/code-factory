@@ -191,54 +191,50 @@ const filterClockIntervalMilliseconds = 60_000;
 const requirementColumns: Array<{
   status: RequirementStatus;
   title: TranslationKey;
-  description: TranslationKey;
   tone: string;
 }> = [
-  { status: 'todo', title: 'TODO', description: 'Session assigned, not started', tone: 'bg-sky-500' },
-  { status: 'doing', title: 'DOING', description: 'Working or awaiting PR events', tone: 'bg-amber-500' },
-  { status: 'waiting_confirmation', title: 'AWAITING CONFIRMATION', description: 'Reply to continue or confirm completion', tone: 'bg-violet-500' },
-  { status: 'done', title: 'DONE', description: 'Completed; reply to reactivate', tone: 'bg-emerald-600' },
+  { status: 'todo', title: 'TODO', tone: 'bg-sky-500' },
+  { status: 'doing', title: 'DOING', tone: 'bg-amber-500' },
+  { status: 'waiting_confirmation', title: 'AWAITING CONFIRMATION', tone: 'bg-violet-500' },
+  { status: 'done', title: 'DONE', tone: 'bg-emerald-600' },
 ];
 
-const pullRequestColumns: Array<{ status: PullRequestStatus; title: TranslationKey; description: TranslationKey; tone: string }> = [
-  { status: 'draft', title: 'DRAFT', description: 'Still in preparation; review unavailable', tone: 'bg-slate-400' },
-  { status: 'open', title: 'OPEN', description: 'A human can request an Agent review', tone: 'bg-emerald-500' },
-  { status: 'closed', title: 'CLOSED', description: 'Closed without being merged', tone: 'bg-rose-500' },
-  { status: 'merged', title: 'MERGED', description: 'Merged into the target branch', tone: 'bg-violet-500' },
+const pullRequestColumns: Array<{ status: PullRequestStatus; title: TranslationKey; tone: string }> = [
+  { status: 'draft', title: 'DRAFT', tone: 'bg-slate-400' },
+  { status: 'open', title: 'OPEN', tone: 'bg-emerald-500' },
+  { status: 'closed', title: 'CLOSED', tone: 'bg-rose-500' },
+  { status: 'merged', title: 'MERGED', tone: 'bg-violet-500' },
 ];
 
 const sessionColumns: Array<{
   state: SessionState;
   title: TranslationKey;
-  description: TranslationKey;
   tone: string;
 }> = [
-  { state: 'idle', title: 'IDLE', description: 'Session assigned, no Run yet', tone: 'bg-slate-400' },
-  { state: 'running', title: 'RUNNING', description: 'Headless CLI is running', tone: 'bg-emerald-500' },
-  { state: 'waiting_human', title: 'WAITING FOR HUMAN', description: 'Awaiting a reply or completion confirmation', tone: 'bg-violet-500' },
-  { state: 'failed', title: 'FAILED', description: 'Can continue in the original Session', tone: 'bg-rose-500' },
-  { state: 'completed', title: 'COMPLETED', description: 'Requirement complete; reply to reactivate', tone: 'bg-teal-600' },
+  { state: 'idle', title: 'IDLE', tone: 'bg-slate-400' },
+  { state: 'running', title: 'RUNNING', tone: 'bg-emerald-500' },
+  { state: 'waiting_human', title: 'WAITING FOR HUMAN', tone: 'bg-violet-500' },
+  { state: 'failed', title: 'FAILED', tone: 'bg-rose-500' },
+  { state: 'completed', title: 'COMPLETED', tone: 'bg-teal-600' },
 ];
 
 const agentTimerColumns: Array<{
   status: AgentTimerDto['status'];
   title: TranslationKey;
-  description: TranslationKey;
   tone: string;
 }> = [
-  { status: 'active', title: 'ACTIVE', description: 'Waiting for the next scheduled wake-up', tone: 'bg-emerald-500' },
-  { status: 'completed', title: 'COMPLETED', description: 'One-time wake-up delivered', tone: 'bg-violet-500' },
-  { status: 'cancelled', title: 'CANCELLED', description: 'Stopped manually or with its Requirement', tone: 'bg-slate-400' },
+  { status: 'active', title: 'ACTIVE', tone: 'bg-emerald-500' },
+  { status: 'completed', title: 'COMPLETED', tone: 'bg-violet-500' },
+  { status: 'cancelled', title: 'CANCELLED', tone: 'bg-slate-400' },
 ];
 
 const workspaceColumns: Array<{
   state: 'running' | 'idle';
   title: TranslationKey;
-  description: TranslationKey;
   tone: string;
 }> = [
-  { state: 'idle', title: 'Idle workspaces', description: 'No Requirements are doing', tone: 'bg-slate-400' },
-  { state: 'running', title: 'Running workspaces', description: 'At least one Requirement is doing', tone: 'bg-emerald-500' },
+  { state: 'idle', title: 'Idle workspaces', tone: 'bg-slate-400' },
+  { state: 'running', title: 'Running workspaces', tone: 'bg-emerald-500' },
 ];
 
 const stateLabel: Record<SessionState, TranslationKey> = {
@@ -571,7 +567,6 @@ function EditRequirementDetailsDialog({ requirement, busy, onUpdate }: {
         <form className="flex max-h-[calc(100dvh-2rem)] min-h-0 flex-col" onSubmit={submit}>
           <DialogHeader className="shrink-0 px-4 pt-4 pr-12">
             <DialogTitle>{t('Edit requirement')}</DialogTitle>
-            <DialogDescription>{t('Update the title and description before this TODO requirement starts.')}</DialogDescription>
           </DialogHeader>
           <div className="min-h-0 overflow-y-auto px-4">
             {submitError ? (
@@ -676,12 +671,12 @@ function EditRequirementAgentConfigurationDialog({
         <form onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>{t('Edit Agent configuration')}</DialogTitle>
-            <DialogDescription>
-              {requirement.status === 'todo'
-                ? t('Choose the Agent, model, and reasoning effort to use when this TODO requirement starts.')
-                : t('Changes take effect on the next Run. Switching Agent starts a new provider conversation with the previous requirement messages; the previous provider context cannot be resumed.')}
-              {movesFromE2B ? ` ${t('Headless Agents use the Default workspace when switching from an E2B workspace.')}` : null}
-            </DialogDescription>
+            {requirement.status !== 'todo' ? (
+              <DialogDescription>
+                {t('Changes take effect on the next Run. Switching Agent starts a new provider conversation with the previous requirement messages; the previous provider context cannot be resumed.')}
+                {movesFromE2B ? ` ${t('Headless Agents use the Default workspace when switching from an E2B workspace.')}` : null}
+              </DialogDescription>
+            ) : null}
           </DialogHeader>
           {submitError ? (
             <Alert variant="destructive" className="mt-5">
@@ -942,9 +937,6 @@ function ReviewAgentDialog({ client, requirement, activeReview, busy, modelCatal
         <form onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>{t('Request a PR review')}</DialogTitle>
-            <DialogDescription>{t(nativeOnly
-              ? 'This PR uses a Native Agent Reviewer. Choose an optional API profile and reasoning effort.'
-              : 'Choose an Agent type, model, and reasoning effort for this one-off review.')}</DialogDescription>
           </DialogHeader>
           {submitError ? (
             <Alert variant="destructive" className="mt-5">
@@ -1275,8 +1267,7 @@ function NewRequirementDialog({ client, disabled, modelCatalog, sandboxes, onCre
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden p-0 sm:max-w-lg">
         <form className="flex max-h-[calc(100dvh-2rem)] min-h-0 flex-col" onSubmit={submit}>
           <DialogHeader className="shrink-0 px-4 pt-4 pr-12">
-            <DialogTitle>{t('Create a requirement and RD Session')}</DialogTitle>
-            <DialogDescription>{t('A unique Session is assigned immediately, with no scheduling or Agent allocation.')}</DialogDescription>
+            <DialogTitle>{t('New requirement')}</DialogTitle>
           </DialogHeader>
           <div className="min-h-0 overflow-y-auto px-4">
             <FieldGroup className="my-5 gap-4">
@@ -1760,7 +1751,6 @@ const AgentTimerDialog = memo(function AgentTimerDialog({
           <>
         <DialogHeader>
           <DialogTitle>{t('Scheduled wake-ups')}</DialogTitle>
-          <DialogDescription>{t('Wake this RD Session with a specific follow-up, once or repeatedly.')}</DialogDescription>
         </DialogHeader>
 
         <div className="my-4 min-w-0 space-y-2">
@@ -2556,9 +2546,7 @@ function RequirementDetail({
                 <div>
                   <h3 id="requirement-conversation" className="text-xs font-semibold">{t('Activity and conversation')}</h3>
                   <p className="mt-0.5 text-[9px] text-muted-foreground">
-                    {t(hasOlderMessages
-                      ? '{count} messages loaded · Continue with the same RD Session'
-                      : '{count} messages · Continue with the same RD Session', { count: messages.length })}
+                    {t(hasOlderMessages ? '{count} messages loaded' : '{count} messages', { count: messages.length })}
                   </p>
                 </div>
               </div>
@@ -2579,7 +2567,6 @@ function RequirementDetail({
               <div className="rounded-xl border border-dashed border-border px-4 py-8 text-center">
                 <Bot className="mx-auto size-5 text-muted-foreground" />
                 <p className="mt-2 text-xs font-medium">{t('No Agent output yet')}</p>
-                <p className="mt-1 text-[10px] text-muted-foreground">{t('RD Agent messages will appear here in real time after the requirement starts.')}</p>
               </div>
             ) : null}
 
@@ -3982,9 +3969,10 @@ function Dashboard() {
               const items = filteredRequirements.filter((item) => item.status === column.status);
               return (
                 <section key={column.status} className="w-[300px]" aria-labelledby={`requirement-${column.status}`}>
-                  <header className="mb-3 h-11 px-1">
-                    <div className="flex items-center gap-2"><span className={`size-1.5 rounded-full ${column.tone}`} /><h2 id={`requirement-${column.status}`} className="text-xs font-semibold">{t(column.title)}</h2><span className="font-mono text-[10px] text-muted-foreground">{items.length}</span></div>
-                    <p className="mt-1 pl-3.5 text-[10px] text-muted-foreground">{t(column.description)}</p>
+                  <header className="mb-3 flex items-center gap-2 px-1">
+                    <span className={`size-1.5 rounded-full ${column.tone}`} />
+                    <h2 id={`requirement-${column.status}`} className="text-xs font-semibold">{t(column.title)}</h2>
+                    <span className="font-mono text-[10px] text-muted-foreground">{items.length}</span>
                   </header>
                   <div className="space-y-2.5">
                     {items.map((item) => (
@@ -4035,13 +4023,10 @@ function Dashboard() {
               const items = filteredPullRequests.filter((item) => item.status === column.status);
               return (
                 <section key={column.status} className="w-[320px]" aria-labelledby={`pull-request-${column.status}`}>
-                  <header className="mb-3 h-11 px-1">
-                    <div className="flex items-center gap-2">
-                      <span className={`size-1.5 rounded-full ${column.tone}`} />
-                      <h2 id={`pull-request-${column.status}`} className="text-xs font-semibold">{t(column.title)}</h2>
-                      <span className="font-mono text-[10px] text-muted-foreground">{items.length}</span>
-                    </div>
-                    <p className="mt-1 pl-3.5 text-[10px] text-muted-foreground">{t(column.description)}</p>
+                  <header className="mb-3 flex items-center gap-2 px-1">
+                    <span className={`size-1.5 rounded-full ${column.tone}`} />
+                    <h2 id={`pull-request-${column.status}`} className="text-xs font-semibold">{t(column.title)}</h2>
+                    <span className="font-mono text-[10px] text-muted-foreground">{items.length}</span>
                   </header>
                   <div className="space-y-2.5">
                     {items.map((pullRequest) => (
@@ -4076,7 +4061,6 @@ function Dashboard() {
                 <form onSubmit={(event) => void createSandbox(event)}>
                   <DialogHeader>
                     <DialogTitle>{t('Create workspace')}</DialogTitle>
-                    <DialogDescription>{t('Select a local workspace or E2B sandbox.')}</DialogDescription>
                   </DialogHeader>
                   {createPathError ? <Alert variant="destructive" className="mt-4">
                     <TriangleAlert /><AlertTitle>{t('Failed to create workspace')}</AlertTitle>
@@ -4256,13 +4240,10 @@ function Dashboard() {
                   ((workspaceRequirements.get(sandbox.id)?.doing ?? 0) > 0 ? 'running' : 'idle') === column.state);
                 return (
                   <section key={column.state} className="w-[266px]" aria-labelledby={`workspace-${column.state}`}>
-                    <header className="mb-3 h-11 px-1">
-                      <div className="flex items-center gap-2">
-                        <span className={`size-1.5 rounded-full ${column.tone}`} />
-                        <h2 id={`workspace-${column.state}`} className="text-xs font-semibold">{t(column.title)}</h2>
-                        <span className="font-mono text-[10px] text-muted-foreground">{items.length}</span>
-                      </div>
-                      <p className="mt-1 pl-3.5 text-[10px] text-muted-foreground">{t(column.description)}</p>
+                    <header className="mb-3 flex items-center gap-2 px-1">
+                      <span className={`size-1.5 rounded-full ${column.tone}`} />
+                      <h2 id={`workspace-${column.state}`} className="text-xs font-semibold">{t(column.title)}</h2>
+                      <span className="font-mono text-[10px] text-muted-foreground">{items.length}</span>
                     </header>
                     <div className="space-y-2.5">
                       {items.map((sandbox) => {
@@ -4304,13 +4285,10 @@ function Dashboard() {
               const items = filteredAgentTimers.filter((item) => item.status === column.status);
               return (
                 <section key={column.status} className="w-[266px]" aria-labelledby={`timer-${column.status}`}>
-                  <header className="mb-3 h-11 px-1">
-                    <div className="flex items-center gap-2">
-                      <span className={`size-1.5 rounded-full ${column.tone}`} />
-                      <h2 id={`timer-${column.status}`} className="text-xs font-semibold">{t(column.title)}</h2>
-                      <span className="font-mono text-[10px] text-muted-foreground">{items.length}</span>
-                    </div>
-                    <p className="mt-1 pl-3.5 text-[10px] text-muted-foreground">{t(column.description)}</p>
+                  <header className="mb-3 flex items-center gap-2 px-1">
+                    <span className={`size-1.5 rounded-full ${column.tone}`} />
+                    <h2 id={`timer-${column.status}`} className="text-xs font-semibold">{t(column.title)}</h2>
+                    <span className="font-mono text-[10px] text-muted-foreground">{items.length}</span>
                   </header>
                   <div className="space-y-2.5">
                     {items.map((timer) => (
@@ -4337,9 +4315,10 @@ function Dashboard() {
               const items = filteredSessions.filter((item) => item.session.state === column.state);
               return (
                 <section key={column.state} className="w-[266px]" aria-labelledby={`session-${column.state}`}>
-                  <header className="mb-3 h-11 px-1">
-                    <div className="flex items-center gap-2"><span className={`size-1.5 rounded-full ${column.tone}`} /><h2 id={`session-${column.state}`} className="text-xs font-semibold">{t(column.title)}</h2><span className="font-mono text-[10px] text-muted-foreground">{items.length}</span></div>
-                    <p className="mt-1 pl-3.5 text-[10px] text-muted-foreground">{t(column.description)}</p>
+                  <header className="mb-3 flex items-center gap-2 px-1">
+                    <span className={`size-1.5 rounded-full ${column.tone}`} />
+                    <h2 id={`session-${column.state}`} className="text-xs font-semibold">{t(column.title)}</h2>
+                    <span className="font-mono text-[10px] text-muted-foreground">{items.length}</span>
                   </header>
                   <div className="space-y-2.5">
                     {items.map((item) => (
