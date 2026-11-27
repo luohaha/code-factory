@@ -36,6 +36,12 @@ Each requirement has a persistent agent session. Humans can steer the agent, req
 
 [Diagram source (Mermaid)](docs/assets/brand/code-factory-overview.mmd)
 
+### Bring Your Own Harness
+
+Code Factory launches your locally installed Codex or Claude Code CLI in the requirement's workspace. Each CLI uses its own discovery rules to load your settings, skills, and enabled memory, so those capabilities carry over to tasks started from Code Factory.
+
+Code Factory passes the requirement context and workflow instructions. It does not inject or maintain additional memory or skills.
+
 ## Documentation
 
 - [Running Code Factory](docs/running-code-factory.md), [Human CLI](docs/running-code-factory.md#human-management-cli), and [Tailscale remote access](docs/tailscale.md)
