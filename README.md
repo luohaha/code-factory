@@ -11,64 +11,37 @@
 
 https://github.com/user-attachments/assets/80896c78-c804-4c3d-98df-75ccc68031f3
 
-Code Factory brings requirements, coding agents, and GitHub pull requests into one control plane, accessible through the **Web dashboard** or **human CLI** (`code-factory-human-cli`). Organize work as a requirement tree and collaborate with **Codex**, **Claude Code**, or **Native Agent** through conversation.
-
-Each requirement has its own persistent agent context. Jev stops automatic recovery after two consecutive failed or timed-out RD Runs; a successful Run starts a fresh failure streak. Agents can split work into child requirements and work in parallel, while humans steer the work, request reviews, and confirm completion.
-
-Reply to steer a running Codex, Claude Code, or Native Agent. The reply is delivered in the current Run when supported. When a headless CLI no longer accepts streaming input, including after it exits, replies queue a follow-up in the same session. **Stop Run** cancels the current work and pauses automatic resumption.
-
-Use **Update model list** in Settings to refresh available model options immediately without restarting Agent Manager.
-
-Native Agents using E2B can check, pause, and resume their selected sandbox and transfer files between the host and sandbox, including conversation attachments. Pausing preserves remote state while the Agent continues on the host.
-
-Codex, Claude Code, and Native RD Agents can explicitly publish generated files as conversation attachments. Remote browser users can download them from the conversation; file bytes stay outside model context during publication. Human uploads and Agent-published attachments are reclaimed after 7 days by default; change the retention period in Settings without restarting. Message text remains available.
-
-Requirement details include collapsible tool calls with arguments, results, and execution status, plus a live working indicator. Both follow the dashboard's light/dark theme and English/Simplified Chinese language setting.
-
-Use the top-right **Open conversation in a new page** control in a requirement's conversation to continue in a separate browser tab with the full page available. The page keeps the same requirement and Manager connection when refreshed.
-
-Standalone conversations use a centered column with space on both sides on wide screens. The column and side gutters share the same background in both themes. Requirement details scroll away with the history; **Back to top** brings them back, while the reply composer stays available below.
-
-## How It Works
-
-<p align="center">
-  <img src="docs/assets/brand/code-factory-overview.png" alt="Humans and agents access Agent Manager through the Web dashboard or human CLI to work with persistent RD sessions, local or E2B workspaces, GitHub pull requests, and on-demand Reviewers." />
-</p>
-
-[Diagram source (Mermaid)](docs/assets/brand/code-factory-overview.mmd).
-
-Local workspaces support Codex, Claude Code, and Native Agent; E2B workspaces support Native Agent. Each requirement keeps one persistent RD session, and its on-demand Reviewer uses the same selected workspace.
+Code Factory connects requirements, coding agents, and GitHub pull requests. Organize work as a requirement tree and collaborate with Codex, Claude Code, or Native Agent through the web dashboard or human CLI.
 
 ## Quick Start
 
-Requires **Node.js 22.19+**. See [Running Code Factory](docs/running-code-factory.md) for agent CLI and GitHub setup, or the [Native Agent guide](docs/native-agent.md) for API profile configuration.
+Requires **Node.js 22.19+**. See [agent CLI and GitHub setup](docs/running-code-factory.md#prerequisites) or [Native Agent authentication](docs/native-agent.md#model-authentication).
 
 ~~~bash
 cd /path/to/the/repository/to-manage
 npx --package @luoyixin/code-factory code-factory-agent-manager start --daemon
 ~~~
 
-Open [http://127.0.0.1:4310](http://127.0.0.1:4310), create a requirement, and select an agent to begin. The startup directory becomes the default workspace; the dashboard is bundled with Agent Manager.
+The startup directory becomes the default workspace. Open [http://127.0.0.1:4310](http://127.0.0.1:4310), create a requirement, and select an agent.
 
-Unsent conversation text and attachments return when you reopen a requirement or reload the dashboard in the same browser.
+Headless agents run with your permissions. Use trusted repositories and restrict dashboard access to trusted users.
 
-For human-directed terminal management, use `npx --package @luoyixin/code-factory code-factory-human-cli --help`. The CLI and companion [skill](skills/code-factory-human-cli/SKILL.md) support search, requirement inspection, human replies, lifecycle actions, PR reviews, and timers. See [CLI usage](docs/running-code-factory.md#human-management-cli).
+## How It Works
 
-E2B sandbox creation defaults to the `e2b.app` domain when left blank and connects an execution environment without preparing a repository; the Native Agent chooses and clones the task repository when needed. Optional sandbox environment variables supply tokens and build settings to Native Agent commands. You can edit them during a Run; the next RD or Reviewer command uses the latest values, while running commands and background processes need a restart. See the [Native Agent guide](docs/native-agent.md).
+Each requirement has a persistent agent session. Humans can steer the agent, request PR reviews, and confirm completion. On-demand reviewers use the requirement's workspace. All three agent providers support local workspaces, and Native Agent also supports E2B sandboxes.
 
-Headless agents inherit your filesystem, network, and command permissions. Run Code Factory in trusted repositories and limit dashboard access to trusted users.
+<p align="center">
+  <img src="docs/assets/brand/code-factory-overview.png" alt="Humans and agents access Agent Manager through the Web dashboard or human CLI to work with persistent RD sessions, local or E2B workspaces, GitHub pull requests, and on-demand Reviewers." />
+</p>
+
+[Diagram source (Mermaid)](docs/assets/brand/code-factory-overview.mmd)
 
 ## Documentation
 
-- [Running Code Factory](docs/running-code-factory.md) — prerequisites, configuration, CLI options, and daemon operation.
-- [Tailscale remote access](docs/tailscale.md) — access the dashboard from another device.
-- [Architecture and domain model](docs/architecture.en.md) — requirement lifecycle, sessions, messaging, and review workflow.
-- [Headless Agent Runner](docs/agent-runners.md) — Codex and Claude Code integration.
-- [Native Agent guide](docs/native-agent.md) — API profiles, tools, and E2B sandboxes.
-- [E2B lifecycle and readiness audit](docs/e2b-lifecycle-audit.md) — current lifecycle, control ownership, and capability gaps.
-- [HTTP API reference](docs/agent-manager-api.md) and [event protocol](docs/protocol.md).
-- [Development guide](docs/development.md) — source installation, builds, and checks.
-- [Release guide](docs/releasing.md) and [roadmap](docs/roadmap.md).
+- [Running Code Factory](docs/running-code-factory.md), [Human CLI](docs/running-code-factory.md#human-management-cli), and [Tailscale remote access](docs/tailscale.md)
+- [Architecture](docs/architecture.en.md), [Headless Agent Runner](docs/agent-runners.md), and [Native Agent guide](docs/native-agent.md)
+- [HTTP API reference](docs/agent-manager-api.md) and [event protocol](docs/protocol.md)
+- [Development guide](docs/development.md), [release guide](docs/releasing.md), and [roadmap](docs/roadmap.md)
 
 ## License
 
